@@ -78,6 +78,7 @@ mod stopwatch;
 const CODEX_EXECVE_WRAPPER_EXE_NAME: &str = "codex-execve-wrapper";
 
 #[derive(Parser)]
+#[clap(version)]
 struct McpServerCli {
     /// Executable to delegate execve(2) calls to in Bash.
     #[arg(long = "execve")]

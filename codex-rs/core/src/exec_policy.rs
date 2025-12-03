@@ -115,7 +115,7 @@ fn evaluate_with_policy(
     }
 }
 
-pub(crate) fn create_approval_requirement_for_command(
+pub(crate) async fn create_approval_requirement_for_command(
     policy: &Policy,
     command: &[String],
     approval_policy: AskForApproval,
@@ -296,8 +296,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
-    #[test]
-    fn approval_requirement_prefers_execpolicy_match() {
+    #[tokio::test]
+    async fn approval_requirement_prefers_execpolicy_match() {
         let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
         let mut parser = PolicyParser::new();
         parser
@@ -312,7 +312,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             AskForApproval::OnRequest,
             &SandboxPolicy::DangerFullAccess,
             SandboxPermissions::UseDefault,
-        );
+        )
+        .await;
 
         assert_eq!(
             requirement,
@@ -322,8 +323,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
-    #[test]
-    fn approval_requirement_respects_approval_policy() {
+    #[tokio::test]
+    async fn approval_requirement_respects_approval_policy() {
         let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
         let mut parser = PolicyParser::new();
         parser
@@ -338,7 +339,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             AskForApproval::Never,
             &SandboxPolicy::DangerFullAccess,
             SandboxPermissions::UseDefault,
-        );
+        )
+        .await;
 
         assert_eq!(
             requirement,
@@ -348,8 +350,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
-    #[test]
-    fn approval_requirement_falls_back_to_heuristics() {
+    #[tokio::test]
+    async fn approval_requirement_falls_back_to_heuristics() {
         let command = vec!["python".to_string()];
 
         let empty_policy = Policy::empty();
@@ -359,7 +361,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             AskForApproval::UnlessTrusted,
             &SandboxPolicy::ReadOnly,
             SandboxPermissions::UseDefault,
-        );
+        )
+        .await;
 
         assert_eq!(
             requirement,

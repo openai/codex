@@ -1261,13 +1261,47 @@ pub struct GitInfo {
     pub repository_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDelivery {
+    Inline,
+    Detached,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+pub enum ReviewTarget {
+    /// Review the working tree: staged, unstaged, and untracked files.
+    UncommittedChanges,
+
+    /// Review changes between the current branch and the given base branch.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    BaseBranch { branch: String },
+
+    /// Review the changes introduced by a specific commit.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Commit {
+        sha: String,
+        /// Optional human-readable label (e.g., commit subject) for UIs.
+        title: Option<String>,
+    },
+
+    /// Arbitrary instructions provided by the user.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Custom { instructions: String },
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 /// Review request sent to the review session.
 pub struct ReviewRequest {
-    pub prompt: String,
-    pub user_facing_hint: String,
-    #[serde(default)]
-    pub append_to_original_thread: bool,
+    pub target: ReviewTarget,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_facing_hint: Option<String>,
 }
 
 /// Structured review result produced by a child review session.
@@ -1333,6 +1367,10 @@ impl Default for ExecCommandSource {
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
     pub call_id: String,
+    /// Identifier for the underlying PTY process (when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub process_id: Option<String>,
     /// Turn ID that this command belongs to.
     pub turn_id: String,
     /// The command to be executed.
@@ -1353,6 +1391,10 @@ pub struct ExecCommandBeginEvent {
 pub struct ExecCommandEndEvent {
     /// Identifier for the ExecCommandBegin that finished.
     pub call_id: String,
+    /// Identifier for the underlying PTY process (when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub process_id: Option<String>,
     /// Turn ID that this command belongs to.
     pub turn_id: String,
     /// The command that was executed.

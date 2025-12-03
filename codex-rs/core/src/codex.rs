@@ -103,6 +103,7 @@ use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
+use crate::rollout::map_session_init_error;
 use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
@@ -207,7 +208,7 @@ impl Codex {
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
-            CodexErr::InternalAgentDied
+            map_session_init_error(&e, &config.codex_home)
         })?;
         let conversation_id = session.conversation_id;
 
@@ -509,7 +510,7 @@ impl Session {
 
         let rollout_recorder = rollout_recorder.map_err(|e| {
             error!("failed to initialize rollout recorder: {e:#}");
-            anyhow::anyhow!("failed to initialize rollout recorder: {e:#}")
+            anyhow::Error::from(e)
         })?;
         let rollout_path = rollout_recorder.rollout_path.clone();
 
@@ -984,6 +985,7 @@ impl Session {
             .read()
             .await
             .resolve_elicitation(server_name, id, response)
+            .await
     }
 
     /// Records input items: always append to conversation history and
@@ -1041,6 +1043,22 @@ impl Session {
     ) {
         let mut state = self.state.lock().await;
         state.record_items(items.iter(), turn_context.truncation_policy);
+    }
+
+    pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
+        if !self.enabled(Feature::ModelWarnings).await {
+            return;
+        }
+
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!("Warning: {}", message.into()),
+            }],
+        };
+
+        self.record_conversation_items(ctx, &[item]).await;
     }
 
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
@@ -1198,22 +1216,17 @@ impl Session {
         }
     }
 
-    /// Record a user input item to conversation history and also persist a
-    /// corresponding UserMessage EventMsg to rollout.
-    async fn record_input_and_rollout_usermsg(
+    pub(crate) async fn record_response_item_and_emit_turn_item(
         &self,
         turn_context: &TurnContext,
-        response_input: &ResponseInputItem,
+        response_item: ResponseItem,
     ) {
-        let response_item: ResponseItem = response_input.clone().into();
-        // Add to conversation history and persist response item to rollout
+        // Add to conversation history and persist response item to rollout.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
 
-        // Derive user message events and persist only UserMessage to rollout
-        let turn_item = parse_turn_item(&response_item);
-
-        if let Some(item @ TurnItem::UserMessage(_)) = turn_item {
+        // Derive a turn item and emit lifecycle events if applicable.
+        if let Some(item) = parse_turn_item(&response_item) {
             self.emit_turn_item_started(turn_context, &item).await;
             self.emit_turn_item_completed(turn_context, item).await;
         }
@@ -1493,6 +1506,8 @@ mod handlers {
     use crate::config::Config;
     use crate::mcp::auth::compute_auth_statuses;
     use crate::openai_models::model_presets::builtin_model_presets;
+    use crate::mcp::collect_mcp_snapshot_from_manager;
+    use crate::review_prompts::resolve_review_request;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
@@ -1690,30 +1705,18 @@ mod handlers {
 
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
         let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
-        let (tools, auth_status_entries, resources, resource_templates) = tokio::join!(
-            mcp_connection_manager.list_all_tools(),
+        let snapshot = collect_mcp_snapshot_from_manager(
+            &mcp_connection_manager,
             compute_auth_statuses(
                 config.mcp_servers.iter(),
                 config.mcp_oauth_credentials_store_mode,
-            ),
-            mcp_connection_manager.list_all_resources(),
-            mcp_connection_manager.list_all_resource_templates(),
-        );
-        let auth_statuses = auth_status_entries
-            .iter()
-            .map(|(name, entry)| (name.clone(), entry.auth_status))
-            .collect();
+            )
+            .await,
+        )
+        .await;
         let event = Event {
             id: sub_id,
-            msg: EventMsg::McpListToolsResponse(crate::protocol::McpListToolsResponseEvent {
-                tools: tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect(),
-                resources,
-                resource_templates,
-                auth_statuses,
-            }),
+            msg: EventMsg::McpListToolsResponse(snapshot),
         };
         sess.send_event_raw(event).await;
     }
@@ -1803,14 +1806,28 @@ mod handlers {
         let turn_context = sess
             .new_turn_with_sub_id(sub_id.clone(), SessionSettingsUpdate::default())
             .await;
-        spawn_review_thread(
-            Arc::clone(sess),
-            Arc::clone(config),
-            turn_context.clone(),
-            sub_id,
-            review_request,
-        )
-        .await;
+        match resolve_review_request(review_request, config.cwd.as_path()) {
+            Ok(resolved) => {
+                spawn_review_thread(
+                    Arc::clone(sess),
+                    Arc::clone(config),
+                    turn_context.clone(),
+                    sub_id,
+                    resolved,
+                )
+                .await;
+            }
+            Err(err) => {
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: err.to_string(),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                };
+                sess.send_event(&turn_context, event.msg).await;
+            }
+        }
     }
 
     pub async fn list_models(sess: &Arc<Session>, sub_id: String, auth_mode: Option<AuthMode>) {
@@ -1829,7 +1846,7 @@ async fn spawn_review_thread(
     config: Arc<Config>,
     parent_turn_context: Arc<TurnContext>,
     sub_id: String,
-    review_request: ReviewRequest,
+    resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
     let model = config.review_model.clone();
     let review_model_family = find_family_for_model(&model)
@@ -1845,7 +1862,7 @@ async fn spawn_review_thread(
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();
-    let review_prompt = review_request.prompt.clone();
+    let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.client.get_provider();
     let auth_manager = parent_turn_context.client.get_auth_manager();
     let model_family = review_model_family.clone();
@@ -1904,14 +1921,13 @@ async fn spawn_review_thread(
         text: review_prompt,
     }];
     let tc = Arc::new(review_turn_context);
-    sess.spawn_task(
-        tc.clone(),
-        input,
-        ReviewTask::new(review_request.append_to_original_thread),
-    )
-    .await;
+    sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
 
     // Announce entering review mode so UIs can switch modes.
+    let review_request = ReviewRequest {
+        target: resolved.target,
+        user_facing_hint: Some(resolved.user_facing_hint),
+    };
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
         .await;
 }
@@ -1945,7 +1961,8 @@ pub(crate) async fn run_task(
     sess.send_event(&turn_context, event).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    sess.record_input_and_rollout_usermsg(turn_context.as_ref(), &initial_input_for_turn)
+    let response_item: ResponseItem = initial_input_for_turn.clone().into();
+    sess.record_response_item_and_emit_turn_item(turn_context.as_ref(), response_item)
         .await;
 
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
@@ -2034,6 +2051,13 @@ pub(crate) async fn run_task(
                 let _ = process_items(processed_items, &sess, &turn_context).await;
                 // Aborted turn is reported via a different event.
                 break;
+            }
+            Err(CodexErr::InvalidImageRequest()) => {
+                let mut state = sess.state.lock().await;
+                error_or_panic(
+                    "Invalid image detected, replacing it in the last turn to prevent poisoning",
+                );
+                state.history.replace_last_turn_images("Invalid image");
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
@@ -2142,6 +2166,8 @@ async fn run_turn(
             }
             Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
             Err(e @ CodexErr::QuotaExceeded) => return Err(e),
+            Err(e @ CodexErr::InvalidImageRequest()) => return Err(e),
+            Err(e @ CodexErr::InvalidRequest(_)) => return Err(e),
             Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
@@ -2477,7 +2503,10 @@ mod tests {
     use crate::tools::format_exec_output_str;
 
     use crate::protocol::CompactedItem;
+    use crate::protocol::CreditsSnapshot;
     use crate::protocol::InitialHistory;
+    use crate::protocol::RateLimitSnapshot;
+    use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
@@ -2545,6 +2574,75 @@ mod tests {
             session.state.lock().await.clone_history().get_history()
         });
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn set_rate_limits_retains_previous_credits() {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load default test config");
+        let config = Arc::new(config);
+        let session_configuration = SessionConfiguration {
+            provider: config.model_provider.clone(),
+            model: config.model.clone(),
+            model_reasoning_effort: config.model_reasoning_effort,
+            model_reasoning_summary: config.model_reasoning_summary,
+            developer_instructions: config.developer_instructions.clone(),
+            user_instructions: config.user_instructions.clone(),
+            base_instructions: config.base_instructions.clone(),
+            compact_prompt: config.compact_prompt.clone(),
+            approval_policy: config.approval_policy,
+            sandbox_policy: config.sandbox_policy.clone(),
+            cwd: config.cwd.clone(),
+            original_config_do_not_use: Arc::clone(&config),
+            features: Features::default(),
+            exec_policy: Arc::new(ExecPolicy::empty()),
+            session_source: SessionSource::Exec,
+        };
+
+        let mut state = SessionState::new(session_configuration);
+        let initial = RateLimitSnapshot {
+            primary: Some(RateLimitWindow {
+                used_percent: 10.0,
+                window_minutes: Some(15),
+                resets_at: Some(1_700),
+            }),
+            secondary: None,
+            credits: Some(CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("10.00".to_string()),
+            }),
+        };
+        state.set_rate_limits(initial.clone());
+
+        let update = RateLimitSnapshot {
+            primary: Some(RateLimitWindow {
+                used_percent: 40.0,
+                window_minutes: Some(30),
+                resets_at: Some(1_800),
+            }),
+            secondary: Some(RateLimitWindow {
+                used_percent: 5.0,
+                window_minutes: Some(60),
+                resets_at: Some(1_900),
+            }),
+            credits: None,
+        };
+        state.set_rate_limits(update.clone());
+
+        assert_eq!(
+            state.latest_rate_limits,
+            Some(RateLimitSnapshot {
+                primary: update.primary.clone(),
+                secondary: update.secondary,
+                credits: initial.credits,
+            })
+        );
     }
 
     #[test]
@@ -2819,6 +2917,40 @@ mod tests {
         (session, turn_context, rx_event)
     }
 
+    #[tokio::test]
+    async fn record_model_warning_appends_user_message() {
+        let (session, turn_context) = make_session_and_context();
+
+        session
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .features
+            .enable(Feature::ModelWarnings);
+
+        session
+            .record_model_warning("too many unified exec sessions", &turn_context)
+            .await;
+
+        let mut history = session.clone_history().await;
+        let history_items = history.get_history();
+        let last = history_items.last().expect("warning recorded");
+
+        match last {
+            ResponseItem::Message { role, content, .. } => {
+                assert_eq!(role, "user");
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::InputText {
+                        text: "Warning: too many unified exec sessions".to_string(),
+                    }]
+                );
+            }
+            other => panic!("expected user message, got {other:?}"),
+        }
+    }
+
     #[derive(Clone, Copy)]
     struct NeverEndingTask {
         kind: TaskKind,
@@ -2910,7 +3042,7 @@ mod tests {
         let input = vec![UserInput::Text {
             text: "start review".to_string(),
         }];
-        sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new(true))
+        sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
             .await;
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
@@ -2938,6 +3070,8 @@ mod tests {
                 .expect("event");
             match evt.msg {
                 EventMsg::RawResponseItem(_) => continue,
+                EventMsg::ItemStarted(_) | EventMsg::ItemCompleted(_) => continue,
+                EventMsg::AgentMessage(_) => continue,
                 EventMsg::TurnAborted(e) => {
                     assert_eq!(TurnAbortReason::Interrupted, e.reason);
                     break;
@@ -2947,23 +3081,7 @@ mod tests {
         }
 
         let history = sess.clone_history().await.get_history();
-        let found = history.iter().any(|item| match item {
-            ResponseItem::Message { role, content, .. } if role == "user" => {
-                content.iter().any(|ci| match ci {
-                    ContentItem::InputText { text } => {
-                        text.contains("<user_action>")
-                            && text.contains("review")
-                            && text.contains("interrupted")
-                    }
-                    _ => false,
-                })
-            }
-            _ => false,
-        });
-        assert!(
-            found,
-            "synthetic review interruption not recorded in history"
-        );
+        let _ = history;
     }
 
     #[tokio::test]

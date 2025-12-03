@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::protocol::common::AuthMode;
-use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::SandboxCommandAssessment as CoreSandboxCommandAssessment;
 use codex_protocol::config_types::ReasoningSummary;
@@ -11,6 +10,8 @@ use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
+use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
+use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
@@ -20,6 +21,9 @@ use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use mcp_types::ContentBlock as McpContentBlock;
+use mcp_types::Resource as McpResource;
+use mcp_types::ResourceTemplate as McpResourceTemplate;
+use mcp_types::Tool as McpTool;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -127,6 +131,21 @@ v2_enum_from_core!(
 v2_enum_from_core!(
     pub enum SandboxMode from codex_protocol::config_types::SandboxMode {
         ReadOnly, WorkspaceWrite, DangerFullAccess
+    }
+);
+
+v2_enum_from_core!(
+    pub enum ReviewDelivery from codex_protocol::protocol::ReviewDelivery {
+        Inline, Detached
+    }
+);
+
+v2_enum_from_core!(
+    pub enum McpAuthStatus from codex_protocol::protocol::McpAuthStatus {
+        Unsupported,
+        NotLoggedIn,
+        BearerToken,
+        OAuth
     }
 );
 
@@ -610,10 +629,41 @@ pub struct ModelListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ListMcpServersParams {
+    /// Opaque pagination cursor returned by a previous call.
+    pub cursor: Option<String>,
+    /// Optional page size; defaults to a server-defined value.
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServer {
+    pub name: String,
+    pub tools: std::collections::HashMap<String, McpTool>,
+    pub resources: Vec<McpResource>,
+    pub resource_templates: Vec<McpResourceTemplate>,
+    pub auth_status: McpAuthStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ListMcpServersResponse {
+    pub data: Vec<McpServer>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// If None, there are no more items to return.
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct FeedbackUploadParams {
     pub classification: String,
     pub reason: Option<String>,
-    pub conversation_id: Option<ConversationId>,
+    pub thread_id: Option<String>,
     pub include_logs: bool,
 }
 
@@ -622,6 +672,26 @@ pub struct FeedbackUploadParams {
 #[ts(export_to = "v2/")]
 pub struct FeedbackUploadResponse {
     pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecParams {
+    pub command: Vec<String>,
+    #[ts(type = "number | null")]
+    pub timeout_ms: Option<i64>,
+    pub cwd: Option<PathBuf>,
+    pub sandbox_policy: Option<SandboxPolicy>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecResponse {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 // === Threads, Turns, and Items ===
@@ -758,6 +828,7 @@ pub struct Thread {
     /// Model provider used for this thread (for example, 'openai').
     pub model_provider: String,
     /// Unix timestamp (in seconds) when the thread was created.
+    #[ts(type = "number")]
     pub created_at: i64,
     /// [UNSTABLE] Path to the thread on disk.
     pub path: PathBuf,
@@ -848,8 +919,9 @@ pub struct Turn {
     /// For all other responses and notifications returning a Turn,
     /// the items field will be an empty list.
     pub items: Vec<ThreadItem>,
-    #[serde(flatten)]
     pub status: TurnStatus,
+    /// Only populated when the Turn's status is failed.
+    pub error: Option<TurnError>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Error)]
@@ -871,12 +943,12 @@ pub struct ErrorNotification {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(tag = "status", rename_all = "camelCase")]
-#[ts(tag = "status", export_to = "v2/")]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub enum TurnStatus {
     Completed,
     Interrupted,
-    Failed { error: TurnError },
+    Failed,
     InProgress,
 }
 
@@ -908,9 +980,22 @@ pub struct ReviewStartParams {
     pub thread_id: String,
     pub target: ReviewTarget,
 
-    /// When true, also append the final review message to the original thread.
+    /// Where to run the review: inline (default) on the current thread or
+    /// detached on a new thread (returned in `reviewThreadId`).
     #[serde(default)]
-    pub append_to_original_thread: bool,
+    pub delivery: Option<ReviewDelivery>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ReviewStartResponse {
+    pub turn: Turn,
+    /// Identifies the thread where the review runs.
+    ///
+    /// For inline reviews, this is the original thread id.
+    /// For detached reviews, this is the id of the new review thread.
+    pub review_thread_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1020,6 +1105,8 @@ pub enum ThreadItem {
         command: String,
         /// The command's working directory.
         cwd: PathBuf,
+        /// Identifier for the underlying PTY process (when available).
+        process_id: Option<String>,
         status: CommandExecutionStatus,
         /// A best-effort parsing of the command to understand the action(s) it will perform.
         /// This returns a list of CommandAction objects because a single shell command may
@@ -1030,6 +1117,7 @@ pub enum ThreadItem {
         /// The command's exit code.
         exit_code: Option<i32>,
         /// The duration of the command execution in milliseconds.
+        #[ts(type = "number | null")]
         duration_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
@@ -1055,13 +1143,13 @@ pub enum ThreadItem {
     WebSearch { id: String, query: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    TodoList { id: String, items: Vec<TodoItem> },
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
     ImageView { id: String, path: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    CodeReview { id: String, review: String },
+    EnteredReviewMode { id: String, review: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ExitedReviewMode { id: String, review: String },
 }
 
 impl From<CoreTurnItem> for ThreadItem {
@@ -1157,15 +1245,6 @@ pub struct McpToolCallError {
     pub message: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct TodoItem {
-    pub id: String,
-    pub text: String,
-    pub completed: bool,
-}
-
 // === Server Notifications ===
 // Thread/Turn lifecycle notifications and item progress events
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1206,8 +1285,54 @@ pub struct TurnCompletedNotification {
 /// Notification that the turn-level unified diff has changed.
 /// Contains the latest aggregated diff across all file changes in the turn.
 pub struct TurnDiffUpdatedNotification {
+    pub thread_id: String,
     pub turn_id: String,
     pub diff: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnPlanUpdatedNotification {
+    pub turn_id: String,
+    pub explanation: Option<String>,
+    pub plan: Vec<TurnPlanStep>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnPlanStep {
+    pub step: String,
+    pub status: TurnPlanStepStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum TurnPlanStepStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+impl From<CorePlanItemArg> for TurnPlanStep {
+    fn from(value: CorePlanItemArg) -> Self {
+        Self {
+            step: value.step,
+            status: value.status.into(),
+        }
+    }
+}
+
+impl From<CorePlanStepStatus> for TurnPlanStepStatus {
+    fn from(value: CorePlanStepStatus) -> Self {
+        match value {
+            CorePlanStepStatus::Pending => Self::Pending,
+            CorePlanStepStatus::InProgress => Self::InProgress,
+            CorePlanStepStatus::Completed => Self::Completed,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1233,6 +1358,8 @@ pub struct ItemCompletedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AgentMessageDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
 }
@@ -1241,8 +1368,11 @@ pub struct AgentMessageDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ReasoningSummaryTextDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
+    #[ts(type = "number")]
     pub summary_index: i64,
 }
 
@@ -1250,7 +1380,10 @@ pub struct ReasoningSummaryTextDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ReasoningSummaryPartAddedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
+    #[ts(type = "number")]
     pub summary_index: i64,
 }
 
@@ -1258,8 +1391,11 @@ pub struct ReasoningSummaryPartAddedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ReasoningTextDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
+    #[ts(type = "number")]
     pub content_index: i64,
 }
 
@@ -1267,6 +1403,18 @@ pub struct ReasoningTextDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CommandExecutionOutputDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FileChangeOutputDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
 }
@@ -1275,6 +1423,8 @@ pub struct CommandExecutionOutputDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct McpToolCallProgressNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub message: String,
 }
@@ -1380,7 +1530,9 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
 #[ts(export_to = "v2/")]
 pub struct RateLimitWindow {
     pub used_percent: i32,
+    #[ts(type = "number | null")]
     pub window_duration_mins: Option<i64>,
+    #[ts(type = "number | null")]
     pub resets_at: Option<i64>,
 }
 
