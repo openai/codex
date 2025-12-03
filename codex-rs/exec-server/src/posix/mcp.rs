@@ -27,8 +27,8 @@ use tracing::debug;
 
 use crate::posix::escalate_server::EscalateServer;
 use crate::posix::escalate_server::{self};
-use crate::posix::mcp_escalation_policy::ExecPolicy;
 use crate::posix::mcp_escalation_policy::McpEscalationPolicy;
+use crate::posix::mcp_escalation_policy::SharedExecPolicy;
 use crate::posix::stopwatch::Stopwatch;
 
 /// Path to our patched bash.
@@ -78,13 +78,13 @@ pub struct ExecTool {
     tool_router: ToolRouter<ExecTool>,
     bash_path: PathBuf,
     execve_wrapper: PathBuf,
-    policy: ExecPolicy,
+    policy: SharedExecPolicy,
     sandbox_state: Arc<RwLock<Option<SandboxState>>>,
 }
 
 #[tool_router]
 impl ExecTool {
-    pub fn new(bash_path: PathBuf, execve_wrapper: PathBuf, policy: ExecPolicy) -> Self {
+    pub fn new(bash_path: PathBuf, execve_wrapper: PathBuf, policy: SharedExecPolicy) -> Self {
         Self {
             tool_router: Self::tool_router(),
             bash_path,
@@ -121,7 +121,7 @@ impl ExecTool {
         let escalate_server = EscalateServer::new(
             self.bash_path.clone(),
             self.execve_wrapper.clone(),
-            McpEscalationPolicy::new(self.policy, context, stopwatch.clone()),
+            McpEscalationPolicy::new(self.policy.clone(), context, stopwatch.clone()),
         );
 
         let result = escalate_server
@@ -198,7 +198,7 @@ impl ServerHandler for ExecTool {
 pub(crate) async fn serve(
     bash_path: PathBuf,
     execve_wrapper: PathBuf,
-    policy: ExecPolicy,
+    policy: SharedExecPolicy,
 ) -> Result<RunningService<RoleServer, ExecTool>, rmcp::service::ServerInitializeError> {
     let tool = ExecTool::new(bash_path, execve_wrapper, policy);
     tool.serve(stdio()).await
