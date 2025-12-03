@@ -207,45 +207,6 @@ async fn apply_patch_cli_updates_file_appends_trailing_newline(
     Ok(())
 }
 
-/// Ensure that applying a patch via the CLI preserves CRLF line endings for
-/// Windows-style inputs even when updating the file contents.
-#[cfg(windows)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_updates_crlf_file_preserves_line_endings(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let harness = apply_patch_harness().await?;
-
-    let target = harness.path("crlf.txt");
-    // Original file uses CRLF (\r\n) endings.
-    fs::write(&target, b"a\r\nb\r\nc\r\n")?;
-
-    // Replace `b` -> `B` and append `d`.
-    let patch = format!(
-        "*** Begin Patch\n*** Update File: {}\n@@\n a\n-b\n+B\n@@\n c\n+d\n*** End Patch",
-        target.display()
-    );
-    let call_id = "apply-crlf-update";
-    mount_apply_patch(&harness, call_id, patch.as_str(), "ok", model_output).await;
-
-    harness
-        .submit("update crlf file via apply_patch CLI")
-        .await?;
-
-    // Expect all CRLF endings and preserved content, including appended line.
-    let out = std::fs::read(&target)?;
-    assert_eq!(out.as_slice(), b"a\r\nB\r\nc\r\nd\r\n");
-
-    Ok(())
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
@@ -1287,5 +1248,96 @@ async fn apply_patch_change_context_disambiguates_target(
 
     let contents = fs::read_to_string(&target)?;
     assert_eq!(contents, "fn a\nx=10\ny=2\nfn b\nx=11\ny=20\n");
+    Ok(())
+}
+
+/// Ensure that applying a patch can update a CRLF file with unicode characters.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(ApplyPatchModelOutput::Freeform)]
+#[test_case(ApplyPatchModelOutput::Function)]
+#[test_case(ApplyPatchModelOutput::Shell)]
+#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
+#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
+async fn apply_patch_cli_updates_unicode_characters(
+    model_output: ApplyPatchModelOutput,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness().await?;
+
+    let target = harness.path("unicode.txt");
+    fs::write(&target, "first ⚠️\nsecond ❌\nthird 🔥\n")?;
+
+    let patch = format!(
+        r#"*** Begin Patch
+*** Update File: {}
+@@
+ first ⚠️
+-second ❌
++SECOND ✅
+@@
+ third 🔥
++FOURTH
+*** End of File
+*** End Patch"#,
+        target.display()
+    );
+    let call_id = "apply-unicode-update";
+    mount_apply_patch(&harness, call_id, patch.as_str(), "ok", model_output).await;
+
+    harness
+        .submit("update unicode characters via apply_patch CLI")
+        .await?;
+
+    let file_contents = fs::read(&target)?;
+    let content = String::from_utf8_lossy(&file_contents);
+    assert_eq!(content, "first ⚠️\nSECOND ✅\nthird 🔥\nFOURTH\n");
+    Ok(())
+}
+
+/// Ensure that applying a patch via the CLI preserves CRLF line endings for
+/// Windows-style inputs even when updating the file contents.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(ApplyPatchModelOutput::Freeform)]
+#[test_case(ApplyPatchModelOutput::Function)]
+#[test_case(ApplyPatchModelOutput::Shell)]
+#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
+#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
+async fn apply_patch_cli_updates_crlf_file_preserves_line_endings(
+    model_output: ApplyPatchModelOutput,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness().await?;
+
+    let target = harness.path("crlf.txt");
+    fs::write(&target, b"first\r\nsecond\r\nthird\r\n")?;
+
+    let patch = format!(
+        r#"*** Begin Patch
+*** Update File: {}
+@@
+ first
+-second
++SECOND
+@@
+ third
++FOURTH
+*** End of File
+*** End Patch"#,
+        target.display()
+    );
+    let call_id = "apply-crlf-update";
+    mount_apply_patch(&harness, call_id, patch.as_str(), "ok", model_output).await;
+
+    harness
+        .submit("update crlf file via apply_patch CLI")
+        .await?;
+
+    let file_contents = fs::read(&target)?;
+    let content = String::from_utf8_lossy(&file_contents);
+    assert!(content.contains("\r\n"));
+    assert_eq!(content, "first\r\nSECOND\r\nthird\r\nFOURTH\r\n");
     Ok(())
 }
