@@ -10,6 +10,7 @@ use codex_execpolicy::Error as ExecPolicyRuleError;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
+use codex_execpolicy::RuleMatch;
 use codex_execpolicy::blocking_append_allow_prefix_rule;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -25,6 +26,8 @@ use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 
 const FORBIDDEN_REASON: &str = "execpolicy forbids this command";
+const PROMPT_CONFLICT_REASON: &str =
+    "execpolicy requires approval for this command, but AskForApproval is set to Never";
 const PROMPT_REASON: &str = "execpolicy requires approval for this command";
 const POLICY_DIR_NAME: &str = "policy";
 const POLICY_EXTENSION: &str = "codexpolicy";
@@ -139,47 +142,6 @@ pub(crate) async fn append_allow_prefix_rule_and_update(
     Ok(())
 }
 
-fn requirement_from_decision(
-    decision: Decision,
-    approval_policy: AskForApproval,
-) -> ExecApprovalRequirement {
-    match decision {
-        Decision::Forbidden => ExecApprovalRequirement::Forbidden {
-            reason: FORBIDDEN_REASON.to_string(),
-        },
-        Decision::Prompt => {
-            let reason = PROMPT_REASON.to_string();
-            if matches!(approval_policy, AskForApproval::Never) {
-                ExecApprovalRequirement::Forbidden { reason }
-            } else {
-                ExecApprovalRequirement::NeedsApproval {
-                    reason: Some(reason),
-                    allow_prefix: None,
-                }
-            }
-        }
-        Decision::Allow => ExecApprovalRequirement::Skip {
-            bypass_sandbox: true,
-        },
-    }
-}
-
-/// Return an allow-prefix option when a single plain command needs approval without
-/// any matching policy rule. We only surface the prefix opt-in when execpolicy did
-/// not already drive the decision (NoMatch) and when the command is a single
-/// unrolled command (multi-part scripts shouldn’t be whitelisted via prefix) and
-/// when execpolicy feature is enabled.
-fn allow_prefix_if_applicable(
-    commands: &[Vec<String>],
-    features: &Features,
-) -> Option<Vec<String>> {
-    if features.enabled(Feature::ExecPolicy) && commands.len() == 1 {
-        Some(commands[0].clone())
-    } else {
-        None
-    }
-}
-
 pub(crate) async fn create_exec_approval_requirement_for_command(
     exec_policy: &Arc<RwLock<Policy>>,
     features: &Features,
@@ -189,28 +151,86 @@ pub(crate) async fn create_exec_approval_requirement_for_command(
     sandbox_permissions: SandboxPermissions,
 ) -> ExecApprovalRequirement {
     let commands = parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
-    let evaluation = exec_policy.read().await.check_multiple(commands.iter());
+    let heuristics_fallback = |cmd: &[String]| {
+        if requires_initial_appoval(approval_policy, sandbox_policy, cmd, sandbox_permissions) {
+            Decision::Prompt
+        } else {
+            Decision::Allow
+        }
+    };
+    let policy = exec_policy.read().await;
+    let evaluation = policy.check_multiple(commands.iter(), &heuristics_fallback);
+    let has_policy_allow = evaluation.matched_rules.iter().any(|rule_match| {
+        !matches!(rule_match, RuleMatch::HeuristicsRuleMatch { .. })
+            && rule_match.decision() == Decision::Allow
+    });
 
-    match evaluation {
-        Evaluation::Match { decision, .. } => requirement_from_decision(decision, approval_policy),
-        Evaluation::NoMatch { .. } => {
-            if requires_initial_appoval(
-                approval_policy,
-                sandbox_policy,
-                command,
-                sandbox_permissions,
-            ) {
-                ExecApprovalRequirement::NeedsApproval {
-                    reason: None,
-                    allow_prefix: allow_prefix_if_applicable(&commands, features),
+    match evaluation.decision {
+        Decision::Forbidden => ExecApprovalRequirement::Forbidden {
+            reason: FORBIDDEN_REASON.to_string(),
+        },
+        Decision::Prompt => {
+            let prompt_reason = derive_prompt_reason(&evaluation);
+            if matches!(approval_policy, AskForApproval::Never) {
+                ExecApprovalRequirement::Forbidden {
+                    reason: prompt_reason.unwrap_or_else(|| PROMPT_CONFLICT_REASON.to_string()),
                 }
             } else {
-                ExecApprovalRequirement::Skip {
-                    bypass_sandbox: false,
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: prompt_reason.or_else(|| Some(PROMPT_REASON.to_string())),
+                    allow_prefix: allow_prefix_if_applicable(&evaluation, &commands, features),
                 }
             }
         }
+        Decision::Allow => ExecApprovalRequirement::Skip {
+            bypass_sandbox: has_policy_allow,
+        },
     }
+}
+
+/// Return an allow-prefix option when a command needs approval and execpolicy did not drive the decision
+fn allow_prefix_if_applicable(
+    evaluation: &Evaluation,
+    commands: &[Vec<String>],
+    features: &Features,
+) -> Option<Vec<String>> {
+    if !features.enabled(Feature::ExecPolicy) || commands.len() != 1 {
+        return None;
+    }
+
+    if evaluation.decision != Decision::Prompt {
+        return None;
+    }
+
+    let mut first_prompt_from_heuristics: Option<Vec<String>> = None;
+    for rule_match in &evaluation.matched_rules {
+        match rule_match {
+            RuleMatch::HeuristicsRuleMatch { command, decision } => {
+                if *decision == Decision::Prompt && first_prompt_from_heuristics.is_none() {
+                    first_prompt_from_heuristics = Some(command.clone());
+                }
+            }
+            _ if rule_match.decision() == Decision::Prompt => {
+                return None;
+            }
+            _ => {}
+        }
+    }
+
+    first_prompt_from_heuristics
+}
+
+/// Only return PROMPT_REASON when an execpolicy rule drove the prompt decision
+fn derive_prompt_reason(evaluation: &Evaluation) -> Option<String> {
+    evaluation.matched_rules.iter().find_map(|rule_match| {
+        if !matches!(rule_match, RuleMatch::HeuristicsRuleMatch { .. })
+            && rule_match.decision() == Decision::Prompt
+        {
+            Some(PROMPT_REASON.to_string())
+        } else {
+            None
+        }
+    })
 }
 
 async fn collect_policy_files(dir: &Path) -> Result<Vec<PathBuf>, ExecPolicyError> {
@@ -282,10 +302,19 @@ mod tests {
             .expect("policy result");
 
         let commands = [vec!["rm".to_string()]];
-        assert!(matches!(
-            policy.read().await.check_multiple(commands.iter()),
-            Evaluation::NoMatch { .. }
-        ));
+        assert_eq!(
+            Evaluation {
+                decision: Decision::Allow,
+                matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                    command: vec!["rm".to_string()],
+                    decision: Decision::Allow
+                }],
+            },
+            policy
+                .read()
+                .await
+                .check_multiple(commands.iter(), &|_| Decision::Allow)
+        );
         assert!(!temp_dir.path().join(POLICY_DIR_NAME).exists());
     }
 
@@ -316,10 +345,19 @@ mod tests {
             .await
             .expect("policy result");
         let command = [vec!["rm".to_string()]];
-        assert!(matches!(
-            policy.read().await.check_multiple(command.iter()),
-            Evaluation::Match { .. }
-        ));
+        assert_eq!(
+            Evaluation {
+                decision: Decision::Forbidden,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: vec!["rm".to_string()],
+                    decision: Decision::Forbidden
+                }],
+            },
+            policy
+                .read()
+                .await
+                .check_multiple(command.iter(), &|_| Decision::Allow)
+        );
     }
 
     #[tokio::test]
@@ -335,10 +373,19 @@ mod tests {
             .await
             .expect("policy result");
         let command = [vec!["ls".to_string()]];
-        assert!(matches!(
-            policy.read().await.check_multiple(command.iter()),
-            Evaluation::NoMatch { .. }
-        ));
+        assert_eq!(
+            Evaluation {
+                decision: Decision::Allow,
+                matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                    command: vec!["ls".to_string()],
+                    decision: Decision::Allow
+                }],
+            },
+            policy
+                .read()
+                .await
+                .check_multiple(command.iter(), &|_| Decision::Allow)
+        );
     }
 
     #[tokio::test]
@@ -458,6 +505,37 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     }
 
     #[tokio::test]
+    async fn heuristics_apply_when_other_commands_match_policy() {
+        let policy_src = r#"prefix_rule(pattern=["apple"], decision="allow")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.codexpolicy", policy_src)
+            .expect("parse policy");
+        let policy = Arc::new(RwLock::new(parser.build()));
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "apple | orange".to_string(),
+        ];
+
+        assert_eq!(
+            create_exec_approval_requirement_for_command(
+                &policy,
+                &Features::with_defaults(),
+                &command,
+                AskForApproval::UnlessTrusted,
+                &SandboxPolicy::DangerFullAccess,
+                SandboxPermissions::UseDefault,
+            )
+            .await,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                allow_prefix: None
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn append_allow_prefix_rule_updates_policy_and_file() {
         let codex_home = tempdir().expect("create temp dir");
         let current_policy = Arc::new(RwLock::new(Policy::empty()));
@@ -467,14 +545,13 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             .await
             .expect("update policy");
 
-        let evaluation = current_policy.read().await.check(&[
-            "echo".to_string(),
-            "hello".to_string(),
-            "world".to_string(),
-        ]);
+        let evaluation = current_policy.read().await.check(
+            &["echo".to_string(), "hello".to_string(), "world".to_string()],
+            &|_| Decision::Allow,
+        );
         assert!(matches!(
             evaluation,
-            Evaluation::Match {
+            Evaluation {
                 decision: Decision::Allow,
                 ..
             }
@@ -607,6 +684,37 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
                 allow_prefix: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn allow_prefix_uses_first_no_match_in_multi_command_scripts() {
+        let policy_src = r#"prefix_rule(pattern=["python"], decision="allow")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.codexpolicy", policy_src)
+            .expect("parse policy");
+        let policy = Arc::new(RwLock::new(parser.build()));
+
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "python && echo ok".to_string(),
+        ];
+
+        assert_eq!(
+            create_exec_approval_requirement_for_command(
+                &policy,
+                &Features::with_defaults(),
+                &command,
+                AskForApproval::UnlessTrusted,
+                &SandboxPolicy::ReadOnly,
+                SandboxPermissions::UseDefault,
+            )
+            .await,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true
             }
         );
     }
