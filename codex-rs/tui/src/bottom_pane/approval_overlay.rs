@@ -43,7 +43,7 @@ pub(crate) enum ApprovalRequest {
         command: Vec<String>,
         reason: Option<String>,
         risk: Option<SandboxCommandAssessment>,
-        allow_prefix: Option<Vec<String>>,
+        proposed_execpolicy_amendment: Option<Vec<String>>,
     },
     ApplyPatch {
         id: String,
@@ -105,8 +105,11 @@ impl ApprovalOverlay {
         header: Box<dyn Renderable>,
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
         let (options, title) = match &variant {
-            ApprovalVariant::Exec { allow_prefix, .. } => (
-                exec_options(allow_prefix.clone()),
+            ApprovalVariant::Exec {
+                proposed_execpolicy_amendment,
+                ..
+            } => (
+                exec_options(proposed_execpolicy_amendment.clone()),
                 "Would you like to run the following command?".to_string(),
             ),
             ApprovalVariant::ApplyPatch { .. } => (
@@ -337,7 +340,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 command,
                 reason,
                 risk,
-                allow_prefix,
+                proposed_execpolicy_amendment,
             } => {
                 let reason = reason.filter(|item| !item.is_empty());
                 let has_reason = reason.is_some();
@@ -360,7 +363,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     variant: ApprovalVariant::Exec {
                         id,
                         command,
-                        allow_prefix,
+                        proposed_execpolicy_amendment,
                     },
                     header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
                 }
@@ -437,7 +440,7 @@ enum ApprovalVariant {
     Exec {
         id: String,
         command: Vec<String>,
-        allow_prefix: Option<Vec<String>>,
+        proposed_execpolicy_amendment: Option<Vec<String>>,
     },
     ApplyPatch {
         id: String,
@@ -470,7 +473,7 @@ impl ApprovalOption {
     }
 }
 
-fn exec_options(allow_prefix: Option<Vec<String>>) -> Vec<ApprovalOption> {
+fn exec_options(proposed_execpolicy_amendment: Option<Vec<String>>) -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
             label: "Yes, proceed".to_string(),
@@ -486,10 +489,10 @@ fn exec_options(allow_prefix: Option<Vec<String>>) -> Vec<ApprovalOption> {
         },
     ]
     .into_iter()
-    .chain(allow_prefix.map(|prefix| ApprovalOption {
+    .chain(proposed_execpolicy_amendment.map(|prefix| ApprovalOption {
         label: "Yes, and don't ask again for commands with this prefix".to_string(),
-        decision: ApprovalDecision::Review(ReviewDecision::ApprovedAllowPrefix {
-            allow_prefix: prefix,
+        decision: ApprovalDecision::Review(ReviewDecision::ApprovedExecpolicyAmendment {
+            proposed_execpolicy_amendment: prefix,
         }),
         display_shortcut: None,
         additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
@@ -556,7 +559,7 @@ mod tests {
             command: vec!["echo".to_string(), "hi".to_string()],
             reason: Some("reason".to_string()),
             risk: None,
-            allow_prefix: None,
+            proposed_execpolicy_amendment: None,
         }
     }
 
@@ -590,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn exec_prefix_option_emits_allow_prefix() {
+    fn exec_prefix_option_emits_execpolicy_amendment() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
         let mut view = ApprovalOverlay::new(
@@ -599,7 +602,7 @@ mod tests {
                 command: vec!["echo".to_string()],
                 reason: None,
                 risk: None,
-                allow_prefix: Some(vec!["echo".to_string()]),
+                proposed_execpolicy_amendment: Some(vec!["echo".to_string()]),
             },
             tx,
         );
@@ -609,8 +612,8 @@ mod tests {
             if let AppEvent::CodexOp(Op::ExecApproval { decision, .. }) = ev {
                 assert_eq!(
                     decision,
-                    ReviewDecision::ApprovedAllowPrefix {
-                        allow_prefix: vec!["echo".to_string()]
+                    ReviewDecision::ApprovedExecpolicyAmendment {
+                        proposed_execpolicy_amendment: vec!["echo".to_string()]
                     }
                 );
                 saw_op = true;
@@ -633,7 +636,7 @@ mod tests {
             command,
             reason: None,
             risk: None,
-            allow_prefix: None,
+            proposed_execpolicy_amendment: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx);

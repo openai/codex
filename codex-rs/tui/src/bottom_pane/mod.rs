@@ -563,7 +563,7 @@ mod tests {
             command: vec!["echo".into(), "ok".into()],
             reason: None,
             risk: None,
-            allow_prefix: None,
+            proposed_execpolicy_amendment: None,
         }
     }
 

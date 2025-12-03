@@ -115,7 +115,7 @@ pub(crate) fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(POLICY_DIR_NAME).join(DEFAULT_POLICY_FILE)
 }
 
-pub(crate) async fn append_allow_prefix_rule_and_update(
+pub(crate) async fn append_execpolicy_amendment_and_update(
     codex_home: &Path,
     current_policy: &Arc<RwLock<Policy>>,
     prefix: &[String],
@@ -142,8 +142,24 @@ pub(crate) async fn append_allow_prefix_rule_and_update(
     Ok(())
 }
 
-/// Return an allow-prefix option when a command needs approval and execpolicy did not drive the decision.
-fn allow_prefix_if_applicable(evaluation: &Evaluation, features: &Features) -> Option<Vec<String>> {
+/// Returns a proposed execpolicy amendment only when heuristics caused
+/// the prompt decision, so we can offer to apply that amendment for future runs.
+///
+/// The amendment uses the first command heuristics marked as `Prompt`. If any explicit
+/// execpolicy rule also prompts, we return `None` because applying the amendment would not
+/// skip that policy requirement.
+///
+/// Examples:
+/// - execpolicy: empty. Command: `["python"]`. Heuristics prompt -> `Some(vec!["python"])`.
+/// - execpolicy: empty. Command: `["bash", "-c", "cd /some/folder && prog1 --option1 arg1 && prog2 --option2 arg2"]`.
+///   Parsed commands include `cd /some/folder`, `prog1 --option1 arg1`, and `prog2 --option2 arg2`. If heuristics allow `cd` but prompt
+///   on `prog1`, we return `Some(vec!["prog1", "--option1", "arg1"])`.
+/// - execpolicy: contains a `prompt for prefix ["prog2"]` rule. For the same command as above,
+///   we return `None` because an execpolicy prompt still applies even if we amend execpolicy to allow ["prog1", "--option1", "arg1"].
+fn proposed_execpolicy_amendment(
+    evaluation: &Evaluation,
+    features: &Features,
+) -> Option<Vec<String>> {
     if !features.enabled(Feature::ExecPolicy) || evaluation.decision != Decision::Prompt {
         return None;
     }
@@ -214,7 +230,10 @@ pub(crate) async fn create_exec_approval_requirement_for_command(
             } else {
                 ExecApprovalRequirement::NeedsApproval {
                     reason: derive_prompt_reason(&evaluation),
-                    allow_prefix: allow_prefix_if_applicable(&evaluation, features),
+                    proposed_execpolicy_amendment: proposed_execpolicy_amendment(
+                        &evaluation,
+                        features,
+                    ),
                 }
             }
         }
@@ -438,7 +457,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             requirement,
             ExecApprovalRequirement::NeedsApproval {
                 reason: Some(PROMPT_REASON.to_string()),
-                allow_prefix: None,
+                proposed_execpolicy_amendment: None,
             }
         );
     }
@@ -490,7 +509,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             requirement,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
-                allow_prefix: Some(command)
+                proposed_execpolicy_amendment: Some(command)
             }
         );
     }
@@ -521,18 +540,18 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             .await,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
-                allow_prefix: Some(vec!["orange".to_string()])
+                proposed_execpolicy_amendment: Some(vec!["orange".to_string()])
             }
         );
     }
 
     #[tokio::test]
-    async fn append_allow_prefix_rule_updates_policy_and_file() {
+    async fn append_execpolicy_amendment_updates_policy_and_file() {
         let codex_home = tempdir().expect("create temp dir");
         let current_policy = Arc::new(RwLock::new(Policy::empty()));
         let prefix = vec!["echo".to_string(), "hello".to_string()];
 
-        append_allow_prefix_rule_and_update(codex_home.path(), &current_policy, &prefix)
+        append_execpolicy_amendment_and_update(codex_home.path(), &current_policy, &prefix)
             .await
             .expect("update policy");
 
@@ -558,12 +577,12 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     }
 
     #[tokio::test]
-    async fn append_allow_prefix_rule_rejects_empty_prefix() {
+    async fn append_execpolicy_amendment_rejects_empty_prefix() {
         let codex_home = tempdir().expect("create temp dir");
         let current_policy = Arc::new(RwLock::new(Policy::empty()));
 
         let result =
-            append_allow_prefix_rule_and_update(codex_home.path(), &current_policy, &[]).await;
+            append_execpolicy_amendment_and_update(codex_home.path(), &current_policy, &[]).await;
 
         assert!(matches!(
             result,
@@ -575,7 +594,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     }
 
     #[tokio::test]
-    async fn allow_prefix_is_present_for_single_command_without_policy_match() {
+    async fn proposed_execpolicy_amendment_is_present_for_single_command_without_policy_match() {
         let command = vec!["cargo".to_string(), "build".to_string()];
 
         let empty_policy = Arc::new(RwLock::new(Policy::empty()));
@@ -593,13 +612,13 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             requirement,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
-                allow_prefix: Some(command)
+                proposed_execpolicy_amendment: Some(command)
             }
         );
     }
 
     #[tokio::test]
-    async fn allow_prefix_is_disabled_when_execpolicy_feature_disabled() {
+    async fn proposed_execpolicy_amendment_is_disabled_when_execpolicy_feature_disabled() {
         let command = vec!["cargo".to_string(), "build".to_string()];
 
         let mut features = Features::with_defaults();
@@ -619,13 +638,13 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             requirement,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
-                allow_prefix: None,
+                proposed_execpolicy_amendment: None,
             }
         );
     }
 
     #[tokio::test]
-    async fn allow_prefix_is_omitted_when_policy_prompts() {
+    async fn proposed_execpolicy_amendment_is_omitted_when_policy_prompts() {
         let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
         let mut parser = PolicyParser::new();
         parser
@@ -648,13 +667,13 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             requirement,
             ExecApprovalRequirement::NeedsApproval {
                 reason: Some(PROMPT_REASON.to_string()),
-                allow_prefix: None,
+                proposed_execpolicy_amendment: None,
             }
         );
     }
 
     #[tokio::test]
-    async fn allow_prefix_is_omitted_for_multi_command_scripts() {
+    async fn proposed_execpolicy_amendment_is_present_for_multi_command_scripts() {
         let command = vec![
             "bash".to_string(),
             "-lc".to_string(),
@@ -674,14 +693,14 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             requirement,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
-                allow_prefix: Some(vec!["cargo".to_string(), "build".to_string()]),
+                proposed_execpolicy_amendment: Some(vec!["cargo".to_string(), "build".to_string()]),
             }
         );
     }
 
     #[tokio::test]
-    async fn allow_prefix_uses_first_no_match_in_multi_command_scripts() {
-        let policy_src = r#"prefix_rule(pattern=["python"], decision="allow")"#;
+    async fn proposed_execpolicy_amendment_uses_first_no_match_in_multi_command_scripts() {
+        let policy_src = r#"prefix_rule(pattern=["cat"], decision="allow")"#;
         let mut parser = PolicyParser::new();
         parser
             .parse("test.codexpolicy", policy_src)
@@ -691,7 +710,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let command = vec![
             "bash".to_string(),
             "-lc".to_string(),
-            "python && echo ok".to_string(),
+            "cat && apple".to_string(),
         ];
 
         assert_eq!(
@@ -704,8 +723,9 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 SandboxPermissions::UseDefault,
             )
             .await,
-            ExecApprovalRequirement::Skip {
-                bypass_sandbox: true
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: Some(vec!["apple".to_string()]),
             }
         );
     }

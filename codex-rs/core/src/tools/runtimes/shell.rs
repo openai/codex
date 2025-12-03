@@ -114,7 +114,9 @@ impl Approvable<ShellRequest> for ShellRuntime {
                         cwd,
                         reason,
                         risk,
-                        req.exec_approval_requirement.allow_prefix().cloned(),
+                        req.exec_approval_requirement
+                            .proposed_execpolicy_amendment()
+                            .cloned(),
                     )
                     .await
             })
