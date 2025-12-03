@@ -187,7 +187,6 @@ impl ToolHandler for UnifiedExecHandler {
                 );
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
-                
                 manager
                     .exec_command(
                         ExecCommandRequest {
