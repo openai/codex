@@ -12,6 +12,7 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::features::Feature;
+use crate::features::Features;
 use crate::function_tool::FunctionCallError;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -189,7 +190,6 @@ impl Codex {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            features: config.features.clone(),
             exec_policy,
             session_source,
         };
@@ -263,6 +263,9 @@ pub(crate) struct Session {
     conversation_id: ConversationId,
     tx_event: Sender<Event>,
     state: Mutex<SessionState>,
+    /// The set of enabled features should be invariant for the lifetime of the
+    /// session.
+    features: Features,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
@@ -343,8 +346,6 @@ pub(crate) struct SessionConfiguration {
     /// operate deterministically.
     cwd: PathBuf,
 
-    /// Set of feature flags for this session
-    features: Features,
     /// Execpolicy policy, applied only when enabled by feature flag.
     exec_policy: Arc<ExecPolicy>,
 
@@ -400,6 +401,7 @@ impl Session {
         sub_id: String,
     ) -> TurnContext {
         let config = session_configuration.original_config_do_not_use.clone();
+        let features = &config.features;
         let model_family = find_family_for_model(&session_configuration.model)
             .unwrap_or_else(|| config.model_family.clone());
         let mut per_turn_config = (*config).clone();
@@ -407,6 +409,7 @@ impl Session {
         per_turn_config.model_family = model_family.clone();
         per_turn_config.model_reasoning_effort = session_configuration.model_reasoning_effort;
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
+        per_turn_config.features = features.clone();
         if let Some(model_info) = get_model_info(&model_family) {
             per_turn_config.model_context_window = Some(model_info.context_window);
         }
@@ -429,7 +432,7 @@ impl Session {
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &config.features,
+            features,
         });
 
         TurnContext {
@@ -515,7 +518,7 @@ impl Session {
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
-        for (alias, feature) in session_configuration.features.legacy_feature_usages() {
+        for (alias, feature) in config.features.legacy_feature_usages() {
             let canonical = feature.key();
             let summary = format!("`{alias}` is deprecated. Use `{canonical}` instead.");
             let details = if alias == canonical {
@@ -574,6 +577,7 @@ impl Session {
             conversation_id,
             tx_event: tx_event.clone(),
             state: Mutex::new(state),
+            features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -1037,7 +1041,7 @@ impl Session {
     }
 
     pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
-        if !self.enabled(Feature::ModelWarnings).await {
+        if !self.enabled(Feature::ModelWarnings) {
             return;
         }
 
@@ -1066,13 +1070,8 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
     }
 
-    pub async fn enabled(&self, feature: Feature) -> bool {
-        self.state
-            .lock()
-            .await
-            .session_configuration
-            .features
-            .enabled(feature)
+    pub fn enabled(&self, feature: Feature) -> bool {
+        self.features.enabled(feature)
     }
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
@@ -1255,7 +1254,7 @@ impl Session {
         turn_context: Arc<TurnContext>,
         cancellation_token: CancellationToken,
     ) {
-        if !self.enabled(Feature::GhostCommit).await {
+        if !self.enabled(Feature::GhostCommit) {
             return;
         }
         let token = match turn_context.tool_call_gate.subscribe().await {
@@ -1828,7 +1827,7 @@ async fn spawn_review_thread(
     let review_model_family = find_family_for_model(&model)
         .unwrap_or_else(|| parent_turn_context.client.get_model_family());
     // For reviews, disable web_search and view_image regardless of global settings.
-    let mut review_features = config.features.clone();
+    let mut review_features = sess.features.clone();
     review_features
         .disable(crate::features::Feature::WebSearchRequest)
         .disable(crate::features::Feature::ViewImageTool);
@@ -1849,6 +1848,7 @@ async fn spawn_review_thread(
     per_turn_config.model_family = model_family.clone();
     per_turn_config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
     per_turn_config.model_reasoning_summary = ReasoningSummaryConfig::Detailed;
+    per_turn_config.features = review_features.clone();
     if let Some(model_info) = get_model_info(&model_family) {
         per_turn_config.model_context_window = Some(model_info.context_window);
     }
@@ -1996,7 +1996,7 @@ pub(crate) async fn run_task(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached {
-                    if should_use_remote_compact_task(&sess).await {
+                    if should_use_remote_compact_task(&sess) {
                         run_inline_remote_auto_compact_task(sess.clone(), turn_context.clone())
                             .await;
                     } else {
@@ -2079,14 +2079,7 @@ async fn run_turn(
         .supports_parallel_tool_calls;
 
     // TODO(jif) revert once testing phase is done.
-    let parallel_tool_calls = model_supports_parallel
-        && sess
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .features
-            .enabled(Feature::ParallelToolCalls);
+    let parallel_tool_calls = model_supports_parallel && sess.enabled(Feature::ParallelToolCalls);
     let mut base_instructions = turn_context.base_instructions.clone();
     if parallel_tool_calls {
         static INSTRUCTIONS: &str = include_str!("../templates/parallel/instructions.md");
@@ -2462,7 +2455,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
     })
 }
 
-use crate::features::Features;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
@@ -2575,7 +2567,6 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            features: Features::default(),
             exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
@@ -2774,7 +2765,6 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            features: Features::default(),
             exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
@@ -2807,6 +2797,7 @@ mod tests {
             conversation_id,
             tx_event,
             state: Mutex::new(state),
+            features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -2852,7 +2843,6 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            features: Features::default(),
             exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
@@ -2885,6 +2875,7 @@ mod tests {
             conversation_id,
             tx_event,
             state: Mutex::new(state),
+            features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -2895,15 +2886,10 @@ mod tests {
 
     #[tokio::test]
     async fn record_model_warning_appends_user_message() {
-        let (session, turn_context) = make_session_and_context();
-
-        session
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .features
-            .enable(Feature::ModelWarnings);
+        let (mut session, turn_context) = make_session_and_context();
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ModelWarnings);
+        session.features = features;
 
         session
             .record_model_warning("too many unified exec sessions", &turn_context)
