@@ -887,6 +887,7 @@ dependencies = [
  "codex-file-search",
  "codex-login",
  "codex-protocol",
+ "codex-rmcp-client",
  "codex-utils-json-to-toml",
  "core_test_support",
  "mcp-types",
