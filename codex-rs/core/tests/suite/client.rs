@@ -21,7 +21,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
-use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::available_models::ReasoningEffort;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;

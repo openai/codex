@@ -12,7 +12,7 @@ use crate::history_cell::HistoryCell;
 
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort;
+use codex_protocol::available_models::ReasoningEffort;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]

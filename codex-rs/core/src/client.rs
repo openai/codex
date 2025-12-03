@@ -20,7 +20,7 @@ use codex_api::error::ApiError;
 use codex_app_server_protocol::AuthMode;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
-use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::available_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;

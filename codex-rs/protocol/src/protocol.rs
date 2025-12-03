@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use crate::ConversationId;
 use crate::approvals::ElicitationRequestEvent;
-use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::available_models::AvailableModelsEvent;
+use crate::available_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
 use crate::items::TurnItem;
@@ -208,6 +209,9 @@ pub enum Op {
         /// The raw command string after '!'
         command: String,
     },
+
+    /// Request the list of available models.
+    ListModels,
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -578,6 +582,7 @@ pub enum EventMsg {
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
+    AvailableModels(AvailableModelsEvent),
 }
 
 /// Codex errors that we expose to clients.

@@ -13,7 +13,7 @@ use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
-use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::available_models::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use insta::assert_snapshot;
 use ratatui::prelude::*;

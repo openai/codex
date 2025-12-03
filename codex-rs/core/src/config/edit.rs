@@ -2,7 +2,7 @@ use crate::config::CONFIG_TOML_FILE;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use anyhow::Context;
-use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::available_models::ReasoningEffort;
 use codex_protocol::config_types::TrustLevel;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -574,7 +574,7 @@ impl ConfigEditsBuilder {
 mod tests {
     use super::*;
     use crate::config::types::McpServerTransportConfig;
-    use codex_protocol::config_types::ReasoningEffort;
+    use codex_protocol::available_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
     use tokio::runtime::Builder;

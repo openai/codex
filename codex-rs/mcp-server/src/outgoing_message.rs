@@ -239,7 +239,7 @@ mod tests {
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ConversationId;
-    use codex_protocol::config_types::ReasoningEffort;
+    use codex_protocol::available_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::NamedTempFile;

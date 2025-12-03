@@ -5,7 +5,7 @@ use crate::protocol::common::AuthMode;
 use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::SandboxCommandAssessment as CoreSandboxCommandAssessment;
-use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::available_models::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
