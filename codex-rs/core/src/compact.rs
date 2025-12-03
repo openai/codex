@@ -38,7 +38,7 @@ pub(crate) async fn should_use_remote_compact_task(session: &Session) -> bool {
         .auth_manager
         .auth()
         .is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
-        && session.enabled(Feature::RemoteCompaction).await
+        && session.enabled(Feature::RemoteCompaction)
 }
 
 pub(crate) async fn run_inline_auto_compact_task(
