@@ -267,8 +267,6 @@ impl ConversationManager {
 
         self.finalize_spawn(codex, conversation_id, session).await
     }
-
-
 }
 
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message

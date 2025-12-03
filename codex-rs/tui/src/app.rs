@@ -343,7 +343,7 @@ impl App {
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
-                    is_first_run: false
+                    is_first_run: false,
                 };
                 ChatWidget::new_from_existing(
                     init,
