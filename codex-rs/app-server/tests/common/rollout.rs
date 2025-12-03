@@ -49,6 +49,7 @@ pub fn create_fake_rollout(
         instructions: None,
         source: SessionSource::Cli,
         model_provider: model_provider.map(str::to_string),
+        name: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,

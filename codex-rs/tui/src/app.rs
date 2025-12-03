@@ -7,6 +7,8 @@ use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
+#[cfg(not(debug_assertions))]
+use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_config;
 use crate::model_migration::run_model_migration_prompt;
@@ -57,9 +59,6 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
-
-#[cfg(not(debug_assertions))]
-use crate::history_cell::UpdateAvailableHistoryCell;
 
 const GPT_5_1_MIGRATION_AUTH_MODES: [AuthMode; 2] = [AuthMode::ChatGPT, AuthMode::ApiKey];
 const GPT_5_1_CODEX_MIGRATION_AUTH_MODES: [AuthMode; 1] = [AuthMode::ChatGPT];
@@ -323,6 +322,28 @@ impl App {
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
+                };
+                ChatWidget::new_from_existing(
+                    init,
+                    resumed.conversation,
+                    resumed.session_configured,
+                )
+            }
+            ResumeSelection::Fork(path) => {
+                let resumed = conversation_manager
+                    .fork_from_rollout(config.clone(), path.clone(), auth_manager.clone())
+                    .await
+                    .wrap_err_with(|| format!("Failed to fork session from {}", path.display()))?;
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: app_event_tx.clone(),
+                    initial_prompt: initial_prompt.clone(),
+                    initial_images: initial_images.clone(),
+                    enhanced_keys_supported,
+                    auth_manager: auth_manager.clone(),
+                    feedback: feedback.clone(),
+                    is_first_run: false,
                 };
                 ChatWidget::new_from_existing(
                     init,

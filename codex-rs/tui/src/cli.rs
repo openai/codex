@@ -32,6 +32,9 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_show_all: bool,
 
+    #[clap(skip)]
+    pub fork_source: Option<String>,
+
     /// Model the agent should use.
     #[arg(long, short = 'm')]
     pub model: Option<String>,

@@ -103,6 +103,8 @@ use crate::protocol::WarningEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
+use crate::saved_sessions::build_saved_session_entry;
+use crate::saved_sessions::upsert_saved_session;
 use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
@@ -137,6 +139,7 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
+use std::path::Path;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -152,6 +155,7 @@ pub struct Codex {
 pub struct CodexSpawnOk {
     pub codex: Codex,
     pub conversation_id: ConversationId,
+    pub(crate) session: Arc<Session>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -212,7 +216,8 @@ impl Codex {
         let conversation_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(session, config, rx_sub));
+        let submission_session = Arc::clone(&session);
+        tokio::spawn(submission_loop(submission_session, config, rx_sub));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -222,6 +227,7 @@ impl Codex {
         Ok(CodexSpawnOk {
             codex,
             conversation_id,
+            session,
         })
     }
 
@@ -643,16 +649,66 @@ impl Session {
     }
 
     /// Ensure all rollout writes are durably flushed.
-    pub(crate) async fn flush_rollout(&self) {
+    pub(crate) async fn flush_rollout(&self) -> std::io::Result<()> {
         let recorder = {
             let guard = self.services.rollout.lock().await;
             guard.clone()
         };
-        if let Some(rec) = recorder
-            && let Err(e) = rec.flush().await
-        {
-            warn!("failed to flush rollout recorder: {e}");
+        if let Some(rec) = recorder {
+            rec.flush().await
+        } else {
+            Ok(())
         }
+    }
+
+    pub(crate) async fn set_session_name(&self, name: Option<String>) -> std::io::Result<()> {
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        if let Some(rec) = recorder {
+            rec.set_session_name(name).await
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) async fn rollout_path(&self) -> CodexResult<PathBuf> {
+        let guard = self.services.rollout.lock().await;
+        let Some(rec) = guard.as_ref() else {
+            return Err(CodexErr::Fatal(
+                "Rollout recorder is not initialized; cannot save session.".to_string(),
+            ));
+        };
+        Ok(rec.rollout_path.clone())
+    }
+
+    pub(crate) async fn model(&self) -> String {
+        let state = self.state.lock().await;
+        state.session_configuration.model.clone()
+    }
+
+    pub(crate) async fn save_session(
+        &self,
+        codex_home: &Path,
+        name: &str,
+    ) -> CodexResult<crate::SavedSessionEntry> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(CodexErr::Fatal("Usage: /save <name>".to_string()));
+        }
+        let rollout_path = self.rollout_path().await?;
+        self.flush_rollout()
+            .await
+            .map_err(|e| CodexErr::Fatal(format!("failed to flush rollout recorder: {e}")))?;
+        self.set_session_name(Some(trimmed.to_string()))
+            .await
+            .map_err(|e| CodexErr::Fatal(format!("failed to write session name: {e}")))?;
+        let entry =
+            build_saved_session_entry(trimmed.to_string(), rollout_path, self.model().await)
+                .await?;
+        upsert_saved_session(codex_home, entry.clone()).await?;
+        Ok(entry)
     }
 
     fn next_internal_sub_id(&self) -> String {
@@ -675,7 +731,9 @@ impl Session {
                 let items = self.build_initial_context(&turn_context);
                 self.record_conversation_items(&turn_context, &items).await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
-                self.flush_rollout().await;
+                if let Err(e) = self.flush_rollout().await {
+                    warn!("failed to flush rollout recorder: {e}");
+                }
             }
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
                 let rollout_items = conversation_history.get_rollout_items();
@@ -719,10 +777,18 @@ impl Session {
 
                 // If persisting, persist all rollout items as-is (recorder filters)
                 if persist && !rollout_items.is_empty() {
-                    self.persist_rollout_items(&rollout_items).await;
+                    // Drop legacy SessionMeta lines from the source rollout so the forked
+                    // session only contains its own SessionMeta written by the recorder.
+                    let filtered =
+                        InitialHistory::Forked(rollout_items.clone()).without_session_meta();
+                    if !filtered.is_empty() {
+                        self.persist_rollout_items(&filtered).await;
+                    }
                 }
                 // Flush after seeding history and any persisted rollout copy.
-                self.flush_rollout().await;
+                if let Err(e) = self.flush_rollout().await {
+                    warn!("failed to flush rollout recorder: {e}");
+                }
             }
         }
     }
@@ -1478,6 +1544,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Review { review_request } => {
                 handlers::review(&sess, &config, sub.id.clone(), review_request).await;
             }
+            Op::SaveSession { name } => {
+                handlers::save_session(&sess, &config, sub.id.clone(), name).await;
+            }
             _ => {} // Ignore unknown ops; enum is non_exhaustive to allow extensions.
         }
     }
@@ -1508,6 +1577,7 @@ mod handlers {
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
+    use codex_protocol::protocol::SaveSessionResponseEvent;
     use codex_protocol::protocol::TurnAbortReason;
 
     use codex_protocol::user_input::UserInput;
@@ -1744,6 +1814,38 @@ mod handlers {
             CompactTask,
         )
         .await;
+    }
+
+    pub async fn save_session(
+        sess: &Arc<Session>,
+        config: &Arc<crate::config::Config>,
+        sub_id: String,
+        name: String,
+    ) {
+        match sess.save_session(&config.codex_home, &name).await {
+            Ok(entry) => {
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::SaveSessionResponse(SaveSessionResponseEvent {
+                        name: entry.name,
+                        rollout_path: entry.rollout_path,
+                        conversation_id: entry.conversation_id,
+                    }),
+                };
+                sess.send_event_raw(event).await;
+            }
+            Err(err) => {
+                let message = format!("Failed to save session '{name}': {err}");
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message,
+                        codex_error_info: None,
+                    }),
+                };
+                sess.send_event_raw(event).await;
+            }
+        }
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {

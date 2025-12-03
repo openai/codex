@@ -1437,8 +1437,8 @@ impl ChatWidget {
                         };
                         self.queue_user_message(user_message);
                     }
-                    InputResult::Command(cmd) => {
-                        self.dispatch_command(cmd);
+                    InputResult::Command { command: cmd, args } => {
+                        self.dispatch_command(cmd, args);
                     }
                     InputResult::None => {}
                 }
@@ -1461,7 +1461,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn dispatch_command(&mut self, cmd: SlashCommand) {
+    fn dispatch_command(&mut self, cmd: SlashCommand, args: Option<String>) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -1481,6 +1481,9 @@ impl ChatWidget {
             }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
+            }
+            SlashCommand::Save => {
+                self.handle_save_command(args);
             }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
@@ -1597,6 +1600,31 @@ impl ChatWidget {
                 }));
             }
         }
+    }
+
+    fn handle_save_command(&mut self, args: Option<String>) {
+        let Some(name_raw) = args else {
+            self.add_to_history(history_cell::new_error_event(
+                "Usage: /save <name>".to_string(),
+            ));
+            return;
+        };
+        let name = name_raw.trim();
+        if name.is_empty() {
+            self.add_to_history(history_cell::new_error_event(
+                "Usage: /save <name>".to_string(),
+            ));
+            return;
+        }
+        if self.conversation_id.is_none() {
+            self.add_to_history(history_cell::new_error_event(
+                "Session is not ready yet; try /save again in a moment.".to_string(),
+            ));
+            return;
+        }
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::SaveSession { name: name.into() }));
+        self.add_info_message(format!("Saving session '{name}'..."), None);
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
@@ -1769,6 +1797,12 @@ impl ChatWidget {
             EventMsg::Error(ErrorEvent { message, .. }) => self.on_error(message),
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
+            EventMsg::SaveSessionResponse(ev) => {
+                self.add_info_message(
+                    format!("Saved session '{}' ({}).", ev.name, ev.conversation_id),
+                    Some(format!("Rollout: {}", ev.rollout_path.display())),
+                );
+            }
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
                     self.on_interrupted_turn(ev.reason);
