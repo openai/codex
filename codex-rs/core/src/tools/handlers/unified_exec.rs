@@ -202,10 +202,8 @@ impl ToolHandler for UnifiedExecHandler {
                     )
                     .await
                     .map_err(|err| {
-                        tracing::error!("failed to exec command: {err:?}");
                         FunctionCallError::RespondToModel(format!("exec_command failed: {err:?}"))
                     })?;
-                tracing::error!("Result: {result:?}");
                 result
             }
             "write_stdin" => {
