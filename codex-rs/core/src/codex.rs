@@ -139,7 +139,6 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
-use reqwest::StatusCode;
 use std::path::Path;
 
 /// The high-level interface to the Codex system.
@@ -1852,7 +1851,7 @@ mod handlers {
                     id: sub_id,
                     msg: EventMsg::Error(ErrorEvent {
                         message,
-                        http_status_code: None,
+                        codex_error_info: None,
                     }),
                 };
                 sess.send_event_raw(event).await;

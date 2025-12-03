@@ -59,6 +59,10 @@ impl ConversationManager {
         )
     }
 
+    pub fn session_source(&self) -> SessionSource {
+        self.session_source.clone()
+    }
+
     /// Start a brand new conversation with default initial history.
     pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
         self.spawn_conversation(config, self.auth_manager.clone())
@@ -263,6 +267,8 @@ impl ConversationManager {
 
         self.finalize_spawn(codex, conversation_id, session).await
     }
+
+
 }
 
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message
