@@ -46,6 +46,7 @@ pub(crate) async fn handle_output_item_done(
     let mut output = OutputItemResult::default();
 
     match ToolRouter::build_tool_call(ctx.sess.as_ref(), item.clone()).await {
+        // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
             let payload_preview = call.payload.log_payload().into_owned();
             tracing::info!("ToolCall: {} {}", call.tool_name, payload_preview);
@@ -54,7 +55,7 @@ pub(crate) async fn handle_output_item_done(
                 .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&item))
                 .await;
 
-            let cancellation_token = ctx.cancellation_token.clone();
+            let cancellation_token = ctx.cancellation_token.child_token();
             let tool_runtime = ctx.tool_runtime.clone();
 
             let tool_future: InFlightFuture<'static> = Box::pin(async move {
@@ -67,6 +68,7 @@ pub(crate) async fn handle_output_item_done(
             output.needs_follow_up = true;
             output.tool_future = Some(tool_future);
         }
+        // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
             if let Some(turn_item) = handle_non_tool_response_item(&item).await {
                 if previously_active_item.is_none() {
@@ -87,6 +89,7 @@ pub(crate) async fn handle_output_item_done(
 
             output.last_agent_message = last_agent_message;
         }
+        // Guardrail: the model issued a LocalShellCall without an id; surface the error back into history.
         Err(FunctionCallError::MissingLocalShellCallId) => {
             let msg = "LocalShellCall without call_id or id";
             ctx.turn_context
@@ -116,6 +119,7 @@ pub(crate) async fn handle_output_item_done(
 
             output.needs_follow_up = true;
         }
+        // The tool request should be answered directly (or was denied); push that response into the transcript.
         Err(FunctionCallError::RespondToModel(message))
         | Err(FunctionCallError::Denied(message)) => {
             let response = ResponseInputItem::FunctionCallOutput {
@@ -139,6 +143,7 @@ pub(crate) async fn handle_output_item_done(
 
             output.needs_follow_up = true;
         }
+        // A fatal error occurred; surface it back into history.
         Err(FunctionCallError::Fatal(message)) => {
             return Err(CodexErr::Fatal(message));
         }
