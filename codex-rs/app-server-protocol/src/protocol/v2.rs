@@ -1144,9 +1144,6 @@ pub enum ThreadItem {
     WebSearch { id: String, query: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    TodoList { id: String, items: Vec<TodoItem> },
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
     ImageView { id: String, path: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1247,15 +1244,6 @@ pub struct McpToolCallResult {
 #[ts(export_to = "v2/")]
 pub struct McpToolCallError {
     pub message: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct TodoItem {
-    pub id: String,
-    pub text: String,
-    pub completed: bool,
 }
 
 // === Server Notifications ===
