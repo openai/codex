@@ -18,9 +18,9 @@ pub(crate) fn backoff(attempt: u64) -> Duration {
 
 pub(crate) fn error_or_panic(message: impl Into<String>) {
     if cfg!(debug_assertions) || env!("CARGO_PKG_VERSION").contains("alpha") {
-        panic!("{message}");
+        panic!("{}", message.to_string());
     } else {
-        error!("{message}");
+        error!("{}", message.to_string());
     }
 }
 
