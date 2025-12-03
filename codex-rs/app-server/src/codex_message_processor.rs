@@ -141,7 +141,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
-use codex_protocol::protocol::McpAuthStatus;
+use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
@@ -1980,7 +1980,8 @@ impl CodexMessageProcessor {
                     .auth_statuses
                     .get(name)
                     .cloned()
-                    .unwrap_or(McpAuthStatus::Unsupported),
+                    .unwrap_or(CoreMcpAuthStatus::Unsupported)
+                    .into(),
             })
             .collect();
 

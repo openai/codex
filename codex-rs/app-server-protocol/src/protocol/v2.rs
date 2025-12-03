@@ -15,7 +15,6 @@ use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
-use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
@@ -139,6 +138,15 @@ v2_enum_from_core!(
 v2_enum_from_core!(
     pub enum ReviewDelivery from codex_protocol::protocol::ReviewDelivery {
         Inline, Detached
+    }
+);
+
+v2_enum_from_core!(
+    pub enum McpAuthStatus from codex_protocol::protocol::McpAuthStatus {
+        Unsupported,
+        NotLoggedIn,
+        BearerToken,
+        OAuth
     }
 );
 
