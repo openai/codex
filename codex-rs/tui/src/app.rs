@@ -14,6 +14,8 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::ResumeSelection;
+use crate::skill_error_prompt::SkillErrorPromptOutcome;
+use crate::skill_error_prompt::run_skill_error_prompt;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -36,6 +38,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_core::skills::load_skills;
 use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -266,6 +269,20 @@ impl App {
             auth_manager.clone(),
             SessionSource::Cli,
         ));
+
+        let skills_outcome = load_skills(&config);
+        if !skills_outcome.errors.is_empty() {
+            match run_skill_error_prompt(tui, &skills_outcome.errors).await {
+                SkillErrorPromptOutcome::Exit => {
+                    return Ok(AppExitInfo {
+                        token_usage: TokenUsage::default(),
+                        conversation_id: None,
+                        update_action: None,
+                    });
+                }
+                SkillErrorPromptOutcome::Continue => {}
+            }
+        }
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
 

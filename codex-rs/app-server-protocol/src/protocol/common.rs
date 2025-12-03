@@ -164,6 +164,12 @@ client_request_definitions! {
         response: v2::FeedbackUploadResponse,
     },
 
+    /// Execute a command (argv vector) under the server's sandbox.
+    OneOffCommandExec => "command/exec" {
+        params: v2::CommandExecParams,
+        response: v2::CommandExecResponse,
+    },
+
     ConfigRead => "config/read" {
         params: v2::ConfigReadParams,
         response: v2::ConfigReadResponse,
@@ -511,6 +517,7 @@ server_notification_definitions! {
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
     AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
+    FileChangeOutputDelta => "item/fileChange/outputDelta" (v2::FileChangeOutputDeltaNotification),
     McpToolCallProgress => "item/mcpToolCall/progress" (v2::McpToolCallProgressNotification),
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),

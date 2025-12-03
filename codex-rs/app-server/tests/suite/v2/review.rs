@@ -93,7 +93,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         match started.item {
             ThreadItem::EnteredReviewMode { id, review } => {
                 assert_eq!(id, turn_id);
-                assert_eq!(review, "commit 1234567");
+                assert_eq!(review, "commit 1234567: Tidy UI colors");
                 saw_entered_review_mode = true;
                 break;
             }

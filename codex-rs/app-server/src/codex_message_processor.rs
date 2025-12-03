@@ -21,9 +21,9 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
-use codex_app_server_protocol::ExecOneOffCommandParams;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
@@ -64,7 +64,7 @@ use codex_app_server_protocol::ResumeConversationResponse;
 use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
-use codex_app_server_protocol::ReviewTarget;
+use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
@@ -124,6 +124,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDelivery as CoreReviewDelivery;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::ReviewTarget as CoreReviewTarget;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::read_head_for_summary;
 use codex_feedback::CodexFeedback;
@@ -255,7 +256,7 @@ impl CodexMessageProcessor {
     }
 
     fn review_request_from_target(
-        target: ReviewTarget,
+        target: ApiReviewTarget,
     ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
         fn invalid_request(message: String) -> JSONRPCErrorError {
             JSONRPCErrorError {
@@ -265,73 +266,52 @@ impl CodexMessageProcessor {
             }
         }
 
-        match target {
-            // TODO(jif) those messages will be extracted in a follow-up PR.
-            ReviewTarget::UncommittedChanges => Ok((
-                ReviewRequest {
-                    prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
-                    user_facing_hint: "current changes".to_string(),
-                },
-                "Review uncommitted changes".to_string(),
-            )),
-            ReviewTarget::BaseBranch { branch } => {
+        let cleaned_target = match target {
+            ApiReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
+            ApiReviewTarget::BaseBranch { branch } => {
                 let branch = branch.trim().to_string();
                 if branch.is_empty() {
                     return Err(invalid_request("branch must not be empty".to_string()));
                 }
-                let prompt = format!("Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings.");
-                let hint = format!("changes against '{branch}'");
-                let display = format!("Review changes against base branch '{branch}'");
-                Ok((
-                    ReviewRequest {
-                        prompt,
-                        user_facing_hint: hint,
-                    },
-                    display,
-                ))
+                ApiReviewTarget::BaseBranch { branch }
             }
-            ReviewTarget::Commit { sha, title } => {
+            ApiReviewTarget::Commit { sha, title } => {
                 let sha = sha.trim().to_string();
                 if sha.is_empty() {
                     return Err(invalid_request("sha must not be empty".to_string()));
                 }
-                let brief_title = title
+                let title = title
                     .map(|t| t.trim().to_string())
                     .filter(|t| !t.is_empty());
-                let prompt = if let Some(title) = brief_title.clone() {
-                    format!("Review the code changes introduced by commit {sha} (\"{title}\"). Provide prioritized, actionable findings.")
-                } else {
-                    format!("Review the code changes introduced by commit {sha}. Provide prioritized, actionable findings.")
-                };
-                let short_sha = sha.chars().take(7).collect::<String>();
-                let hint = format!("commit {short_sha}");
-                let display = if let Some(title) = brief_title {
-                    format!("Review commit {short_sha}: {title}")
-                } else {
-                    format!("Review commit {short_sha}")
-                };
-                Ok((
-                    ReviewRequest {
-                        prompt,
-                        user_facing_hint: hint,
-                    },
-                    display,
-                ))
+                ApiReviewTarget::Commit { sha, title }
             }
-            ReviewTarget::Custom { instructions } => {
+            ApiReviewTarget::Custom { instructions } => {
                 let trimmed = instructions.trim().to_string();
                 if trimmed.is_empty() {
-                    return Err(invalid_request("instructions must not be empty".to_string()));
+                    return Err(invalid_request(
+                        "instructions must not be empty".to_string(),
+                    ));
                 }
-                Ok((
-                    ReviewRequest {
-                        prompt: trimmed.clone(),
-                        user_facing_hint: trimmed.clone(),
-                    },
-                    trimmed,
-                ))
+                ApiReviewTarget::Custom {
+                    instructions: trimmed,
+                }
             }
-        }
+        };
+
+        let core_target = match cleaned_target {
+            ApiReviewTarget::UncommittedChanges => CoreReviewTarget::UncommittedChanges,
+            ApiReviewTarget::BaseBranch { branch } => CoreReviewTarget::BaseBranch { branch },
+            ApiReviewTarget::Commit { sha, title } => CoreReviewTarget::Commit { sha, title },
+            ApiReviewTarget::Custom { instructions } => CoreReviewTarget::Custom { instructions },
+        };
+
+        let hint = codex_core::review_prompts::user_facing_hint(&core_target);
+        let review_request = ReviewRequest {
+            target: core_target,
+            user_facing_hint: Some(hint.clone()),
+        };
+
+        Ok((review_request, hint))
     }
 
     pub async fn process_request(&mut self, request: ClientRequest) {
@@ -467,8 +447,11 @@ impl CodexMessageProcessor {
             ClientRequest::FuzzyFileSearch { request_id, params } => {
                 self.fuzzy_file_search(request_id, params).await;
             }
-            ClientRequest::ExecOneOffCommand { request_id, params } => {
+            ClientRequest::OneOffCommandExec { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
+            }
+            ClientRequest::ExecOneOffCommand { request_id, params } => {
+                self.exec_one_off_command(request_id, params.into()).await;
             }
             ClientRequest::ConfigRead { .. }
             | ClientRequest::ConfigValueWrite { .. }
@@ -1154,7 +1137,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn exec_one_off_command(&self, request_id: RequestId, params: ExecOneOffCommandParams) {
+    async fn exec_one_off_command(&self, request_id: RequestId, params: CommandExecParams) {
         tracing::debug!("ExecOneOffCommand params: {params:?}");
 
         if params.command.is_empty() {
@@ -1169,7 +1152,9 @@ impl CodexMessageProcessor {
 
         let cwd = params.cwd.unwrap_or_else(|| self.config.cwd.clone());
         let env = create_env(&self.config.shell_environment_policy);
-        let timeout_ms = params.timeout_ms;
+        let timeout_ms = params
+            .timeout_ms
+            .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
         let exec_params = ExecParams {
             command: params.command,
             cwd,
@@ -1182,6 +1167,7 @@ impl CodexMessageProcessor {
 
         let effective_policy = params
             .sandbox_policy
+            .map(|policy| policy.to_core())
             .unwrap_or_else(|| self.config.sandbox_policy.clone());
 
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
@@ -2469,6 +2455,7 @@ impl CodexMessageProcessor {
                 let turn = Turn {
                     id: turn_id.clone(),
                     items: vec![],
+                    error: None,
                     status: TurnStatus::InProgress,
                 };
 
@@ -2510,6 +2497,7 @@ impl CodexMessageProcessor {
         Turn {
             id: turn_id,
             items,
+            error: None,
             status: TurnStatus::InProgress,
         }
     }

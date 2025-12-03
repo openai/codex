@@ -976,6 +976,7 @@ impl Session {
             .read()
             .await
             .resolve_elicitation(server_name, id, response)
+            .await
     }
 
     /// Records input items: always append to conversation history and
@@ -1033,6 +1034,22 @@ impl Session {
     ) {
         let mut state = self.state.lock().await;
         state.record_items(items.iter(), turn_context.truncation_policy);
+    }
+
+    pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
+        if !self.enabled(Feature::ModelWarnings).await {
+            return;
+        }
+
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!("Warning: {}", message.into()),
+            }],
+        };
+
+        self.record_conversation_items(ctx, &[item]).await;
     }
 
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
@@ -1476,6 +1493,7 @@ mod handlers {
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
     use crate::mcp::auth::compute_auth_statuses;
+    use crate::review_prompts::resolve_review_request;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
@@ -1784,14 +1802,28 @@ mod handlers {
         let turn_context = sess
             .new_turn_with_sub_id(sub_id.clone(), SessionSettingsUpdate::default())
             .await;
-        spawn_review_thread(
-            Arc::clone(sess),
-            Arc::clone(config),
-            turn_context.clone(),
-            sub_id,
-            review_request,
-        )
-        .await;
+        match resolve_review_request(review_request, config.cwd.as_path()) {
+            Ok(resolved) => {
+                spawn_review_thread(
+                    Arc::clone(sess),
+                    Arc::clone(config),
+                    turn_context.clone(),
+                    sub_id,
+                    resolved,
+                )
+                .await;
+            }
+            Err(err) => {
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: err.to_string(),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                };
+                sess.send_event(&turn_context, event.msg).await;
+            }
+        }
     }
 }
 
@@ -1801,7 +1833,7 @@ async fn spawn_review_thread(
     config: Arc<Config>,
     parent_turn_context: Arc<TurnContext>,
     sub_id: String,
-    review_request: ReviewRequest,
+    resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
     let model = config.review_model.clone();
     let review_model_family = find_family_for_model(&model)
@@ -1817,7 +1849,7 @@ async fn spawn_review_thread(
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();
-    let review_prompt = review_request.prompt.clone();
+    let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.client.get_provider();
     let auth_manager = parent_turn_context.client.get_auth_manager();
     let model_family = review_model_family.clone();
@@ -1879,6 +1911,10 @@ async fn spawn_review_thread(
     sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
 
     // Announce entering review mode so UIs can switch modes.
+    let review_request = ReviewRequest {
+        target: resolved.target,
+        user_facing_hint: Some(resolved.user_facing_hint),
+    };
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
         .await;
 }
@@ -2445,7 +2481,10 @@ mod tests {
     use crate::tools::format_exec_output_str;
 
     use crate::protocol::CompactedItem;
+    use crate::protocol::CreditsSnapshot;
     use crate::protocol::InitialHistory;
+    use crate::protocol::RateLimitSnapshot;
+    use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
@@ -2513,6 +2552,75 @@ mod tests {
             session.state.lock().await.clone_history().get_history()
         });
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn set_rate_limits_retains_previous_credits() {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load default test config");
+        let config = Arc::new(config);
+        let session_configuration = SessionConfiguration {
+            provider: config.model_provider.clone(),
+            model: config.model.clone(),
+            model_reasoning_effort: config.model_reasoning_effort,
+            model_reasoning_summary: config.model_reasoning_summary,
+            developer_instructions: config.developer_instructions.clone(),
+            user_instructions: config.user_instructions.clone(),
+            base_instructions: config.base_instructions.clone(),
+            compact_prompt: config.compact_prompt.clone(),
+            approval_policy: config.approval_policy,
+            sandbox_policy: config.sandbox_policy.clone(),
+            cwd: config.cwd.clone(),
+            original_config_do_not_use: Arc::clone(&config),
+            features: Features::default(),
+            exec_policy: Arc::new(ExecPolicy::empty()),
+            session_source: SessionSource::Exec,
+        };
+
+        let mut state = SessionState::new(session_configuration);
+        let initial = RateLimitSnapshot {
+            primary: Some(RateLimitWindow {
+                used_percent: 10.0,
+                window_minutes: Some(15),
+                resets_at: Some(1_700),
+            }),
+            secondary: None,
+            credits: Some(CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("10.00".to_string()),
+            }),
+        };
+        state.set_rate_limits(initial.clone());
+
+        let update = RateLimitSnapshot {
+            primary: Some(RateLimitWindow {
+                used_percent: 40.0,
+                window_minutes: Some(30),
+                resets_at: Some(1_800),
+            }),
+            secondary: Some(RateLimitWindow {
+                used_percent: 5.0,
+                window_minutes: Some(60),
+                resets_at: Some(1_900),
+            }),
+            credits: None,
+        };
+        state.set_rate_limits(update.clone());
+
+        assert_eq!(
+            state.latest_rate_limits,
+            Some(RateLimitSnapshot {
+                primary: update.primary.clone(),
+                secondary: update.secondary,
+                credits: initial.credits,
+            })
+        );
     }
 
     #[test]
@@ -2785,6 +2893,40 @@ mod tests {
         });
 
         (session, turn_context, rx_event)
+    }
+
+    #[tokio::test]
+    async fn record_model_warning_appends_user_message() {
+        let (session, turn_context) = make_session_and_context();
+
+        session
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .features
+            .enable(Feature::ModelWarnings);
+
+        session
+            .record_model_warning("too many unified exec sessions", &turn_context)
+            .await;
+
+        let mut history = session.clone_history().await;
+        let history_items = history.get_history();
+        let last = history_items.last().expect("warning recorded");
+
+        match last {
+            ResponseItem::Message { role, content, .. } => {
+                assert_eq!(role, "user");
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::InputText {
+                        text: "Warning: too many unified exec sessions".to_string(),
+                    }]
+                );
+            }
+            other => panic!("expected user message, got {other:?}"),
+        }
     }
 
     #[derive(Clone, Copy)]
