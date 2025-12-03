@@ -153,10 +153,23 @@ impl UnifiedExecSessionManager {
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let has_exited = session.has_exited();
         let exit_code = session.exit_code();
-        let sandbox_type = session.sandbox_type();
         let chunk_id = generate_chunk_id();
-        let process_id = if has_exited {
-            None
+         if has_exited {
+            let exit = exit_code.unwrap_or(-1);
+            Self::emit_exec_end_from_context(
+                context,
+                &request.command,
+                cwd,
+                output.clone(),
+                exit,
+                wall_time,
+                // We always emit the process ID in order to keep consistency between the Begin
+                // event and the End event.
+                Some(request.process_id),
+            )
+            .await;
+
+            session.check_for_sandbox_denial_with_text(&text).await?;
         } else {
             // Only store session if not exited.
             self.store_session(
@@ -168,43 +181,22 @@ impl UnifiedExecSessionManager {
                 request.process_id.clone(),
             )
             .await;
-            Some(request.process_id.clone())
-        };
-        let original_token_count = approx_token_count(&text);
+            Some(request.process_id.clone());
 
+            Self::emit_waiting_status(&context.session, &context.turn, &request.command).await;
+        };
+        
+        let original_token_count = approx_token_count(&text);s
         let response = UnifiedExecResponse {
             event_call_id: context.call_id.clone(),
             chunk_id,
             wall_time,
             output,
-            process_id: process_id.clone(),
+            process_id: Some(request.process_id.clone()),
             exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
         };
-
-        if !has_exited {
-            Self::emit_waiting_status(&context.session, &context.turn, &request.command).await;
-        }
-
-        // If the command completed during this call, emit an ExecCommandEnd via the emitter.
-        if has_exited {
-            let exit = response.exit_code.unwrap_or(-1);
-            Self::emit_exec_end_from_context(
-                context,
-                &request.command,
-                cwd,
-                response.output.clone(),
-                exit,
-                response.wall_time,
-                // We always emit the process ID in order to keep consistency between the Begin
-                // event and the End event.
-                Some(request.process_id),
-            )
-            .await;
-
-            sandboxing::check_sandboxing(sandbox_type, &text, exit)?;
-        }
 
         Ok(response)
     }
