@@ -1,3 +1,4 @@
+mod collaboration;
 mod compact;
 mod ghost_snapshot;
 mod regular;
@@ -28,9 +29,9 @@ use crate::state::RunningTask;
 use crate::state::TaskKind;
 use codex_protocol::user_input::UserInput;
 
+pub(crate) use collaboration::CollaborationSupervisor;
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
-pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
 pub(crate) use undo::UndoTask;
 pub(crate) use user_shell::UserShellCommandTask;

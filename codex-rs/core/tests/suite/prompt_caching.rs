@@ -159,6 +159,10 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "read_mcp_resource",
         "update_plan",
         "apply_patch",
+        "grep_files",
+        "read_file",
+        "list_dir",
+        "test_sync_tool",
         "view_image",
     ];
     let body0 = req1.single_request().body_json();

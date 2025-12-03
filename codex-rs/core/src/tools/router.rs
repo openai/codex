@@ -34,8 +34,7 @@ impl ToolRouter {
         config: &ToolsConfig,
         mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
     ) -> Self {
-        let builder = build_specs(config, mcp_tools);
-        let (specs, registry) = builder.build();
+        let (specs, registry) = build_specs(config, mcp_tools).build();
 
         Self { registry, specs }
     }
@@ -136,6 +135,27 @@ impl ToolRouter {
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
     ) -> Result<ResponseInputItem, FunctionCallError> {
+        let session_configuration = session.current_session_configuration().await;
+        let session_history = session.clone_history().await;
+        let mut caller_agent = turn.collaboration_agent();
+        {
+            let mut collab = session.collaboration_state().lock().await;
+            collab.ensure_root_agent(&session_configuration, &session_history);
+            if let Some(mapped) = collab.agent_for_sub_id(&turn.sub_id) {
+                caller_agent = mapped;
+            }
+            if collab.agent(caller_agent).is_none() {
+                return Ok(Self::failure_response(
+                    call.call_id,
+                    matches!(call.payload, ToolPayload::Custom { .. }),
+                    FunctionCallError::RespondToModel(format!(
+                        "unknown collaboration agent {}",
+                        caller_agent.0
+                    )),
+                ));
+            }
+        }
+
         let ToolCall {
             tool_name,
             call_id,
@@ -185,5 +205,23 @@ impl ToolRouter {
                 },
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codex::make_session_and_context_with_rx;
+
+    #[test]
+    fn builds_specs_without_filtering() {
+        let (_session, turn, _rx) = make_session_and_context_with_rx();
+        let router = ToolRouter::from_config(&turn.tools_config, None);
+        let names: Vec<String> = router
+            .specs()
+            .into_iter()
+            .map(|spec| spec.name().to_string())
+            .collect();
+        assert!(names.contains(&"update_plan".to_string()));
     }
 }
