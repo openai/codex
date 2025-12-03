@@ -33,12 +33,20 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                 headers,
                 body,
             } => {
-                if status == http::StatusCode::INTERNAL_SERVER_ERROR {
+                let body_text = body.unwrap_or_default();
+
+                if status == http::StatusCode::BAD_REQUEST {
+                    if body_text
+                        .contains("The image data you provided does not represent a valid image")
+                    {
+                        CodexErr::InvalidImageRequest()
+                    } else {
+                        CodexErr::InvalidRequest(body_text)
+                    }
+                } else if status == http::StatusCode::INTERNAL_SERVER_ERROR {
                     CodexErr::InternalServerError
                 } else if status == http::StatusCode::TOO_MANY_REQUESTS {
-                    if let Some(body) = body
-                        && let Ok(err) = serde_json::from_str::<UsageErrorResponse>(&body)
-                    {
+                    if let Ok(err) = serde_json::from_str::<UsageErrorResponse>(&body_text) {
                         if err.error.error_type.as_deref() == Some("usage_limit_reached") {
                             let rate_limits = headers.as_ref().and_then(parse_rate_limit);
                             let resets_at = err
@@ -62,7 +70,7 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                 } else {
                     CodexErr::UnexpectedStatus(UnexpectedResponseError {
                         status,
-                        body: body.unwrap_or_default(),
+                        body: body_text,
                         request_id: extract_request_id(headers.as_ref()),
                     })
                 }

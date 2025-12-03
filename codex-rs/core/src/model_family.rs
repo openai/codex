@@ -1,5 +1,5 @@
-use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::openai_models::ReasoningEffort;
 
 use crate::config::types::ReasoningSummaryFormat;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;

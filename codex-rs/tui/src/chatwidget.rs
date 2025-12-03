@@ -20,6 +20,7 @@ use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
@@ -122,15 +123,15 @@ use std::path::Path;
 use chrono::Local;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
-use codex_common::model_presets::ModelPreset;
-use codex_common::model_presets::builtin_model_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
+use codex_core::openai_models::model_presets::builtin_model_presets;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
+use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
@@ -257,6 +258,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) skills: Option<Vec<SkillMetadata>>,
+    pub(crate) is_first_run: bool,
 }
 
 #[derive(Default)]
@@ -560,7 +562,19 @@ impl ChatWidget {
     }
 
     pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
-        if let Some(snapshot) = snapshot {
+        if let Some(mut snapshot) = snapshot {
+            if snapshot.credits.is_none() {
+                snapshot.credits = self
+                    .rate_limit_snapshot
+                    .as_ref()
+                    .and_then(|display| display.credits.as_ref())
+                    .map(|credits| CreditsSnapshot {
+                        has_credits: credits.has_credits,
+                        unlimited: credits.unlimited,
+                        balance: credits.balance.clone(),
+                    });
+            }
+
             let warnings = self.rate_limit_warnings.take_warnings(
                 snapshot
                     .secondary
@@ -1220,6 +1234,7 @@ impl ChatWidget {
             auth_manager,
             feedback,
             skills,
+            is_first_run,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1265,7 +1280,7 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
-            show_welcome_banner: true,
+            show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
@@ -1297,6 +1312,7 @@ impl ChatWidget {
             auth_manager,
             feedback,
             skills,
+            ..
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1344,7 +1360,7 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
-            show_welcome_banner: true,
+            show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
@@ -1376,7 +1392,9 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'v') => {
+            } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && c.eq_ignore_ascii_case(&'v') =>
+            {
                 match paste_image_to_temp_png() {
                     Ok((path, info)) => {
                         self.attach_image(
@@ -1469,6 +1487,9 @@ impl ChatWidget {
             }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
+            }
+            SlashCommand::Resume => {
+                self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
@@ -1821,6 +1842,7 @@ impl ChatWidget {
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
+            | EventMsg::ListModelsResponse(_)
             | EventMsg::ReasoningRawContentDelta(_) => {}
         }
     }
@@ -2062,7 +2084,7 @@ impl ChatWidget {
         let description = if preset.description.is_empty() {
             Some("Uses fewer credits for upcoming turns.".to_string())
         } else {
-            Some(preset.description.to_string())
+            Some(preset.description)
         };
 
         let items = vec![
@@ -2198,9 +2220,9 @@ impl ChatWidget {
 
         if choices.len() == 1 {
             if let Some(effort) = choices.first().and_then(|c| c.stored) {
-                self.apply_model_and_effort(preset.model.to_string(), Some(effort));
+                self.apply_model_and_effort(preset.model, Some(effort));
             } else {
-                self.apply_model_and_effort(preset.model.to_string(), None);
+                self.apply_model_and_effort(preset.model, None);
             }
             return;
         }
