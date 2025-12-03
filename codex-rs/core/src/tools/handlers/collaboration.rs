@@ -36,6 +36,48 @@ fn empty_extra_metadata() -> ExtraMetadata {
     ExtraMetadata(HashMap::new())
 }
 
+fn make_send_metadata(
+    success: bool,
+    penalize_model: bool,
+    is_success_msg: Option<bool>,
+    message: &str,
+    extra: ExtraMetadata,
+) -> CollaborationSendMetadata {
+    CollaborationSendMetadata {
+        message_tool_call_success: success,
+        message_tool_call_error_should_penalize_model: penalize_model,
+        is_send_success_msg: is_success_msg,
+        message_content_str: Some(message.to_string()),
+        extra,
+    }
+}
+
+fn make_wait_metadata(
+    success: bool,
+    penalize_model: bool,
+    is_success_msg: Option<bool>,
+    extra: ExtraMetadata,
+) -> CollaborationWaitMetadata {
+    CollaborationWaitMetadata {
+        message_tool_call_success: success,
+        message_tool_call_error_should_penalize_model: penalize_model,
+        is_wait_success_msg: is_success_msg,
+        extra,
+    }
+}
+
+fn make_close_metadata(
+    success: bool,
+    penalize_model: bool,
+    extra: ExtraMetadata,
+) -> CollaborationCloseMetadata {
+    CollaborationCloseMetadata {
+        message_tool_call_success: success,
+        message_tool_call_error_should_penalize_model: penalize_model,
+        extra,
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct CollaborationInitAgentMetadata {
     message_tool_call_success: bool,
@@ -341,7 +383,7 @@ async fn handle_init_agent(
         let metadata = CollaborationInitAgentMetadata {
             message_tool_call_success: false,
             message_tool_call_error_should_penalize_model: true,
-            extra: ExtraMetadata(HashMap::new()),
+            extra: empty_extra_metadata(),
         };
         let output = CollaborationInitAgentOutput {
             content: format!("unknown caller agent {}", parent_id.0),
@@ -357,7 +399,7 @@ async fn handle_init_agent(
         let metadata = CollaborationInitAgentMetadata {
             message_tool_call_success: false,
             message_tool_call_error_should_penalize_model: false,
-            extra: ExtraMetadata(HashMap::new()),
+            extra: empty_extra_metadata(),
         };
         let output = CollaborationInitAgentOutput {
             content: "max agent count reached".to_string(),
@@ -370,7 +412,7 @@ async fn handle_init_agent(
         let metadata = CollaborationInitAgentMetadata {
             message_tool_call_success: false,
             message_tool_call_error_should_penalize_model: false,
-            extra: ExtraMetadata(HashMap::new()),
+            extra: empty_extra_metadata(),
         };
         let output = CollaborationInitAgentOutput {
             content: "max collaboration depth reached".to_string(),
@@ -386,7 +428,7 @@ async fn handle_init_agent(
             let metadata = CollaborationInitAgentMetadata {
                 message_tool_call_success: false,
                 message_tool_call_error_should_penalize_model: true,
-                extra: ExtraMetadata(HashMap::new()),
+                extra: empty_extra_metadata(),
             };
             let output = CollaborationInitAgentOutput {
                 content: "sandbox_policy cannot be more permissive than the parent".to_string(),
@@ -475,13 +517,13 @@ async fn handle_send(
     let sender_id = turn.collaboration_agent();
 
     if collab.agent(sender_id).is_none() {
-        let metadata = CollaborationSendMetadata {
-            message_tool_call_success: false,
-            message_tool_call_error_should_penalize_model: true,
-            is_send_success_msg: Some(false),
-            message_content_str: Some(input.message.clone()),
-            extra: ExtraMetadata(HashMap::new()),
-        };
+        let metadata = make_send_metadata(
+            false,
+            true,
+            Some(false),
+            &input.message,
+            empty_extra_metadata(),
+        );
         let output = CollaborationSendOutput {
             content: format!("unknown caller agent {}", sender_id.0),
             metadata,
@@ -507,13 +549,13 @@ async fn handle_send(
     if valid_recipients.is_empty() {
         let mut extra = HashMap::new();
         extra.insert("recipients".to_string(), json!(input.recipients));
-        let metadata = CollaborationSendMetadata {
-            message_tool_call_success: false,
-            message_tool_call_error_should_penalize_model: true,
-            is_send_success_msg: Some(false),
-            message_content_str: Some(input.message.clone()),
-            extra: ExtraMetadata(extra),
-        };
+        let metadata = make_send_metadata(
+            false,
+            true,
+            Some(false),
+            &input.message,
+            ExtraMetadata(extra),
+        );
         let content = if invalid_recipients.is_empty() {
             "no valid recipients provided".to_string()
         } else {
@@ -552,13 +594,14 @@ async fn handle_send(
         json!(valid_recipients.iter().map(|id| id.0).collect::<Vec<i32>>()),
     );
 
-    let metadata = CollaborationSendMetadata {
-        message_tool_call_success: invalid_recipients.is_empty(),
-        message_tool_call_error_should_penalize_model: !invalid_recipients.is_empty(),
-        is_send_success_msg: Some(invalid_recipients.is_empty()),
-        message_content_str: Some(input.message.clone()),
-        extra: ExtraMetadata(extra),
-    };
+    let message_tool_call_success = invalid_recipients.is_empty();
+    let metadata = make_send_metadata(
+        message_tool_call_success,
+        !invalid_recipients.is_empty(),
+        Some(message_tool_call_success),
+        &input.message,
+        ExtraMetadata(extra),
+    );
 
     let content = if invalid_recipients.is_empty() {
         "Message sent successfully.".to_string()
@@ -573,9 +616,7 @@ async fn handle_send(
         )
     };
 
-    let success = metadata.message_tool_call_success;
-
-    if success && !valid_recipients.is_empty() {
+    if metadata.message_tool_call_success && !valid_recipients.is_empty() {
         let supervisor = session.ensure_collaboration_supervisor().await;
         for recipient in valid_recipients
             .iter()
@@ -586,6 +627,7 @@ async fn handle_send(
         }
     }
 
+    let success = message_tool_call_success;
     let output = CollaborationSendOutput { content, metadata };
     info!(
         "collaboration_send: sender={}, recipients={:?}, status={}",
@@ -604,12 +646,7 @@ async fn handle_wait(
     })?;
 
     if input.max_duration < 0 {
-        let metadata = CollaborationWaitMetadata {
-            message_tool_call_success: false,
-            message_tool_call_error_should_penalize_model: true,
-            is_wait_success_msg: Some(false),
-            extra: empty_extra_metadata(),
-        };
+        let metadata = make_wait_metadata(false, true, Some(false), empty_extra_metadata());
         let output = CollaborationWaitOutput {
             content: "max_duration must be non-negative".to_string(),
             metadata,
@@ -628,12 +665,7 @@ async fn handle_wait(
     {
         let collab = session.collaboration_state().lock().await;
         if collab.agent(caller_id).is_none() {
-            let metadata = CollaborationWaitMetadata {
-                message_tool_call_success: false,
-                message_tool_call_error_should_penalize_model: true,
-                is_wait_success_msg: Some(false),
-                extra: empty_extra_metadata(),
-            };
+            let metadata = make_wait_metadata(false, true, Some(false), empty_extra_metadata());
             let output = CollaborationWaitOutput {
                 content: format!("unknown caller agent {}", caller_id.0),
                 metadata,
@@ -671,12 +703,7 @@ async fn handle_wait(
 
     if !invalid.is_empty() || targets.is_empty() {
         let penalize = !invalid.is_empty();
-        let metadata = CollaborationWaitMetadata {
-            message_tool_call_success: false,
-            message_tool_call_error_should_penalize_model: penalize,
-            is_wait_success_msg: Some(false),
-            extra: empty_extra_metadata(),
-        };
+        let metadata = make_wait_metadata(false, penalize, Some(false), empty_extra_metadata());
         let content = if !invalid.is_empty() {
             format!(
                 "invalid or non-child agent indices: {}",
@@ -719,7 +746,7 @@ async fn handle_wait(
         targets
             .iter()
             .filter(|id| {
-                collab.agent(**id).map_or(false, |agent| {
+                collab.agent(**id).is_some_and(|agent| {
                     matches!(agent.status, AgentLifecycleState::Running)
                 })
             })
@@ -741,12 +768,7 @@ async fn handle_wait(
             ),
         );
         extra.insert("token_budget_exhausted".to_string(), json!(false));
-        let metadata = CollaborationWaitMetadata {
-            message_tool_call_success: true,
-            message_tool_call_error_should_penalize_model: false,
-            is_wait_success_msg: Some(true),
-            extra: ExtraMetadata(extra),
-        };
+        let metadata = make_wait_metadata(true, false, Some(true), ExtraMetadata(extra));
         let output = CollaborationWaitOutput {
             content: "Finished waiting.".to_string(),
             metadata,
@@ -810,12 +832,7 @@ async fn handle_wait(
     let mut extra = HashMap::new();
     extra.insert("agents_ran".to_string(), json!(agents_ran));
 
-    let metadata = CollaborationWaitMetadata {
-        message_tool_call_success: true,
-        message_tool_call_error_should_penalize_model: false,
-        is_wait_success_msg: Some(active.is_empty()),
-        extra: ExtraMetadata(extra),
-    };
+    let metadata = make_wait_metadata(true, false, Some(active.is_empty()), ExtraMetadata(extra));
 
     let content = "Finished waiting.".to_string();
     let output = CollaborationWaitOutput { content, metadata };
@@ -900,11 +917,7 @@ async fn handle_close(
     let caller_id = turn.collaboration_agent();
 
     if collab.agent(caller_id).is_none() {
-        let metadata = CollaborationCloseMetadata {
-            message_tool_call_success: false,
-            message_tool_call_error_should_penalize_model: true,
-            extra: empty_extra_metadata(),
-        };
+        let metadata = make_close_metadata(false, true, empty_extra_metadata());
         let output = CollaborationCloseOutput {
             content: format!("unknown caller agent {}", caller_id.0),
             metadata,
@@ -925,11 +938,7 @@ async fn handle_close(
     }
 
     if !invalid.is_empty() || targets.is_empty() {
-        let metadata = CollaborationCloseMetadata {
-            message_tool_call_success: false,
-            message_tool_call_error_should_penalize_model: true,
-            extra: empty_extra_metadata(),
-        };
+        let metadata = make_close_metadata(false, true, empty_extra_metadata());
         let content = if invalid.is_empty() {
             "no valid agent indices provided to close".to_string()
         } else {
@@ -960,11 +969,7 @@ async fn handle_close(
     let mut extra = HashMap::new();
     extra.insert("closed_agent_indices".to_string(), json!(closed_indices));
 
-    let metadata = CollaborationCloseMetadata {
-        message_tool_call_success: true,
-        message_tool_call_error_should_penalize_model: false,
-        extra: ExtraMetadata(extra),
-    };
+    let metadata = make_close_metadata(true, false, ExtraMetadata(extra));
 
     let content = format!(
         "Closed {} agents (and their descendants).",
