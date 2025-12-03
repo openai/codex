@@ -104,6 +104,7 @@ pub(crate) struct ChatComposer {
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
+    large_paste_counters: HashMap<usize, usize>,
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
@@ -116,6 +117,7 @@ pub(crate) struct ChatComposer {
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<i64>,
+    context_window_used_tokens: Option<i64>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -149,6 +151,7 @@ impl ChatComposer {
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
+            large_paste_counters: HashMap::new(),
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
@@ -159,6 +162,7 @@ impl ChatComposer {
             footer_mode: FooterMode::ShortcutSummary,
             footer_hint_override: None,
             context_window_percent: None,
+            context_window_used_tokens: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -223,7 +227,7 @@ impl ChatComposer {
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
-            let placeholder = format!("[Pasted Content {char_count} chars]");
+            let placeholder = self.next_large_paste_placeholder(char_count);
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
         } else if char_count > 1 && self.handle_paste_image_path(pasted.clone()) {
@@ -374,6 +378,17 @@ impl ChatComposer {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
         self.set_has_focus(has_focus);
+    }
+
+    fn next_large_paste_placeholder(&mut self, char_count: usize) -> String {
+        let base = format!("[Pasted Content {char_count} chars]");
+        let next_suffix = self.large_paste_counters.entry(char_count).or_insert(0);
+        *next_suffix += 1;
+        if *next_suffix == 1 {
+            base
+        } else {
+            format!("{base} #{next_suffix}")
+        }
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
@@ -970,21 +985,17 @@ impl ChatComposer {
                         return (InputResult::None, true);
                     }
                 }
-                // If we have pending placeholder pastes, submit immediately to expand them.
+                // If we have pending placeholder pastes, replace them in the textarea text
+                // and continue to the normal submission flow to handle slash commands.
                 if !self.pending_pastes.is_empty() {
                     let mut text = self.textarea.text().to_string();
-                    self.textarea.set_text("");
                     for (placeholder, actual) in &self.pending_pastes {
                         if text.contains(placeholder) {
                             text = text.replace(placeholder, actual);
                         }
                     }
+                    self.textarea.set_text(&text);
                     self.pending_pastes.clear();
-                    if text.is_empty() {
-                        return (InputResult::None, true);
-                    }
-                    self.history.record_local_submission(&text);
-                    return (InputResult::Submitted(text), true);
                 }
 
                 // During a paste-like burst, treat Enter as a newline instead of submit.
@@ -1407,6 +1418,7 @@ impl ChatComposer {
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
             context_window_percent: self.context_window_percent,
+            context_window_used_tokens: self.context_window_used_tokens,
         }
     }
 
@@ -1537,10 +1549,13 @@ impl ChatComposer {
         self.is_task_running = running;
     }
 
-    pub(crate) fn set_context_window_percent(&mut self, percent: Option<i64>) {
-        if self.context_window_percent != percent {
-            self.context_window_percent = percent;
+    pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
+        if self.context_window_percent == percent && self.context_window_used_tokens == used_tokens
+        {
+            return;
         }
+        self.context_window_percent = percent;
+        self.context_window_used_tokens = used_tokens;
     }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
@@ -2727,6 +2742,83 @@ mod tests {
     }
 
     #[test]
+    fn deleting_duplicate_length_pastes_removes_only_target() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let paste = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
+        let placeholder_base = format!("[Pasted Content {} chars]", paste.chars().count());
+        let placeholder_second = format!("{placeholder_base} #2");
+
+        composer.handle_paste(paste.clone());
+        composer.handle_paste(paste.clone());
+        assert_eq!(
+            composer.textarea.text(),
+            format!("{placeholder_base}{placeholder_second}")
+        );
+        assert_eq!(composer.pending_pastes.len(), 2);
+
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        assert_eq!(composer.textarea.text(), placeholder_base);
+        assert_eq!(composer.pending_pastes.len(), 1);
+        assert_eq!(composer.pending_pastes[0].0, placeholder_base);
+        assert_eq!(composer.pending_pastes[0].1, paste);
+    }
+
+    #[test]
+    fn large_paste_numbering_does_not_reuse_after_deletion() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let paste = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
+        let base = format!("[Pasted Content {} chars]", paste.chars().count());
+        let second = format!("{base} #2");
+        let third = format!("{base} #3");
+
+        composer.handle_paste(paste.clone());
+        composer.handle_paste(paste.clone());
+        assert_eq!(composer.textarea.text(), format!("{base}{second}"));
+
+        composer.textarea.set_cursor(base.len());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), second);
+        assert_eq!(composer.pending_pastes.len(), 1);
+        assert_eq!(composer.pending_pastes[0].0, second);
+
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        composer.handle_paste(paste);
+
+        assert_eq!(composer.textarea.text(), format!("{second}{third}"));
+        assert_eq!(composer.pending_pastes.len(), 2);
+        assert_eq!(composer.pending_pastes[0].0, second);
+        assert_eq!(composer.pending_pastes[1].0, third);
+    }
+
+    #[test]
     fn test_partial_placeholder_deletion() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -3085,6 +3177,70 @@ mod tests {
             result
         );
         assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn custom_prompt_with_large_paste_expands_correctly() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Create a custom prompt with positional args (no named args like $USER)
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "code-review".to_string(),
+            path: "/tmp/code-review.md".to_string().into(),
+            content: "Please review the following code:\n\n$1".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        // Type the slash command
+        let command_text = "/prompts:code-review ";
+        composer.textarea.set_text(command_text);
+        composer.textarea.set_cursor(command_text.len());
+
+        // Paste large content (>3000 chars) to trigger placeholder
+        let large_content = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 3000);
+        composer.handle_paste(large_content.clone());
+
+        // Verify placeholder was created
+        let placeholder = format!("[Pasted Content {} chars]", large_content.chars().count());
+        assert_eq!(
+            composer.textarea.text(),
+            format!("/prompts:code-review {}", placeholder)
+        );
+        assert_eq!(composer.pending_pastes.len(), 1);
+        assert_eq!(composer.pending_pastes[0].0, placeholder);
+        assert_eq!(composer.pending_pastes[0].1, large_content);
+
+        // Submit by pressing Enter
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        // Verify the custom prompt was expanded with the large content as positional arg
+        match result {
+            InputResult::Submitted(text) => {
+                // The prompt should be expanded, with the large content replacing $1
+                assert_eq!(
+                    text,
+                    format!("Please review the following code:\n\n{}", large_content),
+                    "Expected prompt expansion with large content as $1"
+                );
+            }
+            _ => panic!("expected Submitted, got: {result:?}"),
+        }
+        assert!(composer.textarea.is_empty());
+        assert!(composer.pending_pastes.is_empty());
     }
 
     #[test]

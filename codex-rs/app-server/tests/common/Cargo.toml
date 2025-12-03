@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "app_test_support"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [lib]
 path = "lib.rs"
@@ -24,3 +25,5 @@ tokio = { workspace = true, features = [
 ] }
 uuid = { workspace = true }
 wiremock = { workspace = true }
+core_test_support = { path = "../../../core/tests/common" }
+shlex = { workspace = true }

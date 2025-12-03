@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
@@ -39,6 +41,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
@@ -53,6 +56,7 @@ use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::ConversationId;
+use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
@@ -137,6 +141,20 @@ struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
     source: ExecCommandSource,
+}
+
+struct UnifiedExecWaitState {
+    command_display: String,
+}
+
+impl UnifiedExecWaitState {
+    fn new(command_display: String) -> Self {
+        Self { command_display }
+    }
+
+    fn is_duplicate(&self, command_display: &str) -> bool {
+        self.command_display == command_display
+    }
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
@@ -238,6 +256,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
+    pub(crate) is_first_run: bool,
 }
 
 #[derive(Default)]
@@ -265,6 +284,8 @@ pub(crate) struct ChatWidget {
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
+    suppressed_exec_calls: HashSet<String>,
+    last_unified_wait: Option<UnifiedExecWaitState>,
     task_complete_pending: bool,
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
@@ -478,6 +499,8 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
+        self.suppressed_exec_calls.clear();
+        self.last_unified_wait = None;
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -494,7 +517,7 @@ impl ChatWidget {
         match info {
             Some(info) => self.apply_token_info(info),
             None => {
-                self.bottom_pane.set_context_window_percent(None);
+                self.bottom_pane.set_context_window(None, None);
                 self.token_info = None;
             }
         }
@@ -502,7 +525,8 @@ impl ChatWidget {
 
     fn apply_token_info(&mut self, info: TokenUsageInfo) {
         let percent = self.context_remaining_percent(&info);
-        self.bottom_pane.set_context_window_percent(percent);
+        let used_tokens = self.context_used_tokens(&info, percent.is_some());
+        self.bottom_pane.set_context_window(percent, used_tokens);
         self.token_info = Some(info);
     }
 
@@ -515,12 +539,20 @@ impl ChatWidget {
             })
     }
 
+    fn context_used_tokens(&self, info: &TokenUsageInfo, percent_known: bool) -> Option<i64> {
+        if percent_known {
+            return None;
+        }
+
+        Some(info.total_token_usage.tokens_in_context_window())
+    }
+
     fn restore_pre_review_token_info(&mut self) {
         if let Some(saved) = self.pre_review_token_info.take() {
             match saved {
                 Some(info) => self.apply_token_info(info),
                 None => {
-                    self.bottom_pane.set_context_window_percent(None);
+                    self.bottom_pane.set_context_window(None, None);
                     self.token_info = None;
                 }
             }
@@ -528,7 +560,19 @@ impl ChatWidget {
     }
 
     pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
-        if let Some(snapshot) = snapshot {
+        if let Some(mut snapshot) = snapshot {
+            if snapshot.credits.is_none() {
+                snapshot.credits = self
+                    .rate_limit_snapshot
+                    .as_ref()
+                    .and_then(|display| display.credits.as_ref())
+                    .map(|credits| CreditsSnapshot {
+                        has_credits: credits.has_credits,
+                        unlimited: credits.unlimited,
+                        balance: credits.balance.clone(),
+                    });
+            }
+
             let warnings = self.rate_limit_warnings.take_warnings(
                 snapshot
                     .secondary
@@ -587,6 +631,8 @@ impl ChatWidget {
         // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
+        self.suppressed_exec_calls.clear();
+        self.last_unified_wait = None;
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
     }
@@ -730,6 +776,14 @@ impl ChatWidget {
         self.defer_or_handle(
             |q| q.push_apply_patch_approval(id, ev),
             |s| s.handle_apply_patch_approval_now(id2, ev2),
+        );
+    }
+
+    fn on_elicitation_request(&mut self, ev: ElicitationRequestEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_elicitation(ev),
+            |s| s.handle_elicitation_request_now(ev2),
         );
     }
 
@@ -938,6 +992,9 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
+        if self.suppressed_exec_calls.remove(&ev.call_id) {
+            return;
+        }
         let (command, parsed, source) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd, rc.source),
             None => (
@@ -962,6 +1019,7 @@ impl ChatWidget {
                 parsed,
                 source,
                 None,
+                self.config.animations,
             )));
         }
 
@@ -1038,6 +1096,22 @@ impl ChatWidget {
         });
     }
 
+    pub(crate) fn handle_elicitation_request_now(&mut self, ev: ElicitationRequestEvent) {
+        self.flush_answer_stream_with_separator();
+
+        self.notify(Notification::ElicitationRequested {
+            server_name: ev.server_name.clone(),
+        });
+
+        let request = ApprovalRequest::McpElicitation {
+            server_name: ev.server_name,
+            request_id: ev.id,
+            message: ev.message,
+        };
+        self.bottom_pane.push_approval_request(request);
+        self.request_redraw();
+    }
+
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
         self.running_commands.insert(
@@ -1048,6 +1122,27 @@ impl ChatWidget {
                 source: ev.source,
             },
         );
+        let is_wait_interaction = matches!(ev.source, ExecCommandSource::UnifiedExecInteraction)
+            && ev
+                .interaction_input
+                .as_deref()
+                .map(str::is_empty)
+                .unwrap_or(true);
+        let command_display = ev.command.join(" ");
+        let should_suppress_unified_wait = is_wait_interaction
+            && self
+                .last_unified_wait
+                .as_ref()
+                .is_some_and(|wait| wait.is_duplicate(&command_display));
+        if is_wait_interaction {
+            self.last_unified_wait = Some(UnifiedExecWaitState::new(command_display));
+        } else {
+            self.last_unified_wait = None;
+        }
+        if should_suppress_unified_wait {
+            self.suppressed_exec_calls.insert(ev.call_id);
+            return;
+        }
         let interaction_input = ev.interaction_input.clone();
         if let Some(cell) = self
             .active_cell
@@ -1071,6 +1166,7 @@ impl ChatWidget {
                 ev.parsed_cmd,
                 ev.source,
                 interaction_input,
+                self.config.animations,
             )));
         }
 
@@ -1083,6 +1179,7 @@ impl ChatWidget {
         self.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
             ev.call_id,
             ev.invocation,
+            self.config.animations,
         )));
         self.request_redraw();
     }
@@ -1104,7 +1201,11 @@ impl ChatWidget {
             Some(cell) if cell.call_id() == call_id => cell.complete(duration, result),
             _ => {
                 self.flush_active_cell();
-                let mut cell = history_cell::new_active_mcp_tool_call(call_id, invocation);
+                let mut cell = history_cell::new_active_mcp_tool_call(
+                    call_id,
+                    invocation,
+                    self.config.animations,
+                );
                 let extra_cell = cell.complete(duration, result);
                 self.active_cell = Some(Box::new(cell));
                 extra_cell
@@ -1130,6 +1231,7 @@ impl ChatWidget {
             enhanced_keys_supported,
             auth_manager,
             feedback,
+            is_first_run,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1146,6 +1248,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
+                animations_enabled: config.animations,
             }),
             active_cell: None,
             config: config.clone(),
@@ -1162,6 +1265,8 @@ impl ChatWidget {
             rate_limit_poller: None,
             stream_controller: None,
             running_commands: HashMap::new(),
+            suppressed_exec_calls: HashSet::new(),
+            last_unified_wait: None,
             task_complete_pending: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
@@ -1171,7 +1276,7 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
-            show_welcome_banner: true,
+            show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
@@ -1202,6 +1307,7 @@ impl ChatWidget {
             enhanced_keys_supported,
             auth_manager,
             feedback,
+            ..
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1220,6 +1326,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
+                animations_enabled: config.animations,
             }),
             active_cell: None,
             config: config.clone(),
@@ -1236,6 +1343,8 @@ impl ChatWidget {
             rate_limit_poller: None,
             stream_controller: None,
             running_commands: HashMap::new(),
+            suppressed_exec_calls: HashSet::new(),
+            last_unified_wait: None,
             task_complete_pending: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
@@ -1245,7 +1354,7 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
-            show_welcome_banner: true,
+            show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
@@ -1277,7 +1386,9 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'v') => {
+            } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && c.eq_ignore_ascii_case(&'v') =>
+            {
                 match paste_image_to_temp_png() {
                     Ok((path, info)) => {
                         self.attach_image(
@@ -1683,7 +1794,7 @@ impl ChatWidget {
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
-            EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
+            EventMsg::Error(ErrorEvent { message, .. }) => self.on_error(message),
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::SaveSessionResponse(ev) => {
@@ -1711,6 +1822,9 @@ impl ChatWidget {
             EventMsg::ApplyPatchApprovalRequest(ev) => {
                 self.on_apply_patch_approval_request(id.unwrap_or_default(), ev)
             }
+            EventMsg::ElicitationRequest(ev) => {
+                self.on_elicitation_request(ev);
+            }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
@@ -1732,7 +1846,9 @@ impl ChatWidget {
             }
             EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
             EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
-            EventMsg::StreamError(StreamErrorEvent { message }) => self.on_stream_error(message),
+            EventMsg::StreamError(StreamErrorEvent { message, .. }) => {
+                self.on_stream_error(message)
+            }
             EventMsg::UserMessage(ev) => {
                 if from_replay {
                     self.on_user_message_event(ev);
@@ -1742,6 +1858,7 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
+            EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)
@@ -1757,7 +1874,10 @@ impl ChatWidget {
             self.pre_review_token_info = Some(self.token_info.clone());
         }
         self.is_review_mode = true;
-        let banner = format!(">> Code review started: {} <<", review.user_facing_hint);
+        let hint = review
+            .user_facing_hint
+            .unwrap_or_else(|| codex_core::review_prompts::user_facing_hint(&review.target));
+        let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
         self.request_redraw();
     }
@@ -2143,6 +2263,14 @@ impl ChatWidget {
         } else {
             default_choice
         };
+        let selection_choice = highlight_choice.or(default_choice);
+        let initial_selected_idx = choices
+            .iter()
+            .position(|choice| choice.stored == selection_choice)
+            .or_else(|| {
+                selection_choice
+                    .and_then(|effort| choices.iter().position(|choice| choice.display == effort))
+            });
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.display;
@@ -2219,6 +2347,7 @@ impl ChatWidget {
             header: Box::new(header),
             footer_hint: Some(standard_popup_hint_line()),
             items,
+            initial_selected_idx,
             ..Default::default()
         });
     }
@@ -2268,7 +2397,7 @@ impl ChatWidget {
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
         for preset in presets.into_iter() {
             let is_current =
-                current_approval == preset.approval && current_sandbox == preset.sandbox;
+                Self::preset_matches_current(current_approval, &current_sandbox, &preset);
             let name = preset.label.to_string();
             let description_text = preset.description;
             let description = Some(description_text.to_string());
@@ -2356,6 +2485,28 @@ impl ChatWidget {
         })]
     }
 
+    fn preset_matches_current(
+        current_approval: AskForApproval,
+        current_sandbox: &SandboxPolicy,
+        preset: &ApprovalPreset,
+    ) -> bool {
+        if current_approval != preset.approval {
+            return false;
+        }
+        matches!(
+            (&preset.sandbox, current_sandbox),
+            (SandboxPolicy::ReadOnly, SandboxPolicy::ReadOnly)
+                | (
+                    SandboxPolicy::DangerFullAccess,
+                    SandboxPolicy::DangerFullAccess
+                )
+                | (
+                    SandboxPolicy::WorkspaceWrite { .. },
+                    SandboxPolicy::WorkspaceWrite { .. }
+                )
+        )
+    }
+
     #[cfg(target_os = "windows")]
     pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
         if self
@@ -2366,11 +2517,18 @@ impl ChatWidget {
         {
             return None;
         }
-        let cwd = match std::env::current_dir() {
-            Ok(cwd) => cwd,
-            Err(_) => return Some((Vec::new(), 0, true)),
-        };
-        codex_windows_sandbox::world_writable_warning_details(self.config.codex_home.as_path(), cwd)
+        let cwd = self.config.cwd.clone();
+        let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
+        match codex_windows_sandbox::apply_world_writable_scan_and_denies(
+            self.config.codex_home.as_path(),
+            cwd.as_path(),
+            &env_map,
+            &self.config.sandbox_policy,
+            Some(self.config.codex_home.as_path()),
+        ) {
+            Ok(_) => None,
+            Err(_) => Some((Vec::new(), 0, true)),
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -2796,17 +2954,14 @@ impl ChatWidget {
 
         items.push(SelectionItem {
             name: "Review uncommitted changes".to_string(),
-            actions: vec![Box::new(
-                move |tx: &AppEventSender| {
-                    tx.send(AppEvent::CodexOp(Op::Review {
-                        review_request: ReviewRequest {
-                            prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
-                            user_facing_hint: "current changes".to_string(),
-                            append_to_original_thread: true,
-                        },
-                    }));
-                },
-            )],
+            actions: vec![Box::new(move |tx: &AppEventSender| {
+                tx.send(AppEvent::CodexOp(Op::Review {
+                    review_request: ReviewRequest {
+                        target: ReviewTarget::UncommittedChanges,
+                        user_facing_hint: None,
+                    },
+                }));
+            })],
             dismiss_on_select: true,
             ..Default::default()
         });
@@ -2855,11 +3010,10 @@ impl ChatWidget {
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
                     tx3.send(AppEvent::CodexOp(Op::Review {
                         review_request: ReviewRequest {
-                            prompt: format!(
-                                "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
-                            ),
-                            user_facing_hint: format!("changes against '{branch}'"),
-                            append_to_original_thread: true,
+                            target: ReviewTarget::BaseBranch {
+                                branch: branch.clone(),
+                            },
+                            user_facing_hint: None,
                         },
                     }));
                 })],
@@ -2886,21 +3040,18 @@ impl ChatWidget {
         for entry in commits {
             let subject = entry.subject.clone();
             let sha = entry.sha.clone();
-            let short = sha.chars().take(7).collect::<String>();
             let search_val = format!("{subject} {sha}");
 
             items.push(SelectionItem {
                 name: subject.clone(),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    let hint = format!("commit {short}");
-                    let prompt = format!(
-                        "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
-                    );
                     tx3.send(AppEvent::CodexOp(Op::Review {
                         review_request: ReviewRequest {
-                            prompt,
-                            user_facing_hint: hint,
-                            append_to_original_thread: true,
+                            target: ReviewTarget::Commit {
+                                sha: sha.clone(),
+                                title: Some(subject.clone()),
+                            },
+                            user_facing_hint: None,
                         },
                     }));
                 })],
@@ -2933,9 +3084,10 @@ impl ChatWidget {
                 }
                 tx.send(AppEvent::CodexOp(Op::Review {
                     review_request: ReviewRequest {
-                        prompt: trimmed.clone(),
-                        user_facing_hint: trimmed,
-                        append_to_original_thread: true,
+                        target: ReviewTarget::Custom {
+                            instructions: trimmed,
+                        },
+                        user_facing_hint: None,
                     },
                 }));
             }),
@@ -3008,6 +3160,7 @@ enum Notification {
     AgentTurnComplete { response: String },
     ExecApprovalRequested { command: String },
     EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
+    ElicitationRequested { server_name: String },
 }
 
 impl Notification {
@@ -3031,6 +3184,9 @@ impl Notification {
                     }
                 )
             }
+            Notification::ElicitationRequested { server_name } => {
+                format!("Approval requested by {server_name}")
+            }
         }
     }
 
@@ -3038,7 +3194,8 @@ impl Notification {
         match self {
             Notification::AgentTurnComplete { .. } => "agent-turn-complete",
             Notification::ExecApprovalRequested { .. }
-            | Notification::EditApprovalRequested { .. } => "approval-requested",
+            | Notification::EditApprovalRequested { .. }
+            | Notification::ElicitationRequested { .. } => "approval-requested",
         }
     }
 
@@ -3132,21 +3289,18 @@ pub(crate) fn show_review_commit_picker_with_entries(
     for entry in entries {
         let subject = entry.subject.clone();
         let sha = entry.sha.clone();
-        let short = sha.chars().take(7).collect::<String>();
         let search_val = format!("{subject} {sha}");
 
         items.push(SelectionItem {
             name: subject.clone(),
             actions: vec![Box::new(move |tx3: &AppEventSender| {
-                let hint = format!("commit {short}");
-                let prompt = format!(
-                    "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
-                );
                 tx3.send(AppEvent::CodexOp(Op::Review {
                     review_request: ReviewRequest {
-                        prompt,
-                        user_facing_hint: hint,
-                        append_to_original_thread: true,
+                        target: ReviewTarget::Commit {
+                            sha: sha.clone(),
+                            title: Some(subject.clone()),
+                        },
+                        user_facing_hint: None,
                     },
                 }));
             })],

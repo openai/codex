@@ -3,7 +3,7 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_chat_completions_server;
-use app_test_support::create_shell_sse_response;
+use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -41,7 +41,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     std::fs::create_dir(&working_directory)?;
 
     // Mock server: long-running shell command then (after abort) nothing else needed.
-    let server = create_mock_chat_completions_server(vec![create_shell_sse_response(
+    let server = create_mock_chat_completions_server(vec![create_shell_command_sse_response(
         shell_command.clone(),
         Some(&working_directory),
         Some(10_000),
@@ -88,10 +88,11 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     // Give the command a brief moment to start.
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
+    let thread_id = thread.id.clone();
     // Interrupt the in-progress turn by id (v2 API).
     let interrupt_id = mcp
         .send_turn_interrupt_request(TurnInterruptParams {
-            thread_id: thread.id,
+            thread_id: thread_id.clone(),
             turn_id: turn.id,
         })
         .await?;
@@ -112,6 +113,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
             .params
             .expect("turn/completed params must be present"),
     )?;
+    assert_eq!(completed.thread_id, thread_id);
     assert_eq!(completed.turn.status, TurnStatus::Interrupted);
 
     Ok(())

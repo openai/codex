@@ -132,6 +132,7 @@ pub enum ResponseItem {
     GhostSnapshot {
         ghost_commit: GhostCommit,
     },
+    #[serde(alias = "compaction")]
     CompactionSummary {
         encrypted_content: String,
     },
@@ -230,8 +231,24 @@ pub struct LocalShellExecAction {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WebSearchAction {
     Search {
-        query: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        query: Option<String>,
     },
+    OpenPage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        url: Option<String>,
+    },
+    FindInPage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        pattern: Option<String>,
+    },
+
     #[serde(other)]
     Other,
 }
@@ -521,6 +538,7 @@ mod tests {
     use anyhow::Result;
     use mcp_types::ImageContent;
     use mcp_types::TextContent;
+    use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
     #[test]
@@ -630,6 +648,87 @@ mod tests {
 
         let expected_content = serde_json::to_string(&expected_items)?;
         assert_eq!(payload.content, expected_content);
+
+        Ok(())
+    }
+
+    #[test]
+    fn deserializes_compaction_alias() -> Result<()> {
+        let json = r#"{"type":"compaction","encrypted_content":"abc"}"#;
+
+        let item: ResponseItem = serde_json::from_str(json)?;
+
+        assert_eq!(
+            item,
+            ResponseItem::CompactionSummary {
+                encrypted_content: "abc".into(),
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn roundtrips_web_search_call_actions() -> Result<()> {
+        let cases = vec![
+            (
+                r#"{
+                    "type": "web_search_call",
+                    "status": "completed",
+                    "action": {
+                        "type": "search",
+                        "query": "weather seattle"
+                    }
+                }"#,
+                WebSearchAction::Search {
+                    query: Some("weather seattle".into()),
+                },
+                Some("completed".into()),
+            ),
+            (
+                r#"{
+                    "type": "web_search_call",
+                    "status": "open",
+                    "action": {
+                        "type": "open_page",
+                        "url": "https://example.com"
+                    }
+                }"#,
+                WebSearchAction::OpenPage {
+                    url: Some("https://example.com".into()),
+                },
+                Some("open".into()),
+            ),
+            (
+                r#"{
+                    "type": "web_search_call",
+                    "status": "in_progress",
+                    "action": {
+                        "type": "find_in_page",
+                        "url": "https://example.com/docs",
+                        "pattern": "installation"
+                    }
+                }"#,
+                WebSearchAction::FindInPage {
+                    url: Some("https://example.com/docs".into()),
+                    pattern: Some("installation".into()),
+                },
+                Some("in_progress".into()),
+            ),
+        ];
+
+        for (json_literal, expected_action, expected_status) in cases {
+            let parsed: ResponseItem = serde_json::from_str(json_literal)?;
+            let expected = ResponseItem::WebSearchCall {
+                id: None,
+                status: expected_status.clone(),
+                action: expected_action.clone(),
+            };
+            assert_eq!(parsed, expected);
+
+            let serialized = serde_json::to_value(&parsed)?;
+            let original_value: serde_json::Value = serde_json::from_str(json_literal)?;
+            assert_eq!(serialized, original_value);
+        }
 
         Ok(())
     }

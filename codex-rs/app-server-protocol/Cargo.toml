@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "codex-app-server-protocol"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [lib]
 name = "codex_app_server_protocol"
@@ -19,6 +20,7 @@ schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 strum_macros = { workspace = true }
+thiserror = { workspace = true }
 ts-rs = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
 

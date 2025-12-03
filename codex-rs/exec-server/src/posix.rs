@@ -71,12 +71,14 @@ mod escalation_policy;
 mod mcp;
 mod mcp_escalation_policy;
 mod socket;
+mod stopwatch;
 
 /// Default value of --execve option relative to the current executable.
 /// Note this must match the name of the binary as specified in Cargo.toml.
 const CODEX_EXECVE_WRAPPER_EXE_NAME: &str = "codex-execve-wrapper";
 
 #[derive(Parser)]
+#[clap(version)]
 struct McpServerCli {
     /// Executable to delegate execve(2) calls to in Bash.
     #[arg(long = "execve")]

@@ -18,6 +18,7 @@ use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
@@ -35,6 +36,7 @@ use codex_core::protocol::ReviewFinding;
 use codex_core::protocol::ReviewLineRange;
 use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
@@ -50,11 +52,13 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::CodexErrorInfo;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
@@ -151,9 +155,10 @@ fn entered_review_mode_uses_request_hint() {
     chat.handle_codex_event(Event {
         id: "review-start".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
-            prompt: "Review the latest changes".to_string(),
-            user_facing_hint: "feature branch".to_string(),
-            append_to_original_thread: true,
+            target: ReviewTarget::BaseBranch {
+                branch: "feature".to_string(),
+            },
+            user_facing_hint: Some("feature branch".to_string()),
         }),
     });
 
@@ -171,9 +176,8 @@ fn entered_review_mode_defaults_to_current_changes_banner() {
     chat.handle_codex_event(Event {
         id: "review-start".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
-            prompt: "Review the current changes".to_string(),
-            user_facing_hint: "current changes".to_string(),
-            append_to_original_thread: true,
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
         }),
     });
 
@@ -239,9 +243,10 @@ fn review_restores_context_window_indicator() {
     chat.handle_codex_event(Event {
         id: "review-start".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
-            prompt: "Review the latest changes".to_string(),
-            user_facing_hint: "feature branch".to_string(),
-            append_to_original_thread: true,
+            target: ReviewTarget::BaseBranch {
+                branch: "feature".to_string(),
+            },
+            user_facing_hint: Some("feature branch".to_string()),
         }),
     });
 
@@ -293,6 +298,41 @@ fn token_count_none_resets_context_indicator() {
     assert_eq!(chat.bottom_pane.context_window_percent(), None);
 }
 
+#[test]
+fn context_indicator_shows_used_tokens_when_window_unknown() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual();
+
+    chat.config.model_context_window = None;
+    let auto_compact_limit = 200_000;
+    chat.config.model_auto_compact_token_limit = Some(auto_compact_limit);
+
+    // No model window, so the indicator should fall back to showing tokens used.
+    let total_tokens = 106_000;
+    let token_usage = TokenUsage {
+        total_tokens,
+        ..TokenUsage::default()
+    };
+    let token_info = TokenUsageInfo {
+        total_token_usage: token_usage.clone(),
+        last_token_usage: token_usage,
+        model_context_window: None,
+    };
+
+    chat.handle_codex_event(Event {
+        id: "token-usage".into(),
+        msg: EventMsg::TokenCount(TokenCountEvent {
+            info: Some(token_info),
+            rate_limits: None,
+        }),
+    });
+
+    assert_eq!(chat.bottom_pane.context_window_percent(), None);
+    assert_eq!(
+        chat.bottom_pane.context_window_used_tokens(),
+        Some(total_tokens)
+    );
+}
+
 #[cfg_attr(
     target_os = "macos",
     ignore = "system configuration APIs are blocked under macOS seatbelt"
@@ -315,6 +355,7 @@ async fn helpers_are_available_and_do_not_panic() {
         enhanced_keys_supported: false,
         auth_manager,
         feedback: codex_feedback::CodexFeedback::new(),
+        is_first_run: true,
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -338,6 +379,7 @@ fn make_chatwidget_manual() -> (
         enhanced_keys_supported: false,
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
+        animations_enabled: cfg.animations,
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let widget = ChatWidget {
@@ -356,6 +398,8 @@ fn make_chatwidget_manual() -> (
         rate_limit_poller: None,
         stream_controller: None,
         running_commands: HashMap::new(),
+        suppressed_exec_calls: HashSet::new(),
+        last_unified_wait: None,
         task_complete_pending: false,
         mcp_startup_status: None,
         interrupts: InterruptManager::new(),
@@ -476,6 +520,53 @@ fn test_rate_limit_warnings_monthly() {
             "Heads up, you've used over 75% of your monthly limit. Run /status for a breakdown.",
         ),],
         "expected one warning per limit for the highest crossed threshold"
+    );
+}
+
+#[test]
+fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        primary: None,
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: true,
+            unlimited: false,
+            balance: Some("17.5".to_string()),
+        }),
+    }));
+    let initial_balance = chat
+        .rate_limit_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.credits.as_ref())
+        .and_then(|credits| credits.balance.as_deref());
+    assert_eq!(initial_balance, Some("17.5"));
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 80.0,
+            window_minutes: Some(60),
+            resets_at: Some(123),
+        }),
+        secondary: None,
+        credits: None,
+    }));
+
+    let display = chat
+        .rate_limit_snapshot
+        .as_ref()
+        .expect("rate limits should be cached");
+    let credits = display
+        .credits
+        .as_ref()
+        .expect("credits should persist when headers omit them");
+
+    assert_eq!(credits.balance.as_deref(), Some("17.5"));
+    assert!(!credits.unlimited);
+    assert_eq!(
+        display.primary.as_ref().map(|window| window.used_percent),
+        Some(80.0)
     );
 }
 
@@ -717,6 +808,7 @@ fn begin_exec_with_source(
     let interaction_input = None;
     let event = ExecCommandBeginEvent {
         call_id: call_id.to_string(),
+        process_id: None,
         turn_id: "turn-1".to_string(),
         command,
         cwd,
@@ -755,11 +847,13 @@ fn end_exec(
         parsed_cmd,
         source,
         interaction_input,
+        process_id,
     } = begin_event;
     chat.handle_codex_event(Event {
         id: call_id.clone(),
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id,
+            process_id,
             turn_id,
             command,
             cwd,
@@ -1307,12 +1401,13 @@ fn custom_prompt_submit_sends_review_op() {
     match evt {
         AppEvent::CodexOp(Op::Review { review_request }) => {
             assert_eq!(
-                review_request.prompt,
-                "please audit dependencies".to_string()
-            );
-            assert_eq!(
-                review_request.user_facing_hint,
-                "please audit dependencies".to_string()
+                review_request,
+                ReviewRequest {
+                    target: ReviewTarget::Custom {
+                        instructions: "please audit dependencies".to_string(),
+                    },
+                    user_facing_hint: None,
+                }
             );
         }
         other => panic!("unexpected app event: {other:?}"),
@@ -1563,6 +1658,29 @@ fn approvals_selection_popup_snapshot() {
 }
 
 #[test]
+fn preset_matching_ignores_extra_writable_roots() {
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|p| p.id == "auto")
+        .expect("auto preset exists");
+    let current_sandbox = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![PathBuf::from("C:\\extra")],
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+
+    assert!(
+        ChatWidget::preset_matches_current(AskForApproval::OnRequest, &current_sandbox, &preset),
+        "WorkspaceWrite with extra roots should still match the Agent preset"
+    );
+    assert!(
+        !ChatWidget::preset_matches_current(AskForApproval::Never, &current_sandbox, &preset),
+        "approval mismatch should prevent matching the preset"
+    );
+}
+
+#[test]
 fn full_access_confirmation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
@@ -1788,6 +1906,28 @@ fn exec_history_extends_previous_when_consecutive() {
     let begin_cat_bar = begin_exec(&mut chat, "call-cat-bar", "cat bar.txt");
     end_exec(&mut chat, begin_cat_bar, "hello from bar", "", 0);
     assert_snapshot!("exploring_step6_finish_cat_bar", active_blob(&chat));
+}
+
+#[test]
+fn user_shell_command_renders_output_not_exploring() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    let begin_ls = begin_exec_with_source(
+        &mut chat,
+        "user-shell-ls",
+        "ls",
+        ExecCommandSource::UserShell,
+    );
+    end_exec(&mut chat, begin_ls, "file1\nfile2\n", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected a single history cell for the user command"
+    );
+    let blob = lines_to_single_string(cells.first().unwrap());
+    assert_snapshot!("user_shell_ls_output", blob);
 }
 
 #[test]
@@ -2624,6 +2764,7 @@ fn stream_error_updates_status_indicator() {
         id: "sub-1".into(),
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: msg.to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
         }),
     });
 
@@ -2829,6 +2970,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         id: "c1".into(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "c1".into(),
+            process_id: None,
             turn_id: "turn-1".into(),
             command: command.clone(),
             cwd: cwd.clone(),
@@ -2841,6 +2983,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         id: "c1".into(),
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "c1".into(),
+            process_id: None,
             turn_id: "turn-1".into(),
             command,
             cwd,

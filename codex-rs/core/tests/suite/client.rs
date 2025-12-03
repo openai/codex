@@ -15,6 +15,7 @@ use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::error::CodexErr;
+use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -34,6 +35,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use dunce::canonicalize as normalize_path;
 use futures::StreamExt;
 use serde_json::json;
 use std::io::Write;
@@ -621,6 +623,74 @@ async fn includes_user_instructions_message_in_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skills_append_to_instructions_when_feature_enabled() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let skill_dir = codex_home.path().join("skills/demo");
+    std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: demo\ndescription: build charts\n---\n\n# body\n",
+    )
+    .expect("write skill");
+
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = model_provider;
+    config.features.enable(Feature::Skills);
+    config.cwd = codex_home.path().to_path_buf();
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation")
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_message_role(&request_body["input"][0], "user");
+    let instructions_text = request_body["input"][0]["content"][0]["text"]
+        .as_str()
+        .expect("instructions text");
+    assert!(
+        instructions_text.contains("## Skills"),
+        "expected skills section present"
+    );
+    assert!(
+        instructions_text.contains("demo: build charts"),
+        "expected skill summary"
+    );
+    let expected_path = normalize_path(skill_dir.join("SKILL.md")).unwrap();
+    let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
+    assert!(
+        instructions_text.contains(&expected_path_str),
+        "expected path {expected_path_str} in instructions"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
@@ -992,7 +1062,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         id: Some("web-search-id".into()),
         status: Some("completed".into()),
         action: WebSearchAction::Search {
-            query: "weather".into(),
+            query: Some("weather".into()),
         },
     });
     prompt.input.push(ResponseItem::FunctionCall {

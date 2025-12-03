@@ -256,8 +256,8 @@ pub struct History {
     /// If true, history entries will not be written to disk.
     pub persistence: HistoryPersistence,
 
-    /// If set, the maximum size of the history file in bytes.
-    /// TODO(mbolin): Not currently honored.
+    /// If set, the maximum size of the history file in bytes. The oldest entries
+    /// are dropped once the file exceeds this limit.
     pub max_bytes: Option<usize>,
 }
 
@@ -363,6 +363,20 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// Enable animations (welcome screen, shimmer effects, spinners).
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub animations: bool,
+
+    /// Show startup tooltips in the TUI welcome screen.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub show_tooltips: bool,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 /// Settings for notices we display to users via the tui and app-server clients

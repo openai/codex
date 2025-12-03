@@ -47,6 +47,7 @@ use codex_exec::exec_events::WebSearchItem;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::CodexErrorInfo;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::TextContent;
@@ -539,6 +540,7 @@ fn error_event_produces_error() {
         "e1",
         EventMsg::Error(codex_core::protocol::ErrorEvent {
             message: "boom".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
         }),
     ));
     assert_eq!(
@@ -578,6 +580,7 @@ fn stream_error_event_produces_error() {
         "e1",
         EventMsg::StreamError(codex_core::protocol::StreamErrorEvent {
             message: "retrying".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
         }),
     ));
     assert_eq!(
@@ -596,6 +599,7 @@ fn error_followed_by_task_complete_produces_turn_failed() {
         "e1",
         EventMsg::Error(ErrorEvent {
             message: "boom".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
         }),
     );
     assert_eq!(
@@ -633,6 +637,7 @@ fn exec_command_end_success_produces_completed_command_item() {
         "c1",
         EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "1".to_string(),
+            process_id: None,
             turn_id: "turn-1".to_string(),
             command: command.clone(),
             cwd: cwd.clone(),
@@ -662,6 +667,7 @@ fn exec_command_end_success_produces_completed_command_item() {
         "c2",
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "1".to_string(),
+            process_id: None,
             turn_id: "turn-1".to_string(),
             command,
             cwd,
@@ -705,6 +711,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
         "c1",
         EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "2".to_string(),
+            process_id: None,
             turn_id: "turn-1".to_string(),
             command: command.clone(),
             cwd: cwd.clone(),
@@ -733,6 +740,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
         "c2",
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "2".to_string(),
+            process_id: None,
             turn_id: "turn-1".to_string(),
             command,
             cwd,
@@ -773,6 +781,7 @@ fn exec_command_end_without_begin_is_ignored() {
         "c1",
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "no-begin".to_string(),
+            process_id: None,
             turn_id: "turn-1".to_string(),
             command: Vec::new(),
             cwd: PathBuf::from("."),

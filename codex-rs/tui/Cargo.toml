@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "codex-tui"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "codex-tui"
@@ -90,6 +91,7 @@ unicode-width = { workspace = true }
 url = { workspace = true }
 
 codex-windows-sandbox = { workspace = true }
+tokio-util = { workspace = true, features = ["time"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

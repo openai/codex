@@ -131,7 +131,7 @@ client_request_definitions! {
     },
     ReviewStart => "review/start" {
         params: v2::ReviewStartParams,
-        response: v2::TurnStartResponse,
+        response: v2::ReviewStartResponse,
     },
 
     ModelList => "model/list" {
@@ -162,6 +162,25 @@ client_request_definitions! {
     FeedbackUpload => "feedback/upload" {
         params: v2::FeedbackUploadParams,
         response: v2::FeedbackUploadResponse,
+    },
+
+    /// Execute a command (argv vector) under the server's sandbox.
+    OneOffCommandExec => "command/exec" {
+        params: v2::CommandExecParams,
+        response: v2::CommandExecResponse,
+    },
+
+    ConfigRead => "config/read" {
+        params: v2::ConfigReadParams,
+        response: v2::ConfigReadResponse,
+    },
+    ConfigValueWrite => "config/value/write" {
+        params: v2::ConfigValueWriteParams,
+        response: v2::ConfigWriteResponse,
+    },
+    ConfigBatchWrite => "config/batchWrite" {
+        params: v2::ConfigBatchWriteParams,
+        response: v2::ConfigWriteResponse,
     },
 
     GetAccount => "account/read" {
@@ -378,7 +397,7 @@ macro_rules! server_notification_definitions {
         impl TryFrom<JSONRPCNotification> for ServerNotification {
             type Error = serde_json::Error;
 
-            fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
+            fn try_from(value: JSONRPCNotification) -> Result<Self, serde_json::Error> {
                 serde_json::from_value(serde_json::to_value(value)?)
             }
         }
@@ -487,19 +506,25 @@ pub struct FuzzyFileSearchResponse {
 
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
+    Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
+    TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
+    TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
     AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
+    FileChangeOutputDelta => "item/fileChange/outputDelta" (v2::FileChangeOutputDeltaNotification),
     McpToolCallProgress => "item/mcpToolCall/progress" (v2::McpToolCallProgressNotification),
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
     ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),
     ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
+    ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),

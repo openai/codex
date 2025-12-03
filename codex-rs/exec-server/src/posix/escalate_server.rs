@@ -8,11 +8,10 @@ use std::time::Duration;
 use anyhow::Context as _;
 use path_absolutize::Absolutize as _;
 
-use codex_core::exec::SandboxType;
+use codex_core::SandboxState;
 use codex_core::exec::process_exec_tool_call;
-use codex_core::get_platform_sandbox;
-use codex_core::protocol::SandboxPolicy;
 use tokio::process::Command;
+use tokio_util::sync::CancellationToken;
 
 use crate::posix::escalate_protocol::BASH_EXEC_WRAPPER_ENV_VAR;
 use crate::posix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
@@ -22,8 +21,10 @@ use crate::posix::escalate_protocol::EscalateResponse;
 use crate::posix::escalate_protocol::SuperExecMessage;
 use crate::posix::escalate_protocol::SuperExecResult;
 use crate::posix::escalation_policy::EscalationPolicy;
+use crate::posix::mcp::ExecParams;
 use crate::posix::socket::AsyncDatagramSocket;
 use crate::posix::socket::AsyncSocket;
+use codex_core::exec::ExecExpiration;
 
 pub(crate) struct EscalateServer {
     bash_path: PathBuf,
@@ -45,17 +46,16 @@ impl EscalateServer {
 
     pub async fn exec(
         &self,
-        command: String,
-        env: HashMap<String, String>,
-        workdir: PathBuf,
-        timeout_ms: Option<u64>,
+        params: ExecParams,
+        cancel_rx: CancellationToken,
+        sandbox_state: &SandboxState,
     ) -> anyhow::Result<ExecResult> {
         let (escalate_server, escalate_client) = AsyncDatagramSocket::pair()?;
         let client_socket = escalate_client.into_inner();
         client_socket.set_cloexec(false)?;
 
         let escalate_task = tokio::spawn(escalate_task(escalate_server, self.policy.clone()));
-        let mut env = env.clone();
+        let mut env = std::env::vars().collect::<HashMap<String, String>>();
         env.insert(
             ESCALATE_SOCKET_ENV_VAR.to_string(),
             client_socket.as_raw_fd().to_string(),
@@ -65,30 +65,33 @@ impl EscalateServer {
             self.execve_wrapper.to_string_lossy().to_string(),
         );
 
-        // TODO: use the sandbox policy and cwd from the calling client.
-        // Note that sandbox_cwd is ignored for ReadOnly, but needs to be legit
-        // for `SandboxPolicy::WorkspaceWrite`.
-        let sandbox_policy = SandboxPolicy::ReadOnly;
-        let sandbox_cwd = PathBuf::from("/__NONEXISTENT__");
-
+        let ExecParams {
+            command,
+            workdir,
+            timeout_ms: _,
+            login,
+        } = params;
         let result = process_exec_tool_call(
             codex_core::exec::ExecParams {
                 command: vec![
                     self.bash_path.to_string_lossy().to_string(),
-                    "-c".to_string(),
+                    if login == Some(false) {
+                        "-c".to_string()
+                    } else {
+                        "-lc".to_string()
+                    },
                     command,
                 ],
                 cwd: PathBuf::from(&workdir),
-                timeout_ms,
+                expiration: ExecExpiration::Cancellation(cancel_rx),
                 env,
                 with_escalated_permissions: None,
                 justification: None,
                 arg0: None,
             },
-            get_platform_sandbox().unwrap_or(SandboxType::None),
-            &sandbox_policy,
-            &sandbox_cwd,
-            &None,
+            &sandbox_state.sandbox_policy,
+            &sandbox_state.sandbox_cwd,
+            &sandbox_state.codex_linux_sandbox_exe,
             None,
         )
         .await?;

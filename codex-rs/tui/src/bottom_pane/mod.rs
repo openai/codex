@@ -69,12 +69,14 @@ pub(crate) struct BottomPane {
     is_task_running: bool,
     ctrl_c_quit_hint: bool,
     esc_backtrack_hint: bool,
+    animations_enabled: bool,
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
     /// Queued user messages to show above the composer while a turn is running.
     queued_user_messages: QueuedUserMessages,
     context_window_percent: Option<i64>,
+    context_window_used_tokens: Option<i64>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -84,29 +86,40 @@ pub(crate) struct BottomPaneParams {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) placeholder_text: String,
     pub(crate) disable_paste_burst: bool,
+    pub(crate) animations_enabled: bool,
 }
 
 impl BottomPane {
     pub fn new(params: BottomPaneParams) -> Self {
-        let enhanced_keys_supported = params.enhanced_keys_supported;
+        let BottomPaneParams {
+            app_event_tx,
+            frame_requester,
+            has_input_focus,
+            enhanced_keys_supported,
+            placeholder_text,
+            disable_paste_burst,
+            animations_enabled,
+        } = params;
         Self {
             composer: ChatComposer::new(
-                params.has_input_focus,
-                params.app_event_tx.clone(),
+                has_input_focus,
+                app_event_tx.clone(),
                 enhanced_keys_supported,
-                params.placeholder_text,
-                params.disable_paste_burst,
+                placeholder_text,
+                disable_paste_burst,
             ),
             view_stack: Vec::new(),
-            app_event_tx: params.app_event_tx,
-            frame_requester: params.frame_requester,
-            has_input_focus: params.has_input_focus,
+            app_event_tx,
+            frame_requester,
+            has_input_focus,
             is_task_running: false,
             ctrl_c_quit_hint: false,
             status: None,
             queued_user_messages: QueuedUserMessages::new(),
             esc_backtrack_hint: false,
+            animations_enabled,
             context_window_percent: None,
+            context_window_used_tokens: None,
         }
     }
 
@@ -117,6 +130,11 @@ impl BottomPane {
     #[cfg(test)]
     pub(crate) fn context_window_percent(&self) -> Option<i64> {
         self.context_window_percent
+    }
+
+    #[cfg(test)]
+    pub(crate) fn context_window_used_tokens(&self) -> Option<i64> {
+        self.context_window_used_tokens
     }
 
     fn active_view(&self) -> Option<&dyn BottomPaneView> {
@@ -294,6 +312,7 @@ impl BottomPane {
                     self.status = Some(StatusIndicatorWidget::new(
                         self.app_event_tx.clone(),
                         self.frame_requester.clone(),
+                        self.animations_enabled,
                     ));
                 }
                 if let Some(status) = self.status.as_mut() {
@@ -319,6 +338,7 @@ impl BottomPane {
             self.status = Some(StatusIndicatorWidget::new(
                 self.app_event_tx.clone(),
                 self.frame_requester.clone(),
+                self.animations_enabled,
             ));
             self.request_redraw();
         }
@@ -331,13 +351,16 @@ impl BottomPane {
         }
     }
 
-    pub(crate) fn set_context_window_percent(&mut self, percent: Option<i64>) {
-        if self.context_window_percent == percent {
+    pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
+        if self.context_window_percent == percent && self.context_window_used_tokens == used_tokens
+        {
             return;
         }
 
         self.context_window_percent = percent;
-        self.composer.set_context_window_percent(percent);
+        self.context_window_used_tokens = used_tokens;
+        self.composer
+            .set_context_window(percent, self.context_window_used_tokens);
         self.request_redraw();
     }
 
@@ -554,6 +577,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            animations_enabled: true,
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -574,6 +598,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            animations_enabled: true,
         });
 
         // Create an approval modal (active view).
@@ -605,6 +630,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            animations_enabled: true,
         });
 
         // Start a running task so the status indicator is active above the composer.
@@ -670,6 +696,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            animations_enabled: true,
         });
 
         // Begin a task: show initial status.
@@ -695,6 +722,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            animations_enabled: true,
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
@@ -724,6 +752,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            animations_enabled: true,
         });
 
         pane.set_task_running(true);
@@ -750,6 +779,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            animations_enabled: true,
         });
 
         pane.set_task_running(true);

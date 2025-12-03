@@ -1,7 +1,8 @@
 [package]
 name = "codex-execpolicy"
-version = { workspace = true }
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Codex exec policy: prefix-based Starlark rules for command decisions."
 
 [lib]
@@ -27,3 +28,4 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

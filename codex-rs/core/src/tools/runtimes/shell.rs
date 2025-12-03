@@ -12,6 +12,7 @@ use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ApprovalRequirement;
 use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
+use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::SandboxRetryData;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::SandboxablePreference;
@@ -117,8 +118,19 @@ impl Approvable<ShellRequest> for ShellRuntime {
         Some(req.approval_requirement.clone())
     }
 
-    fn wants_escalated_first_attempt(&self, req: &ShellRequest) -> bool {
-        req.with_escalated_permissions.unwrap_or(false)
+    fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {
+        if req.with_escalated_permissions.unwrap_or(false)
+            || matches!(
+                req.approval_requirement,
+                ApprovalRequirement::Skip {
+                    bypass_sandbox: true
+                }
+            )
+        {
+            SandboxOverride::BypassSandboxFirstAttempt
+        } else {
+            SandboxOverride::NoOverride
+        }
     }
 }
 
@@ -133,14 +145,14 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             &req.command,
             &req.cwd,
             &req.env,
-            req.timeout_ms,
+            req.timeout_ms.into(),
             req.with_escalated_permissions,
             req.justification.clone(),
         )?;
         let env = attempt
-            .env_for(&spec)
+            .env_for(spec)
             .map_err(|err| ToolError::Codex(err.into()))?;
-        let out = execute_env(&env, attempt.policy, Self::stdout_stream(ctx))
+        let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
             .await
             .map_err(ToolError::Codex)?;
         Ok(out)

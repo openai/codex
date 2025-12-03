@@ -1,13 +1,17 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_apply_patch_sse_response;
+use app_test_support::create_exec_command_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_mock_chat_completions_server_unchecked;
-use app_test_support::create_shell_sse_response;
+use app_test_support::create_shell_command_sse_response;
+use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
 use codex_app_server_protocol::ApprovalDecision;
+use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -93,6 +97,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     .await??;
     let started: TurnStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
+    assert_eq!(started.thread_id, thread.id);
     assert_eq!(
         started.turn.status,
         codex_app_server_protocol::TurnStatus::InProgress
@@ -136,6 +141,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
             .params
             .expect("turn/completed params must be present"),
     )?;
+    assert_eq!(completed.thread_id, thread.id);
     assert_eq!(completed.turn.status, TurnStatus::Completed);
 
     Ok(())
@@ -203,7 +209,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     // Mock server: first turn requests a shell call (elicitation), then completes.
     // Second turn same, but we'll set approval_policy=never to avoid elicitation.
     let responses = vec![
-        create_shell_sse_response(
+        create_shell_command_sse_response(
             vec![
                 "python3".to_string(),
                 "-c".to_string(),
@@ -214,7 +220,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
             "call1",
         )?,
         create_final_assistant_message_sse_response("done 1")?,
-        create_shell_sse_response(
+        create_shell_command_sse_response(
             vec![
                 "python3".to_string(),
                 "-c".to_string(),
@@ -329,6 +335,145 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_exec_approval_decline_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().to_path_buf();
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+
+    let responses = vec![
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
+            None,
+            Some(5000),
+            "call-decline",
+        )?,
+        create_final_assistant_message_sse_response("done")?,
+    ];
+    let server = create_mock_chat_completions_server(responses).await;
+    create_config_toml(codex_home.as_path(), &server.uri(), "untrusted")?;
+
+    let mut mcp = McpProcess::new(codex_home.as_path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "run python".to_string(),
+            }],
+            cwd: Some(workspace.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let started_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let started_notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(started_notif.params.clone().expect("item/started params"))?;
+            if let ThreadItem::CommandExecution { .. } = started.item {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CommandExecution { id, status, .. } = started_command_execution else {
+        unreachable!("loop ensures we break on command execution items");
+    };
+    assert_eq!(id, "call-decline");
+    assert_eq!(status, CommandExecutionStatus::InProgress);
+
+    let server_req = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req else {
+        panic!("expected CommandExecutionRequestApproval request")
+    };
+    assert_eq!(params.item_id, "call-decline");
+    assert_eq!(params.thread_id, thread.id);
+    assert_eq!(params.turn_id, turn.id);
+
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(CommandExecutionRequestApprovalResponse {
+            decision: ApprovalDecision::Decline,
+            accept_settings: None,
+        })?,
+    )
+    .await?;
+
+    let completed_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let completed_notif = mcp
+                .read_stream_until_notification_message("item/completed")
+                .await?;
+            let completed: ItemCompletedNotification = serde_json::from_value(
+                completed_notif
+                    .params
+                    .clone()
+                    .expect("item/completed params"),
+            )?;
+            if let ThreadItem::CommandExecution { .. } = completed.item {
+                return Ok::<ThreadItem, anyhow::Error>(completed.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CommandExecution {
+        id,
+        status,
+        exit_code,
+        aggregated_output,
+        ..
+    } = completed_command_execution
+    else {
+        unreachable!("loop ensures we break on command execution items");
+    };
+    assert_eq!(id, "call-decline");
+    assert_eq!(status, CommandExecutionStatus::Declined);
+    assert!(exit_code.is_none());
+    assert!(aggregated_output.is_none());
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -343,23 +488,15 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     std::fs::create_dir(&second_cwd)?;
 
     let responses = vec![
-        create_shell_sse_response(
-            vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                "echo first turn".to_string(),
-            ],
+        create_shell_command_sse_response(
+            vec!["echo".to_string(), "first".to_string(), "turn".to_string()],
             None,
             Some(5000),
             "call-first",
         )?,
         create_final_assistant_message_sse_response("done first")?,
-        create_shell_sse_response(
-            vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                "echo second turn".to_string(),
-            ],
+        create_shell_command_sse_response(
+            vec!["echo".to_string(), "second".to_string(), "turn".to_string()],
             None,
             Some(5000),
             "call-second",
@@ -465,7 +602,8 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         unreachable!("loop ensures we break on command execution items");
     };
     assert_eq!(cwd, second_cwd);
-    assert_eq!(command, "bash -lc 'echo second turn'");
+    let expected_command = format_with_current_shell_display("echo second turn");
+    assert_eq!(command, expected_command);
     assert_eq!(status, CommandExecutionStatus::InProgress);
 
     timeout(
@@ -587,6 +725,26 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         })?,
     )
     .await?;
+
+    let output_delta_notif = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("item/fileChange/outputDelta"),
+    )
+    .await??;
+    let output_delta: FileChangeOutputDeltaNotification = serde_json::from_value(
+        output_delta_notif
+            .params
+            .clone()
+            .expect("item/fileChange/outputDelta params"),
+    )?;
+    assert_eq!(output_delta.thread_id, thread.id);
+    assert_eq!(output_delta.turn_id, turn.id);
+    assert_eq!(output_delta.item_id, "patch-call");
+    assert!(
+        !output_delta.delta.is_empty(),
+        "expected delta to be non-empty, got: {}",
+        output_delta.delta
+    );
 
     let completed_file_change = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
@@ -767,6 +925,134 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
         !expected_readme_path.exists(),
         "declined patch should not be applied"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(windows, ignore = "process id reporting differs on Windows")]
+async fn command_execution_notifications_include_process_id() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let responses = vec![
+        create_exec_command_sse_response("uexec-1")?,
+        create_final_assistant_message_sse_response("done")?,
+    ];
+    let server = create_mock_chat_completions_server(responses).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let config_toml = codex_home.path().join("config.toml");
+    let mut config_contents = std::fs::read_to_string(&config_toml)?;
+    config_contents.push_str(
+        r#"
+[features]
+unified_exec = true
+"#,
+    );
+    std::fs::write(&config_toml, config_contents)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "run a command".to_string(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    let TurnStartResponse { turn: _turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let started_command = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification = serde_json::from_value(
+                notif
+                    .params
+                    .clone()
+                    .expect("item/started should include params"),
+            )?;
+            if let ThreadItem::CommandExecution { .. } = started.item {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CommandExecution {
+        id,
+        process_id: started_process_id,
+        status,
+        ..
+    } = started_command
+    else {
+        unreachable!("loop ensures we break on command execution items");
+    };
+    assert_eq!(id, "uexec-1");
+    assert_eq!(status, CommandExecutionStatus::InProgress);
+    let started_process_id = started_process_id.expect("process id should be present");
+
+    let completed_command = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let notif = mcp
+                .read_stream_until_notification_message("item/completed")
+                .await?;
+            let completed: ItemCompletedNotification = serde_json::from_value(
+                notif
+                    .params
+                    .clone()
+                    .expect("item/completed should include params"),
+            )?;
+            if let ThreadItem::CommandExecution { .. } = completed.item {
+                return Ok::<ThreadItem, anyhow::Error>(completed.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CommandExecution {
+        id: completed_id,
+        process_id: completed_process_id,
+        status: completed_status,
+        exit_code,
+        ..
+    } = completed_command
+    else {
+        unreachable!("loop ensures we break on command execution items");
+    };
+    assert_eq!(completed_id, "uexec-1");
+    assert_eq!(completed_status, CommandExecutionStatus::Completed);
+    assert_eq!(exit_code, Some(0));
+    assert_eq!(
+        completed_process_id.as_deref(),
+        Some(started_process_id.as_str())
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     Ok(())
 }
