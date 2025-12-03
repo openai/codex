@@ -1,5 +1,6 @@
 ---
 source: tui/src/pager_overlay.rs
+assertion_line: 689
 expression: term.backend()
 ---
 "/ T R A N S C R I P T / / / / / / / / / "
@@ -9,6 +10,6 @@ expression: term.backend()
 "                                        "
 "gamma                                   "
 "───────────────────────────────── 100% ─"
-" ↑/↓ to scroll   pgup/pgdn to page   hom"
+" ↑/↓/k/j to scroll   pgup/ctrl + b/ctrl "
 " q to quit   esc to edit prev           "
 "                                        "

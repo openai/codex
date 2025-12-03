@@ -1,5 +1,6 @@
 ---
 source: tui/src/pager_overlay.rs
+assertion_line: 771
 expression: snapshot
 ---
 / T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / /
@@ -11,5 +12,5 @@ expression: snapshot
     1 +hello
     2 +world
 ─────────────────────────────────────────────────────────────────────────── 0% ─
- ↑/↓ to scroll   pgup/pgdn to page   home/end to jump
+ ↑/↓/k/j to scroll   pgup/ctrl + b/ctrl + u to scroll up faster   pgdn/space/ctr
  q to quit   esc to edit prev

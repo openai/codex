@@ -66,11 +66,17 @@ impl Overlay {
 
 const KEY_UP: KeyBinding = key_hint::plain(KeyCode::Up);
 const KEY_DOWN: KeyBinding = key_hint::plain(KeyCode::Down);
+const KEY_K: KeyBinding = key_hint::plain(KeyCode::Char('k'));
+const KEY_J: KeyBinding = key_hint::plain(KeyCode::Char('j'));
 const KEY_PAGE_UP: KeyBinding = key_hint::plain(KeyCode::PageUp);
 const KEY_PAGE_DOWN: KeyBinding = key_hint::plain(KeyCode::PageDown);
 const KEY_SPACE: KeyBinding = key_hint::plain(KeyCode::Char(' '));
 const KEY_HOME: KeyBinding = key_hint::plain(KeyCode::Home);
 const KEY_END: KeyBinding = key_hint::plain(KeyCode::End);
+const KEY_CTRL_F: KeyBinding = key_hint::ctrl(KeyCode::Char('f'));
+const KEY_CTRL_D: KeyBinding = key_hint::ctrl(KeyCode::Char('d'));
+const KEY_CTRL_B: KeyBinding = key_hint::ctrl(KeyCode::Char('b'));
+const KEY_CTRL_U: KeyBinding = key_hint::ctrl(KeyCode::Char('u'));
 const KEY_Q: KeyBinding = key_hint::plain(KeyCode::Char('q'));
 const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
 const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
@@ -79,8 +85,15 @@ const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
 
 // Common pager navigation hints rendered on the first line
 const PAGER_KEY_HINTS: &[(&[KeyBinding], &str)] = &[
-    (&[KEY_UP, KEY_DOWN], "to scroll"),
-    (&[KEY_PAGE_UP, KEY_PAGE_DOWN], "to page"),
+    (&[KEY_UP, KEY_DOWN, KEY_K, KEY_J], "to scroll"),
+    (
+        &[KEY_PAGE_UP, KEY_CTRL_B, KEY_CTRL_U],
+        "to scroll up faster",
+    ),
+    (
+        &[KEY_PAGE_DOWN, KEY_SPACE, KEY_CTRL_F, KEY_CTRL_D],
+        "to scroll down faster",
+    ),
     (&[KEY_HOME, KEY_END], "to jump"),
 ];
 
@@ -234,19 +247,29 @@ impl PagerView {
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
         match key_event {
-            e if KEY_UP.is_press(e) => {
+            e if KEY_UP.is_press(e) || KEY_K.is_press(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
             }
-            e if KEY_DOWN.is_press(e) => {
+            e if KEY_DOWN.is_press(e) || KEY_J.is_press(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
             }
-            e if KEY_PAGE_UP.is_press(e) => {
+            e if KEY_PAGE_UP.is_press(e) || KEY_CTRL_B.is_press(e) => {
                 let area = self.content_area(tui.terminal.viewport_area);
                 self.scroll_offset = self.scroll_offset.saturating_sub(area.height as usize);
             }
-            e if KEY_PAGE_DOWN.is_press(e) || KEY_SPACE.is_press(e) => {
+            e if KEY_PAGE_DOWN.is_press(e) || KEY_SPACE.is_press(e) || KEY_CTRL_F.is_press(e) => {
                 let area = self.content_area(tui.terminal.viewport_area);
                 self.scroll_offset = self.scroll_offset.saturating_add(area.height as usize);
+            }
+            e if KEY_CTRL_U.is_press(e) => {
+                let area = self.content_area(tui.terminal.viewport_area);
+                let half_page = usize::from((area.height / 2).max(1));
+                self.scroll_offset = self.scroll_offset.saturating_sub(half_page);
+            }
+            e if KEY_CTRL_D.is_press(e) => {
+                let area = self.content_area(tui.terminal.viewport_area);
+                let half_page = usize::from((area.height / 2).max(1));
+                self.scroll_offset = self.scroll_offset.saturating_add(half_page);
             }
             e if KEY_HOME.is_press(e) => {
                 self.scroll_offset = 0;
