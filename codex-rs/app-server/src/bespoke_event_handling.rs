@@ -62,6 +62,7 @@ use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::TokenCountEvent;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
+use codex_core::review_prompts;
 use codex_protocol::ConversationId;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
@@ -351,8 +352,32 @@ pub(crate) async fn apply_bespoke_event_handling(
                 }))
                 .await;
         }
+        EventMsg::ViewImageToolCall(view_image_event) => {
+            let item = ThreadItem::ImageView {
+                id: view_image_event.call_id.clone(),
+                path: view_image_event.path.to_string_lossy().into_owned(),
+            };
+            let started = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item: item.clone(),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(started))
+                .await;
+            let completed = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(completed))
+                .await;
+        }
         EventMsg::EnteredReviewMode(review_request) => {
-            let review = review_request.user_facing_hint;
+            let review = review_request
+                .user_facing_hint
+                .unwrap_or_else(|| review_prompts::user_facing_hint(&review_request.target));
             let item = ThreadItem::EnteredReviewMode {
                 id: event_turn_id.clone(),
                 review,
@@ -693,6 +718,7 @@ async fn emit_turn_completed_with_status(
     conversation_id: ConversationId,
     event_turn_id: String,
     status: TurnStatus,
+    error: Option<TurnError>,
     outgoing: &OutgoingMessageSender,
 ) {
     let notification = TurnCompletedNotification {
@@ -700,6 +726,7 @@ async fn emit_turn_completed_with_status(
         turn: Turn {
             id: event_turn_id,
             items: vec![],
+            error,
             status,
         },
     };
@@ -788,13 +815,12 @@ async fn handle_turn_complete(
 ) {
     let turn_summary = find_and_remove_turn_summary(conversation_id, turn_summary_store).await;
 
-    let status = if let Some(error) = turn_summary.last_error {
-        TurnStatus::Failed { error }
-    } else {
-        TurnStatus::Completed
+    let (status, error) = match turn_summary.last_error {
+        Some(error) => (TurnStatus::Failed, Some(error)),
+        None => (TurnStatus::Completed, None),
     };
 
-    emit_turn_completed_with_status(conversation_id, event_turn_id, status, outgoing).await;
+    emit_turn_completed_with_status(conversation_id, event_turn_id, status, error, outgoing).await;
 }
 
 async fn handle_turn_interrupted(
@@ -809,6 +835,7 @@ async fn handle_turn_interrupted(
         conversation_id,
         event_turn_id,
         TurnStatus::Interrupted,
+        None,
         outgoing,
     )
     .await;
@@ -1281,6 +1308,7 @@ mod tests {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
                 assert_eq!(n.turn.status, TurnStatus::Completed);
+                assert_eq!(n.turn.error, None);
             }
             other => bail!("unexpected message: {other:?}"),
         }
@@ -1321,6 +1349,7 @@ mod tests {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
                 assert_eq!(n.turn.status, TurnStatus::Interrupted);
+                assert_eq!(n.turn.error, None);
             }
             other => bail!("unexpected message: {other:?}"),
         }
@@ -1360,14 +1389,13 @@ mod tests {
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
+                assert_eq!(n.turn.status, TurnStatus::Failed);
                 assert_eq!(
-                    n.turn.status,
-                    TurnStatus::Failed {
-                        error: TurnError {
-                            message: "bad".to_string(),
-                            codex_error_info: Some(V2CodexErrorInfo::Other),
-                        }
-                    }
+                    n.turn.error,
+                    Some(TurnError {
+                        message: "bad".to_string(),
+                        codex_error_info: Some(V2CodexErrorInfo::Other),
+                    })
                 );
             }
             other => bail!("unexpected message: {other:?}"),
@@ -1628,14 +1656,13 @@ mod tests {
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, a_turn1);
+                assert_eq!(n.turn.status, TurnStatus::Failed);
                 assert_eq!(
-                    n.turn.status,
-                    TurnStatus::Failed {
-                        error: TurnError {
-                            message: "a1".to_string(),
-                            codex_error_info: Some(V2CodexErrorInfo::BadRequest),
-                        }
-                    }
+                    n.turn.error,
+                    Some(TurnError {
+                        message: "a1".to_string(),
+                        codex_error_info: Some(V2CodexErrorInfo::BadRequest),
+                    })
                 );
             }
             other => bail!("unexpected message: {other:?}"),
@@ -1649,14 +1676,13 @@ mod tests {
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, b_turn1);
+                assert_eq!(n.turn.status, TurnStatus::Failed);
                 assert_eq!(
-                    n.turn.status,
-                    TurnStatus::Failed {
-                        error: TurnError {
-                            message: "b1".to_string(),
-                            codex_error_info: None,
-                        }
-                    }
+                    n.turn.error,
+                    Some(TurnError {
+                        message: "b1".to_string(),
+                        codex_error_info: None,
+                    })
                 );
             }
             other => bail!("unexpected message: {other:?}"),
@@ -1671,6 +1697,7 @@ mod tests {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, a_turn2);
                 assert_eq!(n.turn.status, TurnStatus::Completed);
+                assert_eq!(n.turn.error, None);
             }
             other => bail!("unexpected message: {other:?}"),
         }

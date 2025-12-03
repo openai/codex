@@ -76,6 +76,8 @@ pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
 
         _ if slug.starts_with("codex-") => Some(ModelInfo::new(CONTEXT_WINDOW_272K)),
 
+        _ if slug.starts_with("exp-") => Some(ModelInfo::new(CONTEXT_WINDOW_272K)),
+
         _ => None,
     }
 }

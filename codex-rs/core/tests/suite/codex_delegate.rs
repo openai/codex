@@ -3,6 +3,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SandboxPolicy;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
@@ -68,8 +69,10 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     test.codex
         .submit(Op::Review {
             review_request: ReviewRequest {
-                prompt: "Please review".to_string(),
-                user_facing_hint: "review".to_string(),
+                target: ReviewTarget::Custom {
+                    instructions: "Please review".to_string(),
+                },
+                user_facing_hint: None,
             },
         })
         .await
@@ -143,8 +146,10 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     test.codex
         .submit(Op::Review {
             review_request: ReviewRequest {
-                prompt: "Please review".to_string(),
-                user_facing_hint: "review".to_string(),
+                target: ReviewTarget::Custom {
+                    instructions: "Please review".to_string(),
+                },
+                user_facing_hint: None,
             },
         })
         .await
@@ -197,8 +202,10 @@ async fn codex_delegate_ignores_legacy_deltas() {
     test.codex
         .submit(Op::Review {
             review_request: ReviewRequest {
-                prompt: "Please review".to_string(),
-                user_facing_hint: "review".to_string(),
+                target: ReviewTarget::Custom {
+                    instructions: "Please review".to_string(),
+                },
+                user_facing_hint: None,
             },
         })
         .await
