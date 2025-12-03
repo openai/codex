@@ -136,6 +136,28 @@ impl MermaidLinter {
                         }
                     }
                 }
+
+                let tail = &line[single_arrow.end()..];
+                if let Some(first_pipe_rel) = tail.find('|') {
+                    let after_first = &tail[first_pipe_rel + 1..];
+                    if let Some(second_pipe_rel) = after_first.find('|') {
+                        let label_start = single_arrow.end() + first_pipe_rel + 1;
+                        let label_end = label_start + second_pipe_rel;
+                        let label_text = &line[label_start..label_end];
+                        if label_text.contains(['(', ')', '"']) {
+                            let sanitized = sanitize_label_text(label_text);
+                            if !sanitized.is_empty() && sanitized != label_text {
+                                issues.push(Issue::new(
+                                    line_no,
+                                    label_start,
+                                    label_end,
+                                    "Sanitized edge label containing parentheses/quotes.",
+                                    make_replace_span(label_start, label_end, sanitized),
+                                ));
+                            }
+                        }
+                    }
+                }
             }
 
             if lowered.starts_with("pie") {
@@ -594,6 +616,15 @@ fn make_replace_after_colon(colon_pos: usize, find: char, replace_with: char) ->
     })
 }
 
+fn sanitize_label_text(raw: &str) -> String {
+    let cleaned = raw.replace(['(', ')', '"'], " ");
+    cleaned
+        .split_whitespace()
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn compute_label_spans(line: &str) -> Vec<(usize, usize)> {
     let mut spans: Vec<(usize, usize)> = Vec::new();
     for caps in SQUARE_LABEL_RE.captures_iter(line) {
@@ -938,6 +969,13 @@ sequenceDiagram
         assert!(fixed.contains("ClientApp->>APIServer: POST /api/calpico/rooms/{id}/messages"));
         assert!(fixed.contains("APIServer->>MessageWriter: validate membership, persist message"));
         assert!(fixed.contains("MessageWriter-->>APIServer: message record"));
+    }
+
+    #[test]
+    fn edge_labels_with_parens_and_quotes_are_sanitized() {
+        let raw = "```mermaid\nflowchart TD\n  B --|HTTP(\"S\") + cookies/CSRF| W\n```";
+        let fixed = fix_mermaid_blocks(raw);
+        assert!(fixed.contains(r#"B -->|HTTP S + cookies/CSRF| W"#));
     }
 
     #[test]
