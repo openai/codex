@@ -16,6 +16,7 @@ use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::formatted_truncate_text;
+use crate::unified_exec::session_manager;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::SpawnedPty;
 
@@ -168,26 +169,11 @@ impl UnifiedExecSession {
         }
         let aggregated_text = String::from_utf8_lossy(&aggregated).to_string();
         let exit_code = self.exit_code().unwrap_or(-1);
-
-        let exec_output = ExecToolCallOutput {
+        session_manager::sandboxing::check_sandboxing(
+            self.sandbox_type(),
+            &aggregated_text,
             exit_code,
-            stdout: StreamOutput::new(aggregated_text.clone()),
-            aggregated_output: StreamOutput::new(aggregated_text.clone()),
-            ..Default::default()
-        };
-
-        if is_likely_sandbox_denied(self.sandbox_type(), &exec_output) {
-            let snippet = formatted_truncate_text(
-                &aggregated_text,
-                TruncationPolicy::Tokens(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
-            );
-            let message = if snippet.is_empty() {
-                format!("Session creation failed with exit code {exit_code}")
-            } else {
-                snippet
-            };
-            return Err(UnifiedExecError::sandbox_denied(message, exec_output));
-        }
+        )?;
 
         Ok(())
     }

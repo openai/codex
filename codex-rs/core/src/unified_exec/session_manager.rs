@@ -707,7 +707,7 @@ impl UnifiedExecSessionManager {
     }
 }
 
-mod sandboxing {
+pub(crate) mod sandboxing {
     use super::*;
     use crate::exec::SandboxType;
     use crate::exec::is_likely_sandbox_denied;
