@@ -1834,7 +1834,7 @@ mod handlers {
         let models = builtin_model_presets(auth_mode);
         let event = Event {
             id: sub_id,
-            msg: EventMsg::AvailableModels(AvailableModelsEvent { models }),
+            msg: EventMsg::ListModelsResponse(AvailableModelsEvent { models }),
         };
         sess.send_event_raw(event).await;
     }

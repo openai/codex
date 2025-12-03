@@ -582,7 +582,7 @@ pub enum EventMsg {
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
-    AvailableModels(AvailableModelsEvent),
+    ListModelsResponse(AvailableModelsEvent),
 }
 
 /// Codex errors that we expose to clients.

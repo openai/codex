@@ -583,7 +583,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::UndoCompleted(_)
-            | EventMsg::AvailableModels(_)
+            | EventMsg::ListModelsResponse(_)
             | EventMsg::UndoStarted(_) => {}
         }
         CodexStatus::Running

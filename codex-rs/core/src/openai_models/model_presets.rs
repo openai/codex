@@ -19,6 +19,14 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Medium,
+                    description: "Balances speed and reasoning depth for everyday tasks".to_string(),
+                },
+                ReasoningEffortPreset {
                     effort: ReasoningEffort::High,
                     description: "Maximizes reasoning depth for complex problems".to_string(),
                 },

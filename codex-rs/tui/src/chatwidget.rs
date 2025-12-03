@@ -1830,7 +1830,7 @@ impl ChatWidget {
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::AvailableModels(_)
+            | EventMsg::ListModelsResponse(_)
             | EventMsg::ReasoningRawContentDelta(_) => {}
         }
     }
