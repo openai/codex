@@ -718,7 +718,6 @@ pub struct ConfigToml {
     pub experimental_instructions_file: Option<PathBuf>,
     pub experimental_compact_prompt_file: Option<PathBuf>,
     pub experimental_use_unified_exec_tool: Option<bool>,
-    pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_sandbox_command_assessment: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
@@ -1807,10 +1806,12 @@ trust_level = "trusted"
     #[test]
     fn legacy_toggles_map_to_features() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
+        let mut entries = BTreeMap::new();
+        entries.insert("unified_exec".to_string(), true);
+        entries.insert("rmcp_client".to_string(), true);
+        entries.insert("apply_patch_freeform".to_string(), true);
         let cfg = ConfigToml {
-            experimental_use_unified_exec_tool: Some(true),
-            experimental_use_rmcp_client: Some(true),
-            experimental_use_freeform_apply_patch: Some(true),
+            features: Some(crate::features::FeaturesToml { entries }),
             ..Default::default()
         };
 
