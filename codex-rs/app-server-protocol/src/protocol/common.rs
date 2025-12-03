@@ -139,8 +139,8 @@ client_request_definitions! {
         response: v2::ModelListResponse,
     },
 
-    McpServersList => "mcp/servers/list" {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+    McpServersList => "mcpServers/list" {
+        params: v2::ListMcpServersParams,
         response: v2::ListMcpServersResponse,
     },
 
