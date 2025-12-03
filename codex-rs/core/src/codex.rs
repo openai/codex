@@ -1996,7 +1996,7 @@ pub(crate) async fn run_task(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached {
-                    if should_use_remote_compact_task(&sess).await {
+                    if should_use_remote_compact_task(&sess) {
                         run_inline_remote_auto_compact_task(sess.clone(), turn_context.clone())
                             .await;
                     } else {
