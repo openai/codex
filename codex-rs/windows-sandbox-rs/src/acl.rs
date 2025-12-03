@@ -160,6 +160,7 @@ pub unsafe fn dacl_effective_allows_write(p_dacl: *mut ACL, psid: *mut c_void) -
     // Fallback: simple allow ACE scan (already ignores inherit-only)
     dacl_has_write_allow_for_sid(p_dacl, psid)
 }
+#[allow(clippy::missing_safety_doc)]
 pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
     let mut p_sd: *mut c_void = std::ptr::null_mut();
     let mut p_dacl: *mut ACL = std::ptr::null_mut();
@@ -217,6 +218,10 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
     Ok(added)
 }
 
+/// Adds a deny ACE to prevent write/append/delete for the given SID on the target path.
+///
+/// # Safety
+/// Caller must ensure `psid` points to a valid SID and `path` refers to an existing file or directory.
 pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
     let mut p_sd: *mut c_void = std::ptr::null_mut();
     let mut p_dacl: *mut ACL = std::ptr::null_mut();
@@ -330,6 +335,10 @@ pub unsafe fn revoke_ace(path: &Path, psid: *mut c_void) {
     }
 }
 
+/// Grants RX to the null device for the given SID to support stdout/stderr redirection.
+///
+/// # Safety
+/// Caller must ensure `psid` is a valid SID pointer.
 pub unsafe fn allow_null_device(psid: *mut c_void) {
     let desired = 0x00020000 | 0x00040000; // READ_CONTROL | WRITE_DAC
     let h = CreateFileW(
