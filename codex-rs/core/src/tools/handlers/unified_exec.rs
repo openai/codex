@@ -187,7 +187,8 @@ impl ToolHandler for UnifiedExecHandler {
                 );
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
-                let result = manager
+                
+                manager
                     .exec_command(
                         ExecCommandRequest {
                             command,
@@ -203,8 +204,7 @@ impl ToolHandler for UnifiedExecHandler {
                     .await
                     .map_err(|err| {
                         FunctionCallError::RespondToModel(format!("exec_command failed: {err:?}"))
-                    })?;
-                result
+                    })?
             }
             "write_stdin" => {
                 let args: WriteStdinArgs = serde_json::from_str(&arguments).map_err(|err| {
