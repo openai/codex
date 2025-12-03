@@ -22,6 +22,9 @@ pub(crate) enum AppEvent {
     /// Start a new session.
     NewSession,
 
+    /// Open the resume picker inside the running TUI session.
+    OpenResumePicker,
+
     /// Request to exit the application gracefully.
     ExitRequest,
 
