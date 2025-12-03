@@ -398,10 +398,6 @@ impl SessionConfiguration {
         self.user_instructions.clone()
     }
 
-    pub(crate) fn approval_policy(&self) -> AskForApproval {
-        self.approval_policy
-    }
-
     pub(crate) fn sandbox_policy(&self) -> SandboxPolicy {
         self.sandbox_policy.clone()
     }

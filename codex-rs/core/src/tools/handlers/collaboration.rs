@@ -25,6 +25,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use serde_json::json;
 use std::path::PathBuf;
+use tracing::info;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct ExtraMetadata(pub HashMap<String, serde_json::Value>);
@@ -235,7 +236,7 @@ fn build_agent_system_message(
 
     ResponseItem::Message {
         id: None,
-        role: "system".to_string(),
+        role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: lines.join("\n"),
         }],
@@ -267,21 +268,6 @@ fn build_history_for_child(
     history.replace(merged);
     history.set_token_info(token_info);
     history
-}
-
-async fn record_session_summary(
-    session: &crate::codex::Session,
-    turn: &crate::codex::TurnContext,
-    text: String,
-) {
-    let summary = ResponseItem::Message {
-        id: None,
-        role: "assistant".to_string(),
-        content: vec![ContentItem::InputText { text }],
-    };
-    session
-        .record_conversation_items(turn, std::slice::from_ref(&summary))
-        .await;
 }
 
 pub struct CollaborationHandler;
@@ -456,29 +442,18 @@ async fn handle_init_agent(
         extra: ExtraMetadata(extra),
     };
 
-    let content = format!(
-        "Initialized agent {} at depth {} in cwd {}",
-        assigned_id.0,
-        depth,
-        turn.cwd.display()
-    );
+    let content = format!("Initialized agent {} at depth {}", assigned_id.0, depth);
 
     if !cfg!(test) {
         let supervisor = session.ensure_collaboration_supervisor().await;
         supervisor.kick_agent(assigned_id).await;
     }
 
-    record_session_summary(
-        session.as_ref(),
-        turn,
-        format!(
-            "Agent {} initialized (child of {})",
-            assigned_id.0, parent.id.0
-        ),
-    )
-    .await;
-
     let output = CollaborationInitAgentOutput { content, metadata };
+    info!(
+        "collaboration_init_agent: assigned_id={}, parent_id={}, depth={}",
+        assigned_id.0, parent.id.0, depth
+    );
     serialize_function_output(&output, true)
 }
 
@@ -591,19 +566,14 @@ async fn handle_send(
 
     let success = metadata.message_tool_call_success;
 
-    if success {
-        record_session_summary(
-            session.as_ref(),
-            turn,
-            format!(
-                "Agent {} sent to {:?}: {}",
-                sender_id.0, valid_recipients, input.message
-            ),
-        )
-        .await;
+    if success && !valid_recipients.is_empty() {
         let supervisor = session.ensure_collaboration_supervisor().await;
-        for recipient in &valid_recipients {
-            supervisor.kick_agent(*recipient).await;
+        for recipient in valid_recipients
+            .iter()
+            .copied()
+            .filter(|recipient| recipient.0 != 0)
+        {
+            supervisor.kick_agent(recipient).await;
         }
     }
 
@@ -710,9 +680,56 @@ async fn handle_wait(
         return serialize_function_output(&output, false);
     }
 
-    let mut agents_ran = Vec::new();
     let supervisor = session.ensure_collaboration_supervisor().await;
     let mut rx = supervisor.subscribe();
+
+    let snapshot = |agent: &AgentState, delta_tokens: i32, sub_id: Option<String>| {
+        json!({
+            "agent_idx": agent.id.0,
+            "delta_tokens": delta_tokens,
+            "status": status_label(&agent.status),
+            "status_detail": status_detail(&agent.status),
+            "last_agent_message": last_agent_message(&agent.status),
+            "sub_id": sub_id,
+        })
+    };
+
+    let mut agents_ran = Vec::new();
+    {
+        // Short-circuit if all targets are already idle/terminal.
+        let collab = session.collaboration_state().lock().await;
+        if targets.iter().all(|id| {
+            collab
+                .agent(*id)
+                .map(|agent| !matches!(agent.status, AgentLifecycleState::Running))
+                .unwrap_or(false)
+        }) {
+            let mut extra = HashMap::new();
+            extra.insert(
+                "agents_ran".to_string(),
+                json!(
+                    targets
+                        .iter()
+                        .filter_map(|id| collab.agent(*id))
+                        .map(|agent| snapshot(agent, 0, None))
+                        .collect::<Vec<_>>()
+                ),
+            );
+            extra.insert("token_budget_exhausted".to_string(), json!(false));
+            let metadata = CollaborationWaitMetadata {
+                message_tool_call_success: true,
+                message_tool_call_error_should_penalize_model: false,
+                is_wait_success_msg: Some(true),
+                extra: ExtraMetadata(extra),
+            };
+            let output = CollaborationWaitOutput {
+                content: "Finished waiting.".to_string(),
+                metadata,
+            };
+            return serialize_function_output(&output, true);
+        }
+    }
+
     supervisor
         .start_agents(targets.clone(), input.max_duration)
         .await
@@ -730,29 +747,6 @@ async fn handle_wait(
             continue;
         }
         remaining = remaining.saturating_sub(event.delta_tokens);
-
-        if let Some(message) = event.last_message.clone() {
-            record_session_summary(
-                session.as_ref(),
-                turn,
-                format!("Agent {} replied: {}", event.agent.0, message),
-            )
-            .await;
-        } else if let AgentLifecycleState::Error { error } = &event.status {
-            record_session_summary(
-                session.as_ref(),
-                turn,
-                format!("Agent {} failed: {error}", event.agent.0),
-            )
-            .await;
-        } else if !matches!(event.status, AgentLifecycleState::Error { .. }) {
-            record_session_summary(
-                session.as_ref(),
-                turn,
-                format!("Agent {} finished turn.", event.agent.0),
-            )
-            .await;
-        }
 
         let detail = status_detail(&event.status);
         agents_ran.push(json!({
@@ -949,15 +943,6 @@ async fn handle_close(
             )
             .await;
     }
-    record_session_summary(
-        session.as_ref(),
-        turn,
-        format!(
-            "Agent {} closed agents {:?}",
-            caller_id.0, closed_for_summary
-        ),
-    )
-    .await;
     serialize_function_output(&output, true)
 }
 
@@ -1173,7 +1158,7 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert!(matches!(
             items.first(),
-            Some(ResponseItem::Message { role, .. }) if role == "system"
+            Some(ResponseItem::Message { role, .. }) if role == "user"
         ));
         assert!(matches!(
             items.get(1),

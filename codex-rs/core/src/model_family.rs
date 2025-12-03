@@ -196,10 +196,6 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             base_instructions: GPT_5_1_CODEX_MAX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             experimental_supported_tools: vec![
-                "grep_files".to_string(),
-                "list_dir".to_string(),
-                "read_file".to_string(),
-                "test_sync_tool".to_string(),
                 "collaboration".to_string(),
             ],
             shell_type: ConfigShellToolType::ShellCommand,

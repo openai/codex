@@ -13,7 +13,7 @@ The focus is on:
 
 ## 1. Mental Model
 
-- A **Codex session** remains the top‑level unit, with one running `SessionTask` (typically `RegularTask`) at a time.
+- A **Codex session** remains the top‑level unit, with one running `SessionTask` at a time.
 - Within a session we introduce a **Collaboration Graph**: a set of logical agents that can exchange messages and call tools, orchestrated entirely within the same session.
 - The **main agent** corresponds to the existing single agent Codex exposes today. It gets the user’s prompt and controls collaboration via the new `collaboration.*` tools.
 - **Child agents** are lightweight logical agents:
@@ -624,7 +624,6 @@ Add collaboration‑related helpers on `Session`:
 
 The single‑agent path (today’s behavior) remains:
 
-- `RegularTask::run` → `run_task` loop.
 - `run_task` builds `prompt` from *session* history and calls `run_turn`.
 
 For collaboration, we introduce a **CollaborationTask**:
