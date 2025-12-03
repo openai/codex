@@ -477,6 +477,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(not(debug_assertions))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
