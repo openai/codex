@@ -277,9 +277,13 @@ async fn run_agent_turns(
                 {
                     let mut collab = session.collaboration_state().lock().await;
                     if let Some(agent) = collab.agent_mut(target) {
-                        agent_status = AgentLifecycleState::Idle {
-                            last_agent_message: last.clone(),
-                        };
+                        if !responses.is_empty() {
+                            agent_status = AgentLifecycleState::Running;
+                        } else {
+                            agent_status = AgentLifecycleState::Idle {
+                                last_agent_message: last.clone(),
+                            };
+                        }
                         agent.status = agent_status.clone();
                         agent.history = new_history.clone();
                     }
@@ -304,7 +308,13 @@ async fn run_agent_turns(
         remaining_budget = remaining_budget.saturating_sub(delta_tokens);
 
         let final_status = {
-            let collab = session.collaboration_state().lock().await;
+            let mut collab = session.collaboration_state().lock().await;
+            if continue_running
+                && remaining_budget <= 0
+                && let Some(agent) = collab.agent_mut(target)
+            {
+                agent.status = AgentLifecycleState::Exhausted;
+            }
             collab.agent(target).map(|a| a.status.clone())
         }
         .unwrap_or(agent_status.clone());
@@ -317,7 +327,7 @@ async fn run_agent_turns(
             sub_id: Some(sub_id),
         });
 
-        keep_running |= continue_running;
+        keep_running |= continue_running && remaining_budget > 0;
         if !continue_running || remaining_budget <= 0 {
             break;
         }

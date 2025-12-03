@@ -95,6 +95,7 @@ impl ConversationManager {
         let session_configured = match event {
             Event {
                 id,
+                agent_idx: _,
                 msg: EventMsg::SessionConfigured(session_configured),
             } if id == INITIAL_SUBMIT_ID => session_configured,
             _ => {

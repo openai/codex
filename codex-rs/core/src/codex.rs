@@ -569,6 +569,7 @@ impl Session {
             };
             post_session_configured_events.push(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
+                agent_idx: Some(0),
                 msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }),
             });
         }
@@ -630,6 +631,7 @@ impl Session {
 
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
+            agent_idx: Some(0),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: session_configuration.model.clone(),
@@ -863,9 +865,15 @@ impl Session {
 
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
+        let agent = turn_context.collaboration_agent();
+        if !Self::should_emit_event_for_agent(agent, &msg) {
+            return;
+        }
         let legacy_source = msg.clone();
+        let agent_idx = Some(turn_context.collaboration_agent().0);
         let event = Event {
             id: turn_context.sub_id.clone(),
+            agent_idx,
             msg,
         };
         self.send_event_raw(event).await;
@@ -874,13 +882,43 @@ impl Session {
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
             let legacy_event = Event {
                 id: turn_context.sub_id.clone(),
+                agent_idx,
                 msg: legacy,
             };
             self.send_event_raw(legacy_event).await;
         }
     }
 
+    fn should_emit_event_for_agent(agent: AgentId, msg: &EventMsg) -> bool {
+        if agent == AgentId(0) {
+            return true;
+        }
+        !matches!(
+            msg,
+            EventMsg::AgentMessage(_)
+                | EventMsg::AgentMessageDelta(_)
+                | EventMsg::AgentMessageContentDelta(_)
+                | EventMsg::AgentReasoning(_)
+                | EventMsg::AgentReasoningDelta(_)
+                | EventMsg::AgentReasoningRawContent(_)
+                | EventMsg::AgentReasoningRawContentDelta(_)
+                | EventMsg::AgentReasoningSectionBreak(_)
+                | EventMsg::ReasoningContentDelta(_)
+                | EventMsg::ReasoningRawContentDelta(_)
+                | EventMsg::RawResponseItem(_)
+                | EventMsg::UserMessage(_)
+                | EventMsg::TurnDiff(_)
+        )
+    }
+
     pub(crate) async fn send_event_raw(&self, event: Event) {
+        tracing::info!("sending event: {:?}", event);
+        if let Some(agent_idx) = event.agent_idx
+            && agent_idx != 0
+            && !Self::should_emit_event_for_agent(AgentId(agent_idx), &event.msg)
+        {
+            return;
+        }
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
@@ -1858,6 +1896,7 @@ mod handlers {
 
             let event = Event {
                 id: sub_id,
+                agent_idx: Some(0),
                 msg: EventMsg::GetHistoryEntryResponse(
                     crate::protocol::GetHistoryEntryResponseEvent {
                         offset,
@@ -1892,6 +1931,7 @@ mod handlers {
             .collect();
         let event = Event {
             id: sub_id,
+            agent_idx: Some(0),
             msg: EventMsg::McpListToolsResponse(crate::protocol::McpListToolsResponseEvent {
                 tools: tools
                     .into_iter()
@@ -1915,6 +1955,7 @@ mod handlers {
 
         let event = Event {
             id: sub_id,
+            agent_idx: Some(0),
             msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
                 custom_prompts,
             }),
@@ -1965,6 +2006,7 @@ mod handlers {
             warn!("failed to shutdown rollout recorder: {e}");
             let event = Event {
                 id: sub_id.clone(),
+                agent_idx: Some(0),
                 msg: EventMsg::Error(ErrorEvent {
                     message: "Failed to shutdown rollout recorder".to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),
@@ -1975,6 +2017,7 @@ mod handlers {
 
         let event = Event {
             id: sub_id,
+            agent_idx: Some(0),
             msg: EventMsg::ShutdownComplete,
         };
         sess.send_event_raw(event).await;
@@ -2004,6 +2047,7 @@ mod handlers {
             Err(err) => {
                 let event = Event {
                     id: sub_id,
+                    agent_idx: Some(0),
                     msg: EventMsg::Error(ErrorEvent {
                         message: err.to_string(),
                         codex_error_info: Some(CodexErrorInfo::Other),

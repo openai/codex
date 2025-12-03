@@ -99,6 +99,7 @@ fn resumed_initial_messages_render_history() {
     let conversation_id = ConversationId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = codex_core::protocol::SessionConfiguredEvent {
+        agent_idx: Some(0),
         session_id: conversation_id,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -110,10 +111,12 @@ fn resumed_initial_messages_render_history() {
         history_entry_count: 0,
         initial_messages: Some(vec![
             EventMsg::UserMessage(UserMessageEvent {
+                agent_idx: Some(0),
                 message: "hello from user".to_string(),
                 images: None,
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
+                agent_idx: Some(0),
                 message: "assistant reply".to_string(),
             }),
         ]),
@@ -121,6 +124,7 @@ fn resumed_initial_messages_render_history() {
     };
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "initial".into(),
         msg: EventMsg::SessionConfigured(configured),
     });
@@ -153,6 +157,7 @@ fn entered_review_mode_uses_request_hint() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual();
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "review-start".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::BaseBranch {
@@ -174,6 +179,7 @@ fn entered_review_mode_defaults_to_current_changes_banner() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual();
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "review-start".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
@@ -194,6 +200,7 @@ fn exited_review_mode_emits_results_and_finishes() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual();
 
     let review = ReviewOutputEvent {
+        agent_idx: Some(0),
         findings: vec![ReviewFinding {
             title: "[P1] Fix bug".to_string(),
             body: "Something went wrong".to_string(),
@@ -210,8 +217,10 @@ fn exited_review_mode_emits_results_and_finishes() {
     };
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "review-end".into(),
         msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            agent_idx: Some(0),
             review_output: Some(review),
         }),
     });
@@ -232,8 +241,10 @@ fn review_restores_context_window_indicator() {
     let review_tokens = 12_030; // ~97% remaining after subtracting baseline.
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "token-before".into(),
         msg: EventMsg::TokenCount(TokenCountEvent {
+            agent_idx: Some(0),
             info: Some(make_token_info(pre_review_tokens, context_window)),
             rate_limits: None,
         }),
@@ -241,6 +252,7 @@ fn review_restores_context_window_indicator() {
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(30));
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "review-start".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::BaseBranch {
@@ -251,8 +263,10 @@ fn review_restores_context_window_indicator() {
     });
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "token-review".into(),
         msg: EventMsg::TokenCount(TokenCountEvent {
+            agent_idx: Some(0),
             info: Some(make_token_info(review_tokens, context_window)),
             rate_limits: None,
         }),
@@ -260,8 +274,10 @@ fn review_restores_context_window_indicator() {
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(97));
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "review-end".into(),
         msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            agent_idx: Some(0),
             review_output: None,
         }),
     });
@@ -280,8 +296,10 @@ fn token_count_none_resets_context_indicator() {
     let pre_compact_tokens = 12_700;
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "token-before".into(),
         msg: EventMsg::TokenCount(TokenCountEvent {
+            agent_idx: Some(0),
             info: Some(make_token_info(pre_compact_tokens, context_window)),
             rate_limits: None,
         }),
@@ -289,8 +307,10 @@ fn token_count_none_resets_context_indicator() {
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(30));
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "token-cleared".into(),
         msg: EventMsg::TokenCount(TokenCountEvent {
+            agent_idx: Some(0),
             info: None,
             rate_limits: None,
         }),
@@ -319,8 +339,10 @@ fn context_indicator_shows_used_tokens_when_window_unknown() {
     };
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "token-usage".into(),
         msg: EventMsg::TokenCount(TokenCountEvent {
+            agent_idx: Some(0),
             info: Some(token_info),
             rate_limits: None,
         }),
@@ -669,6 +691,7 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
 
     // Trigger an exec approval request with a short, single-line command
     let ev = ExecApprovalRequestEvent {
+        agent_idx: Some(0),
         call_id: "call-short".into(),
         turn_id: "turn-short".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
@@ -680,6 +703,7 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-short".into(),
         msg: EventMsg::ExecApprovalRequest(ev),
     });
@@ -713,6 +737,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
 
     // Multiline command: modal should show full command, history records decision only
     let ev_multi = ExecApprovalRequestEvent {
+        agent_idx: Some(0),
         call_id: "call-multi".into(),
         turn_id: "turn-multi".into(),
         command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
@@ -724,6 +749,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-multi".into(),
         msg: EventMsg::ExecApprovalRequest(ev_multi),
     });
@@ -765,6 +791,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
     // Very long single-line command: decision snippet should be truncated <= 80 chars with trailing ...
     let long = format!("echo {}", "a".repeat(200));
     let ev_long = ExecApprovalRequestEvent {
+        agent_idx: Some(0),
         call_id: "call-long".into(),
         turn_id: "turn-long".into(),
         command: vec!["bash".into(), "-lc".into(), long],
@@ -774,6 +801,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-long".into(),
         msg: EventMsg::ExecApprovalRequest(ev_long),
     });
@@ -816,6 +844,7 @@ fn begin_exec_with_source(
         interaction_input,
     };
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: call_id.to_string(),
         msg: EventMsg::ExecCommandBegin(event.clone()),
     });
@@ -839,6 +868,7 @@ fn end_exec(
         format!("{stdout}{stderr}")
     };
     let ExecCommandBeginEvent {
+        agent_idx: Some(0),
         call_id,
         turn_id,
         command,
@@ -849,8 +879,10 @@ fn end_exec(
         process_id,
     } = begin_event;
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: call_id.clone(),
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            agent_idx: Some(0),
             call_id,
             process_id,
             turn_id,
@@ -1237,8 +1269,10 @@ fn undo_success_events_render_info_messages() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "turn-1".to_string(),
         msg: EventMsg::UndoStarted(UndoStartedEvent {
+            agent_idx: Some(0),
             message: Some("Undo requested for the last turn...".to_string()),
         }),
     });
@@ -1248,8 +1282,10 @@ fn undo_success_events_render_info_messages() {
     );
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "turn-1".to_string(),
         msg: EventMsg::UndoCompleted(UndoCompletedEvent {
+            agent_idx: Some(0),
             success: true,
             message: None,
         }),
@@ -1274,8 +1310,12 @@ fn undo_failure_events_render_error_message() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "turn-2".to_string(),
-        msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
+        msg: EventMsg::UndoStarted(UndoStartedEvent {
+            agent_idx: Some(0),
+            message: None,
+        }),
     });
     assert!(
         chat.bottom_pane.status_indicator_visible(),
@@ -1283,8 +1323,10 @@ fn undo_failure_events_render_error_message() {
     );
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "turn-2".to_string(),
         msg: EventMsg::UndoCompleted(UndoCompletedEvent {
+            agent_idx: Some(0),
             success: false,
             message: Some("Failed to restore workspace state.".to_string()),
         }),
@@ -1309,8 +1351,12 @@ fn undo_started_hides_interrupt_hint() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "turn-hint".to_string(),
-        msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
+        msg: EventMsg::UndoStarted(UndoStartedEvent {
+            agent_idx: Some(0),
+            message: None,
+        }),
     });
 
     let status = chat
@@ -1432,8 +1478,10 @@ fn view_image_tool_call_adds_history_cell() {
     let image_path = chat.config.cwd.join("example.png");
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-image".into(),
         msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
+            agent_idx: Some(0),
             call_id: "call-image".into(),
             path: image_path,
         }),
@@ -1457,8 +1505,10 @@ fn interrupt_exec_marks_failed_snapshot() {
     // Simulate the task being aborted (as if ESC was pressed), which should
     // cause the active exec cell to be finalized as failed and flushed.
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "call-int".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            agent_idx: Some(0),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -1482,16 +1532,20 @@ fn interrupted_turn_error_message_snapshot() {
 
     // Simulate an in-progress task so the widget is in a running state.
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "task-1".into(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
+            agent_idx: Some(0),
             model_context_window: None,
         }),
     });
 
     // Abort the turn (like pressing Esc) and drain inserted history.
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "task-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            agent_idx: Some(0),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -1961,6 +2015,7 @@ fn approval_modal_exec_snapshot() {
     chat.config.approval_policy = AskForApproval::OnRequest;
     // Inject an exec approval request to display the approval modal.
     let ev = ExecApprovalRequestEvent {
+        agent_idx: Some(0),
         call_id: "call-approve-cmd".into(),
         turn_id: "turn-approve-cmd".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
@@ -1972,6 +2027,7 @@ fn approval_modal_exec_snapshot() {
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-approve".into(),
         msg: EventMsg::ExecApprovalRequest(ev),
     });
@@ -2009,6 +2065,7 @@ fn approval_modal_exec_without_reason_snapshot() {
     chat.config.approval_policy = AskForApproval::OnRequest;
 
     let ev = ExecApprovalRequestEvent {
+        agent_idx: Some(0),
         call_id: "call-approve-cmd-noreason".into(),
         turn_id: "turn-approve-cmd-noreason".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
@@ -2018,6 +2075,7 @@ fn approval_modal_exec_without_reason_snapshot() {
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-approve-noreason".into(),
         msg: EventMsg::ExecApprovalRequest(ev),
     });
@@ -2050,6 +2108,7 @@ fn approval_modal_patch_snapshot() {
         },
     );
     let ev = ApplyPatchApprovalRequestEvent {
+        agent_idx: Some(0),
         call_id: "call-approve-patch".into(),
         turn_id: "turn-approve-patch".into(),
         changes,
@@ -2057,6 +2116,7 @@ fn approval_modal_patch_snapshot() {
         grant_root: Some(PathBuf::from("/tmp")),
     };
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-approve-patch".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ev),
     });
@@ -2091,8 +2151,10 @@ fn interrupt_restores_queued_messages_into_composer() {
 
     // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            agent_idx: Some(0),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -2129,8 +2191,10 @@ fn interrupt_prepends_queued_messages_before_existing_composer_text() {
     chat.refresh_queued_user_messages();
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            agent_idx: Some(0),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -2174,14 +2238,18 @@ fn ui_snapshots_small_heights_task_running() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
     // Activate status line
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "task-1".into(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
+            agent_idx: Some(0),
             model_context_window: None,
         }),
     });
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "task-1".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            agent_idx: Some(0),
             delta: "**Thinking**".into(),
         }),
     });
@@ -2205,21 +2273,26 @@ fn status_widget_and_approval_modal_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
     // Begin a running task so the status indicator would be active.
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "task-1".into(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
+            agent_idx: Some(0),
             model_context_window: None,
         }),
     });
     // Provide a deterministic header for the status line.
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "task-1".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            agent_idx: Some(0),
             delta: "**Analyzing**".into(),
         }),
     });
 
     // Now show an approval modal (e.g. exec approval).
     let ev = ExecApprovalRequestEvent {
+        agent_idx: Some(0),
         call_id: "call-approve-exec".into(),
         turn_id: "turn-approve-exec".into(),
         command: vec!["echo".into(), "hello world".into()],
@@ -2231,6 +2304,7 @@ fn status_widget_and_approval_modal_snapshot() {
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-approve-exec".into(),
         msg: EventMsg::ExecApprovalRequest(ev),
     });
@@ -2252,15 +2326,19 @@ fn status_widget_active_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
     // Activate the status indicator by simulating a task start.
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "task-1".into(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
+            agent_idx: Some(0),
             model_context_window: None,
         }),
     });
     // Provide a deterministic header via a bold reasoning chunk.
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "task-1".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            agent_idx: Some(0),
             delta: "**Analyzing**".into(),
         }),
     });
@@ -2279,8 +2357,10 @@ fn background_event_updates_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "bg-1".into(),
         msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            agent_idx: Some(0),
             message: "Waiting for `vim`".to_string(),
         }),
     });
@@ -2303,6 +2383,7 @@ fn apply_patch_events_emit_history_cells() {
         },
     );
     let ev = ApplyPatchApprovalRequestEvent {
+        agent_idx: Some(0),
         call_id: "c1".into(),
         turn_id: "turn-c1".into(),
         changes,
@@ -2310,6 +2391,7 @@ fn apply_patch_events_emit_history_cells() {
         grant_root: None,
     };
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ev),
     });
@@ -2344,12 +2426,14 @@ fn apply_patch_events_emit_history_cells() {
         },
     );
     let begin = PatchApplyBeginEvent {
+        agent_idx: Some(0),
         call_id: "c1".into(),
         turn_id: "turn-c1".into(),
         auto_approved: true,
         changes: changes2,
     };
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::PatchApplyBegin(begin),
     });
@@ -2370,6 +2454,7 @@ fn apply_patch_events_emit_history_cells() {
         },
     );
     let end = PatchApplyEndEvent {
+        agent_idx: Some(0),
         call_id: "c1".into(),
         turn_id: "turn-c1".into(),
         stdout: "ok\n".into(),
@@ -2378,6 +2463,7 @@ fn apply_patch_events_emit_history_cells() {
         changes: end_changes,
     };
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::PatchApplyEnd(end),
     });
@@ -2400,8 +2486,10 @@ fn apply_patch_manual_approval_adjusts_header() {
         },
     );
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+            agent_idx: Some(0),
             call_id: "c1".into(),
             turn_id: "turn-c1".into(),
             changes: proposed_changes,
@@ -2419,8 +2507,10 @@ fn apply_patch_manual_approval_adjusts_header() {
         },
     );
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+            agent_idx: Some(0),
             call_id: "c1".into(),
             turn_id: "turn-c1".into(),
             auto_approved: false,
@@ -2449,8 +2539,10 @@ fn apply_patch_manual_flow_snapshot() {
         },
     );
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+            agent_idx: Some(0),
             call_id: "c1".into(),
             turn_id: "turn-c1".into(),
             changes: proposed_changes,
@@ -2472,8 +2564,10 @@ fn apply_patch_manual_flow_snapshot() {
         },
     );
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+            agent_idx: Some(0),
             call_id: "c1".into(),
             turn_id: "turn-c1".into(),
             auto_approved: false,
@@ -2502,6 +2596,7 @@ fn apply_patch_approval_sends_op_with_submission_id() {
         },
     );
     let ev = ApplyPatchApprovalRequestEvent {
+        agent_idx: Some(0),
         call_id: "call-999".into(),
         turn_id: "turn-999".into(),
         changes,
@@ -2509,6 +2604,7 @@ fn apply_patch_approval_sends_op_with_submission_id() {
         grant_root: None,
     };
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-123".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ev),
     });
@@ -2540,8 +2636,10 @@ fn apply_patch_full_flow_integration_like() {
         FileChange::Add { content: "".into() },
     );
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-xyz".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+            agent_idx: Some(0),
             call_id: "call-1".into(),
             turn_id: "turn-call-1".into(),
             changes,
@@ -2581,8 +2679,10 @@ fn apply_patch_full_flow_integration_like() {
         FileChange::Add { content: "".into() },
     );
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-xyz".into(),
         msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+            agent_idx: Some(0),
             call_id: "call-1".into(),
             turn_id: "turn-call-1".into(),
             auto_approved: false,
@@ -2595,8 +2695,10 @@ fn apply_patch_full_flow_integration_like() {
         FileChange::Add { content: "".into() },
     );
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-xyz".into(),
         msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+            agent_idx: Some(0),
             call_id: "call-1".into(),
             turn_id: "turn-call-1".into(),
             stdout: String::from("ok"),
@@ -2620,8 +2722,10 @@ fn apply_patch_untrusted_shows_approval_modal() {
         FileChange::Add { content: "".into() },
     );
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-1".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+            agent_idx: Some(0),
             call_id: "call-1".into(),
             turn_id: "turn-call-1".into(),
             changes,
@@ -2669,8 +2773,10 @@ fn apply_patch_request_shows_diff_summary() {
         },
     );
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-apply".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+            agent_idx: Some(0),
             call_id: "call-apply".into(),
             turn_id: "turn-apply".into(),
             changes,
@@ -2739,6 +2845,7 @@ fn plan_update_renders_history_cell() {
         ],
     };
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-1".into(),
         msg: EventMsg::PlanUpdate(update),
     });
@@ -2760,8 +2867,10 @@ fn stream_error_updates_status_indicator() {
     chat.bottom_pane.set_task_running(true);
     let msg = "Reconnecting... 2/5";
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-1".into(),
         msg: EventMsg::StreamError(StreamErrorEvent {
+            agent_idx: Some(0),
             message: msg.to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
         }),
@@ -2783,8 +2892,10 @@ fn stream_error_updates_status_indicator() {
 fn warning_event_adds_warning_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "sub-1".into(),
         msg: EventMsg::Warning(WarningEvent {
+            agent_idx: Some(0),
             message: "test warning message".to_string(),
         }),
     });
@@ -2804,32 +2915,40 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
 
     // Begin turn
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
+            agent_idx: Some(0),
             model_context_window: None,
         }),
     });
 
     // First finalized assistant message
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
+            agent_idx: Some(0),
             message: "First message".into(),
         }),
     });
 
     // Second finalized assistant message in the same turn
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
+            agent_idx: Some(0),
             message: "Second message".into(),
         }),
     });
 
     // End turn
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            agent_idx: Some(0),
             last_agent_message: None,
         }),
     });
@@ -2858,14 +2977,18 @@ fn final_reasoning_then_message_without_deltas_are_rendered() {
 
     // No deltas; only final reasoning followed by final message.
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            agent_idx: Some(0),
             text: "I will first analyze the request.".into(),
         }),
     });
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
+            agent_idx: Some(0),
             message: "Here is the result.".into(),
         }),
     });
@@ -2885,47 +3008,61 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
 
     // Stream some reasoning deltas first.
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            agent_idx: Some(0),
             delta: "I will ".into(),
         }),
     });
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            agent_idx: Some(0),
             delta: "first analyze the ".into(),
         }),
     });
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            agent_idx: Some(0),
             delta: "request.".into(),
         }),
     });
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            agent_idx: Some(0),
             text: "request.".into(),
         }),
     });
 
     // Then stream answer deltas, followed by the exact same final message.
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            agent_idx: Some(0),
             delta: "Here is the ".into(),
         }),
     });
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            agent_idx: Some(0),
             delta: "result.".into(),
         }),
     });
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
+            agent_idx: Some(0),
             message: "Here is the result.".into(),
         }),
     });
@@ -2946,9 +3083,9 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
 #[test]
 fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
-    chat.handle_codex_event(Event {
+    chat.handle_codex_event(Event { agent_idx: Some(0),
         id: "t1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
+        msg: EventMsg::AgentMessage(AgentMessageEvent { agent_idx: Some(0), message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
     });
 
     let command = vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()];
@@ -2966,8 +3103,10 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     ];
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "c1".into(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            agent_idx: Some(0),
             call_id: "c1".into(),
             process_id: None,
             turn_id: "turn-1".into(),
@@ -2979,8 +3118,10 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         }),
     });
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "c1".into(),
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            agent_idx: Some(0),
             call_id: "c1".into(),
             process_id: None,
             turn_id: "turn-1".into(),
@@ -2998,14 +3139,18 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         }),
     });
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "t1".into(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
+            agent_idx: Some(0),
             model_context_window: None,
         }),
     });
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "t1".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            agent_idx: Some(0),
             delta: "**Investigating rendering code**".into(),
         }),
     });
@@ -3042,8 +3187,10 @@ fn chatwidget_markdown_code_blocks_vt100_snapshot() {
     // Simulate a final agent message via streaming deltas instead of a single message
 
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "t1".into(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
+            agent_idx: Some(0),
             model_context_window: None,
         }),
     });
@@ -3090,8 +3237,12 @@ printf 'fenced within fenced\n'
         }
 
         chat.handle_codex_event(Event {
+            agent_idx: Some(0),
             id: "t1".into(),
-            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                agent_idx: Some(0),
+                delta,
+            }),
         });
         // Drive commit ticks and drain emitted history lines into the vt100 buffer.
         loop {
@@ -3113,8 +3264,10 @@ printf 'fenced within fenced\n'
 
     // Finalize the stream without sending a final AgentMessage, to flush any tail.
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "t1".into(),
         msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            agent_idx: Some(0),
             last_agent_message: None,
         }),
     });
@@ -3130,8 +3283,10 @@ printf 'fenced within fenced\n'
 fn chatwidget_tall() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
     chat.handle_codex_event(Event {
+        agent_idx: Some(0),
         id: "t1".into(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
+            agent_idx: Some(0),
             model_context_window: None,
         }),
     });

@@ -469,6 +469,7 @@ impl EventProcessor for EventProcessorWithJsonOutput {
     fn print_config_summary(&mut self, _: &Config, _: &str, ev: &SessionConfiguredEvent) {
         self.process_event(Event {
             id: "".to_string(),
+            agent_idx: Some(0),
             msg: EventMsg::SessionConfigured(ev.clone()),
         });
     }

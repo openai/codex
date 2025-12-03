@@ -1563,6 +1563,7 @@ impl ChatWidget {
                 use codex_core::protocol::FileChange;
 
                 self.app_event_tx.send(AppEvent::CodexEvent(Event {
+                    agent_idx: Some(0),
                     id: "1".to_string(),
                     // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                     //     call_id: "1".to_string(),
@@ -1719,7 +1720,11 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
-        let Event { id, msg } = event;
+        let Event {
+            id,
+            agent_idx: _,
+            msg,
+        } = event;
         self.dispatch_event_msg(Some(id), msg, false);
     }
 

@@ -681,6 +681,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
             });
             let event = Event {
                 id: stream.sub_id.clone(),
+                agent_idx: None,
                 msg,
             };
             #[allow(clippy::let_unit_value)]

@@ -25,6 +25,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use serde_json::json;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 use tracing::info;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -144,6 +146,7 @@ struct CollaborationInitAgentInput {
     #[serde(default)]
     context_strategy: Option<ContextStrategy>,
     #[serde(default)]
+    #[allow(dead_code)]
     instructions: Option<String>,
     #[serde(default)]
     sandbox_policy: Option<SandboxPolicy>,
@@ -402,9 +405,9 @@ async fn handle_init_agent(
         updated_configuration = updated_configuration.apply(&update);
     }
 
-    let instructions = input
+    let instructions = parent
         .instructions
-        .or(parent.instructions.clone())
+        .clone()
         .or(session_configuration.developer_instructions())
         .or(session_configuration.user_instructions());
 
@@ -443,11 +446,6 @@ async fn handle_init_agent(
     };
 
     let content = format!("Initialized agent {} at depth {}", assigned_id.0, depth);
-
-    if !cfg!(test) {
-        let supervisor = session.ensure_collaboration_supervisor().await;
-        supervisor.kick_agent(assigned_id).await;
-    }
 
     let output = CollaborationInitAgentOutput { content, metadata };
     info!(
@@ -492,7 +490,10 @@ async fn handle_send(
 
     for raw in &input.recipients {
         let candidate = AgentId(*raw);
-        if collab.agent(candidate).is_some() && collab.is_direct_child(sender_id, candidate) {
+        if let Some(agent) = collab.agent(candidate)
+            && collab.is_direct_child(sender_id, candidate)
+            && !matches!(agent.status, AgentLifecycleState::Closed)
+        {
             valid_recipients.push(candidate);
         } else {
             invalid_recipients.push(*raw);
@@ -522,6 +523,10 @@ async fn handle_send(
             )
         };
         let output = CollaborationSendOutput { content, metadata };
+        info!(
+            "collaboration_send: sender={}, recipients={:?}, status=error: {}",
+            sender_id.0, input.recipients, output.content
+        );
         return serialize_function_output(&output, false);
     }
 
@@ -578,6 +583,10 @@ async fn handle_send(
     }
 
     let output = CollaborationSendOutput { content, metadata };
+    info!(
+        "collaboration_send: sender={}, recipients={:?}, status={}",
+        sender_id.0, valid_recipients, output.content
+    );
     serialize_function_output(&output, success)
 }
 
@@ -677,9 +686,14 @@ async fn handle_wait(
             "no eligible child agents to wait for".to_string()
         };
         let output = CollaborationWaitOutput { content, metadata };
+        info!(
+            "collaboration_wait: caller={}, targets={:?}, status=error: {}",
+            caller_id.0, targets, output.content
+        );
         return serialize_function_output(&output, false);
     }
 
+    // Passive wait: observe running children only; do not start new work.
     let supervisor = session.ensure_collaboration_supervisor().await;
     let mut rx = supervisor.subscribe();
 
@@ -695,92 +709,116 @@ async fn handle_wait(
     };
 
     let mut agents_ran = Vec::new();
-    {
-        // Short-circuit if all targets are already idle/terminal.
+    let mut recorded: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    let mut active: std::collections::HashSet<i32> = {
         let collab = session.collaboration_state().lock().await;
-        if targets.iter().all(|id| {
-            collab
-                .agent(*id)
-                .map(|agent| !matches!(agent.status, AgentLifecycleState::Running))
-                .unwrap_or(false)
-        }) {
-            let mut extra = HashMap::new();
-            extra.insert(
-                "agents_ran".to_string(),
-                json!(
-                    targets
-                        .iter()
-                        .filter_map(|id| collab.agent(*id))
-                        .map(|agent| snapshot(agent, 0, None))
-                        .collect::<Vec<_>>()
-                ),
-            );
-            extra.insert("token_budget_exhausted".to_string(), json!(false));
-            let metadata = CollaborationWaitMetadata {
-                message_tool_call_success: true,
-                message_tool_call_error_should_penalize_model: false,
-                is_wait_success_msg: Some(true),
-                extra: ExtraMetadata(extra),
-            };
-            let output = CollaborationWaitOutput {
-                content: "Finished waiting.".to_string(),
-                metadata,
-            };
-            return serialize_function_output(&output, true);
-        }
+        targets
+            .iter()
+            .filter(|id| {
+                collab.agent(**id).map_or(false, |agent| {
+                    matches!(agent.status, AgentLifecycleState::Running)
+                })
+            })
+            .map(|id| id.0)
+            .collect()
+    };
+
+    if active.is_empty() {
+        let collab = session.collaboration_state().lock().await;
+        let mut extra = HashMap::new();
+        extra.insert(
+            "agents_ran".to_string(),
+            json!(
+                targets
+                    .iter()
+                    .filter_map(|id| collab.agent(*id))
+                    .map(|agent| snapshot(agent, 0, None))
+                    .collect::<Vec<_>>()
+            ),
+        );
+        extra.insert("token_budget_exhausted".to_string(), json!(false));
+        let metadata = CollaborationWaitMetadata {
+            message_tool_call_success: true,
+            message_tool_call_error_should_penalize_model: false,
+            is_wait_success_msg: Some(true),
+            extra: ExtraMetadata(extra),
+        };
+        let output = CollaborationWaitOutput {
+            content: "Finished waiting.".to_string(),
+            metadata,
+        };
+        info!(
+            "collaboration_wait: caller={}, targets={:?}, status=ready",
+            caller_id.0, targets
+        );
+        return serialize_function_output(&output, true);
     }
 
-    supervisor
-        .start_agents(targets.clone(), input.max_duration)
-        .await
-        .map_err(FunctionCallError::RespondToModel)?;
+    let deadline = Instant::now() + Duration::from_millis(input.max_duration.max(0) as u64);
 
-    let mut remaining = input.max_duration;
-    let mut active: std::collections::HashSet<i32> = targets.iter().map(|id| id.0).collect();
-
-    while remaining > 0 && !active.is_empty() {
-        let event = match rx.recv().await {
-            Ok(evt) => evt,
-            Err(_) => break,
+    while !active.is_empty() {
+        let now = Instant::now();
+        if now >= deadline {
+            break;
+        }
+        let remaining_time = deadline.saturating_duration_since(now);
+        let event = match tokio::time::timeout(remaining_time, rx.recv()).await {
+            Ok(Ok(evt)) => evt,
+            _ => break,
         };
         if !active.contains(&event.agent.0) {
             continue;
         }
-        remaining = remaining.saturating_sub(event.delta_tokens);
 
         let detail = status_detail(&event.status);
+        let fallback_last = {
+            let collab = session.collaboration_state().lock().await;
+            collab
+                .agent(event.agent)
+                .and_then(|agent| last_agent_message(&agent.status).map(str::to_string))
+        };
         agents_ran.push(json!({
             "agent_idx": event.agent.0,
             "delta_tokens": event.delta_tokens,
             "status": status_label(&event.status),
             "status_detail": detail,
-            "last_agent_message": event.last_message,
+            "last_agent_message": event.last_message.or(fallback_last),
             "sub_id": event.sub_id,
         }));
-
+        recorded.insert(event.agent.0);
         if !matches!(event.status, AgentLifecycleState::Running) {
             active.remove(&event.agent.0);
         }
     }
 
-    let total_tokens = input.max_duration.saturating_sub(remaining);
+    {
+        let collab = session.collaboration_state().lock().await;
+        for id in &targets {
+            if recorded.contains(&id.0) {
+                continue;
+            }
+            if let Some(agent) = collab.agent(*id) {
+                agents_ran.push(snapshot(agent, 0, None));
+            }
+        }
+    }
 
     let mut extra = HashMap::new();
     extra.insert("agents_ran".to_string(), json!(agents_ran));
-    extra.insert(
-        "token_budget_exhausted".to_string(),
-        json!(total_tokens >= input.max_duration),
-    );
 
     let metadata = CollaborationWaitMetadata {
         message_tool_call_success: true,
         message_tool_call_error_should_penalize_model: false,
-        is_wait_success_msg: Some(true),
+        is_wait_success_msg: Some(active.is_empty()),
         extra: ExtraMetadata(extra),
     };
 
     let content = "Finished waiting.".to_string();
     let output = CollaborationWaitOutput { content, metadata };
+    info!(
+        "collaboration_wait: caller={}, targets={:?}, ran={:?}",
+        caller_id.0, targets, agents_ran
+    );
     serialize_function_output(&output, true)
 }
 
@@ -838,6 +876,7 @@ async fn handle_get_state(
         content: description,
         metadata,
     };
+    info!("collaboration_get_state: agents={}", agents.len());
     serialize_function_output(&output, true)
 }
 
@@ -943,6 +982,10 @@ async fn handle_close(
             )
             .await;
     }
+    info!(
+        "collaboration_close: caller={}, closed={:?}",
+        caller_id.0, closed
+    );
     serialize_function_output(&output, true)
 }
 
@@ -1035,7 +1078,7 @@ pub(crate) fn create_collaboration_wait_tool() -> ToolSpec {
         "max_duration".to_string(),
         JsonSchema::Number {
             description: Some(
-                "Maximum duration to wait, measured in tokens. Must be >= 0.".to_string(),
+                "Maximum duration to wait in ms, measured in tokens. Must be >= 0. A good default value is 10.000".to_string(),
             ),
         },
     );

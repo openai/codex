@@ -217,11 +217,11 @@ mod tests {
     fn builds_specs_without_filtering() {
         let (_session, turn, _rx) = make_session_and_context_with_rx();
         let router = ToolRouter::from_config(&turn.tools_config, None);
-        let names: Vec<String> = router
+        let has_update_plan = router
             .specs()
             .into_iter()
             .map(|spec| spec.name().to_string())
-            .collect();
-        assert!(names.contains(&"update_plan".to_string()));
+            .any(|name| name == "update_plan");
+        assert!(has_update_plan);
     }
 }

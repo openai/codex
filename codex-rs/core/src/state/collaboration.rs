@@ -10,6 +10,7 @@ use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
 use crate::protocol::TokenUsageInfo;
 use crate::truncate::TruncationPolicy;
+use tracing::info;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct AgentId(pub i32);
@@ -191,6 +192,14 @@ impl CollaborationState {
     }
 
     pub(crate) fn record_message_for_agent(&mut self, id: AgentId, message: ResponseItem) {
+        let role = match &message {
+            ResponseItem::Message { role, .. } => role.as_str(),
+            _ => "other",
+        };
+        info!(
+            "collaboration: queued message for agent {} (role={role})",
+            id.0
+        );
         if let Some(agent) = self.agent_mut(id) {
             agent
                 .history
