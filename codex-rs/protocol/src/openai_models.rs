@@ -35,11 +35,6 @@ pub enum ReasoningEffort {
     XHigh,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
-pub struct AvailableModelsEvent {
-    pub models: Vec<ModelPreset>,
-}
-
 /// A reasoning effort option that can be surfaced for a model.
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ReasoningEffortPreset {
