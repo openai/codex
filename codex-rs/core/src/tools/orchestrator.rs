@@ -95,7 +95,7 @@ impl ToolOrchestrator {
                         return Err(ToolError::Rejected("rejected by user".to_string()));
                     }
                     ReviewDecision::Approved
-                    | ReviewDecision::ApprovedAllowPrefix { .. }
+                    | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                     | ReviewDecision::ApprovedForSession => {}
                 }
                 already_approved = true;
@@ -178,7 +178,7 @@ impl ToolOrchestrator {
                             return Err(ToolError::Rejected("rejected by user".to_string()));
                         }
                         ReviewDecision::Approved
-                        | ReviewDecision::ApprovedAllowPrefix { .. }
+                        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                         | ReviewDecision::ApprovedForSession => {}
                     }
                 }

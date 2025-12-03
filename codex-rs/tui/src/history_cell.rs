@@ -409,7 +409,7 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
-        ApprovedAllowPrefix { .. } => {
+        ApprovedExecpolicyAmendment { .. } => {
             let snippet = Span::from(exec_snippet(&command)).dim();
             (
                 "✔ ".green(),
@@ -418,7 +418,7 @@ pub fn new_approval_decision_cell(
                     "approved".bold(),
                     " codex to run ".into(),
                     snippet,
-                    " and added its prefix to your allow list".bold(),
+                    " and applied the execpolicy amendment".bold(),
                 ],
             )
         }

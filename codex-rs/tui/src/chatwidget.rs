@@ -1074,7 +1074,7 @@ impl ChatWidget {
             command: ev.command,
             reason: ev.reason,
             risk: ev.risk,
-            allow_prefix: ev.allow_prefix,
+            proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
         };
         self.bottom_pane.push_approval_request(request);
         self.request_redraw();

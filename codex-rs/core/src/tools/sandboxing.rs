@@ -98,18 +98,19 @@ pub(crate) enum ExecApprovalRequirement {
     /// Approval required for this tool call.
     NeedsApproval {
         reason: Option<String>,
-        /// Prefix that can be whitelisted via execpolicy to skip future approvals for similar commands
-        allow_prefix: Option<Vec<String>>,
+        /// Proposed execpolicy amendment to skip future approvals for similar commands
+        /// See core/src/exec_policy.rs for more details on how proposed_execpolicy_amendment is determined.
+        proposed_execpolicy_amendment: Option<Vec<String>>,
     },
     /// Execution forbidden for this tool call.
     Forbidden { reason: String },
 }
 
 impl ExecApprovalRequirement {
-    pub fn allow_prefix(&self) -> Option<&Vec<String>> {
+    pub fn proposed_execpolicy_amendment(&self) -> Option<&Vec<String>> {
         match self {
             Self::NeedsApproval {
-                allow_prefix: Some(prefix),
+                proposed_execpolicy_amendment: Some(prefix),
                 ..
             } => Some(prefix),
             _ => None,
@@ -133,7 +134,7 @@ pub(crate) fn default_exec_approval_requirement(
     if needs_approval {
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            allow_prefix: None,
+            proposed_execpolicy_amendment: None,
         }
     } else {
         ExecApprovalRequirement::Skip {

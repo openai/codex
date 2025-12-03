@@ -1560,7 +1560,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
-async fn approving_allow_prefix_persists_policy_and_skips_future_prompts() -> Result<()> {
+async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::UnlessTrusted;
     let sandbox_policy = SandboxPolicy::ReadOnly;
@@ -1580,8 +1580,9 @@ async fn approving_allow_prefix_persists_policy_and_skips_future_prompts() -> Re
     .prepare(&test, &server, call_id_first, false)
     .await?;
     let expected_command =
-        expected_command.expect("allow prefix scenario should produce a shell command");
-    let expected_allow_prefix = vec!["touch".to_string(), "allow-prefix.txt".to_string()];
+        expected_command.expect("execpolicy amendment scenario should produce a shell command");
+    let expected_execpolicy_amendment =
+        vec!["touch".to_string(), "allow-prefix.txt".to_string()];
 
     let _ = mount_sse_once(
         &server,
@@ -1610,13 +1611,16 @@ async fn approving_allow_prefix_persists_policy_and_skips_future_prompts() -> Re
     .await?;
 
     let approval = expect_exec_approval(&test, expected_command.as_str()).await;
-    assert_eq!(approval.allow_prefix, Some(expected_allow_prefix.clone()));
+    assert_eq!(
+        approval.proposed_execpolicy_amendment,
+        Some(expected_execpolicy_amendment.clone())
+    );
 
     test.codex
         .submit(Op::ExecApproval {
             id: "0".into(),
-            decision: ReviewDecision::ApprovedAllowPrefix {
-                allow_prefix: expected_allow_prefix.clone(),
+            decision: ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment: expected_execpolicy_amendment.clone(),
             },
         })
         .await?;
