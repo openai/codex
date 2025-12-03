@@ -89,8 +89,7 @@ impl SkillPopup {
                 let description = skill.description.clone();
                 GenericDisplayRow {
                     name,
-                    match_indices: indices
-                        .map(|v| v.into_iter().map(|i| i.saturating_add(1)).collect()),
+                    match_indices: indices,
                     is_current: false,
                     display_shortcut: None,
                     description: Some(description),

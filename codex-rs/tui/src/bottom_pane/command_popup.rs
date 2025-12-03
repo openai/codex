@@ -32,14 +32,10 @@ pub(crate) struct CommandPopup {
 
 impl CommandPopup {
     pub(crate) fn new(mut prompts: Vec<CustomPrompt>, skills_enabled: bool) -> Self {
-        let builtins = if skills_enabled {
-            built_in_slash_commands()
-        } else {
-            built_in_slash_commands()
-                .into_iter()
-                .filter(|(_, cmd)| *cmd != SlashCommand::Skills)
-                .collect()
-        };
+        let builtins: Vec<(&'static str, SlashCommand)> = built_in_slash_commands()
+            .into_iter()
+            .filter(|(_, cmd)| skills_enabled || *cmd != SlashCommand::Skills)
+            .collect();
         // Exclude prompts that collide with builtin command names and sort by name.
         let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
         prompts.retain(|p| !exclude.contains(&p.name));
