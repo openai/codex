@@ -10,7 +10,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
-use codex_protocol::available_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses::mount_sse_once;

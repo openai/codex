@@ -2,8 +2,8 @@ use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_core::openai_models::model_presets::builtin_model_presets;
-use codex_protocol::available_models::ModelPreset;
-use codex_protocol::available_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 
 pub fn supported_models(auth_mode: Option<AuthMode>) -> Vec<Model> {
     builtin_model_presets(auth_mode)

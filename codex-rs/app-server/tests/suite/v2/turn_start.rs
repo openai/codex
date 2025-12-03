@@ -29,7 +29,7 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::protocol_config_types::ReasoningSummary;
-use codex_protocol::available_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::path::Path;

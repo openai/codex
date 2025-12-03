@@ -127,8 +127,8 @@ use codex_core::openai_models::model_presets::builtin_model_presets;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
-use codex_protocol::available_models::ModelPreset;
-use codex_protocol::available_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
