@@ -11,6 +11,7 @@ use app_test_support::to_response;
 use codex_app_server_protocol::ApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -29,8 +30,8 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
+use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::path::Path;
@@ -724,6 +725,26 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         })?,
     )
     .await?;
+
+    let output_delta_notif = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("item/fileChange/outputDelta"),
+    )
+    .await??;
+    let output_delta: FileChangeOutputDeltaNotification = serde_json::from_value(
+        output_delta_notif
+            .params
+            .clone()
+            .expect("item/fileChange/outputDelta params"),
+    )?;
+    assert_eq!(output_delta.thread_id, thread.id);
+    assert_eq!(output_delta.turn_id, turn.id);
+    assert_eq!(output_delta.item_id, "patch-call");
+    assert!(
+        !output_delta.delta.is_empty(),
+        "expected delta to be non-empty, got: {}",
+        output_delta.delta
+    );
 
     let completed_file_change = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {

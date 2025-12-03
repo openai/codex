@@ -41,6 +41,7 @@ use super::UnifiedExecContext;
 use super::UnifiedExecError;
 use super::UnifiedExecResponse;
 use super::UnifiedExecSessionManager;
+use super::WARNING_UNIFIED_EXEC_SESSIONS;
 use super::WriteStdinRequest;
 use super::clamp_yield_time;
 use super::generate_chunk_id;
@@ -152,6 +153,7 @@ impl UnifiedExecSessionManager {
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let has_exited = session.has_exited();
         let exit_code = session.exit_code();
+        let sandbox_type = session.sandbox_type();
         let chunk_id = generate_chunk_id();
         let process_id = if has_exited {
             None
@@ -200,6 +202,9 @@ impl UnifiedExecSessionManager {
                 Some(request.process_id),
             )
             .await;
+
+            // Exit code should always be Some
+            sandboxing::check_sandboxing(sandbox_type, &text, exit_code.unwrap_or_default())?;
         }
 
         Ok(response)
@@ -421,9 +426,22 @@ impl UnifiedExecSessionManager {
             started_at,
             last_used: started_at,
         };
-        let mut store = self.session_store.lock().await;
-        Self::prune_sessions_if_needed(&mut store);
-        store.sessions.insert(process_id, entry);
+        let number_sessions = {
+            let mut store = self.session_store.lock().await;
+            Self::prune_sessions_if_needed(&mut store);
+            store.sessions.insert(process_id, entry);
+            store.sessions.len()
+        };
+
+        if number_sessions >= WARNING_UNIFIED_EXEC_SESSIONS {
+            context
+                .session
+                .record_model_warning(
+                    format!("The maximum number of unified exec sessions you can keep open is {WARNING_UNIFIED_EXEC_SESSIONS} and you currently have {number_sessions} sessions open. Reuse older sessions or close them to prevent automatic pruning of old session"),
+                    &context.turn
+                )
+                .await;
+        };
     }
 
     async fn emit_exec_end_from_entry(
@@ -540,19 +558,21 @@ impl UnifiedExecSessionManager {
         let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
+        let approval_requirement = create_approval_requirement_for_command(
+            &context.turn.exec_policy,
+            command,
+            context.turn.approval_policy,
+            &context.turn.sandbox_policy,
+            SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
+        )
+        .await;
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,
             env,
             with_escalated_permissions,
             justification,
-            create_approval_requirement_for_command(
-                &context.turn.exec_policy,
-                command,
-                context.turn.approval_policy,
-                &context.turn.sandbox_policy,
-                SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
-            ),
+            approval_requirement,
         );
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),
@@ -633,9 +653,9 @@ impl UnifiedExecSessionManager {
         collected
     }
 
-    fn prune_sessions_if_needed(store: &mut SessionStore) {
+    fn prune_sessions_if_needed(store: &mut SessionStore) -> bool {
         if store.sessions.len() < MAX_UNIFIED_EXEC_SESSIONS {
-            return;
+            return false;
         }
 
         let meta: Vec<(String, Instant, bool)> = store
@@ -646,7 +666,10 @@ impl UnifiedExecSessionManager {
 
         if let Some(session_id) = Self::session_id_to_prune_from_meta(&meta) {
             store.remove(&session_id);
+            return true;
         }
+
+        false
     }
 
     // Centralized pruning policy so we can easily swap strategies later.
@@ -681,6 +704,39 @@ impl UnifiedExecSessionManager {
     pub(crate) async fn terminate_all_sessions(&self) {
         let mut sessions = self.session_store.lock().await;
         sessions.clear();
+    }
+}
+
+mod sandboxing {
+    use super::*;
+    use crate::exec::SandboxType;
+    use crate::exec::is_likely_sandbox_denied;
+    use crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_TOKENS;
+
+    pub(crate) fn check_sandboxing(
+        sandbox_type: SandboxType,
+        text: &str,
+        exit_code: i32,
+    ) -> Result<(), UnifiedExecError> {
+        let exec_output = ExecToolCallOutput {
+            exit_code,
+            stderr: StreamOutput::new(text.to_string()),
+            aggregated_output: StreamOutput::new(text.to_string()),
+            ..Default::default()
+        };
+        if is_likely_sandbox_denied(sandbox_type, &exec_output) {
+            let snippet = formatted_truncate_text(
+                text,
+                TruncationPolicy::Tokens(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
+            );
+            let message = if snippet.is_empty() {
+                format!("Session exited with code {exit_code}")
+            } else {
+                snippet
+            };
+            return Err(UnifiedExecError::sandbox_denied(message, exec_output));
+        }
+        Ok(())
     }
 }
 

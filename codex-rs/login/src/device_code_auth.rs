@@ -8,11 +8,10 @@ use std::time::Instant;
 
 use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
-use std::io::Write;
-use std::io::{self};
+use std::io;
 
-const ANSI_YELLOW: &str = "\x1b[93m";
-const ANSI_BOLD: &str = "\x1b[1m";
+const ANSI_BLUE: &str = "\x1b[94m";
+const ANSI_GRAY: &str = "\x1b[90m";
 const ANSI_RESET: &str = "\x1b[0m";
 
 #[derive(Deserialize)]
@@ -138,14 +137,16 @@ async fn poll_for_token(
     }
 }
 
-fn print_colored_warning_device_code() {
-    let mut stdout = io::stdout().lock();
-    let _ = write!(
-        stdout,
-        "{ANSI_YELLOW}{ANSI_BOLD}Only use device code authentication when browser login is not available.{ANSI_RESET}{ANSI_YELLOW}\n\
-{ANSI_BOLD}Keep the code secret; do not share it.{ANSI_RESET}{ANSI_RESET}\n\n"
+fn print_device_code_prompt(code: &str) {
+    println!(
+        "\nWelcome to Codex [v{ANSI_GRAY}{version}{ANSI_RESET}]\n{ANSI_GRAY}OpenAI's command-line coding agent{ANSI_RESET}\n\
+\nFollow these steps to sign in with ChatGPT using device code authorization:\n\
+\n1. Open this link in your browser\n   {ANSI_BLUE}https://auth.openai.com/codex/device{ANSI_RESET}\n\
+\n2. Enter this one-time code {ANSI_GRAY}(expires in 15 minutes){ANSI_RESET}\n   {ANSI_BLUE}{code}{ANSI_RESET}\n\
+\n{ANSI_GRAY}Device codes are a common phishing target. Never share this code.{ANSI_RESET}\n",
+        version = env!("CARGO_PKG_VERSION"),
+        code = code
     );
-    let _ = stdout.flush();
 }
 
 /// Full device code login flow.
@@ -153,13 +154,9 @@ pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     let client = reqwest::Client::new();
     let base_url = opts.issuer.trim_end_matches('/');
     let api_base_url = format!("{}/api/accounts", opts.issuer.trim_end_matches('/'));
-    print_colored_warning_device_code();
     let uc = request_user_code(&client, &api_base_url, &opts.client_id).await?;
 
-    println!(
-        "To authenticate:\n  1. Open in your browser: {ANSI_BOLD}https://auth.openai.com/codex/device{ANSI_RESET}\n  2. Enter the one-time code below within 15 minutes:\n\n     {ANSI_BOLD}{}{ANSI_RESET}\n",
-        uc.user_code
-    );
+    print_device_code_prompt(&uc.user_code);
 
     let code_resp = poll_for_token(
         &client,
