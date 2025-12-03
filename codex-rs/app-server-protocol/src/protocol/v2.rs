@@ -22,6 +22,9 @@ use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use mcp_types::ContentBlock as McpContentBlock;
+use mcp_types::Resource as McpResource;
+use mcp_types::ResourceTemplate as McpResourceTemplate;
+use mcp_types::Tool as McpTool;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -135,6 +138,15 @@ v2_enum_from_core!(
 v2_enum_from_core!(
     pub enum ReviewDelivery from codex_protocol::protocol::ReviewDelivery {
         Inline, Detached
+    }
+);
+
+v2_enum_from_core!(
+    pub enum McpAuthStatus from codex_protocol::protocol::McpAuthStatus {
+        Unsupported,
+        NotLoggedIn,
+        BearerToken,
+        OAuth
     }
 );
 
@@ -610,6 +622,37 @@ pub struct ReasoningEffortOption {
 #[ts(export_to = "v2/")]
 pub struct ModelListResponse {
     pub data: Vec<Model>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// If None, there are no more items to return.
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ListMcpServersParams {
+    /// Opaque pagination cursor returned by a previous call.
+    pub cursor: Option<String>,
+    /// Optional page size; defaults to a server-defined value.
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServer {
+    pub name: String,
+    pub tools: std::collections::HashMap<String, McpTool>,
+    pub resources: Vec<McpResource>,
+    pub resource_templates: Vec<McpResourceTemplate>,
+    pub auth_status: McpAuthStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ListMcpServersResponse {
+    pub data: Vec<McpServer>,
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// If None, there are no more items to return.
     pub next_cursor: Option<String>,

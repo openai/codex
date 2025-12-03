@@ -256,6 +256,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
+    pub(crate) is_first_run: bool,
 }
 
 #[derive(Default)]
@@ -1230,6 +1231,7 @@ impl ChatWidget {
             enhanced_keys_supported,
             auth_manager,
             feedback,
+            is_first_run,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1274,7 +1276,7 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
-            show_welcome_banner: true,
+            show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
@@ -1305,6 +1307,7 @@ impl ChatWidget {
             enhanced_keys_supported,
             auth_manager,
             feedback,
+            ..
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1351,7 +1354,7 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
-            show_welcome_banner: true,
+            show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
@@ -1383,7 +1386,9 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'v') => {
+            } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && c.eq_ignore_ascii_case(&'v') =>
+            {
                 match paste_image_to_temp_png() {
                     Ok((path, info)) => {
                         self.attach_image(

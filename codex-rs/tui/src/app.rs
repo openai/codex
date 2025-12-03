@@ -252,6 +252,7 @@ impl App {
         initial_images: Vec<PathBuf>,
         resume_selection: ResumeSelection,
         feedback: codex_feedback::CodexFeedback,
+        is_first_run: bool,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -297,6 +298,7 @@ impl App {
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
+                    is_first_run,
                 };
                 ChatWidget::new(init, conversation_manager.clone())
             }
@@ -320,6 +322,7 @@ impl App {
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
+                    is_first_run,
                 };
                 ChatWidget::new_from_existing(
                     init,
@@ -473,6 +476,7 @@ impl App {
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
                     feedback: self.feedback.clone(),
+                    is_first_run: false,
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 if let Some(summary) = summary {
