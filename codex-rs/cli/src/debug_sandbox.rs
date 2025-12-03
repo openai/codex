@@ -108,6 +108,9 @@ async fn run_command_under_sandbox(
     codex_linux_sandbox_exe: Option<PathBuf>,
     log_denials: bool,
 ) -> anyhow::Result<()> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = log_denials;
+
     let sandbox_mode = create_sandbox_mode(full_auto);
     let config = Config::load_with_cli_overrides(
         config_overrides
