@@ -85,7 +85,7 @@ const DEFAULT_MAX_BYTES_PER_FILE: usize = 500_000; // ~488 KiB
 const DEFAULT_MAX_TOTAL_BYTES: usize = 7 * 1024 * 1024; // ~7 MiB
 const MAX_PROMPT_BYTES: usize = 9_000_000; // ~8.6 MiB safety margin under API cap
 const MAX_CONCURRENT_FILE_ANALYSIS: usize = 32;
-const FILE_TRIAGE_CHUNK_SIZE: usize = 20;
+const FILE_TRIAGE_CHUNK_SIZE: usize = 50;
 const FILE_TRIAGE_CONCURRENCY: usize = 8;
 const MAX_SEARCH_REQUESTS_PER_FILE: usize = 3;
 const MAX_SEARCH_OUTPUT_CHARS: usize = 4_000;
@@ -240,6 +240,74 @@ pub fn prepare_security_review_output_root(repo_path: &Path) -> std::io::Result<
     Ok(output_root)
 }
 
+fn resume_state_path(output_root: &Path) -> PathBuf {
+    output_root.join("resume_state.json")
+}
+
+pub(crate) fn load_checkpoint(output_root: &Path) -> Option<SecurityReviewCheckpoint> {
+    let path = resume_state_path(output_root);
+    let bytes = fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn write_checkpoint(
+    output_root: &Path,
+    checkpoint: &SecurityReviewCheckpoint,
+) -> std::io::Result<()> {
+    let path = resume_state_path(output_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let bytes = serde_json::to_vec_pretty(checkpoint)?;
+    fs::write(path, bytes)
+}
+
+#[derive(Clone, Debug)]
+pub struct RunningSecurityReviewCandidate {
+    pub output_root: PathBuf,
+    pub checkpoint: SecurityReviewCheckpoint,
+}
+
+pub fn latest_running_review_candidate(repo_path: &Path) -> Option<RunningSecurityReviewCandidate> {
+    let storage_root = security_review_storage_root(repo_path);
+    let entries = fs::read_dir(storage_root).ok()?;
+    let mut candidates: Vec<(String, PathBuf, SecurityReviewCheckpoint)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(checkpoint) = load_checkpoint(&path) else {
+            continue;
+        };
+        if checkpoint.status != SecurityReviewCheckpointStatus::Running {
+            continue;
+        }
+        let name = entry
+            .file_name()
+            .to_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                path.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string()
+            });
+        candidates.push((name, path, checkpoint));
+    }
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    let (_, path, checkpoint) = candidates.into_iter().next()?;
+    Some(RunningSecurityReviewCandidate {
+        output_root: path,
+        checkpoint,
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SecurityReviewMode {
     #[default]
@@ -285,6 +353,7 @@ pub struct SecurityReviewRequest {
     // When true, accept auto-scoped directories without a confirmation dialog.
     pub skip_auto_scope_confirmation: bool,
     pub auto_scope_prompt: Option<String>,
+    pub resume_checkpoint: Option<SecurityReviewCheckpoint>,
 }
 
 #[derive(Clone, Debug)]
@@ -310,6 +379,101 @@ pub struct SecurityReviewResult {
 pub struct SecurityReviewFailure {
     pub message: String,
     pub logs: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SecurityReviewCheckpointStatus {
+    Running,
+    Complete,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SecurityReviewCheckpoint {
+    pub(crate) status: SecurityReviewCheckpointStatus,
+    pub(crate) mode: SecurityReviewMode,
+    pub(crate) include_paths: Vec<String>,
+    pub(crate) scope_display_paths: Vec<String>,
+    pub(crate) auto_scope_prompt: Option<String>,
+    pub(crate) triage_model: String,
+    pub(crate) model: String,
+    pub(crate) provider_name: String,
+    pub(crate) repo_slug: String,
+    pub(crate) repo_root: PathBuf,
+    #[serde(with = "time::serde::rfc3339")]
+    pub(crate) started_at: OffsetDateTime,
+    pub(crate) plan_statuses: HashMap<String, StepStatus>,
+    pub(crate) selected_snippets: Option<Vec<FileSnippet>>,
+    pub(crate) spec: Option<StoredSpecOutcome>,
+    pub(crate) threat_model: Option<StoredThreatModelOutcome>,
+    pub(crate) bug_snapshot_path: Option<PathBuf>,
+    pub(crate) bugs_path: Option<PathBuf>,
+    pub(crate) report_path: Option<PathBuf>,
+    pub(crate) report_html_path: Option<PathBuf>,
+    pub(crate) api_overview_path: Option<PathBuf>,
+    pub(crate) classification_json_path: Option<PathBuf>,
+    pub(crate) classification_table_path: Option<PathBuf>,
+    pub(crate) last_log: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct StoredSpecOutcome {
+    combined_markdown: String,
+    locations: Vec<String>,
+    logs: Vec<String>,
+    api_entries: Vec<ApiEntry>,
+    classification_rows: Vec<DataClassificationRow>,
+    classification_table: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct StoredThreatModelOutcome {
+    markdown: String,
+    logs: Vec<String>,
+}
+
+impl From<&SpecGenerationOutcome> for StoredSpecOutcome {
+    fn from(spec: &SpecGenerationOutcome) -> Self {
+        Self {
+            combined_markdown: spec.combined_markdown.clone(),
+            locations: spec.locations.clone(),
+            logs: spec.logs.clone(),
+            api_entries: spec.api_entries.clone(),
+            classification_rows: spec.classification_rows.clone(),
+            classification_table: spec.classification_table.clone(),
+        }
+    }
+}
+
+impl StoredSpecOutcome {
+    fn into_outcome(self) -> SpecGenerationOutcome {
+        SpecGenerationOutcome {
+            combined_markdown: self.combined_markdown,
+            locations: self.locations,
+            logs: self.logs,
+            api_entries: self.api_entries,
+            classification_rows: self.classification_rows,
+            classification_table: self.classification_table,
+        }
+    }
+}
+
+impl From<&ThreatModelOutcome> for StoredThreatModelOutcome {
+    fn from(threat: &ThreatModelOutcome) -> Self {
+        Self {
+            markdown: threat.markdown.clone(),
+            logs: threat.logs.clone(),
+        }
+    }
+}
+
+impl StoredThreatModelOutcome {
+    fn into_outcome(self) -> ThreatModelOutcome {
+        ThreatModelOutcome {
+            markdown: self.markdown,
+            logs: self.logs,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -475,6 +639,33 @@ impl SecurityReviewPlanTracker {
         }
         format!("Plan update: {}", parts.join("; "))
     }
+
+    fn restore_statuses(&mut self, statuses: &HashMap<String, StepStatus>) {
+        let mut changed = false;
+        for (slug, status) in statuses {
+            if let Some(step) = plan_step_from_slug(slug) {
+                changed |= self.set_status_if_present(step, status.clone());
+            }
+        }
+        if changed {
+            self.emit_update();
+        }
+    }
+
+    fn snapshot_statuses(&self) -> HashMap<String, StepStatus> {
+        let mut map = HashMap::new();
+        for step in &self.steps {
+            map.insert(plan_step_slug(step.kind).to_string(), step.status.clone());
+        }
+        map
+    }
+
+    fn status_for(&self, step: SecurityReviewPlanStep) -> Option<StepStatus> {
+        self.steps
+            .iter()
+            .find(|entry| entry.kind == step)
+            .map(|entry| entry.status.clone())
+    }
 }
 
 fn plan_steps_for_mode(mode: SecurityReviewMode) -> Vec<SecurityReviewPlanItem> {
@@ -506,14 +697,43 @@ fn plan_steps_for_mode(mode: SecurityReviewMode) -> Vec<SecurityReviewPlanItem> 
     steps
 }
 
+fn plan_step_slug(step: SecurityReviewPlanStep) -> &'static str {
+    match step {
+        SecurityReviewPlanStep::GenerateSpecs => "generate_specs",
+        SecurityReviewPlanStep::ThreatModel => "threat_model",
+        SecurityReviewPlanStep::AnalyzeBugs => "analyze_bugs",
+        SecurityReviewPlanStep::PolishFindings => "polish_findings",
+        SecurityReviewPlanStep::AssembleReport => "assemble_report",
+    }
+}
+
+fn plan_step_from_slug(slug: &str) -> Option<SecurityReviewPlanStep> {
+    match slug {
+        "generate_specs" => Some(SecurityReviewPlanStep::GenerateSpecs),
+        "threat_model" => Some(SecurityReviewPlanStep::ThreatModel),
+        "analyze_bugs" => Some(SecurityReviewPlanStep::AnalyzeBugs),
+        "polish_findings" => Some(SecurityReviewPlanStep::PolishFindings),
+        "assemble_report" => Some(SecurityReviewPlanStep::AssembleReport),
+        _ => None,
+    }
+}
+
+fn default_plan_statuses(mode: SecurityReviewMode) -> HashMap<String, StepStatus> {
+    let mut statuses = HashMap::new();
+    for step in plan_steps_for_mode(mode) {
+        statuses.insert(plan_step_slug(step.kind).to_string(), StepStatus::Pending);
+    }
+    statuses
+}
+
 pub(crate) fn read_security_review_metadata(path: &Path) -> Result<SecurityReviewMetadata, String> {
     let bytes = fs::read(path).map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
     serde_json::from_slice::<SecurityReviewMetadata>(&bytes)
         .map_err(|e| format!("Failed to parse {}: {e}", path.display()))
 }
 
-#[derive(Clone)]
-struct FileSnippet {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct FileSnippet {
     relative_path: PathBuf,
     language: String,
     content: String,
@@ -956,7 +1176,7 @@ struct SpecEntry {
     api_markdown: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct ApiEntry {
     location_label: String,
     markdown: String,
@@ -2009,6 +2229,102 @@ fn snapshot_bugs(snapshot: &SecurityReviewSnapshot) -> Vec<SecurityReviewBug> {
         .collect()
 }
 
+pub(crate) fn resume_completed_review_from_checkpoint(
+    checkpoint: SecurityReviewCheckpoint,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
+) -> Result<SecurityReviewResult, SecurityReviewFailure> {
+    let mut logs: Vec<String> = Vec::new();
+    let record = |logs: &mut Vec<String>, line: String| {
+        if let Some(tx) = progress_sender.as_ref() {
+            tx.send(AppEvent::SecurityReviewLog(line.clone()));
+        }
+        write_log_sink(&log_sink, line.as_str());
+        logs.push(line);
+    };
+
+    let snapshot_path =
+        checkpoint
+            .bug_snapshot_path
+            .clone()
+            .ok_or_else(|| SecurityReviewFailure {
+                message: "Cannot resume completed review: missing bug snapshot path.".to_string(),
+                logs: Vec::new(),
+            })?;
+    let bugs_path = checkpoint
+        .bugs_path
+        .clone()
+        .ok_or_else(|| SecurityReviewFailure {
+            message: "Cannot resume completed review: missing bugs path.".to_string(),
+            logs: Vec::new(),
+        })?;
+    let output_root = snapshot_path
+        .parent()
+        .and_then(|ctx| ctx.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| checkpoint.repo_root.clone());
+    let metadata_path = output_root.join("metadata.json");
+
+    record(
+        &mut logs,
+        format!(
+            "Resuming completed security review from {}.",
+            snapshot_path
+                .parent()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| snapshot_path.display().to_string())
+        ),
+    );
+
+    let snapshot_bytes = fs::read(&snapshot_path).map_err(|err| SecurityReviewFailure {
+        message: format!(
+            "Cannot resume completed review: failed to read snapshot {}: {err}",
+            snapshot_path.display()
+        ),
+        logs: logs.clone(),
+    })?;
+    let snapshot: SecurityReviewSnapshot =
+        serde_json::from_slice(&snapshot_bytes).map_err(|err| SecurityReviewFailure {
+            message: format!(
+                "Cannot resume completed review: failed to parse snapshot {}: {err}",
+                snapshot_path.display()
+            ),
+            logs: logs.clone(),
+        })?;
+
+    let findings_summary = snapshot.findings_summary.clone();
+    let bugs = snapshot_bugs(&snapshot);
+
+    let report_path = checkpoint.report_path.clone();
+    let report_html_path = checkpoint.report_html_path.clone();
+    let api_overview_path = checkpoint.api_overview_path.clone();
+    let classification_json_path = checkpoint.classification_json_path.clone();
+    let classification_table_path = checkpoint.classification_table_path;
+
+    record(
+        &mut logs,
+        "All steps completed in prior run; showing saved report.".to_string(),
+    );
+
+    Ok(SecurityReviewResult {
+        findings_summary,
+        bug_summary_table: None,
+        bugs,
+        bugs_path,
+        report_path,
+        report_html_path,
+        snapshot_path,
+        metadata_path,
+        api_overview_path,
+        classification_json_path,
+        classification_table_path,
+        logs,
+        token_usage: TokenUsage::default(),
+        estimated_cost_usd: None,
+        rate_limit_wait: Duration::ZERO,
+    })
+}
+
 #[derive(Clone)]
 struct GitLinkInfo {
     repo_root: PathBuf,
@@ -2018,6 +2334,86 @@ struct GitLinkInfo {
 struct BugPromptData {
     prompt: String,
     logs: Vec<String>,
+}
+
+fn is_spec_dir_likely_low_signal(path: &Path) -> bool {
+    let mut components: Vec<String> = Vec::new();
+    for comp in path.components() {
+        if let std::path::Component::Normal(part) = comp
+            && let Some(s) = part.to_str()
+        {
+            components.push(s.to_ascii_lowercase());
+        }
+    }
+    let skip_markers = [
+        "test",
+        "tests",
+        "testing",
+        "spec",
+        "specs",
+        "example",
+        "examples",
+        "fixture",
+        "fixtures",
+        "docs",
+        "doc",
+        "script",
+        "scripts",
+        "util",
+        "utils",
+        "tools",
+        "tooling",
+        "playground",
+        "migration",
+        "migrations",
+        "seed",
+        "seeds",
+        "sample",
+        "samples",
+    ];
+    components
+        .iter()
+        .any(|segment| skip_markers.iter().any(|marker| segment.contains(marker)))
+}
+
+fn prune_low_signal_spec_dirs(dirs: &[(PathBuf, String)]) -> (Vec<(PathBuf, String)>, Vec<String>) {
+    let mut kept: Vec<(PathBuf, String)> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    for (path, label) in dirs {
+        if is_spec_dir_likely_low_signal(path) {
+            dropped.push(label.clone());
+        } else {
+            kept.push((path.clone(), label.clone()));
+        }
+    }
+    if kept.is_empty() {
+        (dirs.to_vec(), Vec::new())
+    } else {
+        (kept, dropped)
+    }
+}
+
+fn filter_spec_targets(
+    targets: &[PathBuf],
+    repo_root: &Path,
+    log: &mut dyn FnMut(String),
+) -> Vec<PathBuf> {
+    let mut kept: Vec<PathBuf> = Vec::new();
+    for target in targets {
+        if is_spec_dir_likely_low_signal(target) {
+            let display = display_path_for(target, repo_root);
+            log(format!(
+                "Skipping specification for {display} (looks like tests/utils/scripts)."
+            ));
+            continue;
+        }
+        kept.push(target.clone());
+    }
+    if kept.is_empty() {
+        targets.to_vec()
+    } else {
+        kept
+    }
 }
 
 fn is_ignored_file(path: &Path) -> bool {
@@ -2059,29 +2455,167 @@ pub async fn run_security_review(
     let model_client = create_client();
     let overall_start = Instant::now();
 
-    let mut record = |line: String| {
-        if let Some(callback) = request.progress_callback.as_ref() {
-            callback(line.clone());
+    let repo_path = request.repo_path.clone();
+    let repo_slug = sanitize_repo_slug(&repo_path);
+    let mut include_paths = request.include_paths.clone();
+    let mut scope_display_paths = request.scope_display_paths.clone();
+    let mut auto_scope_prompt = request.auto_scope_prompt.clone();
+    let mut mode = request.mode;
+
+    let mut checkpoint = request
+        .resume_checkpoint
+        .clone()
+        .or_else(|| load_checkpoint(&request.output_root));
+    if let Some(cp) = checkpoint.clone() {
+        checkpoint = match cp.status {
+            SecurityReviewCheckpointStatus::Running | SecurityReviewCheckpointStatus::Complete => {
+                Some(cp)
+            }
+        };
+    }
+    let resuming = checkpoint.is_some();
+    if let Some(checkpoint) = checkpoint.as_ref()
+        && checkpoint.status == SecurityReviewCheckpointStatus::Complete
+    {
+        return resume_completed_review_from_checkpoint(
+            checkpoint.clone(),
+            request.progress_sender.clone(),
+            request.log_sink.clone(),
+        );
+    }
+
+    let mut checkpoint = checkpoint.unwrap_or_else(|| SecurityReviewCheckpoint {
+        status: SecurityReviewCheckpointStatus::Running,
+        mode,
+        include_paths: include_paths
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect(),
+        scope_display_paths: scope_display_paths.clone(),
+        auto_scope_prompt: auto_scope_prompt.clone(),
+        triage_model: request.triage_model.clone(),
+        model: request.model.clone(),
+        provider_name: request.provider.name.clone(),
+        repo_slug: repo_slug.clone(),
+        repo_root: repo_path.clone(),
+        started_at: OffsetDateTime::now_utc(),
+        plan_statuses: default_plan_statuses(mode),
+        selected_snippets: None,
+        spec: None,
+        threat_model: None,
+        bug_snapshot_path: None,
+        bugs_path: None,
+        report_path: None,
+        report_html_path: None,
+        api_overview_path: None,
+        classification_json_path: None,
+        classification_table_path: None,
+        last_log: None,
+    });
+
+    if resuming {
+        include_paths = checkpoint.include_paths.iter().map(PathBuf::from).collect();
+        scope_display_paths = checkpoint.scope_display_paths.clone();
+        auto_scope_prompt = checkpoint.auto_scope_prompt.clone();
+        mode = checkpoint.mode;
+    } else {
+        checkpoint.plan_statuses = default_plan_statuses(mode);
+    }
+
+    let previous_model = checkpoint.model.clone();
+    let previous_provider = checkpoint.provider_name.clone();
+    checkpoint.status = SecurityReviewCheckpointStatus::Running;
+    checkpoint.repo_root = repo_path.clone();
+    checkpoint.repo_slug = repo_slug.clone();
+    checkpoint.mode = mode;
+    checkpoint.triage_model = request.triage_model.clone();
+    checkpoint.model = request.model.clone();
+    checkpoint.provider_name = request.provider.name.clone();
+    checkpoint.include_paths = include_paths
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect();
+    checkpoint.scope_display_paths = scope_display_paths.clone();
+    checkpoint.auto_scope_prompt = auto_scope_prompt.clone();
+    if checkpoint.plan_statuses.is_empty() {
+        checkpoint.plan_statuses = default_plan_statuses(mode);
+    }
+
+    let record = {
+        let progress_sender = progress_sender.clone();
+        let log_sink = log_sink.clone();
+        move |logs: &mut Vec<String>, line: String| {
+            if let Some(callback) = request.progress_callback.as_ref() {
+                callback(line.clone());
+            }
+            if let Some(tx) = progress_sender.as_ref() {
+                tx.send(AppEvent::SecurityReviewLog(line.clone()));
+            }
+            write_log_sink(&log_sink, line.as_str());
+            logs.push(line);
         }
-        if let Some(tx) = progress_sender.as_ref() {
-            tx.send(AppEvent::SecurityReviewLog(line.clone()));
-        }
-        write_log_sink(&log_sink, line.as_str());
-        logs.push(line);
     };
 
-    record(format!(
-        "Starting security review in {} (mode: {}, model: {})",
-        request.repo_path.display(),
-        request.mode.as_str(),
-        request.model
-    ));
-    let repo_path = request.repo_path.clone();
-    let mut include_paths = request.include_paths.clone();
+    if resuming {
+        if previous_model != request.model {
+            record(
+                &mut logs,
+                format!(
+                    "Checkpoint recorded under model {}; continuing with {}.",
+                    previous_model, request.model
+                ),
+            );
+        }
+        if previous_provider != request.provider.name {
+            record(
+                &mut logs,
+                format!(
+                    "Checkpoint recorded under provider {}; continuing with {}.",
+                    previous_provider, request.provider.name
+                ),
+            );
+        }
+    }
+
+    let persist_checkpoint = |checkpoint: &mut SecurityReviewCheckpoint, logs: &mut Vec<String>| {
+        checkpoint.last_log = logs.last().cloned();
+        if let Err(err) = write_checkpoint(&request.output_root, checkpoint) {
+            let message = format!("Failed to persist checkpoint: {err}");
+            if let Some(tx) = progress_sender.as_ref() {
+                tx.send(AppEvent::SecurityReviewLog(message.clone()));
+            }
+            write_log_sink(&log_sink, message.as_str());
+            logs.push(message);
+        }
+    };
+
+    if resuming {
+        record(
+            &mut logs,
+            format!(
+                "Resuming security review from {} (mode: {}, model: {})",
+                request.output_root.display(),
+                mode.as_str(),
+                request.model
+            ),
+        );
+    } else {
+        record(
+            &mut logs,
+            format!(
+                "Starting security review in {} (mode: {}, model: {})",
+                repo_path.display(),
+                mode.as_str(),
+                request.model
+            ),
+        );
+    }
+
     let git_link_info = build_git_link_info(&repo_path).await;
+    persist_checkpoint(&mut checkpoint, &mut logs);
 
     if include_paths.is_empty()
-        && let Some(prompt) = request.auto_scope_prompt.as_ref().and_then(|value| {
+        && let Some(prompt) = auto_scope_prompt.as_ref().and_then(|value| {
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 None
@@ -2093,9 +2627,10 @@ pub async fn run_security_review(
         // Always use the fast model for auto-scope regardless of triage_model.
         let auto_scope_model = AUTO_SCOPE_MODEL;
 
-        record(format!(
-            "Auto-detecting review scope from user prompt: {prompt}"
-        ));
+        record(
+            &mut logs,
+            format!("Auto-detecting review scope from user prompt: {prompt}"),
+        );
         match auto_detect_scope(
             &model_client,
             &request.provider,
@@ -2109,10 +2644,11 @@ pub async fn run_security_review(
         {
             Ok((selections, scope_logs)) => {
                 for line in scope_logs {
-                    record(line);
+                    record(&mut logs, line);
                 }
                 if selections.is_empty() {
                     record(
+                        &mut logs,
                         "Auto scope returned no directories; reviewing entire repository."
                             .to_string(),
                     );
@@ -2133,12 +2669,12 @@ pub async fn run_security_review(
                         } else {
                             format!("Auto scope included {kind} {display_path}")
                         };
-                        record(message);
+                        record(&mut logs, message);
                         resolved_paths.push(abs_path);
                         selection_summaries.push((display_path, reason));
                     }
 
-                    if let Some(tx) = request.progress_sender.as_ref() {
+                    if let Some(tx) = progress_sender.as_ref() {
                         let display_paths: Vec<String> = selection_summaries
                             .iter()
                             .map(|(path, _)| path.clone())
@@ -2147,10 +2683,17 @@ pub async fn run_security_review(
                         if request.skip_auto_scope_confirmation {
                             // Option 2 (Quick bug sweep): auto-accept detected scope and continue.
                             include_paths = resolved_paths;
-                            record("Auto scope selections accepted.".to_string());
+                            scope_display_paths = display_paths.clone();
+                            record(&mut logs, "Auto scope selections accepted.".to_string());
                             tx.send(AppEvent::SecurityReviewScopeResolved {
                                 paths: display_paths,
                             });
+                            checkpoint.include_paths = include_paths
+                                .iter()
+                                .map(|path| path.to_string_lossy().to_string())
+                                .collect();
+                            checkpoint.scope_display_paths = scope_display_paths.clone();
+                            persist_checkpoint(&mut checkpoint, &mut logs);
                         } else {
                             // Show confirmation dialog when not explicitly skipping.
                             let (confirm_tx, confirm_rx) = oneshot::channel();
@@ -2163,31 +2706,40 @@ pub async fn run_security_review(
                                     })
                                     .collect();
                             tx.send(AppEvent::SecurityReviewAutoScopeConfirm {
-                                mode: request.mode,
+                                mode,
                                 prompt: prompt.to_string(),
                                 selections: selections_for_ui,
                                 responder: confirm_tx,
                             });
 
                             record(
+                                &mut logs,
                                 "Waiting for user confirmation of auto-detected scope..."
                                     .to_string(),
                             );
 
                             match confirm_rx.await {
                                 Ok(true) => {
-                                    record("Auto scope confirmed by user.".to_string());
+                                    record(&mut logs, "Auto scope confirmed by user.".to_string());
                                     include_paths = resolved_paths;
+                                    scope_display_paths = display_paths.clone();
                                     tx.send(AppEvent::SecurityReviewScopeResolved {
                                         paths: display_paths,
                                     });
+                                    checkpoint.include_paths = include_paths
+                                        .iter()
+                                        .map(|path| path.to_string_lossy().to_string())
+                                        .collect();
+                                    checkpoint.scope_display_paths = scope_display_paths.clone();
+                                    persist_checkpoint(&mut checkpoint, &mut logs);
                                 }
                                 Ok(false) => {
                                     record(
+                                        &mut logs,
                                         "Auto scope selection rejected by user; cancelling review."
                                             .to_string(),
                                     );
-                                    tx.send(AppEvent::OpenSecurityReviewPathPrompt(request.mode));
+                                    tx.send(AppEvent::OpenSecurityReviewPathPrompt(mode));
                                     return Err(SecurityReviewFailure {
                                         message:
                                             "Security review cancelled after auto scope rejection."
@@ -2197,6 +2749,7 @@ pub async fn run_security_review(
                                 }
                                 Err(_) => {
                                     record(
+                                        &mut logs,
                                         "Auto scope confirmation interrupted; cancelling review."
                                             .to_string(),
                                     );
@@ -2215,121 +2768,205 @@ pub async fn run_security_review(
                 }
             }
             Err(failure) => {
-                record(format!("Auto scope detection failed: {}", failure.message));
+                record(
+                    &mut logs,
+                    format!("Auto scope detection failed: {}", failure.message),
+                );
                 for line in failure.logs {
-                    record(line);
+                    record(&mut logs, line);
                 }
             }
         }
     }
 
-    let mut plan_tracker = SecurityReviewPlanTracker::new(
-        request.mode,
-        &include_paths,
-        &request.repo_path,
-        progress_sender.clone(),
-    );
-    record("Collecting candidate files...".to_string());
+    checkpoint.include_paths = include_paths
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect();
+    checkpoint.scope_display_paths = scope_display_paths.clone();
+    persist_checkpoint(&mut checkpoint, &mut logs);
 
-    let progress_sender_for_collection = progress_sender.clone();
-    let collection_paths = include_paths.clone();
-    let collection = match spawn_blocking(move || {
-        collect_snippets_blocking(
-            repo_path,
-            collection_paths,
-            DEFAULT_MAX_FILES,
-            DEFAULT_MAX_BYTES_PER_FILE,
-            DEFAULT_MAX_TOTAL_BYTES,
-            progress_sender_for_collection,
-        )
-    })
-    .await
-    {
-        Ok(Ok(collection)) => collection,
-        Ok(Err(failure)) => {
-            let mut combined_logs = logs.clone();
-            if let Some(tx) = progress_sender.as_ref() {
-                for line in &failure.logs {
-                    tx.send(AppEvent::SecurityReviewLog(line.clone()));
+    let mut plan_tracker =
+        SecurityReviewPlanTracker::new(mode, &include_paths, &repo_path, progress_sender.clone());
+    plan_tracker.restore_statuses(&checkpoint.plan_statuses);
+    checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+    persist_checkpoint(&mut checkpoint, &mut logs);
+
+    let mut selected_snippets = checkpoint.selected_snippets.clone();
+    if selected_snippets.is_none() {
+        record(&mut logs, "Collecting candidate files...".to_string());
+
+        let progress_sender_for_collection = progress_sender.clone();
+        let collection_paths = include_paths.clone();
+        let repo_path_for_collection = repo_path.clone();
+        let collection = match spawn_blocking(move || {
+            collect_snippets_blocking(
+                repo_path_for_collection,
+                collection_paths,
+                DEFAULT_MAX_FILES,
+                DEFAULT_MAX_BYTES_PER_FILE,
+                DEFAULT_MAX_TOTAL_BYTES,
+                progress_sender_for_collection,
+            )
+        })
+        .await
+        {
+            Ok(Ok(collection)) => collection,
+            Ok(Err(failure)) => {
+                let mut combined_logs = logs.clone();
+                if let Some(tx) = progress_sender.as_ref() {
+                    for line in &failure.logs {
+                        tx.send(AppEvent::SecurityReviewLog(line.clone()));
+                    }
                 }
+                combined_logs.extend(failure.logs);
+                return Err(SecurityReviewFailure {
+                    message: failure.message,
+                    logs: combined_logs,
+                });
             }
-            combined_logs.extend(failure.logs);
-            return Err(SecurityReviewFailure {
-                message: failure.message,
-                logs: combined_logs,
-            });
+            Err(e) => {
+                record(&mut logs, format!("File collection task failed: {e}"));
+                return Err(SecurityReviewFailure {
+                    message: format!("File collection task failed: {e}"),
+                    logs,
+                });
+            }
+        };
+
+        for line in collection.logs {
+            record(&mut logs, line);
         }
-        Err(e) => {
-            record(format!("File collection task failed: {e}"));
+
+        if collection.snippets.is_empty() {
+            record(
+                &mut logs,
+                "No candidate files found for review.".to_string(),
+            );
             return Err(SecurityReviewFailure {
-                message: format!("File collection task failed: {e}"),
+                message: "No candidate files found for review.".to_string(),
                 logs,
             });
         }
-    };
 
-    for line in collection.logs {
-        record(line);
-    }
-
-    if collection.snippets.is_empty() {
-        record("No candidate files found for review.".to_string());
-        return Err(SecurityReviewFailure {
-            message: "No candidate files found for review.".to_string(),
-            logs,
-        });
-    }
-
-    record("Running LLM file triage to prioritize analysis...".to_string());
-    let triage = match triage_files_for_bug_analysis(
-        &model_client,
-        &request.provider,
-        &request.auth,
-        &request.triage_model,
-        collection.snippets,
-        progress_sender.clone(),
-        log_sink.clone(),
-        metrics.clone(),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(err) => {
-            record(err.message.clone());
-            let mut combined_logs = logs.clone();
-            combined_logs.extend(err.logs);
-            return Err(SecurityReviewFailure {
-                message: err.message,
-                logs: combined_logs,
-            });
+        // First prune at the directory level to keep triage manageable.
+        let mut directories: HashMap<PathBuf, Vec<FileSnippet>> = HashMap::new();
+        for snippet in collection.snippets {
+            let parent = snippet
+                .relative_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            directories.entry(parent).or_default().push(snippet);
         }
-    };
+        let mut ranked_dirs: Vec<(PathBuf, Vec<FileSnippet>, usize)> = directories
+            .into_iter()
+            .map(|(dir, snippets)| {
+                let bytes = snippets.iter().map(|s| s.bytes).sum::<usize>();
+                (dir, snippets, bytes)
+            })
+            .collect();
+        ranked_dirs.sort_by(|a, b| b.2.cmp(&a.2));
+        let mut pruned_snippets: Vec<FileSnippet> = Vec::new();
+        for (dir, snippets, bytes) in ranked_dirs {
+            record(
+                &mut logs,
+                format!(
+                    "Inspecting directory {} ({} files, {}).",
+                    display_path_for(&dir, &repo_path),
+                    snippets.len(),
+                    human_readable_bytes(bytes),
+                ),
+            );
+            pruned_snippets.extend(snippets);
+        }
+        record(
+            &mut logs,
+            format!(
+                "Running LLM file triage to prioritize analysis across {} files ({} directories).",
+                pruned_snippets.len(),
+                pruned_snippets
+                    .iter()
+                    .filter_map(|s| s.relative_path.parent())
+                    .collect::<HashSet<_>>()
+                    .len()
+            ),
+        );
+        let triage = match triage_files_for_bug_analysis(
+            &model_client,
+            &request.provider,
+            &request.auth,
+            &request.triage_model,
+            pruned_snippets,
+            progress_sender.clone(),
+            log_sink.clone(),
+            metrics.clone(),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                record(&mut logs, err.message.clone());
+                let mut combined_logs = logs.clone();
+                combined_logs.extend(err.logs);
+                return Err(SecurityReviewFailure {
+                    message: err.message,
+                    logs: combined_logs,
+                });
+            }
+        };
 
-    for line in &triage.logs {
-        record(line.clone());
+        for line in &triage.logs {
+            record(&mut logs, line.clone());
+        }
+
+        selected_snippets = Some(triage.included);
+        checkpoint.selected_snippets = selected_snippets.clone();
+        persist_checkpoint(&mut checkpoint, &mut logs);
+    } else {
+        let count = selected_snippets
+            .as_ref()
+            .map(std::vec::Vec::len)
+            .unwrap_or(0);
+        record(
+            &mut logs,
+            format!("Using {count} triaged file(s) from checkpoint resume."),
+        );
     }
 
-    let selected_snippets = triage.included;
-
-    if selected_snippets.is_empty() {
-        record("No files selected for bug analysis after triage.".to_string());
+    let Some(selected_snippets) = selected_snippets else {
         return Err(SecurityReviewFailure {
-            message: "No files selected for bug analysis after triage.".to_string(),
+            message: "No files selected for bug analysis after checkpoint resume.".to_string(),
             logs,
         });
-    }
+    };
 
-    if matches!(request.mode, SecurityReviewMode::Full) {
+    if matches!(mode, SecurityReviewMode::Full)
+        && !matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::GenerateSpecs),
+            Some(StepStatus::Completed | StepStatus::InProgress)
+        )
+    {
         plan_tracker.start_step(SecurityReviewPlanStep::GenerateSpecs);
     }
-    plan_tracker.start_step(SecurityReviewPlanStep::AnalyzeBugs);
+    if !matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::AnalyzeBugs),
+        Some(StepStatus::Completed | StepStatus::InProgress)
+    ) {
+        plan_tracker.start_step(SecurityReviewPlanStep::AnalyzeBugs);
+    }
+    checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+    persist_checkpoint(&mut checkpoint, &mut logs);
     let total_bytes = selected_snippets.iter().map(|s| s.bytes).sum::<usize>();
     let total_size = human_readable_bytes(total_bytes);
-    record(format!(
-        "Preparing bug analysis for {} files ({} total).",
-        selected_snippets.len(),
-        total_size
-    ));
+    record(
+        &mut logs,
+        format!(
+            "Preparing bug analysis for {} files ({} total).",
+            selected_snippets.len(),
+            total_size
+        ),
+    );
 
     let repository_summary = build_repository_summary(&selected_snippets);
     let mut spec_targets: Vec<PathBuf> = if !include_paths.is_empty() {
@@ -2337,25 +2974,99 @@ pub async fn run_security_review(
     } else {
         let mut unique_dirs: HashSet<PathBuf> = HashSet::new();
         for snippet in &selected_snippets {
-            let absolute = request.repo_path.join(&snippet.relative_path);
-            let dir = absolute.parent().unwrap_or(&request.repo_path);
+            let absolute = repo_path.join(&snippet.relative_path);
+            let dir = absolute.parent().unwrap_or(&repo_path);
             unique_dirs.insert(dir.to_path_buf());
         }
         if unique_dirs.is_empty() {
-            vec![request.repo_path.clone()]
+            vec![repo_path.clone()]
         } else {
             unique_dirs.into_iter().collect()
         }
     };
 
     spec_targets.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
-    let mut spec_generation: Option<SpecGenerationOutcome> = None;
-    let mut threat_model: Option<ThreatModelOutcome> = None;
-    let spec_threat_task = if matches!(request.mode, SecurityReviewMode::Full) {
-        record(format!(
-            "Generating system specifications for {} scope path(s) (running in parallel with bug analysis).",
-            spec_targets.len()
-        ));
+    if matches!(mode, SecurityReviewMode::Full) {
+        let mut directory_candidates: Vec<(PathBuf, String)> = spec_targets
+            .iter()
+            .map(|path| {
+                let label = display_path_for(path, &repo_path);
+                (path.clone(), label)
+            })
+            .collect();
+        directory_candidates.sort_by(|a, b| a.1.cmp(&b.1));
+
+        match filter_spec_directories(
+            &model_client,
+            &request.provider,
+            &request.auth,
+            &repo_path,
+            &directory_candidates,
+            metrics.clone(),
+        )
+        .await
+        {
+            Ok(filtered) => {
+                let (preferred_dirs, dropped) = prune_low_signal_spec_dirs(&filtered);
+                for label in &dropped {
+                    record(
+                        &mut logs,
+                        format!(
+                            "Skipping specification for {label} (low-signal helper/migration dir)."
+                        ),
+                    );
+                }
+                let selected_dirs = if preferred_dirs.is_empty() {
+                    filtered
+                } else {
+                    preferred_dirs
+                };
+                let filtered_paths: Vec<PathBuf> =
+                    selected_dirs.iter().map(|(path, _)| path.clone()).collect();
+                if filtered_paths.len() < spec_targets.len() {
+                    record(
+                        &mut logs,
+                        format!(
+                            "Spec directory triage kept {}/{} directories for specification.",
+                            filtered_paths.len(),
+                            spec_targets.len()
+                        ),
+                    );
+                }
+                spec_targets = filtered_paths;
+            }
+            Err(err) => {
+                for line in &err.logs {
+                    record(&mut logs, line.clone());
+                }
+                record(
+                    &mut logs,
+                    format!(
+                        "Spec directory triage failed; using all directories. {}",
+                        err.message
+                    ),
+                );
+            }
+        }
+    }
+
+    let mut spec_generation: Option<SpecGenerationOutcome> = checkpoint
+        .spec
+        .as_ref()
+        .map(|stored| stored.clone().into_outcome());
+    let mut threat_model: Option<ThreatModelOutcome> = checkpoint
+        .threat_model
+        .as_ref()
+        .map(|stored| stored.clone().into_outcome());
+    let spec_threat_task = if matches!(mode, SecurityReviewMode::Full) && spec_generation.is_none()
+    {
+        record(
+            &mut logs,
+            format!(
+                "Generating system specifications for {} scope path(s) (running in parallel with bug analysis).",
+                spec_targets.len()
+            ),
+        );
         let model_client = model_client.clone();
         let provider = request.provider.clone();
         let auth = request.auth.clone();
@@ -2420,20 +3131,40 @@ pub async fn run_security_review(
     };
     if spec_threat_task.is_some() && request.include_spec_in_bug_analysis {
         record(
+            &mut logs,
             "Running bug analysis while specifications and threat model are generated; will apply that context during risk rerank."
                 .to_string(),
         );
     } else if spec_threat_task.is_some() && !request.include_spec_in_bug_analysis {
         record(
+            &mut logs,
             "Bug analysis running in parallel with specification generation (context disabled by config)."
                 .to_string(),
         );
+    } else if matches!(mode, SecurityReviewMode::Full) {
+        if spec_generation.is_some() {
+            record(
+                &mut logs,
+                "Specification already available from checkpoint; skipping regeneration."
+                    .to_string(),
+            );
+        }
+        if threat_model.is_some() {
+            record(
+                &mut logs,
+                "Threat model already available from checkpoint; skipping regeneration."
+                    .to_string(),
+            );
+        }
     }
     let spec_for_bug_analysis: Option<&str> = None;
 
     // Run bug analysis in N full passes across all selected files.
     let total_passes = BUG_FINDING_PASSES.max(1);
-    record(format!("Running bug analysis in {total_passes} pass(es)."));
+    record(
+        &mut logs,
+        format!("Running bug analysis in {total_passes} pass(es)."),
+    );
 
     let mut aggregated_logs: Vec<String> = Vec::new();
     let mut all_summaries: Vec<BugSummary> = Vec::new();
@@ -2442,12 +3173,15 @@ pub async fn run_security_review(
     let mut files_map: StdHashMap<PathBuf, FileSnippet> = StdHashMap::new();
 
     for pass in 1..=total_passes {
-        record(format!(
-            "Starting bug analysis pass {}/{} over {} files.",
-            pass,
-            total_passes,
-            selected_snippets.len()
-        ));
+        record(
+            &mut logs,
+            format!(
+                "Starting bug analysis pass {}/{} over {} files.",
+                pass,
+                total_passes,
+                selected_snippets.len()
+            ),
+        );
 
         let pass_outcome = match analyze_files_individually(
             &model_client,
@@ -2469,7 +3203,7 @@ pub async fn run_security_review(
         {
             Ok(outcome) => outcome,
             Err(err) => {
-                record(err.message.clone());
+                record(&mut logs, err.message.clone());
                 let mut combined_logs = logs.clone();
                 combined_logs.extend(err.logs);
                 return Err(SecurityReviewFailure {
@@ -2480,7 +3214,7 @@ pub async fn run_security_review(
         };
 
         for line in &pass_outcome.logs {
-            record(line.clone());
+            record(&mut logs, line.clone());
         }
         aggregated_logs.extend(pass_outcome.logs.clone());
 
@@ -2503,15 +3237,18 @@ pub async fn run_security_review(
                 .or_insert(snippet);
         }
 
-        record(format!(
-            "Completed bug analysis pass {pass}/{total_passes}."
-        ));
+        record(
+            &mut logs,
+            format!("Completed bug analysis pass {pass}/{total_passes}."),
+        );
     }
 
     plan_tracker.complete_and_start_next(
         SecurityReviewPlanStep::AnalyzeBugs,
         Some(SecurityReviewPlanStep::PolishFindings),
     );
+    checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+    persist_checkpoint(&mut checkpoint, &mut logs);
     let mut analysis_context: Option<String> = None;
     let mut spec_for_rerank: Option<&str> = None;
     if let Some(task) = spec_threat_task {
@@ -2521,24 +3258,31 @@ pub async fn run_security_review(
                 threat_model = outcome.threat;
                 if let Some(spec) = spec_generation.as_ref() {
                     for line in &spec.logs {
-                        record(line.clone());
+                        record(&mut logs, line.clone());
                     }
                 } else {
-                    record("Specification step skipped (no targets).".to_string());
+                    record(
+                        &mut logs,
+                        "Specification step skipped (no targets).".to_string(),
+                    );
                 }
                 plan_tracker.complete_and_start_next(
                     SecurityReviewPlanStep::GenerateSpecs,
                     Some(SecurityReviewPlanStep::ThreatModel),
                 );
+                checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+                persist_checkpoint(&mut checkpoint, &mut logs);
                 if let Some(threat) = threat_model.as_ref() {
                     for line in &threat.logs {
-                        record(line.clone());
+                        record(&mut logs, line.clone());
                     }
                 }
                 plan_tracker.mark_complete(SecurityReviewPlanStep::ThreatModel);
+                checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+                persist_checkpoint(&mut checkpoint, &mut logs);
             }
             Ok(Err(err)) => {
-                record(err.message.clone());
+                record(&mut logs, err.message.clone());
                 let mut combined_logs = logs.clone();
                 combined_logs.extend(err.logs);
                 return Err(SecurityReviewFailure {
@@ -2548,7 +3292,7 @@ pub async fn run_security_review(
             }
             Err(join_err) => {
                 let message = format!("Specification/threat tasks failed: {join_err}");
-                record(message.clone());
+                record(&mut logs, message.clone());
                 let mut combined_logs = logs.clone();
                 combined_logs.push(message.clone());
                 return Err(SecurityReviewFailure {
@@ -2557,7 +3301,20 @@ pub async fn run_security_review(
                 });
             }
         }
+    } else if matches!(mode, SecurityReviewMode::Full) {
+        if spec_generation.is_some() {
+            plan_tracker.mark_complete(SecurityReviewPlanStep::GenerateSpecs);
+        }
+        if threat_model.is_some() {
+            plan_tracker.mark_complete(SecurityReviewPlanStep::ThreatModel);
+        }
+        checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+        persist_checkpoint(&mut checkpoint, &mut logs);
     }
+
+    checkpoint.spec = spec_generation.as_ref().map(StoredSpecOutcome::from);
+    checkpoint.threat_model = threat_model.as_ref().map(StoredThreatModelOutcome::from);
+    persist_checkpoint(&mut checkpoint, &mut logs);
 
     if request.include_spec_in_bug_analysis {
         let spec_text = spec_generation
@@ -2583,22 +3340,26 @@ pub async fn run_security_review(
                         "Using compacted specification/threat model context ({} chars) for risk rerank.",
                         compacted.len()
                     );
-                    record(message);
+                    record(&mut logs, message);
                     analysis_context = Some(compacted);
                 }
                 Ok(None) => {
                     record(
+                        &mut logs,
                         "Specification context unavailable; risk rerank will omit it.".to_string(),
                     );
                 }
                 Err(err) => {
-                    record(err.message);
+                    record(&mut logs, err.message);
                 }
             }
         }
         spec_for_rerank = analysis_context.as_deref().or(spec_text);
     } else if spec_generation.is_some() {
-        record("Skipping specification context in risk rerank (disabled by config).".to_string());
+        record(
+            &mut logs,
+            "Skipping specification context in risk rerank (disabled by config).".to_string(),
+        );
     }
     // Post-process aggregated findings: normalize, filter, dedupe, then risk rerank.
     for summary in all_summaries.iter_mut() {
@@ -2653,12 +3414,12 @@ pub async fn run_security_review(
             "Filtered out {filtered} informational finding{}.",
             if filtered == 1 { "" } else { "s" }
         );
-        record(msg.clone());
+        record(&mut logs, msg.clone());
         aggregated_logs.push(msg);
     }
     if all_summaries.is_empty() {
         let msg = "No high, medium, or low severity findings remain after filtering.".to_string();
-        record(msg.clone());
+        record(&mut logs, msg.clone());
         aggregated_logs.push(msg);
     }
 
@@ -2672,7 +3433,7 @@ pub async fn run_security_review(
                 "Deduplicated {removed} duplicated finding{} by grouping titles/tags.",
                 if removed == 1 { "" } else { "s" }
             );
-            record(msg.clone());
+            record(&mut logs, msg.clone());
             aggregated_logs.push(msg);
         }
     }
@@ -2693,7 +3454,7 @@ pub async fn run_security_review(
         .await;
         aggregated_logs.extend(risk_logs.clone());
         for line in risk_logs {
-            record(line);
+            record(&mut logs, line);
         }
     }
 
@@ -2743,7 +3504,7 @@ pub async fn run_security_review(
                 "Filtered out {filtered} informational finding{} after rerank.",
                 if filtered == 1 { "" } else { "s" }
             );
-            record(msg.clone());
+            record(&mut logs, msg.clone());
             aggregated_logs.push(msg);
         }
 
@@ -2755,7 +3516,7 @@ pub async fn run_security_review(
             "Polishing markdown for {} bug finding(s).",
             all_summaries.len()
         );
-        record(polish_message.clone());
+        record(&mut logs, polish_message.clone());
         aggregated_logs.push(polish_message);
         let polish_logs = match polish_bug_markdowns(
             &model_client,
@@ -2776,7 +3537,7 @@ pub async fn run_security_review(
             }
         };
         for line in polish_logs {
-            record(line.clone());
+            record(&mut logs, line.clone());
             aggregated_logs.push(line);
         }
     }
@@ -2793,10 +3554,13 @@ pub async fn run_security_review(
 
     let findings_count = all_summaries.len();
 
-    record(format!(
-        "Aggregated bug findings across {} file(s).",
-        files_with_findings.len()
-    ));
+    record(
+        &mut logs,
+        format!(
+            "Aggregated bug findings across {} file(s).",
+            files_with_findings.len()
+        ),
+    );
     aggregated_logs.push(format!(
         "Aggregated bug findings across {} file(s).",
         files_with_findings.len()
@@ -2804,35 +3568,43 @@ pub async fn run_security_review(
 
     let bug_summary_table = make_bug_summary_table(&all_summaries);
     if let Some(table) = bug_summary_table.as_ref() {
-        record("Findings summary table:".to_string());
-        record(table.clone());
+        record(&mut logs, "Findings summary table:".to_string());
+        record(&mut logs, table.clone());
     }
     let bug_summaries = all_summaries;
     let bug_details = all_details;
 
     let findings_summary = format_findings_summary(findings_count, files_with_findings.len());
-    record(format!(
-        "Bug analysis summary: {}",
-        findings_summary.as_str()
-    ));
-    record("Bug analysis complete.".to_string());
+    record(
+        &mut logs,
+        format!("Bug analysis summary: {}", findings_summary.as_str()),
+    );
+    record(&mut logs, "Bug analysis complete.".to_string());
     plan_tracker.complete_and_start_next(
         SecurityReviewPlanStep::PolishFindings,
         Some(SecurityReviewPlanStep::AssembleReport),
     );
+    checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+    persist_checkpoint(&mut checkpoint, &mut logs);
 
     let (bugs_for_result, bug_snapshots) = build_bug_records(bug_summaries, bug_details);
     let mut report_sections_prefix: Vec<String> = Vec::new();
-    if matches!(request.mode, SecurityReviewMode::Full) {
+    if matches!(mode, SecurityReviewMode::Full) {
         if let Some(spec) = spec_generation.as_ref() {
-            record("Including combined specification in final report.".to_string());
+            record(
+                &mut logs,
+                "Including combined specification in final report.".to_string(),
+            );
             let trimmed = spec.combined_markdown.trim();
             if !trimmed.is_empty() {
                 report_sections_prefix.push(trimmed.to_string());
             }
         }
         if let Some(threat) = threat_model.as_ref() {
-            record("Including threat model in final report.".to_string());
+            record(
+                &mut logs,
+                "Including threat model in final report.".to_string(),
+            );
             let trimmed = threat.markdown.trim();
             if !trimmed.is_empty() {
                 report_sections_prefix.push(trimmed.to_string());
@@ -2854,17 +3626,21 @@ pub async fn run_security_review(
     } else {
         Some(format!("# Security Findings\n\n{}", bugs_markdown.trim()))
     };
-    let report_markdown = match request.mode {
+    let report_markdown = match mode {
         SecurityReviewMode::Full => {
             let mut sections = report_sections_prefix.clone();
             if let Some(section) = findings_section.clone() {
                 sections.push(section);
             }
             if sections.is_empty() {
-                record("No content available for final report.".to_string());
+                record(
+                    &mut logs,
+                    "No content available for final report.".to_string(),
+                );
                 None
             } else {
                 record(
+                    &mut logs,
                     "Final report assembled from specification, threat model, and findings."
                         .to_string(),
                 );
@@ -2873,10 +3649,16 @@ pub async fn run_security_review(
         }
         SecurityReviewMode::Bugs => {
             if let Some(section) = findings_section {
-                record("Generated findings-only report for bug sweep.".to_string());
+                record(
+                    &mut logs,
+                    "Generated findings-only report for bug sweep.".to_string(),
+                );
                 Some(fix_mermaid_blocks(&section))
             } else {
-                record("No findings available for bug sweep report.".to_string());
+                record(
+                    &mut logs,
+                    "No findings available for bug sweep report.".to_string(),
+                );
                 None
             }
         }
@@ -2884,8 +3666,8 @@ pub async fn run_security_review(
 
     // Intentionally avoid logging the output path pre-write to keep logs concise.
     let metadata = SecurityReviewMetadata {
-        mode: request.mode,
-        scope_paths: request.scope_display_paths.clone(),
+        mode,
+        scope_paths: scope_display_paths.clone(),
     };
     let api_entries_for_persist = spec_generation
         .as_ref()
@@ -2900,7 +3682,7 @@ pub async fn run_security_review(
         .and_then(|spec| spec.classification_table.clone());
     let artifacts = match persist_artifacts(
         &request.output_root,
-        &request.repo_path,
+        &repo_path,
         &metadata,
         &bugs_markdown,
         &api_entries_for_persist,
@@ -2912,20 +3694,23 @@ pub async fn run_security_review(
     .await
     {
         Ok(paths) => {
-            record(format!(
-                "Artifacts written to {}",
-                request.output_root.display()
-            ));
-            if let Some(ref report) = paths.report_path {
-                record(format!("  • Report markdown: {}", report.display()));
-            }
-            if let Some(ref html) = paths.report_html_path {
-                record(format!("  • Report HTML: {}", html.display()));
-            }
+            record(
+                &mut logs,
+                format!("Artifacts written to {}", request.output_root.display()),
+            );
+            checkpoint.bug_snapshot_path = Some(paths.snapshot_path.clone());
+            checkpoint.bugs_path = Some(paths.bugs_path.clone());
+            checkpoint.report_path = paths.report_path.clone();
+            checkpoint.report_html_path = paths.report_html_path.clone();
+            checkpoint.api_overview_path = paths.api_overview_path.clone();
+            checkpoint.classification_json_path = paths.classification_json_path.clone();
+            checkpoint.classification_table_path = paths.classification_table_path.clone();
+            checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+            persist_checkpoint(&mut checkpoint, &mut logs);
             paths
         }
         Err(err) => {
-            record(format!("Failed to write artifacts: {err}"));
+            record(&mut logs, format!("Failed to write artifacts: {err}"));
             return Err(SecurityReviewFailure {
                 message: format!("Failed to write artifacts: {err}"),
                 logs,
@@ -2933,6 +3718,9 @@ pub async fn run_security_review(
         }
     };
     plan_tracker.mark_complete(SecurityReviewPlanStep::AssembleReport);
+    checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+    checkpoint.status = SecurityReviewCheckpointStatus::Complete;
+    persist_checkpoint(&mut checkpoint, &mut logs);
 
     let elapsed = overall_start.elapsed();
     let elapsed_display = fmt_elapsed_compact(elapsed.as_secs());
@@ -2942,32 +3730,57 @@ pub async fn run_security_review(
     let mut estimated_cost = None;
     let tool_summary = metrics_snapshot.tool_call_summary();
     let wait_display = fmt_elapsed_compact(rate_limit_wait.as_secs());
-    record(format!(
-        "Security review duration: {elapsed_display} (rate-limit backoff: {wait_display}; model calls: {model_calls}; tool calls: {tool_summary}).",
-        model_calls = metrics_snapshot.model_calls,
-    ));
+    record(
+        &mut logs,
+        format!(
+            "Security review duration: {elapsed_display} (rate-limit backoff: {wait_display}; model calls: {model_calls}; tool calls: {tool_summary}).",
+            model_calls = metrics_snapshot.model_calls,
+        ),
+    );
 
     if !token_usage.is_zero() {
-        record(FinalOutput::from(token_usage.clone()).to_string());
+        record(
+            &mut logs,
+            FinalOutput::from(token_usage.clone()).to_string(),
+        );
         match fetch_openrouter_pricing(&model_client, &request.model).await {
             Ok(Some(pricing)) => {
                 let cost = compute_cost_breakdown(&token_usage, &pricing);
-                record(format!("Estimated model cost: ${:.4}.", cost.total));
+                record(
+                    &mut logs,
+                    format!("Estimated model cost: ${:.4}.", cost.total),
+                );
                 estimated_cost = Some(cost.total);
             }
             Ok(None) => {
-                record(format!(
-                    "Pricing data for model {} not found via OpenRouter; skipping cost estimate.",
-                    request.model
-                ));
+                record(
+                    &mut logs,
+                    format!(
+                        "Pricing data for model {} not found via OpenRouter; skipping cost estimate.",
+                        request.model
+                    ),
+                );
             }
             Err(err) => {
-                record(format!(
-                    "Failed to fetch pricing for model {}: {err}",
-                    request.model
-                ));
+                record(
+                    &mut logs,
+                    format!("Failed to fetch pricing for model {}: {err}", request.model),
+                );
             }
         }
+    }
+
+    if let Some(report_path) = artifacts.report_path.as_ref() {
+        record(
+            &mut logs,
+            format!("Report markdown: {}", report_path.display()),
+        );
+    }
+    if let Some(report_html_path) = artifacts.report_html_path.as_ref() {
+        record(
+            &mut logs,
+            format!("Report HTML: {}", report_html_path.display()),
+        );
     }
     // Omit redundant completion log; the UI presents a follow-up line.
 
@@ -3518,12 +4331,28 @@ async fn generate_specs(
         .collect();
     directory_candidates.sort_by(|a, b| a.1.cmp(&b.1));
 
-    let filtered_dirs = match filter_spec_directories(
+    let mut heuristically_filtered: Vec<(PathBuf, String)> = Vec::new();
+    for (path, label) in &directory_candidates {
+        if is_spec_dir_likely_low_signal(path) {
+            if let Some(tx) = progress_sender.as_ref() {
+                tx.send(AppEvent::SecurityReviewLog(format!(
+                    "Heuristic skip for spec dir {label} (tests/utils/scripts)."
+                )));
+            }
+        } else {
+            heuristically_filtered.push((path.clone(), label.clone()));
+        }
+    }
+    if heuristically_filtered.is_empty() {
+        heuristically_filtered = directory_candidates.clone();
+    }
+
+    let mut filtered_dirs = match filter_spec_directories(
         client,
         provider,
         auth,
         repo_root,
-        &directory_candidates,
+        &heuristically_filtered,
         metrics.clone(),
     )
     .await
@@ -3547,6 +4376,23 @@ async fn generate_specs(
             directory_candidates.clone()
         }
     };
+
+    let (preferred_dirs, dropped) = prune_low_signal_spec_dirs(&filtered_dirs);
+    if !preferred_dirs.is_empty() {
+        if let Some(tx) = progress_sender.as_ref() {
+            for label in &dropped {
+                tx.send(AppEvent::SecurityReviewLog(format!(
+                    "Skipping specification for {label} (low-signal helper/migration dir)."
+                )));
+            }
+        }
+        for label in &dropped {
+            logs.push(format!(
+                "Skipping specification for {label} (low-signal helper/migration dir)."
+            ));
+        }
+        filtered_dirs = preferred_dirs;
+    }
 
     let normalized: Vec<PathBuf> = if filtered_dirs.is_empty() {
         directory_candidates
@@ -4718,10 +5564,6 @@ async fn filter_spec_directories(
     candidates: &[(PathBuf, String)],
     metrics: Arc<ReviewMetrics>,
 ) -> Result<Vec<(PathBuf, String)>, SecurityReviewFailure> {
-    if candidates.len() <= SPEC_DIR_FILTER_TARGET {
-        return Ok(candidates.to_vec());
-    }
-
     let repository_label = display_path_for(repo_root, repo_root);
     let mut prompt = String::new();
     prompt.push_str(&format!("Repository root: {repository_label}\n\n"));
@@ -10491,7 +11333,8 @@ async fn call_model(
     metrics: Arc<ReviewMetrics>,
     temperature: f32,
 ) -> Result<ModelCallOutput, String> {
-    let max_attempts = provider.request_max_retries();
+    // Ensure multiple retries for transient issues like rate limits (5 total attempts minimum).
+    let max_attempts = provider.request_max_retries().max(4);
     let mut attempt_errors: Vec<String> = Vec::new();
 
     for attempt in 0..=max_attempts {
@@ -10549,7 +11392,12 @@ async fn call_model(
                     );
                     sleep(total_delay).await;
                 } else {
-                    sleep(default_retry_backoff(attempt + 1)).await;
+                    let base = default_retry_backoff(attempt + 1);
+                    let jitter_ms = rand::random_range(250..=750);
+                    let jitter = Duration::from_millis(jitter_ms);
+                    let total_delay = base.saturating_add(jitter);
+                    metrics.record_rate_limit_wait(total_delay);
+                    sleep(total_delay).await;
                 }
             }
         }

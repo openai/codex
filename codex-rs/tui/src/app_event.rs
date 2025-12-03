@@ -194,6 +194,7 @@ pub(crate) enum AppEvent {
         include_paths: Vec<String>,
         scope_prompt: Option<String>,
         force_new: bool,
+        resume_from: Option<PathBuf>,
     },
 
     /// Resume a previously generated security review from disk.

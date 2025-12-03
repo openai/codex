@@ -821,12 +821,14 @@ impl App {
                 include_paths,
                 scope_prompt,
                 force_new,
+                resume_from,
             } => {
                 self.chat_widget.start_security_review(
                     mode,
                     include_paths,
                     scope_prompt,
                     force_new,
+                    resume_from,
                 );
             }
             AppEvent::ResumeSecurityReview {

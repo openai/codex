@@ -35,6 +35,7 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
 use codex_tui::SecurityReviewMode;
 use codex_tui::SecurityReviewRequest;
+use codex_tui::latest_running_review_candidate;
 use codex_tui::prepare_security_review_output_root;
 use codex_tui::run_security_review;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -330,13 +331,35 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         config.cli_auth_credentials_store_mode,
     );
     if let Some(review_args) = parse_security_review_command(&prompt, &default_cwd)? {
-        let output_root = prepare_security_review_output_root(&default_cwd)?;
+        let (output_root, include_paths, scope_display_paths, mode, resume_checkpoint) =
+            if review_args.resume {
+                if let Some(candidate) = latest_running_review_candidate(&default_cwd) {
+                    (
+                        candidate.output_root.clone(),
+                        Vec::new(),
+                        Vec::new(),
+                        review_args.mode,
+                        Some(candidate.checkpoint.clone()),
+                    )
+                } else {
+                    eprintln!("No in-progress security review found to resume.");
+                    std::process::exit(1);
+                }
+            } else {
+                (
+                    prepare_security_review_output_root(&default_cwd)?,
+                    review_args.include_paths,
+                    review_args.scope_display_paths,
+                    review_args.mode,
+                    None,
+                )
+            };
         let request = SecurityReviewRequest {
             repo_path: default_cwd.clone(),
-            include_paths: review_args.include_paths,
-            scope_display_paths: review_args.scope_display_paths,
+            include_paths,
+            scope_display_paths,
             output_root: output_root.clone(),
-            mode: review_args.mode,
+            mode,
             include_spec_in_bug_analysis: true,
             triage_model: config.review_model.clone(),
             model: config.model.clone(),
@@ -351,6 +374,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             })),
             skip_auto_scope_confirmation: true,
             auto_scope_prompt: review_args.auto_scope_prompt,
+            resume_checkpoint,
         };
 
         match run_security_review(request).await {
@@ -508,6 +532,7 @@ struct SecurityReviewCliArgs {
     include_paths: Vec<PathBuf>,
     scope_display_paths: Vec<String>,
     auto_scope_prompt: Option<String>,
+    resume: bool,
 }
 
 fn parse_security_review_command(
@@ -527,6 +552,7 @@ fn parse_security_review_command(
     let mut mode = SecurityReviewMode::Full;
     let mut raw_paths: Vec<String> = Vec::new();
     let mut auto_scope_prompt: Option<String> = None;
+    let mut resume = false;
 
     let mut iter = tokens.into_iter();
     // Skip the command token.
@@ -565,6 +591,9 @@ fn parse_security_review_command(
                     auto_scope_prompt = Some(trimmed_prompt.to_string());
                 }
             }
+            "resume" | "--resume" => {
+                resume = true;
+            }
             other if other.starts_with("--") => {
                 return Err(anyhow::anyhow!(
                     "Unknown flag `{other}` for /secreview command."
@@ -590,6 +619,7 @@ fn parse_security_review_command(
         include_paths,
         scope_display_paths,
         auto_scope_prompt,
+        resume,
     }))
 }
 

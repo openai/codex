@@ -110,7 +110,9 @@ use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
+use crate::security_review::RunningSecurityReviewCandidate;
 use crate::security_review::SECURITY_REVIEW_FOLLOW_UP_MARKER;
+use crate::security_review::SecurityReviewCheckpointStatus;
 use crate::security_review::SecurityReviewFailure;
 use crate::security_review::SecurityReviewLogSink;
 use crate::security_review::SecurityReviewMetadata;
@@ -125,6 +127,8 @@ use crate::status::RateLimitSnapshotDisplay;
 use crate::status_indicator_widget::fmt_elapsed_compact;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+use time::OffsetDateTime;
+use time::macros::format_description;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -433,15 +437,45 @@ fn build_percent_prefix(percent: u8) -> String {
     format!("{pct}% {bar} ")
 }
 
+fn humanize_age(duration: time::Duration) -> Option<String> {
+    let secs = duration.whole_seconds();
+    if secs < 0 {
+        return None;
+    }
+    let minutes = secs / 60;
+    let hours = minutes / 60;
+    let days = hours / 24;
+    let label = if days > 0 {
+        format!("{days} day{} ago", if days == 1 { "" } else { "s" })
+    } else if hours > 0 {
+        format!("{hours}h ago")
+    } else if minutes > 0 {
+        format!("{minutes}m ago")
+    } else {
+        format!("{secs}s ago")
+    };
+    Some(label)
+}
+
+fn parse_timestamp_from_folder(folder: &str) -> Option<OffsetDateTime> {
+    let fmt = format_description!("[year][month][day]-[hour][minute][second]");
+    OffsetDateTime::parse(folder, &fmt).ok()
+}
+
 #[derive(Clone)]
 struct SecurityReviewResumeCandidate {
     folder_name: String,
     output_root: PathBuf,
     metadata: SecurityReviewMetadata,
+    age_label: String,
 }
 
-fn latest_security_review_candidate(storage_root: &Path) -> Option<SecurityReviewResumeCandidate> {
-    let entries = fs::read_dir(storage_root).ok()?;
+fn completed_security_review_candidates(storage_root: &Path) -> Vec<SecurityReviewResumeCandidate> {
+    let entries = match fs::read_dir(storage_root) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+    let now = time::OffsetDateTime::now_utc();
     let mut candidates: Vec<(String, SecurityReviewResumeCandidate)> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
@@ -457,35 +491,51 @@ fn latest_security_review_candidate(storage_root: &Path) -> Option<SecurityRevie
             Ok(meta) => meta,
             Err(_) => continue,
         };
+        let snapshot_bytes = fs::read(&snapshot_path).ok();
+        let generated_at = snapshot_bytes.and_then(|bytes| {
+            serde_json::from_slice::<serde_json::Value>(&bytes)
+                .ok()
+                .and_then(|value| value.get("generated_at").cloned())
+                .and_then(|raw| serde_json::from_value::<time::OffsetDateTime>(raw).ok())
+        });
         let folder_name = entry.file_name().into_string().unwrap_or_else(|_| {
             path.file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("latest")
                 .to_string()
         });
+        let folder_ts = parse_timestamp_from_folder(&folder_name);
+        let age_label = generated_at
+            .or(folder_ts)
+            .and_then(|ts| humanize_age(now - ts))
+            .unwrap_or_else(|| format!("unknown age (folder: {folder_name})"));
         candidates.push((
             folder_name.clone(),
             SecurityReviewResumeCandidate {
                 folder_name,
                 output_root: path,
                 metadata,
+                age_label,
             },
         ));
     }
     if candidates.is_empty() {
-        return None;
+        return Vec::new();
     }
     candidates.sort_by(|a, b| b.0.cmp(&a.0));
-    let mut candidate = candidates.into_iter().next().map(|(_, c)| c)?;
-    if candidate.folder_name.is_empty() {
-        candidate.folder_name = candidate
-            .output_root
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("latest")
-            .to_string();
+    let mut deduped: Vec<SecurityReviewResumeCandidate> = Vec::new();
+    for (_, mut candidate) in candidates {
+        if candidate.folder_name.is_empty() {
+            candidate.folder_name = candidate
+                .output_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("latest")
+                .to_string();
+        }
+        deduped.push(candidate);
     }
-    Some(candidate)
+    deduped
 }
 
 struct SecurityReviewContext {
@@ -541,38 +591,13 @@ impl ChatWidget {
         mode: SecurityReviewMode,
         include_paths: Vec<String>,
         scope_prompt: Option<String>,
-        candidate: SecurityReviewResumeCandidate,
+        candidates: Vec<SecurityReviewResumeCandidate>,
     ) {
         let repo_path = self.config.cwd.clone();
-        let display_path = display_path_for(&candidate.output_root, &repo_path);
-        let scope_summary = if candidate.metadata.scope_paths.is_empty() {
-            "entire repository".to_string()
-        } else {
-            candidate.metadata.scope_paths.join(", ")
-        };
-
-        let mut items: Vec<SelectionItem> = Vec::new();
-        let resume_candidate = candidate;
-        items.push(SelectionItem {
-            name: format!("Resume latest review ({})", resume_candidate.folder_name),
-            description: Some(format!(
-                "Mode: {} • Scope: {}",
-                resume_candidate.metadata.mode.as_str(),
-                scope_summary
-            )),
-            actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::ResumeSecurityReview {
-                    output_root: resume_candidate.output_root.clone(),
-                    metadata: resume_candidate.metadata.clone(),
-                });
-            })],
-            dismiss_on_select: true,
-            search_value: Some(display_path.clone()),
-            ..Default::default()
-        });
 
         let include_paths_for_retry = include_paths;
         let scope_prompt_for_retry = scope_prompt;
+        let mut items: Vec<SelectionItem> = Vec::new();
         items.push(SelectionItem {
             name: "Start a new security review".to_string(),
             description: Some("Create a fresh report".to_string()),
@@ -582,14 +607,117 @@ impl ChatWidget {
                     include_paths: include_paths_for_retry.clone(),
                     scope_prompt: scope_prompt_for_retry.clone(),
                     force_new: true,
+                    resume_from: None,
                 });
             })],
             dismiss_on_select: true,
             ..Default::default()
         });
 
+        for candidate in candidates {
+            let display_path = display_path_for(&candidate.output_root, &repo_path);
+            let scope_summary = if candidate.metadata.scope_paths.is_empty() {
+                "entire repository".to_string()
+            } else {
+                candidate.metadata.scope_paths.join(", ")
+            };
+            let age = candidate.age_label.clone();
+            items.push(SelectionItem {
+                name: format!("Resume {}", candidate.folder_name),
+                description: Some(format!(
+                    "Mode: {} • Scope: {} • Age: {}",
+                    candidate.metadata.mode.as_str(),
+                    scope_summary,
+                    age
+                )),
+                actions: vec![Box::new(move |tx: &AppEventSender| {
+                    tx.send(AppEvent::ResumeSecurityReview {
+                        output_root: candidate.output_root.clone(),
+                        metadata: candidate.metadata.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                search_value: Some(display_path.clone()),
+                ..Default::default()
+            });
+        }
+
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Existing security review found".to_string()),
+            title: Some("Existing security review(s) found".to_string()),
+            subtitle: Some("Pick a completed review to resume or start fresh".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn prompt_running_security_review_resume(
+        &mut self,
+        mode: SecurityReviewMode,
+        include_paths: Vec<String>,
+        scope_prompt: Option<String>,
+        candidate: RunningSecurityReviewCandidate,
+    ) {
+        let repo_path = self.config.cwd.clone();
+        let display_path = display_path_for(&candidate.output_root, &repo_path);
+        let scope_summary = if candidate.checkpoint.scope_display_paths.is_empty() {
+            "entire repository".to_string()
+        } else {
+            candidate.checkpoint.scope_display_paths.join(", ")
+        };
+        let step_summary = candidate
+            .checkpoint
+            .plan_statuses
+            .iter()
+            .find(|(_, status)| matches!(status, StepStatus::InProgress))
+            .map(|(slug, _)| slug.clone())
+            .or_else(|| candidate.checkpoint.last_log.clone())
+            .unwrap_or_else(|| "pending".to_string());
+
+        let include_paths_for_retry = include_paths;
+        let scope_prompt_for_retry = scope_prompt;
+        let mut items: Vec<SelectionItem> = Vec::new();
+        items.push(SelectionItem {
+            name: "Start a new security review".to_string(),
+            description: Some("Create a fresh report".to_string()),
+            actions: vec![Box::new(move |tx: &AppEventSender| {
+                tx.send(AppEvent::StartSecurityReview {
+                    mode,
+                    include_paths: include_paths_for_retry.clone(),
+                    scope_prompt: scope_prompt_for_retry.clone(),
+                    force_new: true,
+                    resume_from: None,
+                });
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        let resume_candidate = candidate;
+        items.push(SelectionItem {
+            name: "Resume in-progress security review".to_string(),
+            description: Some(format!(
+                "Mode: {} • Scope: {} • Step: {}",
+                resume_candidate.checkpoint.mode.as_str(),
+                scope_summary,
+                step_summary
+            )),
+            actions: vec![Box::new(move |tx: &AppEventSender| {
+                tx.send(AppEvent::StartSecurityReview {
+                    mode: resume_candidate.checkpoint.mode,
+                    include_paths: Vec::new(),
+                    scope_prompt: None,
+                    force_new: false,
+                    resume_from: Some(resume_candidate.output_root.clone()),
+                });
+            })],
+            dismiss_on_select: true,
+            search_value: Some(display_path.clone()),
+            ..Default::default()
+        });
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("In-progress security review found".to_string()),
             subtitle: Some(format!("Latest output at {display_path}")),
             footer_hint: Some(standard_popup_hint_line()),
             items,
@@ -3508,6 +3636,7 @@ impl ChatWidget {
                     include_paths: Vec::new(),
                     scope_prompt: None,
                     force_new: false,
+                    resume_from: None,
                 });
             })],
             dismiss_on_select: true,
@@ -3523,6 +3652,7 @@ impl ChatWidget {
                     include_paths: Vec::new(),
                     scope_prompt: None,
                     force_new: false,
+                    resume_from: None,
                 });
             })],
             dismiss_on_select: true,
@@ -3562,10 +3692,11 @@ impl ChatWidget {
 
     pub(crate) fn start_security_review(
         &mut self,
-        mode: SecurityReviewMode,
+        mut mode: SecurityReviewMode,
         include_paths: Vec<String>,
         scope_prompt: Option<String>,
         force_new: bool,
+        resume_from: Option<PathBuf>,
     ) {
         if self.bottom_pane.is_task_running() || self.security_review_context.is_some() {
             self.add_error_message(
@@ -3584,16 +3715,89 @@ impl ChatWidget {
             return;
         }
 
-        let storage_root = crate::security_review_storage_root(&repo_path);
-        if !force_new && let Some(candidate) = latest_security_review_candidate(&storage_root) {
-            self.prompt_security_review_resume(mode, include_paths, scope_prompt, candidate);
+        if resume_from.is_none()
+            && !force_new
+            && let Some(candidate) =
+                crate::security_review::latest_running_review_candidate(&repo_path)
+        {
+            self.prompt_running_security_review_resume(
+                mode,
+                include_paths,
+                scope_prompt,
+                candidate,
+            );
             return;
+        }
+
+        let storage_root = crate::security_review_storage_root(&repo_path);
+        if resume_from.is_none() && !force_new {
+            let completed = completed_security_review_candidates(&storage_root);
+            if !completed.is_empty() {
+                self.prompt_security_review_resume(mode, include_paths, scope_prompt, completed);
+                return;
+            }
         }
 
         self.clear_security_review_follow_up();
 
         let mut resolved_paths: Vec<PathBuf> = Vec::new();
         let mut display_paths: Vec<String> = Vec::new();
+        let resume_checkpoint = resume_from
+            .as_ref()
+            .and_then(|path| crate::security_review::load_checkpoint(path));
+        if let Some(cp) = resume_checkpoint.as_ref() {
+            mode = cp.mode;
+        }
+        if let Some(path) = resume_from.as_ref() {
+            if !path.exists() {
+                self.add_error_message(format!(
+                    "Security review output path {} no longer exists.",
+                    path.display()
+                ));
+                return;
+            }
+            if resume_checkpoint.is_none() {
+                self.add_error_message(format!("No checkpoint found at {}.", path.display()));
+                return;
+            }
+            if let Some(cp) = resume_checkpoint.as_ref() {
+                display_paths = cp.scope_display_paths.clone();
+                resolved_paths = cp.include_paths.iter().map(PathBuf::from).collect();
+            }
+        } else if !include_paths.is_empty() {
+            for raw in &include_paths {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                let candidate = if Path::new(trimmed).is_absolute() {
+                    PathBuf::from(trimmed)
+                } else {
+                    repo_path.join(trimmed)
+                };
+
+                if !candidate.exists() {
+                    self.add_error_message(format!(
+                        "Path `{}` was not found within {}.",
+                        trimmed,
+                        repo_path.display()
+                    ));
+                    return;
+                }
+
+                let canonical = candidate.canonicalize().unwrap_or(candidate.clone());
+                resolved_paths.push(canonical.clone());
+                display_paths.push(display_path_for(&canonical, &repo_path));
+            }
+
+            if resolved_paths.is_empty() {
+                self.add_error_message(
+                    "No valid paths were provided for the security review.".to_string(),
+                );
+                return;
+            }
+        }
 
         if !include_paths.is_empty() {
             for raw in include_paths {
@@ -3630,22 +3834,6 @@ impl ChatWidget {
             }
         }
 
-        let skip_auto_scope_confirmation = false;
-
-        let context_paths = display_paths.clone();
-        // Do not echo the auto-scope prompt into the scope list; keep the header concise.
-
-        let output_root = match crate::prepare_security_review_output_root(&repo_path) {
-            Ok(path) => path,
-            Err(err) => {
-                self.add_error_message(format!(
-                    "Failed to prepare security review output directory {}: {err}",
-                    storage_root.display()
-                ));
-                return;
-            }
-        };
-
         let log_sink = log_dir(&self.config).ok().and_then(|dir| {
             if fs::create_dir_all(&dir).is_err() {
                 return None;
@@ -3653,6 +3841,52 @@ impl ChatWidget {
             let path = dir.join("sec-review.log");
             SecurityReviewLogSink::new(&path).map(Arc::new).ok()
         });
+
+        if let Some(cp) = resume_checkpoint.as_ref()
+            && cp.status == SecurityReviewCheckpointStatus::Complete
+        {
+            match crate::security_review::resume_completed_review_from_checkpoint(
+                cp.clone(),
+                Some(self.app_event_tx.clone()),
+                log_sink,
+            ) {
+                Ok(result) => {
+                    self.on_security_review_complete(result);
+                }
+                Err(error) => {
+                    self.on_security_review_failed(error);
+                }
+            }
+            return;
+        }
+
+        let skip_auto_scope_confirmation = resume_from.is_some();
+
+        let context_paths = if let Some(cp) = resume_checkpoint.as_ref() {
+            if cp.scope_display_paths.is_empty() {
+                Vec::new()
+            } else {
+                cp.scope_display_paths.clone()
+            }
+        } else {
+            display_paths.clone()
+        };
+        // Do not echo the auto-scope prompt into the scope list; keep the header concise.
+
+        let output_root = if let Some(path) = resume_from.clone() {
+            path
+        } else {
+            match crate::prepare_security_review_output_root(&repo_path) {
+                Ok(path) => path,
+                Err(err) => {
+                    self.add_error_message(format!(
+                        "Failed to prepare security review output directory {}: {err}",
+                        storage_root.display()
+                    ));
+                    return;
+                }
+            }
+        };
 
         self.bottom_pane.set_task_running(true);
         self.bottom_pane
@@ -3664,26 +3898,41 @@ impl ChatWidget {
             context_paths.join(", ")
         };
 
-        self.add_info_message(
+        let banner = if resume_from.is_some() {
             if context_paths.is_empty() {
-                format!(">> Security review started (mode: {}) <<", mode.as_str())
+                format!(">> Resuming security review (mode: {}) <<", mode.as_str())
             } else {
                 format!(
-                    ">> Security review started (mode: {}, scope: {}) <<",
+                    ">> Resuming security review (mode: {}, scope: {}) <<",
                     mode.as_str(),
                     scope_text
                 )
-            },
-            None,
-        );
+            }
+        } else if context_paths.is_empty() {
+            format!(">> Security review started (mode: {}) <<", mode.as_str())
+        } else {
+            format!(
+                ">> Security review started (mode: {}, scope: {}) <<",
+                mode.as_str(),
+                scope_text
+            )
+        };
+
+        self.add_info_message(banner, None);
 
         self.security_review_context = Some(SecurityReviewContext {
             mode,
             include_paths: context_paths.clone(),
             output_root: output_root.clone(),
             repo_path: repo_path.clone(),
-            model: self.config.model.clone(),
-            provider_name: self.config.model_provider.name.clone(),
+            model: resume_checkpoint
+                .as_ref()
+                .map(|cp| cp.model.clone())
+                .unwrap_or_else(|| self.config.model.clone()),
+            provider_name: resume_checkpoint
+                .as_ref()
+                .map(|cp| cp.provider_name.clone())
+                .unwrap_or_else(|| self.config.model_provider.name.clone()),
             started_at: Instant::now(),
             last_log: None,
             thinking_lines: Vec::new(),
@@ -3693,9 +3942,13 @@ impl ChatWidget {
 
         // Enable auto-scope when a scope prompt is provided (options 3 and 4).
         // We annotate the prompt for both Full and Bugs modes.
-        let annotated_scope_prompt = scope_prompt
-            .as_ref()
-            .map(|prompt| annotate_scope_prompt(prompt.as_str()));
+        let annotated_scope_prompt = if let Some(cp) = resume_checkpoint.as_ref() {
+            cp.auto_scope_prompt.clone()
+        } else {
+            scope_prompt
+                .as_ref()
+                .map(|prompt| annotate_scope_prompt(prompt.as_str()))
+        };
 
         let request = SecurityReviewRequest {
             repo_path,
@@ -3715,6 +3968,7 @@ impl ChatWidget {
             progress_callback: None,
             skip_auto_scope_confirmation,
             auto_scope_prompt: annotated_scope_prompt,
+            resume_checkpoint,
         };
 
         let tx = self.app_event_tx.clone();
@@ -3785,6 +4039,7 @@ impl ChatWidget {
                     include_paths,
                     scope_prompt: scope_prompt_override,
                     force_new: false,
+                    resume_from: None,
                 });
             }),
         );
@@ -4231,24 +4486,6 @@ impl ChatWidget {
         if let Some(root) = output_root_display.as_ref() {
             tail_lines
                 .push(vec!["↳ ".into(), format!("Artifacts written to {root}").into()].into());
-            if let Some(md) = report_markdown_display.as_ref() {
-                tail_lines.push(
-                    vec![
-                        "↳ ".into(),
-                        format!("  • Report markdown: {}", md.as_str()).into(),
-                    ]
-                    .into(),
-                );
-            }
-            if let Some(html) = report_html_display.as_ref() {
-                tail_lines.push(
-                    vec![
-                        "↳ ".into(),
-                        format!("  • Report HTML: {}", html.as_str()).into(),
-                    ]
-                    .into(),
-                );
-            }
         }
 
         let find_log_line = |prefix: &str| -> Option<String> {

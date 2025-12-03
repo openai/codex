@@ -65,6 +65,79 @@ impl MermaidLinter {
             let trimmed = line.trim();
             let lowered = trimmed.to_lowercase();
 
+            let arrow_matches: Vec<_> = ARROW_RE.find_iter(line).collect();
+            let label_spans = compute_label_spans(line);
+            let filtered_arrows: Vec<_> = arrow_matches
+                .iter()
+                .cloned()
+                .filter(|m| {
+                    let start = m.start();
+                    let end = m.end();
+                    !label_spans.iter().any(|(a, b)| start >= *a && end <= *b)
+                        && !is_within_double_quotes(line, start, end)
+                })
+                .collect();
+            if filtered_arrows.len() > 1 {
+                let replacement = filtered_arrows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, m)| {
+                        let start = if i == 0 {
+                            0
+                        } else {
+                            filtered_arrows[i - 1].end()
+                        };
+                        let end = filtered_arrows
+                            .get(i + 1)
+                            .map(regex::Match::start)
+                            .unwrap_or_else(|| line.len());
+                        let source = line[start..m.start()].trim();
+                        let target = line[m.end()..end].trim();
+                        if source.is_empty() && target.is_empty() {
+                            return None;
+                        }
+                        let left = wrap_node_if_plain(source);
+                        let right = wrap_node_if_plain(target);
+                        let arrow = m.as_str().trim();
+                        Some(format!("{left} {arrow} {right}").trim().to_string())
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                issues.push(Issue::new(
+                    line_no,
+                    0,
+                    line.len(),
+                    "Multiple arrows on one line; splitting into separate edges.",
+                    Box::new(move |_| replacement.clone()),
+                ));
+                continue;
+            }
+            if let Some(single_arrow) = filtered_arrows.first() {
+                let right_side = line[single_arrow.end()..].trim();
+                let pipe_count = right_side.matches('|').count();
+                if pipe_count == 1 && right_side.starts_with('|') {
+                    let tail = right_side.trim_start_matches('|').trim();
+                    if let Some((label, target)) = tail.split_once(char::is_whitespace) {
+                        let cleaned_label = label.trim();
+                        let cleaned_target = target.trim();
+                        if !cleaned_label.is_empty() && !cleaned_target.is_empty() {
+                            let left = wrap_node_if_plain(line[..single_arrow.start()].trim());
+                            let arrow_text = single_arrow.as_str().trim();
+                            let replacement =
+                                format!("{left} {arrow_text}|{cleaned_label}| {cleaned_target}");
+                            issues.push(Issue::new(
+                                line_no,
+                                0,
+                                line.len(),
+                                "Arrow label missing closing pipe; inserted and separated target.",
+                                Box::new(move |_| replacement.clone()),
+                            ));
+                            continue;
+                        }
+                    }
+                }
+            }
+
             if lowered.starts_with("pie") {
                 in_pie = true;
                 in_diagram = true;
@@ -131,19 +204,17 @@ impl MermaidLinter {
             }
 
             if !in_sequence {
-                let label_spans = compute_label_spans(line);
-                for arrow in ARROW_RE.find_iter(line) {
+                for arrow in &filtered_arrows {
                     let start = arrow.start();
                     let end = arrow.end();
-                    if label_spans.iter().any(|(a, b)| start >= *a && end <= *b) {
+                    let arrow_text = arrow.as_str();
+                    let normalized = arrow_text.trim();
+                    if normalized.chars().any(|c| !matches!(c, '-' | '>')) {
                         continue;
                     }
-                    if is_within_double_quotes(line, start, end) {
-                        continue;
-                    }
-                    if arrow.as_str() != "-->" {
+                    if normalized != "-->" {
                         let message =
-                            format!("Inconsistent arrow style '{}'; use '-->'.", arrow.as_str());
+                            format!("Inconsistent arrow style '{arrow_text}'; use '-->'.");
                         issues.push(Issue::new(
                             line_no,
                             start,
@@ -352,6 +423,24 @@ impl MermaidLinter {
                         make_replace_span(group.start(), group.end(), sanitized),
                     ));
                 }
+            } else if !in_sequence && let Some(arrow) = filtered_arrows.first() {
+                let left = line[..arrow.start()].trim();
+                let right = line[arrow.end()..].trim();
+                let wrapped_left = wrap_node_if_plain(left);
+                let wrapped_right = wrap_node_if_plain(right);
+                if wrapped_left != left || wrapped_right != right {
+                    let arrow_text = arrow.as_str().trim();
+                    let replacement = format!("{wrapped_left} {arrow_text} {wrapped_right}")
+                        .trim()
+                        .to_string();
+                    issues.push(Issue::new(
+                        line_no,
+                        0,
+                        line.len(),
+                        "Wrapped node names with punctuation or spaces in quotes.",
+                        Box::new(move |_| replacement.clone()),
+                    ));
+                }
             }
         }
 
@@ -461,6 +550,16 @@ lazy_static! {
     );
 }
 
+fn wrap_node_if_plain(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.contains(['[', '(']) || NODE_ID_VALID_RE.is_match(trimmed) {
+        return trimmed.to_string();
+    }
+    let id = sanitize_node_id(trimmed);
+    let safe_label = trimmed.replace('"', "'");
+    format!("{id}[\"{safe_label}\"]")
+}
+
 fn sanitize_node_id(value: &str) -> String {
     let replaced = value
         .chars()
@@ -513,36 +612,6 @@ fn compute_label_spans(line: &str) -> Vec<(usize, usize)> {
         }
     }
     spans
-}
-
-fn leading_indent(haystack: &str, m: &regex::Match) -> String {
-    let start = m.start();
-    let line_start = haystack[..start]
-        .rfind('\n')
-        .map(|idx| idx.saturating_add(1))
-        .unwrap_or(0);
-    haystack[line_start..start]
-        .chars()
-        .take_while(|ch| ch.is_whitespace())
-        .collect()
-}
-
-fn indent_block(block: &str, indent: &str) -> String {
-    if indent.is_empty() {
-        return block.to_string();
-    }
-
-    block
-        .lines()
-        .map(|line| {
-            if line.is_empty() {
-                indent.to_string()
-            } else {
-                format!("{indent}{line}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn is_already_quoted(raw: &str) -> bool {
@@ -624,30 +693,25 @@ pub(crate) fn fix_mermaid_blocks(input: &str) -> String {
 
     let after_fenced = MERMAID_FENCE_RE
         .replace_all(input, |caps: &Captures| {
-            let Some(full_match) = caps.get(0) else {
+            let Some(_full_match) = caps.get(0) else {
                 return caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string();
             };
-            let indent = leading_indent(input, &full_match);
             let body = caps
                 .get(1)
                 .map(|m| m.as_str())
                 .unwrap_or("")
                 .trim_matches('\n');
-            let wrapped = lint_and_wrap(body);
-            if indent.is_empty() {
-                wrapped
-            } else {
-                indent_block(&wrapped, &indent)
-            }
+
+            // Always left-align mermaid fences to avoid excessive indentation in rendered diagrams.
+            lint_and_wrap(body)
         })
         .into_owned();
 
     let after_generic = GENERIC_FENCE_RE
         .replace_all(&after_fenced, |caps: &Captures| {
-            let Some(full_match) = caps.get(0) else {
+            let Some(_full_match) = caps.get(0) else {
                 return caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string();
             };
-            let indent = leading_indent(&after_fenced, &full_match);
             let lang = caps
                 .get(1)
                 .map(|m| m.as_str())
@@ -677,12 +741,7 @@ pub(crate) fn fix_mermaid_blocks(input: &str) -> String {
             .iter()
             .any(|prefix| head.starts_with(prefix))
             {
-                let wrapped = lint_and_wrap(body);
-                if indent.is_empty() {
-                    wrapped
-                } else {
-                    indent_block(&wrapped, &indent)
-                }
+                lint_and_wrap(body)
             } else {
                 caps.get(0)
                     .map(|m| m.as_str().to_string())
