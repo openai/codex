@@ -189,9 +189,6 @@ impl UnifiedExecSessionManager {
 
         // If the command completed during this call, emit an ExecCommandEnd via the emitter.
         if has_exited {
-            // Exit code should always be Some
-            sandboxing::check_sandboxing(sandbox_type, &text, exit_code.unwrap_or_default())?;
-
             let exit = response.exit_code.unwrap_or(-1);
             Self::emit_exec_end_from_context(
                 context,
@@ -205,6 +202,9 @@ impl UnifiedExecSessionManager {
                 Some(request.process_id),
             )
             .await;
+
+            // Exit code should always be Some
+            sandboxing::check_sandboxing(sandbox_type, &text, exit_code.unwrap_or_default())?;
         }
 
         Ok(response)
