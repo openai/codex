@@ -32,6 +32,10 @@ use tracing::info;
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct ExtraMetadata(pub HashMap<String, serde_json::Value>);
 
+fn empty_extra_metadata() -> ExtraMetadata {
+    ExtraMetadata(HashMap::new())
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct CollaborationInitAgentMetadata {
     message_tool_call_success: bool,
@@ -604,7 +608,7 @@ async fn handle_wait(
             message_tool_call_success: false,
             message_tool_call_error_should_penalize_model: true,
             is_wait_success_msg: Some(false),
-            extra: ExtraMetadata(HashMap::new()),
+            extra: empty_extra_metadata(),
         };
         let output = CollaborationWaitOutput {
             content: "max_duration must be non-negative".to_string(),
@@ -628,7 +632,7 @@ async fn handle_wait(
                 message_tool_call_success: false,
                 message_tool_call_error_should_penalize_model: true,
                 is_wait_success_msg: Some(false),
-                extra: ExtraMetadata(HashMap::new()),
+                extra: empty_extra_metadata(),
             };
             let output = CollaborationWaitOutput {
                 content: format!("unknown caller agent {}", caller_id.0),
@@ -671,7 +675,7 @@ async fn handle_wait(
             message_tool_call_success: false,
             message_tool_call_error_should_penalize_model: penalize,
             is_wait_success_msg: Some(false),
-            extra: ExtraMetadata(HashMap::new()),
+            extra: empty_extra_metadata(),
         };
         let content = if !invalid.is_empty() {
             format!(
@@ -899,7 +903,7 @@ async fn handle_close(
         let metadata = CollaborationCloseMetadata {
             message_tool_call_success: false,
             message_tool_call_error_should_penalize_model: true,
-            extra: ExtraMetadata(HashMap::new()),
+            extra: empty_extra_metadata(),
         };
         let output = CollaborationCloseOutput {
             content: format!("unknown caller agent {}", caller_id.0),
@@ -924,7 +928,7 @@ async fn handle_close(
         let metadata = CollaborationCloseMetadata {
             message_tool_call_success: false,
             message_tool_call_error_should_penalize_model: true,
-            extra: ExtraMetadata(HashMap::new()),
+            extra: empty_extra_metadata(),
         };
         let content = if invalid.is_empty() {
             "no valid agent indices provided to close".to_string()
@@ -943,21 +947,18 @@ async fn handle_close(
     }
 
     let all = collab.descendants(&targets);
-    let mut closed = Vec::new();
+    let mut closed_ids = Vec::new();
+    let mut closed_indices = Vec::new();
     for id in all {
         if let Some(agent) = collab.agent_mut(id) {
             agent.status = AgentLifecycleState::Closed;
-            closed.push(id.0);
+            closed_ids.push(id);
+            closed_indices.push(id.0);
         }
     }
 
     let mut extra = HashMap::new();
-    extra.insert("closed_agent_indices".to_string(), json!(closed));
-
-    let closed_for_summary = extra
-        .get("closed_agent_indices")
-        .cloned()
-        .unwrap_or(json!([]));
+    extra.insert("closed_agent_indices".to_string(), json!(closed_indices));
 
     let metadata = CollaborationCloseMetadata {
         message_tool_call_success: true,
@@ -965,26 +966,18 @@ async fn handle_close(
         extra: ExtraMetadata(extra),
     };
 
-    let content = format!("Closed {} agents (and their descendants).", closed.len());
+    let content = format!(
+        "Closed {} agents (and their descendants).",
+        closed_indices.len()
+    );
     let output = CollaborationCloseOutput { content, metadata };
     {
         let supervisor = session.ensure_collaboration_supervisor().await;
-        supervisor
-            .close_agents(
-                closed_for_summary
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|v| v.as_i64())
-                    .map(|v| AgentId(v as i32))
-                    .collect(),
-            )
-            .await;
+        supervisor.close_agents(closed_ids).await;
     }
     info!(
         "collaboration_close: caller={}, closed={:?}",
-        caller_id.0, closed
+        caller_id.0, closed_indices
     );
     serialize_function_output(&output, true)
 }
