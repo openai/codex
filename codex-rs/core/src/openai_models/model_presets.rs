@@ -209,7 +209,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     ]
 });
 
-pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
+pub(crate) fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
     PRESETS
         .iter()
         .filter(|preset| match auth_mode {
