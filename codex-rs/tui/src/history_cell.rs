@@ -660,11 +660,10 @@ pub(crate) fn new_session_info(
 
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
     } else {
-        if config.show_tooltips {
-            if let Some(tooltips) = tooltips::random_tooltip().map(TooltipHistoryCell::new) {
+        if config.show_tooltips
+            && let Some(tooltips) = tooltips::random_tooltip().map(TooltipHistoryCell::new) {
                 parts.push(Box::new(tooltips));
             }
-        }
         if config.model != model {
             let lines = vec![
                 "model changed:".magenta().bold().into(),
