@@ -199,7 +199,7 @@ impl ConversationManager {
     }
 
     pub async fn list_models(&self) -> Vec<ModelPreset> {
-        self.models_manager.available_models.clone()
+        self.models_manager.available_models.read().await.clone()
     }
 }
 
