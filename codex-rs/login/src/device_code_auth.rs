@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
+use crate::server::build_login_http_client;
 use std::io::Write;
 use std::io::{self};
 
@@ -150,7 +151,7 @@ fn print_colored_warning_device_code() {
 
 /// Full device code login flow.
 pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
-    let client = reqwest::Client::new();
+    let client = build_login_http_client()?;
     let base_url = opts.issuer.trim_end_matches('/');
     let api_base_url = format!("{}/api/accounts", opts.issuer.trim_end_matches('/'));
     print_colored_warning_device_code();
