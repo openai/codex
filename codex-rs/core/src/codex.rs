@@ -12,6 +12,7 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::features::Feature;
+use crate::features::Features;
 use crate::function_tool::FunctionCallError;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -175,6 +176,7 @@ impl Codex {
             .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
 
         let config = Arc::new(config);
+        let session_features = config.features.clone();
 
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -189,7 +191,6 @@ impl Codex {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            features: config.features.clone(),
             exec_policy,
             session_source,
         };
@@ -198,6 +199,7 @@ impl Codex {
         let session_source_clone = session_configuration.session_source.clone();
         let session = Session::new(
             session_configuration,
+            session_features,
             config.clone(),
             auth_manager.clone(),
             tx_event.clone(),
@@ -263,6 +265,9 @@ pub(crate) struct Session {
     conversation_id: ConversationId,
     tx_event: Sender<Event>,
     state: Mutex<SessionState>,
+    /// The set of enabled features should be invariant for the lifetime of the
+    /// session.
+    features: Features,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
@@ -343,8 +348,6 @@ pub(crate) struct SessionConfiguration {
     /// operate deterministically.
     cwd: PathBuf,
 
-    /// Set of feature flags for this session
-    features: Features,
     /// Execpolicy policy, applied only when enabled by feature flag.
     exec_policy: Arc<ExecPolicy>,
 
@@ -396,6 +399,7 @@ impl Session {
         otel_event_manager: &OtelEventManager,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
+        features: &Features,
         conversation_id: ConversationId,
         sub_id: String,
     ) -> TurnContext {
@@ -407,6 +411,7 @@ impl Session {
         per_turn_config.model_family = model_family.clone();
         per_turn_config.model_reasoning_effort = session_configuration.model_reasoning_effort;
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
+        per_turn_config.features = features.clone();
         if let Some(model_info) = get_model_info(&model_family) {
             per_turn_config.model_context_window = Some(model_info.context_window);
         }
@@ -429,7 +434,7 @@ impl Session {
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &config.features,
+            features,
         });
 
         TurnContext {
@@ -454,6 +459,7 @@ impl Session {
 
     async fn new(
         session_configuration: SessionConfiguration,
+        features: Features,
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
         tx_event: Sender<Event>,
@@ -515,7 +521,7 @@ impl Session {
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
-        for (alias, feature) in session_configuration.features.legacy_feature_usages() {
+        for (alias, feature) in features.legacy_feature_usages() {
             let canonical = feature.key();
             let summary = format!("`{alias}` is deprecated. Use `{canonical}` instead.");
             let details = if alias == canonical {
@@ -574,6 +580,7 @@ impl Session {
             conversation_id,
             tx_event: tx_event.clone(),
             state: Mutex::new(state),
+            features,
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -755,6 +762,7 @@ impl Session {
             &self.services.otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
+            &self.features,
             self.conversation_id,
             sub_id,
         );
@@ -1067,12 +1075,7 @@ impl Session {
     }
 
     pub async fn enabled(&self, feature: Feature) -> bool {
-        self.state
-            .lock()
-            .await
-            .session_configuration
-            .features
-            .enabled(feature)
+        self.features.enabled(feature)
     }
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
@@ -1828,7 +1831,7 @@ async fn spawn_review_thread(
     let review_model_family = find_family_for_model(&model)
         .unwrap_or_else(|| parent_turn_context.client.get_model_family());
     // For reviews, disable web_search and view_image regardless of global settings.
-    let mut review_features = config.features.clone();
+    let mut review_features = sess.features.clone();
     review_features
         .disable(crate::features::Feature::WebSearchRequest)
         .disable(crate::features::Feature::ViewImageTool);
@@ -1849,6 +1852,7 @@ async fn spawn_review_thread(
     per_turn_config.model_family = model_family.clone();
     per_turn_config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
     per_turn_config.model_reasoning_summary = ReasoningSummaryConfig::Detailed;
+    per_turn_config.features = review_features.clone();
     if let Some(model_info) = get_model_info(&model_family) {
         per_turn_config.model_context_window = Some(model_info.context_window);
     }
@@ -2079,14 +2083,8 @@ async fn run_turn(
         .supports_parallel_tool_calls;
 
     // TODO(jif) revert once testing phase is done.
-    let parallel_tool_calls = model_supports_parallel
-        && sess
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .features
-            .enabled(Feature::ParallelToolCalls);
+    let parallel_tool_calls =
+        model_supports_parallel && sess.enabled(Feature::ParallelToolCalls).await;
     let mut base_instructions = turn_context.base_instructions.clone();
     if parallel_tool_calls {
         static INSTRUCTIONS: &str = include_str!("../templates/parallel/instructions.md");
@@ -2462,7 +2460,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
     })
 }
 
-use crate::features::Features;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
@@ -2575,7 +2572,6 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            features: Features::default(),
             exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
@@ -2744,14 +2740,19 @@ mod tests {
     }
 
     pub(crate) fn make_session_and_context() -> (Session, TurnContext) {
+        make_session_and_context_with_features(Features::with_defaults())
+    }
+
+    fn make_session_and_context_with_features(features: Features) -> (Session, TurnContext) {
         let (tx_event, _rx_event) = async_channel::unbounded();
         let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = Config::load_from_base_config_with_overrides(
+        let mut config = Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
             codex_home.path().to_path_buf(),
         )
         .expect("load default test config");
+        config.features = features.clone();
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
         let otel_event_manager = otel_event_manager(conversation_id, config.as_ref());
@@ -2774,7 +2775,6 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            features: Features::default(),
             exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
@@ -2799,6 +2799,7 @@ mod tests {
             &otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
+            &features,
             conversation_id,
             "turn_id".to_string(),
         );
@@ -2807,6 +2808,7 @@ mod tests {
             conversation_id,
             tx_event,
             state: Mutex::new(state),
+            features,
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -2817,19 +2819,22 @@ mod tests {
 
     // Like make_session_and_context, but returns Arc<Session> and the event receiver
     // so tests can assert on emitted events.
-    pub(crate) fn make_session_and_context_with_rx() -> (
+    fn make_session_and_context_with_rx_and_features(
+        features: Features,
+    ) -> (
         Arc<Session>,
         Arc<TurnContext>,
         async_channel::Receiver<Event>,
     ) {
         let (tx_event, rx_event) = async_channel::unbounded();
         let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = Config::load_from_base_config_with_overrides(
+        let mut config = Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
             codex_home.path().to_path_buf(),
         )
         .expect("load default test config");
+        config.features = features.clone();
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
         let otel_event_manager = otel_event_manager(conversation_id, config.as_ref());
@@ -2852,7 +2857,6 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            features: Features::default(),
             exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
@@ -2877,6 +2881,7 @@ mod tests {
             &otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
+            &features,
             conversation_id,
             "turn_id".to_string(),
         ));
@@ -2885,6 +2890,7 @@ mod tests {
             conversation_id,
             tx_event,
             state: Mutex::new(state),
+            features,
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -2893,17 +2899,19 @@ mod tests {
         (session, turn_context, rx_event)
     }
 
+    pub(crate) fn make_session_and_context_with_rx() -> (
+        Arc<Session>,
+        Arc<TurnContext>,
+        async_channel::Receiver<Event>,
+    ) {
+        make_session_and_context_with_rx_and_features(Features::with_defaults())
+    }
+
     #[tokio::test]
     async fn record_model_warning_appends_user_message() {
-        let (session, turn_context) = make_session_and_context();
-
-        session
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .features
-            .enable(Feature::ModelWarnings);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ModelWarnings);
+        let (session, turn_context) = make_session_and_context_with_features(features);
 
         session
             .record_model_warning("too many unified exec sessions", &turn_context)
