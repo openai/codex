@@ -1,8 +1,8 @@
 use codex_app_server_protocol::AuthMode;
-use codex_protocol::available_models::ModelPreset;
-use codex_protocol::available_models::ModelUpgrade;
-use codex_protocol::available_models::ReasoningEffort;
-use codex_protocol::available_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelUpgrade;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use once_cell::sync::Lazy;
 
 pub const HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG: &str = "hide_gpt5_1_migration_prompt";
@@ -201,11 +201,11 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     ]
 });
 
-pub fn builtin_model_presets(auth_mode: AuthMode) -> Vec<ModelPreset> {
+pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
     PRESETS
         .iter()
         .filter(|preset| match auth_mode {
-            AuthMode::ApiKey => preset.show_in_picker && preset.id != "gpt-5.1-codex-max",
+            Some(AuthMode::ApiKey) => preset.show_in_picker && preset.id != "gpt-5.1-codex-max",
             _ => preset.show_in_picker,
         })
         .cloned()

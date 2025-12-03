@@ -120,15 +120,15 @@ use std::path::Path;
 use chrono::Local;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
-use codex_common::model_presets::ModelPreset;
-use codex_common::model_presets::builtin_model_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
+use codex_core::openai_models::model_presets::builtin_model_presets;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
+use codex_protocol::available_models::ModelPreset;
+use codex_protocol::available_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
@@ -1802,6 +1802,7 @@ impl ChatWidget {
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
+            | EventMsg::AvailableModels(_)
             | EventMsg::ReasoningRawContentDelta(_) => {}
         }
     }
@@ -2040,7 +2041,7 @@ impl ChatWidget {
         let description = if preset.description.is_empty() {
             Some("Uses fewer credits for upcoming turns.".to_string())
         } else {
-            Some(preset.description.to_string())
+            Some(preset.description)
         };
 
         let items = vec![
@@ -2176,9 +2177,9 @@ impl ChatWidget {
 
         if choices.len() == 1 {
             if let Some(effort) = choices.first().and_then(|c| c.stored) {
-                self.apply_model_and_effort(preset.model.to_string(), Some(effort));
+                self.apply_model_and_effort(preset.model, Some(effort));
             } else {
-                self.apply_model_and_effort(preset.model.to_string(), None);
+                self.apply_model_and_effort(preset.model, None);
             }
             return;
         }

@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
 use codex_common::approval_presets::ApprovalPreset;
-use codex_common::model_presets::ModelPreset;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
+use codex_protocol::available_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;

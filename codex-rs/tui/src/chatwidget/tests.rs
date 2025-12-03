@@ -5,8 +5,6 @@ use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_common::approval_presets::builtin_approval_presets;
-use codex_common::model_presets::ModelPreset;
-use codex_common::model_presets::ReasoningEffortPreset;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
@@ -46,6 +44,8 @@ use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::ConversationId;
+use codex_protocol::available_models::ModelPreset;
+use codex_protocol::available_models::ReasoningEffortPreset;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -1706,17 +1706,17 @@ fn reasoning_popup_shows_extra_high_with_space() {
 fn single_reasoning_option_skips_selection() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
-    static SINGLE_EFFORT: [ReasoningEffortPreset; 1] = [ReasoningEffortPreset {
+    let single_effort = vec![ReasoningEffortPreset {
         effort: ReasoningEffortConfig::High,
-        description: "Maximizes reasoning depth for complex or ambiguous problems",
+        description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
     }];
     let preset = ModelPreset {
-        id: "model-with-single-reasoning",
-        model: "model-with-single-reasoning",
-        display_name: "model-with-single-reasoning",
-        description: "",
+        id: "model-with-single-reasoning".to_string(),
+        model: "model-with-single-reasoning".to_string(),
+        display_name: "model-with-single-reasoning".to_string(),
+        description: "".to_string(),
         default_reasoning_effort: ReasoningEffortConfig::High,
-        supported_reasoning_efforts: &SINGLE_EFFORT,
+        supported_reasoning_efforts: single_effort,
         is_default: false,
         upgrade: None,
         show_in_picker: true,

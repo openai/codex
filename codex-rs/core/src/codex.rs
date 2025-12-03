@@ -126,12 +126,12 @@ use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
 use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::available_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
@@ -1475,7 +1475,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::review(&sess, &config, sub.id.clone(), review_request).await;
             }
             Op::ListModels => {
-                handlers::list_models(&sess, sub.id.clone(), sess.get_auth_mode()).await;
+                handlers::list_models(&sess, sub.id.clone(), Some(sess.get_auth_mode())).await;
             }
             _ => {} // Ignore unknown ops; enum is non_exhaustive to allow extensions.
         }
@@ -1498,8 +1498,8 @@ mod handlers {
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
     use codex_app_server_protocol::AuthMode;
-    use codex_protocol::available_models::AvailableModelsEvent;
     use codex_protocol::custom_prompts::CustomPrompt;
+    use codex_protocol::openai_models::AvailableModelsEvent;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -1813,7 +1813,7 @@ mod handlers {
         .await;
     }
 
-    pub async fn list_models(sess: &Arc<Session>, sub_id: String, auth_mode: AuthMode) {
+    pub async fn list_models(sess: &Arc<Session>, sub_id: String, auth_mode: Option<AuthMode>) {
         let models = builtin_model_presets(auth_mode);
         let event = Event {
             id: sub_id,
