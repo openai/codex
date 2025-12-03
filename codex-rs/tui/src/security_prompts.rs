@@ -138,23 +138,116 @@ You triage directories for a security review specification. Only choose director
 - If a directory looks like helper utils (path util, user util, lfs util) or only contains migrations/seeding, skip it unless it is the only place core logic lives.
 Respond with a newline-separated list containing only the directory paths chosen from the provided list. Respond with `ALL` if every directory should be included. Do not add quotes or extra commentary.
 "#;
-pub(crate) const SPEC_MARKDOWN_TEMPLATE: &str = "# Project Specification\n- Location: {target_label}\n- Prepared by: {model_name}\n- Date: {date}\n- In-scope paths:\n```\n{project_locations}\n```\n\n## Overview\nSummarize what the project delivers, who uses it, and why it matters. Call out the most security-relevant entry points.\n\n### Relevant Source Files\nList bullet points referencing the primary source directories or files (use inline code formatting) with a short note describing what each covers. Make sure the key areas of the scope appear here.\n\n## Interaction & Architecture Model\nDescribe how control and data move through the system. Tailor the narrative to the project type:\n- Services: show request routing, data stores, and external integrations.\n- SDKs/libraries: show host application calls into the library and any upstream services.\n- Clients/firmware: show local processes, platform APIs, and sync/telemetry paths.\nInclude a `mermaid flowchart TD` (or `flowchart LR`) that best represents those interactions. Label edges with the action or payload and highlight trust boundaries (grouping nodes or adding annotations is fine). If you add more than one diagram anywhere in the spec, insert a `title <descriptive name>` line inside each mermaid block so rendered output shows distinct labels. Finish with `Sources:` pointing to the code that backs the description.\n\n## Core Components\nOpen with a sentence or two describing the component landscape. When it clarifies relationships, include a compact `mermaid flowchart` that shows the major components/modules and their interactions.\n\nCreate `### <Component name>` subsections for roughly 5-8 components (map to services, crates/packages, critical subsystems, or hardware modules depending on the project). Within each subsection include bullet points covering:\n- Summary / primary responsibilities\n- Key dependencies, integrations, or hardware/software interfaces\n- Security-relevant behaviour or controls (validation, auth checks, rate limiting, sandboxing, etc.)\nEnd every subsection with a line that starts with `Sources:` referencing the supporting directories or modules. If a component does not exist for this architecture, omit the subsection. Do not add an extra, section-level `Sources:` block after listing the components; the per-component sources are sufficient.\n\n## Usage & Execution Flows\nDocument the critical workflows. For each important flow, create a `### <Flow name>` subsection that:\n- Explains the trigger and actors\n- Lists the main steps or states (bullets)\n- Includes a `mermaid sequenceDiagram` or flowchart grounded in real functions/handlers/commands\n- Ends with `Sources:` citing the relevant code\nIf authentication or authorization occurs, dedicate subsections to those flows; otherwise, state `- Not applicable (reason)`.\n\n## Configuration & Policy Model\nSummarize how runtime behaviour is configured (files, env vars, feature flags, build-time toggles, device settings). Mention validation routines, defaults, and how secrets or credentials enter the system. Include a small diagram or table when it helps. End with `Sources:`.\n\n## Runtime & Deployment Model\nOutline how the project is packaged and delivered (e.g., binaries, firmware images, mobile bundles, library artifacts), supported deployment modes, and operational differences that affect security. A compact flowchart or table is welcome. End with `Sources:`.\n\n## Security Controls\n### Authentication\nDetail identity providers, credential flows, session handling, and token management (or state `- Not applicable (reason)`). Include libraries or helpers used and finish with `Sources:`.\n\n### Authorization\nExplain enforcement points, policy evaluation, privilege separation, and escalation safeguards (or mark as not applicable). Include `Sources:`.\n\n### Auditing & Observability\nCover logging, metrics, traces, and alerting hooks used to monitor security-sensitive behaviour. Call out log redaction or PII handling. Include `Sources:`.\n\n## Trust Boundaries & Message Channels
-List the key trust boundaries (for example: browser ↔ service worker, host app ↔ SDK, microcontroller ↔ peripheral, client ↔ server, server ↔ external APIs). For each, note the data types crossing it, the transport/security guarantees (origin checks, auth, rate limits), and any validation or schema enforcement applied to messages. If you include more than one diagram in this section, add a brief introductory sentence and a `title <name>` line inside each mermaid block, and place each diagram in its own subsection with a one-line description so they are clearly labeled. End with `Sources:`.\n\n## API & Interfaces\nDescribe externally reachable or embeddable surfaces.\n\n### Server APIs\nProvide a markdown table with the exact columns:\n- endpoint path\n- authN method\n- authZ type\n- request parameters\n- example request (params, body, or method)\n- code location\n- parsing/validation logic (include auth/rate limiting/abuse controls if present)\nIf the project exposes no server APIs, write `- Not applicable (library/client-only)` (or similar) instead of a table.\n\n### Client/SDK APIs\nWhen the project ships a library, client SDK, CLI, mobile surface, or firmware commands, provide a table with columns:\n- api name (module.func, CLI command, or message)\n- module/package (or binary/component)\n- summary\n- parameters (omit if noisy)\n- returns / side effects (omit if noisy)\n- stability (public/official/internal/experimental)\n- code location\nIf there is no callable client surface, state `- Not applicable (reason)`.\n\n### Other Interfaces\nCapture message queues, hardware interfaces, scheduled jobs, or integrations that do not fit the tables above. Use bullets, note security expectations, and include `Sources:` when added.\n\n## Data Classification\nIdentify sensitive data types handled by the project and where they are stored or transmitted. Prefer markdown tables that consolidate the details (data type, sensitivity, storage location, retention, transport protections). End with `Sources:`.\n\n## Secrets, Error Handling, and Logging\nEnumerate required secrets (API keys, certificates, hardware tokens), how absence or invalid values fail, and any logging or error paths that could leak input or credentials. Mention rotation, storage, and masking practices. Include `Sources:`.\n\n## Operational Considerations\nSummarize infrastructure-as-code, build/deploy automation, background jobs or schedulers, scaling/resiliency patterns, device update mechanisms, and monitoring/alerting hooks that affect security posture. Close with `Sources:`.\n";
+pub(crate) const SPEC_MARKDOWN_TEMPLATE: &str = "# Project Specification
+- Location: {target_label}
+- Prepared by: {model_name}
+- Date: {date}
+- In-scope paths:
+```
+{project_locations}
+```
+
+## Overview
+Summarize what the project delivers, who uses it, and why it matters. Call out the most security-relevant entry points.
+
+### Relevant Source Files
+List bullet points referencing the primary source directories or files (use inline code formatting) with a short note describing what each covers. Make sure the key areas of the scope appear here.
+
+## Overall Architecture
+Describe how control and data move through the system. Tailor the narrative to the project type:
+- Services: show request routing, data stores, and external integrations.
+- SDKs/libraries: show host application calls into the library and any upstream services.
+- Clients/firmware: show local processes, platform APIs, and sync/telemetry paths.
+Include a `mermaid flowchart TD` (or `flowchart LR`) that shows only the core components and their compositions; if the system has many components, keep this diagram to the essential surfaces and push detailed visuals into the per-component sections below. Label edges with the action or payload and highlight trust boundaries (grouping nodes or adding annotations is fine). If you add more than one diagram anywhere in the spec, insert a `title <descriptive name>` line inside each mermaid block so rendered output shows distinct labels. Finish with `Sources:` pointing to the code that backs the description.
+
+## Core Components
+Open with a sentence or two describing the component landscape. When it clarifies relationships, include a compact `mermaid flowchart` that shows the major components/modules and their interactions.
+
+Create `### <Component name>` subsections for roughly 5-8 components (map to services, crates/packages, critical subsystems, or hardware modules depending on the project). Within each subsection include bullet points covering:
+- Primary responsibilities and scope (be concrete about behaviours and data handled)
+- Key dependencies, integrations, or hardware/software interfaces
+- Security-relevant behaviour or controls (validation, auth checks, rate limiting, sandboxing, etc.)
+Include a focused `mermaid flowchart` for this component when it helps show detail that would clutter the overall architecture diagram. End every subsection with a line that starts with `Sources:` referencing the supporting directories or modules. If a component does not exist for this architecture, omit the subsection. Do not add an extra, section-level `Sources:` block after listing the components; the per-component sources are sufficient.
+
+## Usage & Execution Flows
+Document the critical workflows. For each important flow, create a `### <Flow name>` subsection that:
+- Explains the trigger and actors
+- Lists the main steps or states (bullets)
+- Includes a `mermaid sequenceDiagram` or flowchart grounded in real functions/handlers/commands
+- Ends with `Sources:` citing the relevant code
+If authentication or authorization occurs, dedicate subsections to those flows; otherwise, state `- Not applicable (reason)`.
+
+## Configuration & Policy Model
+Summarize how runtime behaviour is configured (files, env vars, feature flags, build-time toggles, device settings). Mention validation routines, defaults, and how secrets or credentials enter the system. Include a small diagram or table when it helps. End with `Sources:`.
+
+## Runtime & Deployment Model
+Outline how the project is packaged and delivered (e.g., binaries, firmware images, mobile bundles, library artifacts), supported deployment modes, and operational differences that affect security. A compact flowchart or table is welcome. End with `Sources:`.
+
+## Security Controls
+### Authentication
+Detail identity providers, credential flows, session handling, and token management (or state `- Not applicable (reason)`). Include libraries or helpers used and finish with `Sources:`.
+
+### Authorization
+Explain enforcement points, policy evaluation, privilege separation, and escalation safeguards (or mark as not applicable). Include `Sources:`.
+
+### Auditing & Observability
+Cover logging, metrics, traces, and alerting hooks used to monitor security-sensitive behaviour. Call out log redaction or PII handling. Include `Sources:`.
+
+## Trust Boundaries & Message Channels
+List the key trust boundaries (for example: browser ↔ service worker, host app ↔ SDK, microcontroller ↔ peripheral, client ↔ server, server ↔ external APIs). For each, note the data types crossing it, the transport/security guarantees (origin checks, auth, rate limits), and any validation or schema enforcement applied to messages. If you include more than one diagram in this section, add a brief introductory sentence and a `title <name>` line inside each mermaid block, and place each diagram in its own subsection with a one-line description so they are clearly labeled. End with `Sources:`.
+
+## API & Interfaces
+Describe externally reachable or embeddable surfaces.
+
+### Server APIs
+Provide a markdown table with the exact columns:
+- endpoint path
+- authN method
+- authZ type
+- request parameters
+- example request (params, body, or method)
+- code location
+- parsing/validation logic (include auth/rate limiting/abuse controls if present)
+If the project exposes no server APIs, write `- Not applicable (library/client-only)` (or similar) instead of a table.
+
+### Client/SDK APIs
+When the project ships a library, client SDK, CLI, mobile surface, or firmware commands, provide a table with columns:
+- api name (module.func, CLI command, or message)
+- module/package (or binary/component)
+- summary
+- parameters (omit if noisy)
+- returns / side effects (omit if noisy)
+- stability (public/official/internal/experimental)
+- code location
+If there is no callable client surface, state `- Not applicable (reason)`.
+
+### Other Interfaces
+Capture message queues, hardware interfaces, scheduled jobs, or integrations that do not fit the tables above. Use bullets, note security expectations, and include `Sources:` when added.
+
+## Data Classification
+Identify sensitive data types handled by the project and where they are stored or transmitted. Prefer markdown tables that consolidate the details (data type, sensitivity, storage location, retention, transport protections). End with `Sources:`.
+
+## Secrets, Error Handling, and Logging
+Enumerate required secrets (API keys, certificates, hardware tokens), how absence or invalid values fail, and any logging or error paths that could leak input or credentials. Mention rotation, storage, and masking practices. Include `Sources:`.
+
+## Operational Considerations
+Summarize infrastructure-as-code, build/deploy automation, background jobs or schedulers, scaling/resiliency patterns, device update mechanisms, and monitoring/alerting hooks that affect security posture. Close with `Sources:`.
+";
 pub(crate) const SPEC_COMBINED_MARKDOWN_TEMPLATE: &str = r#"# Project Specification
 Provide a 2–3 sentence executive overview summarizing the system's purpose, primary users, and the highest-value assets or flows that matter for security.
 
 ## Relevant Source Files
 List bullet points for the key files and directories covered by the drafts. Use inline code formatting for paths (for example, `src/service.rs`) and briefly note what each covers. Ensure every draft's location label appears at least once.
 
-## Interaction & Architecture Model
-Provide a concise overview of how control and data move through the system, adapted to the project type (services, SDKs/libraries, clients/firmware). Include exactly one overarching `mermaid flowchart TD` (or `flowchart LR`) diagram here that captures the end-to-end interaction (no per-component or sequence diagrams in this section). Label edges with the action or payload being exchanged and call out trust boundaries inside the diagram (for example, group nodes with subgraphs or add text annotations). If the combined document includes other diagrams elsewhere, add a `title <descriptive label>` line inside each mermaid block so rendered output shows distinct titles. End with a `Sources:` line enumerating the supporting modules.
+## Overall Architecture
+Provide a concise overview of how control and data move through the system, adapted to the project type (services, SDKs/libraries, clients/firmware). Include exactly one overarching `mermaid flowchart TD` (or `flowchart LR`) diagram here that captures the end-to-end interaction (no per-component or sequence diagrams in this section). Keep this diagram to the core components and compositions; move detailed interactions into the per-component sections. Label edges with the action or payload being exchanged and call out trust boundaries inside the diagram (for example, group nodes with subgraphs or add text annotations). If the combined document includes other diagrams elsewhere, add a `title <descriptive label>` line inside each mermaid block so rendered output shows distinct titles. End with a `Sources:` line enumerating the supporting modules.
 
 ## Core Components
 Create `### <Component name>` subsections for the union of the 4–8 major components across drafts (services, packages, subsystems, or hardware modules as appropriate). Within each subsection, merge bullets covering:
-- Summary / primary responsibilities
+- Primary responsibilities and scope (be concrete about behaviours and data handled)
 - Key dependencies, integrations, or interfaces
 - Security-relevant behaviour or controls
-Include a compact `mermaid flowchart` when it clarifies interactions. End every subsection with a `Sources:` line referencing the supporting directories (prefer directories over individual file paths unless only files were cited).
+Include a compact `mermaid flowchart` when it clarifies interactions, and use it to show detail that would clutter the overall architecture diagram. End every subsection with a `Sources:` line referencing the supporting directories (prefer directories over individual file paths unless only files were cited).
 
 ## Usage & Execution Flows
 Merge the critical workflows from the drafts. Provide at least `### Authentication Flow` and `### Authorization Flow` when applicable; add other flow subsections as needed. For each flow, combine the steps, keep or merge mermaid diagrams (preserve multiple when they differ, adding descriptive titles), and finish with `Sources:` that cite every contributing draft.
@@ -214,6 +307,7 @@ Follow these rules:
 - The current file is provided in full. Analyze it first; do not issue broad searches for generic or dangerous keywords (e.g., "password", "token") unless you are tracing a concrete dataflow across files.
 - Use the search tools below to inspect additional in-scope files only when tracing data flows or confirming a hypothesis that clearly spans multiple files; cite the relevant variables, functions, and any validation or sanitization steps you discover.
 - Trace attacker-controlled inputs through the call graph to the ultimate sink. Highlight any sanitization or missing validation along the way.
+- Group variants that share the same root cause or control gap into one finding; list all affected paths/endpoints within that finding instead of emitting near-duplicates. When endpoints or code locations are unique but stem from the same issue, merge them into a single consolidated finding rather than dropping them.
 - Ignore unit tests, example scripts, or tooling unless they ship to production in this repo.
 - Only report real vulnerabilities that an attacker can trigger with meaningful impact. If none are found, respond with exactly `no bugs found` (no additional text).
 - Emphasize findings with concrete impact to infrastructure control, user data exposure, or financial loss; spell out the impact path.
