@@ -206,6 +206,117 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_list_fetches_until_limit_or_exhausted() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    // Newest 16 conversations belong to a different provider; the older 8 are the
+    // only ones that match the filter. We request 8 so the server must keep
+    // paging past the first two pages to reach the desired count.
+    for i in 0..24 {
+        let day = 30 - i;
+        let ts_file = format!("2025-03-{day:02}T12-00-00");
+        let ts_rfc = format!("2025-03-{day:02}T12:00:00Z");
+        let provider = if i < 16 {
+            "skip_provider"
+        } else {
+            "target_provider"
+        };
+        create_fake_rollout(
+            codex_home.path(),
+            &ts_file,
+            &ts_rfc,
+            "Hello",
+            Some(provider),
+            None,
+        )?;
+    }
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    // Request 8 threads for the target provider; the matches only start on the
+    // third page so we rely on pagination to reach the limit.
+    let ThreadListResponse { data, next_cursor } = list_threads(
+        &mut mcp,
+        None,
+        Some(8),
+        Some(vec!["target_provider".to_string()]),
+    )
+    .await?;
+    assert_eq!(
+        data.len(),
+        8,
+        "should keep paging until the requested count is filled"
+    );
+    assert!(
+        data.iter()
+            .all(|thread| thread.model_provider == "target_provider"),
+        "all returned threads must match the requested provider"
+    );
+    assert_eq!(
+        next_cursor, None,
+        "once the requested count is satisfied on the final page, nextCursor should be None"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_stops_when_not_enough_filtered_results_exist() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    // Only the last 7 conversations match the provider filter; we ask for 10 to
+    // ensure the server exhausts pagination without looping forever.
+    for i in 0..22 {
+        let day = 28 - i;
+        let ts_file = format!("2025-04-{day:02}T08-00-00");
+        let ts_rfc = format!("2025-04-{day:02}T08:00:00Z");
+        let provider = if i < 15 {
+            "skip_provider"
+        } else {
+            "target_provider"
+        };
+        create_fake_rollout(
+            codex_home.path(),
+            &ts_file,
+            &ts_rfc,
+            "Hello",
+            Some(provider),
+            None,
+        )?;
+    }
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    // Request more threads than exist after filtering; expect all matches to be
+    // returned with nextCursor None.
+    let ThreadListResponse { data, next_cursor } = list_threads(
+        &mut mcp,
+        None,
+        Some(10),
+        Some(vec!["target_provider".to_string()]),
+    )
+    .await?;
+    assert_eq!(
+        data.len(),
+        7,
+        "all available filtered threads should be returned"
+    );
+    assert!(
+        data.iter()
+            .all(|thread| thread.model_provider == "target_provider"),
+        "results should still respect the provider filter"
+    );
+    assert_eq!(
+        next_cursor, None,
+        "when results are exhausted before reaching the limit, nextCursor should be None"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_includes_git_info() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;

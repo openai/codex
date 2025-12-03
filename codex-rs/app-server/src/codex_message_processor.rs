@@ -1508,20 +1508,41 @@ impl CodexMessageProcessor {
             model_providers,
         } = params;
 
-        let page_size = limit.unwrap_or(25).max(1) as usize;
+        let requested = limit.unwrap_or(25).max(1) as usize;
+        let mut remaining = requested;
+        let mut cursor = cursor;
+        let mut last_cursor = cursor.clone();
+        let mut data: Vec<_> = Vec::with_capacity(requested);
+        let mut next_cursor: Option<String> = None;
 
-        let (summaries, next_cursor) = match self
-            .list_conversations_common(page_size, cursor, model_providers)
-            .await
-        {
-            Ok(r) => r,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
+        while remaining > 0 {
+            let page_size = remaining.min(100);
+            let (summaries, page_cursor) = match self
+                .list_conversations_common(page_size, cursor.clone(), model_providers.clone())
+                .await
+            {
+                Ok(r) => r,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+            data.extend(summaries.into_iter().map(summary_to_thread));
+            remaining = requested.saturating_sub(data.len());
+            next_cursor = page_cursor.clone();
+            match page_cursor {
+                Some(cursor_val) if remaining > 0 => {
+                    // Break if the backend hands back the same cursor again; this avoids
+                    // an infinite loop when filtering drops everything on the page.
+                    if Some(&cursor_val) == last_cursor.as_ref() {
+                        break;
+                    }
+                    last_cursor = Some(cursor_val.clone());
+                    cursor = Some(cursor_val);
+                }
+                _ => break,
             }
-        };
-
-        let data = summaries.into_iter().map(summary_to_thread).collect();
+        }
 
         let response = ThreadListResponse { data, next_cursor };
         self.outgoing.send_response(request_id, response).await;
