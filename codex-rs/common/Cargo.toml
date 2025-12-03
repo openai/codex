@@ -9,12 +9,10 @@ workspace = true
 
 [dependencies]
 clap = { workspace = true, features = ["derive", "wrap_help"], optional = true }
-codex-app-server-protocol = { workspace = true }
 codex-core = { workspace = true }
 codex-lmstudio = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
-once_cell = { workspace = true }
 serde = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 

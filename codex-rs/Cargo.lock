@@ -1117,12 +1117,10 @@ name = "codex-common"
 version = "0.0.0"
 dependencies = [
  "clap",
- "codex-app-server-protocol",
  "codex-core",
  "codex-lmstudio",
  "codex-ollama",
  "codex-protocol",
- "once_cell",
  "serde",
  "toml",
 ]
