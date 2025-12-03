@@ -43,6 +43,7 @@ pub mod parse_command;
 pub mod powershell;
 mod response_processing;
 pub mod sandboxing;
+pub mod status;
 mod text_encoding;
 pub mod token_data;
 mod truncate;

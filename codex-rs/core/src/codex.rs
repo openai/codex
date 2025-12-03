@@ -108,6 +108,8 @@ use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
+use crate::status::ComponentHealth;
+use crate::status::maybe_codex_status_warning;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
@@ -453,6 +455,16 @@ impl Session {
         }
     }
 
+    pub(crate) async fn replace_codex_backend_status(
+        &self,
+        status: ComponentHealth,
+    ) -> Option<ComponentHealth> {
+        let mut guard = self.services.codex_backend_status.lock().await;
+        let previous = *guard;
+        *guard = Some(status);
+        previous
+    }
+
     async fn new(
         session_configuration: SessionConfiguration,
         config: Arc<Config>,
@@ -569,6 +581,7 @@ impl Session {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            codex_backend_status: Mutex::new(None),
         };
 
         let sess = Arc::new(Session {
@@ -2230,6 +2243,19 @@ async fn try_run_turn(
     });
 
     sess.persist_rollout_items(&[rollout_item]).await;
+    let sess_clone = Arc::clone(&sess);
+    let turn_context_clone = Arc::clone(&turn_context);
+    tokio::spawn(async move {
+        if let Some(message) = maybe_codex_status_warning(sess_clone.as_ref()).await {
+            sess_clone
+                .send_event(
+                    &turn_context_clone,
+                    EventMsg::Warning(WarningEvent { message }),
+                )
+                .await;
+        }
+    });
+
     let mut stream = turn_context
         .client
         .clone()
@@ -2816,6 +2842,7 @@ mod tests {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            codex_backend_status: Mutex::new(None),
         };
 
         let turn_context = Session::make_turn_context(
@@ -2894,6 +2921,7 @@ mod tests {
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            codex_backend_status: Mutex::new(None),
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
