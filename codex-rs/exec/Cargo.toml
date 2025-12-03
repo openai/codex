@@ -60,3 +60,4 @@ tempfile = { workspace = true }
 uuid = { workspace = true }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
+which = { workspace = true }
