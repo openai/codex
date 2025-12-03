@@ -369,10 +369,9 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub animations: bool,
 
-    // TODO(jif) toggle default once design is done.
     /// Show startup tooltips in the TUI welcome screen.
-    /// Defaults to `false`.
-    #[serde(default)]
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
     pub show_tooltips: bool,
 }
 
