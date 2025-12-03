@@ -2040,6 +2040,9 @@ pub(crate) async fn run_task(
             }
             Err(CodexErr::InvalidImageRequest()) => {
                 let mut state = sess.state.lock().await;
+                error_or_panic(
+                    "Invalid image detected, replacing it in the last turn to prevent poisoning",
+                );
                 state.history.replace_last_turn_images("Invalid image");
             }
             Err(e) => {

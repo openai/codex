@@ -16,7 +16,7 @@ pub(crate) fn backoff(attempt: u64) -> Duration {
     Duration::from_millis((base as f64 * jitter) as u64)
 }
 
-pub(crate) fn error_or_panic(message: String) {
+pub(crate) fn error_or_panic(message: impl Into<String>) {
     if cfg!(debug_assertions) || env!("CARGO_PKG_VERSION").contains("alpha") {
         panic!("{message}");
     } else {
