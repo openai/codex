@@ -39,7 +39,7 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_rmcp_client::ElicitationResponse;
 use futures::future::BoxFuture;
 use futures::prelude::*;
-use futures::stream::FuturesUnordered;
+use futures::stream::FuturesOrdered;
 use mcp_types::CallToolResult;
 use mcp_types::ListResourceTemplatesRequestParams;
 use mcp_types::ListResourceTemplatesResult;
@@ -2155,11 +2155,16 @@ struct TurnRunResult {
 }
 
 async fn drain_in_flight(
-    in_flight: &mut FuturesUnordered<BoxFuture<'static, CodexResult<()>>>,
+    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
 ) -> CodexResult<()> {
     while let Some(res) = in_flight.next().await {
         match res {
-            Ok(_) => {}
+            Ok(response_input) => {
+                sess.record_conversation_items(&turn_context, &[response_input.into()])
+                    .await;
+            }
             Err(err) => {
                 tracing::error!(error = ?err, "in-flight tool future failed during drain");
             }
@@ -2200,8 +2205,8 @@ async fn try_run_turn(
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
     );
-    let mut in_flight: FuturesUnordered<BoxFuture<'static, CodexResult<()>>> =
-        FuturesUnordered::new();
+    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
+        FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
@@ -2235,7 +2240,7 @@ async fn try_run_turn(
                 let output_result =
                     handle_output_item_done(&mut ctx, item, previously_active_item).await?;
                 if let Some(tool_future) = output_result.tool_future {
-                    in_flight.push(tool_future);
+                    in_flight.push_back(tool_future);
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
@@ -2342,7 +2347,7 @@ async fn try_run_turn(
         }
     };
 
-    drain_in_flight(&mut in_flight).await?;
+    drain_in_flight(&mut in_flight, sess, turn_context).await?;
 
     outcome
 }

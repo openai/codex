@@ -21,7 +21,8 @@ use tracing::debug;
 /// Handle a completed output item from the model stream, recording it and
 /// queuing any tool execution futures. This records items immediately so
 /// history and rollout stay in sync even if the turn is later cancelled.
-pub(crate) type InFlightFuture<'f> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'f>>;
+pub(crate) type InFlightFuture<'f> =
+    Pin<Box<dyn Future<Output = Result<ResponseInputItem>> + Send + 'f>>;
 
 #[derive(Default)]
 pub(crate) struct OutputItemResult {
@@ -53,8 +54,6 @@ pub(crate) async fn handle_output_item_done(
                 .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&item))
                 .await;
 
-            let sess_for_output: Arc<Session> = Arc::clone(&ctx.sess);
-            let turn_for_output: Arc<TurnContext> = Arc::clone(&ctx.turn_context);
             let cancellation_token = ctx.cancellation_token.clone();
             let tool_runtime = ctx.tool_runtime.clone();
 
@@ -62,15 +61,7 @@ pub(crate) async fn handle_output_item_done(
                 let response_input = tool_runtime
                     .handle_tool_call(call, cancellation_token)
                     .await?;
-                if let Some(response_item) = response_input_to_response_item(&response_input) {
-                    sess_for_output
-                        .record_conversation_items(
-                            turn_for_output.as_ref(),
-                            std::slice::from_ref(&response_item),
-                        )
-                        .await;
-                }
-                Ok(())
+                Ok(response_input)
             });
 
             output.needs_follow_up = true;
