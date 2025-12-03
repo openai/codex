@@ -160,8 +160,8 @@ fn allow_prefix_if_applicable(evaluation: &Evaluation, features: &Features) -> O
     first_prompt_from_heuristics
 }
 
-pub(crate) fn create_approval_requirement_for_command(
-    policy: &Policy,
+pub(crate) async fn create_approval_requirement_for_command(
+    exec_policy: &Arc<RwLock<Policy>>,
     features: &Features,
     command: &[String],
     approval_policy: AskForApproval,
@@ -176,7 +176,10 @@ pub(crate) fn create_approval_requirement_for_command(
             Decision::Allow
         }
     };
-    let evaluation = policy.check_multiple(commands.iter(), &heuristics_fallback);
+    let evaluation = exec_policy
+        .read()
+        .await
+        .check_multiple(commands.iter(), &heuristics_fallback);
     let has_policy_allow = evaluation.matched_rules.iter().any(|rule_match| {
         !matches!(rule_match, RuleMatch::HeuristicsRuleMatch { .. })
             && rule_match.decision() == Decision::Allow
@@ -373,8 +376,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn evaluates_bash_lc_inner_commands() {
+    #[tokio::test]
+    async fn evaluates_bash_lc_inner_commands() {
         let policy_src = r#"
 prefix_rule(pattern=["rm"], decision="forbidden")
 "#;
@@ -382,7 +385,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         parser
             .parse("test.codexpolicy", policy_src)
             .expect("parse policy");
-        let policy = parser.build();
+        let policy = Arc::new(RwLock::new(parser.build()));
 
         let forbidden_script = vec![
             "bash".to_string(),
@@ -397,7 +400,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             AskForApproval::OnRequest,
             &SandboxPolicy::DangerFullAccess,
             SandboxPermissions::UseDefault,
-        );
+        )
+        .await;
 
         assert_eq!(
             requirement,
@@ -407,14 +411,14 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
-    #[test]
-    fn approval_requirement_prefers_execpolicy_match() {
+    #[tokio::test]
+    async fn approval_requirement_prefers_execpolicy_match() {
         let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
         let mut parser = PolicyParser::new();
         parser
             .parse("test.codexpolicy", policy_src)
             .expect("parse policy");
-        let policy = parser.build();
+        let policy = Arc::new(RwLock::new(parser.build()));
         let command = vec!["rm".to_string()];
 
         let requirement = create_approval_requirement_for_command(
@@ -424,7 +428,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             AskForApproval::OnRequest,
             &SandboxPolicy::DangerFullAccess,
             SandboxPermissions::UseDefault,
-        );
+        )
+        .await;
 
         assert_eq!(
             requirement,
@@ -435,14 +440,14 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
-    #[test]
-    fn approval_requirement_respects_approval_policy() {
+    #[tokio::test]
+    async fn approval_requirement_respects_approval_policy() {
         let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
         let mut parser = PolicyParser::new();
         parser
             .parse("test.codexpolicy", policy_src)
             .expect("parse policy");
-        let policy = parser.build();
+        let policy = Arc::new(RwLock::new(parser.build()));
         let command = vec!["rm".to_string()];
 
         let requirement = create_approval_requirement_for_command(
@@ -452,7 +457,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             AskForApproval::Never,
             &SandboxPolicy::DangerFullAccess,
             SandboxPermissions::UseDefault,
-        );
+        )
+        .await;
 
         assert_eq!(
             requirement,
@@ -462,11 +468,11 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
-    #[test]
-    fn approval_requirement_falls_back_to_heuristics() {
+    #[tokio::test]
+    async fn approval_requirement_falls_back_to_heuristics() {
         let command = vec!["python".to_string()];
 
-        let empty_policy = Policy::empty();
+        let empty_policy = Arc::new(RwLock::new(Policy::empty()));
         let requirement = create_approval_requirement_for_command(
             &empty_policy,
             &Features::with_defaults(),
@@ -474,7 +480,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             AskForApproval::UnlessTrusted,
             &SandboxPolicy::ReadOnly,
             SandboxPermissions::UseDefault,
-        );
+        )
+        .await;
 
         assert_eq!(
             requirement,
@@ -485,14 +492,14 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
-    #[test]
-    fn heuristics_apply_when_other_commands_match_policy() {
+    #[tokio::test]
+    async fn heuristics_apply_when_other_commands_match_policy() {
         let policy_src = r#"prefix_rule(pattern=["apple"], decision="allow")"#;
         let mut parser = PolicyParser::new();
         parser
             .parse("test.codexpolicy", policy_src)
             .expect("parse policy");
-        let policy = parser.build();
+        let policy = Arc::new(RwLock::new(parser.build()));
         let command = vec![
             "bash".to_string(),
             "-lc".to_string(),
@@ -507,7 +514,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 AskForApproval::UnlessTrusted,
                 &SandboxPolicy::DangerFullAccess,
                 SandboxPermissions::UseDefault,
-            ),
+            )
+            .await,
             ApprovalRequirement::NeedsApproval {
                 reason: None,
                 allow_prefix: Some(vec!["orange".to_string()])
@@ -563,11 +571,11 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         ));
     }
 
-    #[test]
-    fn allow_prefix_is_present_for_single_command_without_policy_match() {
+    #[tokio::test]
+    async fn allow_prefix_is_present_for_single_command_without_policy_match() {
         let command = vec!["python".to_string()];
 
-        let empty_policy = Policy::empty();
+        let empty_policy = Arc::new(RwLock::new(Policy::empty()));
         let requirement = create_approval_requirement_for_command(
             &empty_policy,
             &Features::with_defaults(),
@@ -575,7 +583,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             AskForApproval::UnlessTrusted,
             &SandboxPolicy::ReadOnly,
             SandboxPermissions::UseDefault,
-        );
+        )
+        .await;
 
         assert_eq!(
             requirement,
@@ -586,21 +595,22 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
-    #[test]
-    fn allow_prefix_is_disabled_when_execpolicy_feature_disabled() {
+    #[tokio::test]
+    async fn allow_prefix_is_disabled_when_execpolicy_feature_disabled() {
         let command = vec!["python".to_string()];
 
         let mut features = Features::with_defaults();
         features.disable(Feature::ExecPolicy);
 
         let requirement = create_approval_requirement_for_command(
-            &Policy::empty(),
+            &Arc::new(RwLock::new(Policy::empty())),
             &features,
             &command,
             AskForApproval::UnlessTrusted,
             &SandboxPolicy::ReadOnly,
             SandboxPermissions::UseDefault,
-        );
+        )
+        .await;
 
         assert_eq!(
             requirement,
@@ -611,14 +621,14 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
-    #[test]
-    fn allow_prefix_is_omitted_when_policy_prompts() {
+    #[tokio::test]
+    async fn allow_prefix_is_omitted_when_policy_prompts() {
         let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
         let mut parser = PolicyParser::new();
         parser
             .parse("test.codexpolicy", policy_src)
             .expect("parse policy");
-        let policy = parser.build();
+        let policy = Arc::new(RwLock::new(parser.build()));
         let command = vec!["rm".to_string()];
 
         let requirement = create_approval_requirement_for_command(
@@ -628,7 +638,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             AskForApproval::OnRequest,
             &SandboxPolicy::DangerFullAccess,
             SandboxPermissions::UseDefault,
-        );
+        )
+        .await;
 
         assert_eq!(
             requirement,
@@ -639,21 +650,22 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
-    #[test]
-    fn allow_prefix_is_omitted_for_multi_command_scripts() {
+    #[tokio::test]
+    async fn allow_prefix_is_omitted_for_multi_command_scripts() {
         let command = vec![
             "bash".to_string(),
             "-lc".to_string(),
             "python && echo ok".to_string(),
         ];
         let requirement = create_approval_requirement_for_command(
-            &Policy::empty(),
+            &Arc::new(RwLock::new(Policy::empty())),
             &Features::with_defaults(),
             &command,
             AskForApproval::UnlessTrusted,
             &SandboxPolicy::ReadOnly,
             SandboxPermissions::UseDefault,
-        );
+        )
+        .await;
 
         assert_eq!(
             requirement,
@@ -664,14 +676,14 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
-    #[test]
-    fn allow_prefix_uses_first_no_match_in_multi_command_scripts() {
+    #[tokio::test]
+    async fn allow_prefix_uses_first_no_match_in_multi_command_scripts() {
         let policy_src = r#"prefix_rule(pattern=["python"], decision="allow")"#;
         let mut parser = PolicyParser::new();
         parser
             .parse("test.codexpolicy", policy_src)
             .expect("parse policy");
-        let policy = parser.build();
+        let policy = Arc::new(RwLock::new(parser.build()));
 
         let command = vec![
             "bash".to_string(),
@@ -687,7 +699,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 AskForApproval::UnlessTrusted,
                 &SandboxPolicy::ReadOnly,
                 SandboxPermissions::UseDefault,
-            ),
+            )
+            .await,
             ApprovalRequirement::Skip {
                 bypass_sandbox: true
             }

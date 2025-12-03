@@ -555,17 +555,15 @@ impl UnifiedExecSessionManager {
         let features = context.session.features().await;
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
-        let approval_requirement = {
-            let exec_policy = context.session.current_exec_policy().await;
-            create_approval_requirement_for_command(
-                &exec_policy,
-                &features,
-                command,
-                context.turn.approval_policy,
-                &context.turn.sandbox_policy,
-                SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
-            )
-        };
+        let approval_requirement = create_approval_requirement_for_command(
+            &context.turn.exec_policy,
+            &features,
+            command,
+            context.turn.approval_policy,
+            &context.turn.sandbox_policy,
+            SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
+        )
+        .await;
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,
