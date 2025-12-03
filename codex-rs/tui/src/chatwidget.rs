@@ -256,8 +256,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
-    pub(crate) skills: Vec<SkillMetadata>,
-    pub(crate) skill_mentions_enabled: bool,
+    pub(crate) skills: Option<Vec<SkillMetadata>>,
 }
 
 #[derive(Default)]
@@ -1221,7 +1220,6 @@ impl ChatWidget {
             auth_manager,
             feedback,
             skills,
-            skill_mentions_enabled,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1239,7 +1237,6 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
-                skill_mentions_enabled,
                 skills,
             }),
             active_cell: None,
@@ -1300,7 +1297,6 @@ impl ChatWidget {
             auth_manager,
             feedback,
             skills,
-            skill_mentions_enabled,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1320,7 +1316,6 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
-                skill_mentions_enabled,
                 skills,
             }),
             active_cell: None,

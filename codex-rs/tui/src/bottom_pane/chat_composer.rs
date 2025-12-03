@@ -116,9 +116,8 @@ pub(crate) struct ChatComposer {
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
-    skill_mentions_enabled: bool,
+    skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
-    skills: Vec<SkillMetadata>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -164,17 +163,15 @@ impl ChatComposer {
             footer_hint_override: None,
             context_window_percent: None,
             context_window_used_tokens: None,
-            skill_mentions_enabled: false,
+            skills: None,
             dismissed_skill_popup_token: None,
-            skills: Vec::new(),
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
         this
     }
 
-    pub fn set_skill_mentions(&mut self, enabled: bool, skills: Vec<SkillMetadata>) {
-        self.skill_mentions_enabled = enabled;
+    pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
     }
 
@@ -785,6 +782,10 @@ impl ChatComposer {
         lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")
     }
 
+    fn skills_enabled(&self) -> bool {
+        self.skills.as_ref().is_some_and(|s| !s.is_empty())
+    }
+
     /// Extract a token prefixed with `prefix` under the cursor, if any.
     ///
     /// The returned string **does not** include the prefix.
@@ -899,7 +900,7 @@ impl ChatComposer {
     }
 
     fn current_skill_token(&self) -> Option<String> {
-        if !self.skill_mentions_enabled || self.skills.is_empty() {
+        if !self.skills_enabled() {
             return None;
         }
         Self::current_prefixed_token(&self.textarea, '$', true)
@@ -1615,7 +1616,9 @@ impl ChatComposer {
             }
             _ => {
                 if is_editing_slash_command_name {
-                    let mut command_popup = CommandPopup::new(self.custom_prompts.clone());
+                    let skills_enabled = self.skills_enabled();
+                    let mut command_popup =
+                        CommandPopup::new(self.custom_prompts.clone(), skills_enabled);
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
@@ -1671,13 +1674,21 @@ impl ChatComposer {
             return;
         }
 
+        let skills = match self.skills.as_ref() {
+            Some(skills) if !skills.is_empty() => skills.clone(),
+            _ => {
+                self.active_popup = ActivePopup::None;
+                return;
+            }
+        };
+
         match &mut self.active_popup {
             ActivePopup::Skill(popup) => {
                 popup.set_query(&query);
-                popup.set_skills(self.skills.clone());
+                popup.set_skills(skills);
             }
             _ => {
-                let mut popup = SkillPopup::new(self.skills.clone());
+                let mut popup = SkillPopup::new(skills);
                 popup.set_query(&query);
                 self.active_popup = ActivePopup::Skill(popup);
             }

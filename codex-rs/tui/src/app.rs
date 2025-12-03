@@ -232,8 +232,7 @@ pub(crate) struct App {
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
 
-    pub(crate) skills: Vec<SkillMetadata>,
-    pub(crate) skill_mentions_enabled: bool,
+    pub(crate) skills: Option<Vec<SkillMetadata>>,
 }
 
 impl App {
@@ -287,11 +286,10 @@ impl App {
             }
         }
 
-        let skill_mentions_enabled = config.features.enabled(Feature::Skills);
-        let skills = if skill_mentions_enabled {
-            skills_outcome.skills.clone()
+        let skills = if config.features.enabled(Feature::Skills) {
+            Some(skills_outcome.skills.clone())
         } else {
-            Vec::new()
+            None
         };
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
@@ -308,7 +306,6 @@ impl App {
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
                     skills: skills.clone(),
-                    skill_mentions_enabled,
                 };
                 ChatWidget::new(init, conversation_manager.clone())
             }
@@ -333,7 +330,6 @@ impl App {
                     auth_manager: auth_manager.clone(),
                     feedback: feedback.clone(),
                     skills: skills.clone(),
-                    skill_mentions_enabled,
                 };
                 ChatWidget::new_from_existing(
                     init,
@@ -369,7 +365,6 @@ impl App {
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
             skills,
-            skill_mentions_enabled,
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -490,7 +485,6 @@ impl App {
                     auth_manager: self.auth_manager.clone(),
                     feedback: self.feedback.clone(),
                     skills: self.skills.clone(),
-                    skill_mentions_enabled: self.skill_mentions_enabled,
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 if let Some(summary) = summary {
@@ -1093,8 +1087,7 @@ mod tests {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
-            skills: Vec::new(),
-            skill_mentions_enabled: false,
+            skills: None,
         }
     }
 
@@ -1132,8 +1125,7 @@ mod tests {
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 skip_world_writable_scan_once: false,
-                skills: Vec::new(),
-                skill_mentions_enabled: false,
+                skills: None,
             },
             rx,
             op_rx,

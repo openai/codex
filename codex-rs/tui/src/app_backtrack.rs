@@ -348,7 +348,6 @@ impl App {
             auth_manager: self.auth_manager.clone(),
             feedback: self.feedback.clone(),
             skills: self.skills.clone(),
-            skill_mentions_enabled: self.skill_mentions_enabled,
         };
         self.chat_widget =
             crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);

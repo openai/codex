@@ -89,8 +89,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) placeholder_text: String,
     pub(crate) disable_paste_burst: bool,
     pub(crate) animations_enabled: bool,
-    pub(crate) skill_mentions_enabled: bool,
-    pub(crate) skills: Vec<SkillMetadata>,
+    pub(crate) skills: Option<Vec<SkillMetadata>>,
 }
 
 impl BottomPane {
@@ -103,7 +102,6 @@ impl BottomPane {
             placeholder_text,
             disable_paste_burst,
             animations_enabled,
-            skill_mentions_enabled,
             skills,
         } = params;
         let mut composer = ChatComposer::new(
@@ -113,7 +111,7 @@ impl BottomPane {
             placeholder_text,
             disable_paste_burst,
         );
-        composer.set_skill_mentions(skill_mentions_enabled, skills);
+        composer.set_skill_mentions(skills);
 
         Self {
             composer,
@@ -587,8 +585,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
-            skill_mentions_enabled: false,
-            skills: Vec::new(),
+            skills: Some(Vec::new()),
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -610,8 +607,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
-            skill_mentions_enabled: false,
-            skills: Vec::new(),
+            skills: Some(Vec::new()),
         });
 
         // Create an approval modal (active view).
@@ -644,8 +640,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
-            skill_mentions_enabled: false,
-            skills: Vec::new(),
+            skills: Some(Vec::new()),
         });
 
         // Start a running task so the status indicator is active above the composer.
@@ -712,8 +707,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
-            skill_mentions_enabled: false,
-            skills: Vec::new(),
+            skills: Some(Vec::new()),
         });
 
         // Begin a task: show initial status.
@@ -740,8 +734,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
-            skill_mentions_enabled: false,
-            skills: Vec::new(),
+            skills: Some(Vec::new()),
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
@@ -772,8 +765,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
-            skill_mentions_enabled: false,
-            skills: Vec::new(),
+            skills: Some(Vec::new()),
         });
 
         pane.set_task_running(true);
@@ -801,8 +793,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
-            skill_mentions_enabled: false,
-            skills: Vec::new(),
+            skills: Some(Vec::new()),
         });
 
         pane.set_task_running(true);
