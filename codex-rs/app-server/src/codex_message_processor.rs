@@ -3021,9 +3021,25 @@ impl CodexMessageProcessor {
         let FeedbackUploadParams {
             classification,
             reason,
-            conversation_id,
+            thread_id,
             include_logs,
         } = params;
+
+        let conversation_id = match thread_id.as_deref() {
+            Some(thread_id) => match ConversationId::from_string(thread_id) {
+                Ok(conversation_id) => Some(conversation_id),
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid thread id: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            },
+            None => None,
+        };
 
         let snapshot = self.feedback.snapshot(conversation_id);
         let thread_id = snapshot.thread_id.clone();

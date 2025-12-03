@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::protocol::common::AuthMode;
-use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::SandboxCommandAssessment as CoreSandboxCommandAssessment;
 use codex_protocol::config_types::ReasoningEffort;
@@ -664,7 +663,7 @@ pub struct ListMcpServersResponse {
 pub struct FeedbackUploadParams {
     pub classification: String,
     pub reason: Option<String>,
-    pub conversation_id: Option<ConversationId>,
+    pub thread_id: Option<String>,
     pub include_logs: bool,
 }
 
