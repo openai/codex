@@ -505,6 +505,7 @@ async fn run_ratatui_app(
         images,
         resume_selection,
         feedback,
+        should_show_trust_screen, // Proxy to: is it a first run in this directory?
     )
     .await;
 

@@ -575,22 +575,12 @@ impl HistoryCell for TooltipHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let indent: Line<'static> = "  ".into();
         let mut lines = Vec::new();
-        lines.push(Line::from(""));
         let tooltip_line: Line<'static> = vec!["Tip: ".cyan(), self.tip.into()].into();
         let wrap_opts = RtOptions::new(usize::from(width.max(1)))
             .initial_indent(indent.clone())
             .subsequent_indent(indent.clone());
         lines.extend(
             word_wrap_line(&tooltip_line, wrap_opts.clone())
-                .into_iter()
-                .map(|line| line_to_static(&line)),
-        );
-        let disable_line: Line<'static> =
-            "Disable tips via tui.show_tooltips = false in config.toml"
-                .dim()
-                .into();
-        lines.extend(
-            word_wrap_line(&disable_line, wrap_opts)
                 .into_iter()
                 .map(|line| line_to_static(&line)),
         );
@@ -625,15 +615,16 @@ pub(crate) fn new_session_info(
         reasoning_effort,
         ..
     } = event;
-    SessionInfoCell(if is_first_event {
-        // Header box rendered as history (so it appears at the very top)
-        let header = SessionHeaderHistoryCell::new(
-            model,
-            reasoning_effort,
-            config.cwd.clone(),
-            crate::version::CODEX_CLI_VERSION,
-        );
+    // Header box rendered as history (so it appears at the very top)
+    let header = SessionHeaderHistoryCell::new(
+        model.clone(),
+        reasoning_effort,
+        config.cwd.clone(),
+        CODEX_CLI_VERSION,
+    );
+    let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
+    if is_first_event {
         // Help lines below the header (new copy and list)
         let help_lines: Vec<Line<'static>> = vec![
             "  To get started, describe a task or try one of these commands:"
@@ -667,33 +658,24 @@ pub(crate) fn new_session_info(
             ]),
         ];
 
-        let tooltip = if config.show_tooltips {
-            tooltips::random_tooltip().map(TooltipHistoryCell::new)
-        } else {
-            None
-        };
-
-        let mut parts: Vec<Box<dyn HistoryCell>> = vec![
-            Box::new(header),
-            Box::new(PlainHistoryCell { lines: help_lines }),
-        ];
-        if let Some(cell) = tooltip {
-            parts.push(Box::new(cell));
-        }
-
-        CompositeHistoryCell { parts }
-    } else if config.model == model {
-        CompositeHistoryCell { parts: vec![] }
+        parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
     } else {
-        let lines = vec![
-            "model changed:".magenta().bold().into(),
-            format!("requested: {}", config.model).into(),
-            format!("used: {model}").into(),
-        ];
-        CompositeHistoryCell {
-            parts: vec![Box::new(PlainHistoryCell { lines })],
+        if config.show_tooltips {
+            if let Some(tooltips) = tooltips::random_tooltip().map(TooltipHistoryCell::new) {
+                parts.push(Box::new(tooltips));
+            }
         }
-    })
+        if config.model != model {
+            let lines = vec![
+                "model changed:".magenta().bold().into(),
+                format!("requested: {}", config.model).into(),
+                format!("used: {model}").into(),
+            ];
+            parts.push(Box::new(PlainHistoryCell { lines }));
+        }
+    }
+
+    SessionInfoCell(CompositeHistoryCell { parts })
 }
 
 pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
