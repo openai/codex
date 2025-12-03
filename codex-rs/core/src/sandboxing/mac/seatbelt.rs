@@ -1,18 +1,17 @@
-#![cfg(target_os = "macos")]
-
 use std::collections::HashMap;
-use std::ffi::CStr;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Child;
 
 use crate::protocol::SandboxPolicy;
+#[cfg(target_os = "macos")]
+use crate::sandboxing::mac::sys;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
-const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
-const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
+const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("../../seatbelt_base_policy.sbpl");
+const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("../../seatbelt_network_policy.sbpl");
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
 /// to defend against an attacker trying to inject a malicious version on the
@@ -104,18 +103,26 @@ pub(crate) fn create_seatbelt_command_args(
         ""
     };
 
-    // TODO(mbolin): apply_patch calls must also honor the SandboxPolicy.
     let network_policy = if sandbox_policy.has_full_network_access() {
         MACOS_SEATBELT_NETWORK_POLICY
     } else {
         ""
     };
 
+    let (user_cache_dir_policy, user_cache_dir_params) = user_cache_dir()
+        .map(|p| {
+            (
+                "(allow file-write* (subpath (param \"DARWIN_USER_CACHE_DIR\")))",
+                vec![("DARWIN_USER_CACHE_DIR".to_string(), p)],
+            )
+        })
+        .unwrap_or_default();
+
     let full_policy = format!(
-        "{MACOS_SEATBELT_BASE_POLICY}\n{file_read_policy}\n{file_write_policy}\n{network_policy}"
+        "{MACOS_SEATBELT_BASE_POLICY}\n{file_read_policy}\n{file_write_policy}\n{network_policy}\n{user_cache_dir_policy}"
     );
 
-    let dir_params = [file_write_dir_params, macos_dir_params()].concat();
+    let dir_params = [file_write_dir_params, user_cache_dir_params].concat();
 
     let mut seatbelt_args: Vec<String> = vec!["-p".to_string(), full_policy];
     let definition_args = dir_params
@@ -127,38 +134,22 @@ pub(crate) fn create_seatbelt_command_args(
     seatbelt_args
 }
 
-/// Wraps libc::confstr to return a String.
-fn confstr(name: libc::c_int) -> Option<String> {
-    let mut buf = vec![0_i8; (libc::PATH_MAX as usize) + 1];
-    let len = unsafe { libc::confstr(name, buf.as_mut_ptr(), buf.len()) };
-    if len == 0 {
-        return None;
-    }
-    // confstr guarantees NUL-termination when len > 0.
-    let cstr = unsafe { CStr::from_ptr(buf.as_ptr()) };
-    cstr.to_str().ok().map(ToString::to_string)
+#[cfg(target_os = "macos")]
+fn user_cache_dir() -> Option<PathBuf> {
+    sys::user_cache_dir()
 }
 
-/// Wraps confstr to return a canonicalized PathBuf.
-fn confstr_path(name: libc::c_int) -> Option<PathBuf> {
-    let s = confstr(name)?;
-    let path = PathBuf::from(s);
-    path.canonicalize().ok().or(Some(path))
-}
-
-fn macos_dir_params() -> Vec<(String, PathBuf)> {
-    if let Some(p) = confstr_path(libc::_CS_DARWIN_USER_CACHE_DIR) {
-        return vec![("DARWIN_USER_CACHE_DIR".to_string(), p)];
-    }
-    vec![]
+#[cfg(not(target_os = "macos"))]
+fn user_cache_dir() -> Option<PathBuf> {
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::MACOS_SEATBELT_BASE_POLICY;
     use super::create_seatbelt_command_args;
-    use super::macos_dir_params;
     use crate::protocol::SandboxPolicy;
+    use crate::seatbelt::user_cache_dir;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -194,12 +185,13 @@ mod tests {
             &cwd,
         );
 
+        let user_cache_dir = user_cache_dir();
         // Build the expected policy text using a raw string for readability.
         // Note that the policy includes:
         // - the base policy,
         // - read-only access to the filesystem,
         // - write access to WRITABLE_ROOT_0 (but not its .git) and WRITABLE_ROOT_1.
-        let expected_policy = format!(
+        let mut expected_policy = format!(
             r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
@@ -208,6 +200,10 @@ mod tests {
 )
 "#,
         );
+        if user_cache_dir.is_some() {
+            expected_policy
+                .push_str("\n(allow file-write* (subpath (param \"DARWIN_USER_CACHE_DIR\")))");
+        }
 
         let mut expected_args = vec![
             "-p".to_string(),
@@ -227,11 +223,9 @@ mod tests {
             format!("-DWRITABLE_ROOT_2={}", cwd.to_string_lossy()),
         ];
 
-        expected_args.extend(
-            macos_dir_params()
-                .into_iter()
-                .map(|(key, value)| format!("-D{key}={value}", value = value.to_string_lossy())),
-        );
+        if let Some(p) = &user_cache_dir {
+            expected_args.push(format!("-DDARWIN_USER_CACHE_DIR={}", p.to_string_lossy()));
+        }
 
         expected_args.extend(vec![
             "--".to_string(),
@@ -275,6 +269,7 @@ mod tests {
             .map(PathBuf::from)
             .and_then(|p| p.canonicalize().ok())
             .map(|p| p.to_string_lossy().to_string());
+        let user_cache_dir = user_cache_dir();
 
         let tempdir_policy_entry = if tmpdir_env_var.is_some() {
             r#" (subpath (param "WRITABLE_ROOT_2"))"#
@@ -287,7 +282,7 @@ mod tests {
         // - the base policy,
         // - read-only access to the filesystem,
         // - write access to WRITABLE_ROOT_0 (but not its .git) and WRITABLE_ROOT_1.
-        let expected_policy = format!(
+        let mut expected_policy = format!(
             r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
@@ -296,6 +291,10 @@ mod tests {
 )
 "#,
         );
+        if user_cache_dir.is_some() {
+            expected_policy
+                .push_str("\n(allow file-write* (subpath (param \"DARWIN_USER_CACHE_DIR\")))");
+        }
 
         let mut expected_args = vec![
             "-p".to_string(),
@@ -321,11 +320,9 @@ mod tests {
             expected_args.push(format!("-DWRITABLE_ROOT_2={p}"));
         }
 
-        expected_args.extend(
-            macos_dir_params()
-                .into_iter()
-                .map(|(key, value)| format!("-D{key}={value}", value = value.to_string_lossy())),
-        );
+        if let Some(p) = &user_cache_dir {
+            expected_args.push(format!("-DDARWIN_USER_CACHE_DIR={}", p.to_string_lossy()));
+        }
 
         expected_args.extend(vec![
             "--".to_string(),

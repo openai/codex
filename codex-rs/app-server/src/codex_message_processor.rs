@@ -1178,7 +1178,6 @@ impl CodexMessageProcessor {
             .sandbox_policy
             .map(|policy| policy.to_core())
             .unwrap_or_else(|| self.config.sandbox_policy.clone());
-
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
         let req_id = request_id;
