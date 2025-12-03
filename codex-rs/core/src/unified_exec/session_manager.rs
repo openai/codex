@@ -15,7 +15,7 @@ use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
 use crate::exec_env::create_env;
-use crate::exec_policy::create_approval_requirement_for_command;
+use crate::exec_policy::create_exec_approval_requirement_for_command;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandSource;
@@ -559,7 +559,7 @@ impl UnifiedExecSessionManager {
         let features = context.session.features();
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
-        let approval_requirement = create_approval_requirement_for_command(
+        let exec_approval_requirement = create_exec_approval_requirement_for_command(
             &context.turn.exec_policy,
             &features,
             command,
@@ -574,7 +574,7 @@ impl UnifiedExecSessionManager {
             env,
             with_escalated_permissions,
             justification,
-            approval_requirement,
+            exec_approval_requirement,
         );
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),

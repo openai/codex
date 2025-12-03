@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
-use crate::exec_policy::create_approval_requirement_for_command;
+use crate::exec_policy::create_exec_approval_requirement_for_command;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
@@ -232,7 +232,7 @@ impl ShellHandler {
         emitter.begin(event_ctx).await;
 
         let features = session.features();
-        let approval_requirement = create_approval_requirement_for_command(
+        let exec_approval_requirement = create_exec_approval_requirement_for_command(
             &turn.exec_policy,
             &features,
             &exec_params.command,
@@ -241,7 +241,7 @@ impl ShellHandler {
             SandboxPermissions::from(exec_params.with_escalated_permissions.unwrap_or(false)),
         )
         .await;
-    
+
         let req = ShellRequest {
             command: exec_params.command.clone(),
             cwd: exec_params.cwd.clone(),
@@ -249,7 +249,7 @@ impl ShellHandler {
             env: exec_params.env.clone(),
             with_escalated_permissions: exec_params.with_escalated_permissions,
             justification: exec_params.justification.clone(),
-            approval_requirement,
+            exec_approval_requirement,
         };
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = ShellRuntime::new();

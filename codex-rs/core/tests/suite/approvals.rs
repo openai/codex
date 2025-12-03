@@ -1559,29 +1559,29 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
 async fn approving_allow_prefix_persists_policy_and_skips_future_prompts() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::UnlessTrusted;
-    let sandbox_policy = SandboxPolicy::DangerFullAccess;
+    let sandbox_policy = SandboxPolicy::ReadOnly;
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config.approval_policy = approval_policy;
         config.sandbox_policy = sandbox_policy_for_config;
     });
     let test = builder.build(&server).await?;
+    let allow_prefix_path = test.cwd.path().join("allow-prefix.txt");
+    let _ = fs::remove_file(&allow_prefix_path);
 
     let call_id_first = "allow-prefix-first";
     let (first_event, expected_command) = ActionKind::RunCommand {
-        command: "printf allow-prefix-ok",
+        command: "touch allow-prefix.txt",
     }
     .prepare(&test, &server, call_id_first, false)
     .await?;
     let expected_command =
         expected_command.expect("allow prefix scenario should produce a shell command");
-    let expected_allow_prefix = expected_command
-        .split_whitespace()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
+    let expected_allow_prefix = vec!["touch".to_string(), "allow-prefix.txt".to_string()];
 
     let _ = mount_sse_once(
         &server,
@@ -1626,7 +1626,7 @@ async fn approving_allow_prefix_persists_policy_and_skips_future_prompts() -> Re
     let policy_contents = fs::read_to_string(&policy_path)?;
     assert!(
         policy_contents
-            .contains(r#"prefix_rule(pattern=["printf", "allow-prefix-ok"], decision="allow")"#),
+            .contains(r#"prefix_rule(pattern=["touch", "allow-prefix.txt"], decision="allow")"#),
         "unexpected policy contents: {policy_contents}"
     );
 
@@ -1637,14 +1637,19 @@ async fn approving_allow_prefix_persists_policy_and_skips_future_prompts() -> Re
     );
     assert_eq!(first_output.exit_code.unwrap_or(0), 0);
     assert!(
-        first_output.stdout.contains("allow-prefix-ok"),
+        first_output.stdout.is_empty(),
         "unexpected stdout: {}",
         first_output.stdout
+    );
+    assert_eq!(
+        fs::read_to_string(&allow_prefix_path)?,
+        "",
+        "unexpected file contents after first run"
     );
 
     let call_id_second = "allow-prefix-second";
     let (second_event, second_command) = ActionKind::RunCommand {
-        command: "printf allow-prefix-ok",
+        command: "touch allow-prefix.txt",
     }
     .prepare(&test, &server, call_id_second, false)
     .await?;
@@ -1685,9 +1690,14 @@ async fn approving_allow_prefix_persists_policy_and_skips_future_prompts() -> Re
     );
     assert_eq!(second_output.exit_code.unwrap_or(0), 0);
     assert!(
-        second_output.stdout.contains("allow-prefix-ok"),
+        second_output.stdout.is_empty(),
         "unexpected stdout: {}",
         second_output.stdout
+    );
+    assert_eq!(
+        fs::read_to_string(&allow_prefix_path)?,
+        "",
+        "unexpected file contents after second run"
     );
 
     Ok(())

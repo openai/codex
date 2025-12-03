@@ -871,6 +871,10 @@ impl Session {
         .await
     }
 
+    /// Adds a prefix rule to the exec policy
+    ///
+    /// This mutates the in-memory execpolicy so the current conversation can use the new
+    /// prefix and persists the change in default.execpolicy so new conversations will also allow the new prefix.
     pub(crate) async fn persist_command_allow_prefix(
         &self,
         prefix: &[String],

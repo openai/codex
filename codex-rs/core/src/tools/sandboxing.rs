@@ -88,24 +88,24 @@ pub(crate) struct ApprovalCtx<'a> {
 
 // Specifies what tool orchestrator should do with a given tool call.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ApprovalRequirement {
+pub(crate) enum ExecApprovalRequirement {
     /// No approval required for this tool call.
     Skip {
         /// The first attempt should skip sandboxing (e.g., when explicitly
         /// greenlit by policy).
         bypass_sandbox: bool,
     },
-    /// Approval required for this tool call
+    /// Approval required for this tool call.
     NeedsApproval {
         reason: Option<String>,
         /// Prefix that can be whitelisted via execpolicy to skip future approvals for similar commands
         allow_prefix: Option<Vec<String>>,
     },
-    /// Execution forbidden for this tool call
+    /// Execution forbidden for this tool call.
     Forbidden { reason: String },
 }
 
-impl ApprovalRequirement {
+impl ExecApprovalRequirement {
     pub fn allow_prefix(&self) -> Option<&Vec<String>> {
         match self {
             Self::NeedsApproval {
@@ -120,10 +120,10 @@ impl ApprovalRequirement {
 /// - Never, OnFailure: do not ask
 /// - OnRequest: ask unless sandbox policy is DangerFullAccess
 /// - UnlessTrusted: always ask
-pub(crate) fn default_approval_requirement(
+pub(crate) fn default_exec_approval_requirement(
     policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
-) -> ApprovalRequirement {
+) -> ExecApprovalRequirement {
     let needs_approval = match policy {
         AskForApproval::Never | AskForApproval::OnFailure => false,
         AskForApproval::OnRequest => !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess),
@@ -131,12 +131,12 @@ pub(crate) fn default_approval_requirement(
     };
 
     if needs_approval {
-        ApprovalRequirement::NeedsApproval {
+        ExecApprovalRequirement::NeedsApproval {
             reason: None,
             allow_prefix: None,
         }
     } else {
-        ApprovalRequirement::Skip {
+        ExecApprovalRequirement::Skip {
             bypass_sandbox: false,
         }
     }
@@ -168,10 +168,9 @@ pub(crate) trait Approvable<Req> {
         matches!(policy, AskForApproval::Never)
     }
 
-    /// Override the default approval requirement. Return `Some(_)` to specify
-    /// a custom requirement, or `None` to fall back to
-    /// policy-based default.
-    fn approval_requirement(&self, _req: &Req) -> Option<ApprovalRequirement> {
+    /// Return `Some(_)` to specify a custom exec approval requirement, or `None`
+    /// to fall back to policy-based default.
+    fn exec_approval_requirement(&self, _req: &Req) -> Option<ExecApprovalRequirement> {
         None
     }
 
