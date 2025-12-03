@@ -200,7 +200,6 @@ pub(crate) struct App {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     pub(crate) auth_manager: Arc<AuthManager>,
-
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) active_profile: Option<String>,
@@ -297,6 +296,7 @@ impl App {
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
+                    models_manager: conversation_manager.models_manager.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
                 };
@@ -321,6 +321,7 @@ impl App {
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
+                    models_manager: conversation_manager.models_manager.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
                 };
@@ -339,7 +340,7 @@ impl App {
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
         let mut app = Self {
-            server: conversation_manager,
+            server: conversation_manager.clone(),
             app_event_tx,
             chat_widget,
             auth_manager: auth_manager.clone(),
@@ -475,6 +476,7 @@ impl App {
                     initial_images: Vec::new(),
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
+                    models_manager: self.server.models_manager.clone(),
                     feedback: self.feedback.clone(),
                     is_first_run: false,
                 };
@@ -522,6 +524,7 @@ impl App {
                                     initial_images: Vec::new(),
                                     enhanced_keys_supported: self.enhanced_keys_supported,
                                     auth_manager: self.auth_manager.clone(),
+                                    models_manager: self.server.models_manager.clone(),
                                     feedback: self.feedback.clone(),
                                     is_first_run: false,
                                 };

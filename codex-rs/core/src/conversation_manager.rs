@@ -37,7 +37,7 @@ pub struct NewConversation {
 pub struct ConversationManager {
     conversations: Arc<RwLock<HashMap<ConversationId, Arc<CodexConversation>>>>,
     auth_manager: Arc<AuthManager>,
-    models_manager: Arc<ModelsManager>,
+    pub models_manager: Arc<ModelsManager>,
     session_source: SessionSource,
 }
 

@@ -354,6 +354,7 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_images: Vec::new(),
         enhanced_keys_supported: false,
         auth_manager,
+        models_manager: conversation_manager.models_manager.clone(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
     };
@@ -388,7 +389,8 @@ fn make_chatwidget_manual() -> (
         bottom_pane: bottom,
         active_cell: None,
         config: cfg.clone(),
-        auth_manager,
+        auth_manager: auth_manager.clone(),
+        models_manager: Arc::new(ModelsManager::new(auth_manager.get_auth_mode())),
         session_header: SessionHeader::new(cfg.model),
         initial_user_message: None,
         token_info: None,
@@ -1751,9 +1753,13 @@ fn model_reasoning_selection_popup_snapshot() {
     chat.config.model = "gpt-5.1-codex-max".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
-    let preset = builtin_model_presets(None)
-        .into_iter()
-        .find(|preset| preset.model == "gpt-5.1-codex-max")
+    let preset = chat
+        .models_manager
+        .available_models
+        .blocking_read()
+        .iter()
+        .find(|&preset| preset.model == "gpt-5.1-codex-max")
+        .cloned()
         .expect("gpt-5.1-codex-max preset");
     chat.open_reasoning_popup(preset);
 
@@ -1768,7 +1774,12 @@ fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
     chat.config.model = "gpt-5.1-codex-max".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::XHigh);
 
-    let preset = builtin_model_presets(None)
+    let preset = chat
+        .models_manager
+        .available_models
+        .blocking_read()
+        .iter()
+        .cloned()
         .into_iter()
         .find(|preset| preset.model == "gpt-5.1-codex-max")
         .expect("gpt-5.1-codex-max preset");
@@ -1784,7 +1795,12 @@ fn reasoning_popup_shows_extra_high_with_space() {
 
     chat.config.model = "gpt-5.1-codex-max".to_string();
 
-    let preset = builtin_model_presets(None)
+    let preset = chat
+        .models_manager
+        .available_models
+        .blocking_read()
+        .iter()
+        .cloned()
         .into_iter()
         .find(|preset| preset.model == "gpt-5.1-codex-max")
         .expect("gpt-5.1-codex-max preset");
@@ -1870,11 +1886,15 @@ fn reasoning_popup_escape_returns_to_model_popup() {
     chat.config.model = "gpt-5.1".to_string();
     chat.open_model_popup();
 
-    let presets = builtin_model_presets(None)
-        .into_iter()
-        .find(|preset| preset.model == "gpt-5.1-codex")
+    let preset = chat
+        .models_manager
+        .available_models
+        .blocking_read()
+        .iter()
+        .find(|&preset| preset.model == "gpt-5.1-codex")
+        .cloned()
         .expect("gpt-5.1-codex preset");
-    chat.open_reasoning_popup(presets);
+    chat.open_reasoning_popup(preset);
 
     let before_escape = render_bottom_popup(&chat, 80);
     assert!(before_escape.contains("Select Reasoning Level"));
