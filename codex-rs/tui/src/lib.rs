@@ -67,6 +67,7 @@ mod resume_picker;
 mod selection_list;
 mod session_log;
 mod shimmer;
+mod skill_error_prompt;
 mod slash_command;
 mod status;
 mod status_indicator_widget;
@@ -74,6 +75,7 @@ mod streaming;
 mod style;
 mod terminal_palette;
 mod text_formatting;
+mod tooltips;
 mod tui;
 mod ui_consts;
 pub mod update_action;
@@ -504,6 +506,7 @@ async fn run_ratatui_app(
         images,
         resume_selection,
         feedback,
+        should_show_trust_screen, // Proxy to: is it a first run in this directory?
     )
     .await;
 

@@ -124,7 +124,7 @@ experimental_use_profile = false
 [history]
 # save-all (default) | none
 persistence = "save-all"
-# Maximum bytes for history file (currently not enforced). Example: 5242880
+# Maximum bytes for history file; oldest entries are trimmed when exceeded. Example: 5242880
 # max_bytes = 0
 
 # URI scheme for clickable citations: vscode (default) | vscode-insiders | windsurf | cursor | none

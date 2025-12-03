@@ -139,6 +139,11 @@ client_request_definitions! {
         response: v2::ModelListResponse,
     },
 
+    McpServersList => "mcpServers/list" {
+        params: v2::ListMcpServersParams,
+        response: v2::ListMcpServersResponse,
+    },
+
     LoginAccount => "account/login/start" {
         params: v2::LoginAccountParams,
         response: v2::LoginAccountResponse,
@@ -162,6 +167,12 @@ client_request_definitions! {
     FeedbackUpload => "feedback/upload" {
         params: v2::FeedbackUploadParams,
         response: v2::FeedbackUploadResponse,
+    },
+
+    /// Execute a command (argv vector) under the server's sandbox.
+    OneOffCommandExec => "command/exec" {
+        params: v2::CommandExecParams,
+        response: v2::CommandExecResponse,
     },
 
     ConfigRead => "config/read" {

@@ -76,6 +76,7 @@ pub(crate) struct BottomPane {
     /// Queued user messages to show above the composer while a turn is running.
     queued_user_messages: QueuedUserMessages,
     context_window_percent: Option<i64>,
+    context_window_used_tokens: Option<i64>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -118,6 +119,7 @@ impl BottomPane {
             esc_backtrack_hint: false,
             animations_enabled,
             context_window_percent: None,
+            context_window_used_tokens: None,
         }
     }
 
@@ -128,6 +130,11 @@ impl BottomPane {
     #[cfg(test)]
     pub(crate) fn context_window_percent(&self) -> Option<i64> {
         self.context_window_percent
+    }
+
+    #[cfg(test)]
+    pub(crate) fn context_window_used_tokens(&self) -> Option<i64> {
+        self.context_window_used_tokens
     }
 
     fn active_view(&self) -> Option<&dyn BottomPaneView> {
@@ -344,13 +351,16 @@ impl BottomPane {
         }
     }
 
-    pub(crate) fn set_context_window_percent(&mut self, percent: Option<i64>) {
-        if self.context_window_percent == percent {
+    pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
+        if self.context_window_percent == percent && self.context_window_used_tokens == used_tokens
+        {
             return;
         }
 
         self.context_window_percent = percent;
-        self.composer.set_context_window_percent(percent);
+        self.context_window_used_tokens = used_tokens;
+        self.composer
+            .set_context_window(percent, self.context_window_used_tokens);
         self.request_redraw();
     }
 
