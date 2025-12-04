@@ -17,7 +17,6 @@ pub static CODEX_ALIASES_TEMP_DIR: TempDir = unsafe {
 mod abort_tasks;
 #[cfg(not(target_os = "windows"))]
 mod apply_patch_cli;
-mod apply_patch_scenarios;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
 mod auth_refresh;
