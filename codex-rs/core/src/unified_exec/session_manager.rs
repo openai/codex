@@ -10,6 +10,7 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::bash::extract_bash_command;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
@@ -516,7 +517,11 @@ impl UnifiedExecSessionManager {
         turn: &Arc<TurnContext>,
         command: &[String],
     ) {
-        let command_display = command.join(" ");
+        let command_display = if let Some((_, script)) = extract_bash_command(command) {
+            script.to_string()
+        } else {
+            command.join(" ")
+        };
         let message = format!("Waiting for `{command_display}`");
         session
             .send_event(
