@@ -139,6 +139,11 @@ client_request_definitions! {
         response: v2::ModelListResponse,
     },
 
+    McpServersList => "mcpServers/list" {
+        params: v2::ListMcpServersParams,
+        response: v2::ListMcpServersResponse,
+    },
+
     LoginAccount => "account/login/start" {
         params: v2::LoginAccountParams,
         response: v2::LoginAccountResponse,

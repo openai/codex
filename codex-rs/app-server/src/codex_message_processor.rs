@@ -45,6 +45,8 @@ use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
+use codex_app_server_protocol::ListMcpServersParams;
+use codex_app_server_protocol::ListMcpServersResponse;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LoginApiKeyResponse;
@@ -52,6 +54,7 @@ use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::LogoutChatGptResponse;
+use codex_app_server_protocol::McpServer;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
@@ -119,6 +122,8 @@ use codex_core::exec_env::create_env;
 use codex_core::features::Feature;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
+use codex_core::mcp::collect_mcp_snapshot;
+use codex_core::mcp::group_tools_by_server;
 use codex_core::parse_cursor;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -136,6 +141,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
+use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
@@ -362,6 +368,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ModelList { request_id, params } => {
                 self.list_models(request_id, params).await;
+            }
+            ClientRequest::McpServersList { request_id, params } => {
+                self.list_mcp_servers(request_id, params).await;
             }
             ClientRequest::LoginAccount { request_id, params } => {
                 self.login_v2(request_id, params).await;
@@ -1853,8 +1862,7 @@ impl CodexMessageProcessor {
 
     async fn list_models(&self, request_id: RequestId, params: ModelListParams) {
         let ModelListParams { limit, cursor } = params;
-        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
-        let models = supported_models(auth_mode);
+        let models = supported_models(self.conversation_manager.clone()).await;
         let total = models.len();
 
         if total == 0 {
@@ -1905,6 +1913,85 @@ impl CodexMessageProcessor {
             data: items,
             next_cursor,
         };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn list_mcp_servers(&self, request_id: RequestId, params: ListMcpServersParams) {
+        let snapshot = collect_mcp_snapshot(self.config.as_ref()).await;
+
+        let tools_by_server = group_tools_by_server(&snapshot.tools);
+
+        let mut server_names: Vec<String> = self
+            .config
+            .mcp_servers
+            .keys()
+            .cloned()
+            .chain(snapshot.auth_statuses.keys().cloned())
+            .chain(snapshot.resources.keys().cloned())
+            .chain(snapshot.resource_templates.keys().cloned())
+            .collect();
+        server_names.sort();
+        server_names.dedup();
+
+        let total = server_names.len();
+        let limit = params.limit.unwrap_or(total as u32).max(1) as usize;
+        let effective_limit = limit.min(total);
+        let start = match params.cursor {
+            Some(cursor) => match cursor.parse::<usize>() {
+                Ok(idx) => idx,
+                Err(_) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid cursor: {cursor}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            },
+            None => 0,
+        };
+
+        if start > total {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("cursor {start} exceeds total MCP servers {total}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let end = start.saturating_add(effective_limit).min(total);
+
+        let data: Vec<McpServer> = server_names[start..end]
+            .iter()
+            .map(|name| McpServer {
+                name: name.clone(),
+                tools: tools_by_server.get(name).cloned().unwrap_or_default(),
+                resources: snapshot.resources.get(name).cloned().unwrap_or_default(),
+                resource_templates: snapshot
+                    .resource_templates
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default(),
+                auth_status: snapshot
+                    .auth_statuses
+                    .get(name)
+                    .cloned()
+                    .unwrap_or(CoreMcpAuthStatus::Unsupported)
+                    .into(),
+            })
+            .collect();
+
+        let next_cursor = if end < total {
+            Some(end.to_string())
+        } else {
+            None
+        };
+
+        let response = ListMcpServersResponse { data, next_cursor };
+
         self.outgoing.send_response(request_id, response).await;
     }
 
@@ -2933,9 +3020,25 @@ impl CodexMessageProcessor {
         let FeedbackUploadParams {
             classification,
             reason,
-            conversation_id,
+            thread_id,
             include_logs,
         } = params;
+
+        let conversation_id = match thread_id.as_deref() {
+            Some(thread_id) => match ConversationId::from_string(thread_id) {
+                Ok(conversation_id) => Some(conversation_id),
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid thread id: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            },
+            None => None,
+        };
 
         let snapshot = self.feedback.snapshot(conversation_id);
         let thread_id = snapshot.thread_id.clone();

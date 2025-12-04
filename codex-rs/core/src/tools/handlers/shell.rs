@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
-use crate::exec_policy::create_approval_requirement_for_command;
+use crate::exec_policy::create_exec_approval_requirement_for_command;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
@@ -231,8 +231,10 @@ impl ShellHandler {
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;
 
-        let approval_requirement = create_approval_requirement_for_command(
+        let features = session.features();
+        let exec_approval_requirement = create_exec_approval_requirement_for_command(
             &turn.exec_policy,
+            &features,
             &exec_params.command,
             turn.approval_policy,
             &turn.sandbox_policy,
@@ -247,7 +249,7 @@ impl ShellHandler {
             env: exec_params.env.clone(),
             with_escalated_permissions: exec_params.with_escalated_permissions,
             justification: exec_params.justification.clone(),
-            approval_requirement,
+            exec_approval_requirement,
         };
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = ShellRuntime::new();

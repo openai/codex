@@ -11,6 +11,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
 
+type HeuristicsFallback<'a> = Option<&'a dyn Fn(&[String]) -> Decision>;
+
 #[derive(Clone, Debug)]
 pub struct Policy {
     rules_by_program: MultiMap<String, RuleRef>,
@@ -50,62 +52,84 @@ impl Policy {
         Ok(())
     }
 
-    pub fn check(&self, cmd: &[String]) -> Evaluation {
-        let rules = match cmd.first() {
-            Some(first) => match self.rules_by_program.get_vec(first) {
-                Some(rules) => rules,
-                None => return Evaluation::NoMatch {},
-            },
-            None => return Evaluation::NoMatch {},
-        };
-
-        let matched_rules: Vec<RuleMatch> =
-            rules.iter().filter_map(|rule| rule.matches(cmd)).collect();
-        match matched_rules.iter().map(RuleMatch::decision).max() {
-            Some(decision) => Evaluation::Match {
-                decision,
-                matched_rules,
-            },
-            None => Evaluation::NoMatch {},
-        }
+    pub fn check<F>(&self, cmd: &[String], heuristics_fallback: &F) -> Evaluation
+    where
+        F: Fn(&[String]) -> Decision,
+    {
+        let matched_rules = self.matches_for_command(cmd, Some(heuristics_fallback));
+        Evaluation::from_matches(matched_rules)
     }
 
-    pub fn check_multiple<Commands>(&self, commands: Commands) -> Evaluation
+    pub fn check_multiple<Commands, F>(
+        &self,
+        commands: Commands,
+        heuristics_fallback: &F,
+    ) -> Evaluation
     where
         Commands: IntoIterator,
         Commands::Item: AsRef<[String]>,
+        F: Fn(&[String]) -> Decision,
     {
         let matched_rules: Vec<RuleMatch> = commands
             .into_iter()
-            .flat_map(|command| match self.check(command.as_ref()) {
-                Evaluation::Match { matched_rules, .. } => matched_rules,
-                Evaluation::NoMatch { .. } => Vec::new(),
+            .flat_map(|command| {
+                self.matches_for_command(command.as_ref(), Some(heuristics_fallback))
             })
             .collect();
 
-        match matched_rules.iter().map(RuleMatch::decision).max() {
-            Some(decision) => Evaluation::Match {
-                decision,
-                matched_rules,
-            },
-            None => Evaluation::NoMatch {},
+        Evaluation::from_matches(matched_rules)
+    }
+
+    pub fn matches_for_command(
+        &self,
+        cmd: &[String],
+        heuristics_fallback: HeuristicsFallback<'_>,
+    ) -> Vec<RuleMatch> {
+        let mut matched_rules: Vec<RuleMatch> = match cmd.first() {
+            Some(first) => self
+                .rules_by_program
+                .get_vec(first)
+                .map(|rules| rules.iter().filter_map(|rule| rule.matches(cmd)).collect())
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+
+        if let (true, Some(heuristics_fallback)) = (matched_rules.is_empty(), heuristics_fallback) {
+            matched_rules.push(RuleMatch::HeuristicsRuleMatch {
+                command: cmd.to_vec(),
+                decision: heuristics_fallback(cmd),
+            });
         }
+
+        matched_rules
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum Evaluation {
-    NoMatch {},
-    Match {
-        decision: Decision,
-        #[serde(rename = "matchedRules")]
-        matched_rules: Vec<RuleMatch>,
-    },
+pub struct Evaluation {
+    pub decision: Decision,
+    #[serde(rename = "matchedRules")]
+    pub matched_rules: Vec<RuleMatch>,
 }
 
 impl Evaluation {
     pub fn is_match(&self) -> bool {
-        matches!(self, Self::Match { .. })
+        self.matched_rules
+            .iter()
+            .any(|rule_match| !matches!(rule_match, RuleMatch::HeuristicsRuleMatch { .. }))
+    }
+
+    fn from_matches(matched_rules: Vec<RuleMatch>) -> Self {
+        let decision = matched_rules
+            .iter()
+            .map(RuleMatch::decision)
+            .max()
+            .unwrap_or(Decision::Allow);
+
+        Self {
+            decision,
+            matched_rules,
+        }
     }
 }

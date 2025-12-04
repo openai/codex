@@ -6,6 +6,7 @@ use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
+use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
@@ -1523,7 +1524,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
             test.codex
                 .submit(Op::ExecApproval {
                     id: "0".into(),
-                    decision: *decision,
+                    decision: decision.clone(),
                 })
                 .await?;
             wait_for_completion(&test).await;
@@ -1544,7 +1545,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
             test.codex
                 .submit(Op::PatchApproval {
                     id: "0".into(),
-                    decision: *decision,
+                    decision: decision.clone(),
                 })
                 .await?;
             wait_for_completion(&test).await;
@@ -1554,6 +1555,155 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     let output_item = results_mock.single_request().function_call_output(call_id);
     let result = parse_result(&output_item);
     scenario.expectation.verify(&test, &result)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts() -> Result<()> {
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::ReadOnly;
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.approval_policy = approval_policy;
+        config.sandbox_policy = sandbox_policy_for_config;
+    });
+    let test = builder.build(&server).await?;
+    let allow_prefix_path = test.cwd.path().join("allow-prefix.txt");
+    let _ = fs::remove_file(&allow_prefix_path);
+
+    let call_id_first = "allow-prefix-first";
+    let (first_event, expected_command) = ActionKind::RunCommand {
+        command: "touch allow-prefix.txt",
+    }
+    .prepare(&test, &server, call_id_first, false)
+    .await?;
+    let expected_command =
+        expected_command.expect("execpolicy amendment scenario should produce a shell command");
+    let expected_execpolicy_amendment =
+        ExecPolicyAmendment::new(vec!["touch".to_string(), "allow-prefix.txt".to_string()]);
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-allow-prefix-1"),
+            first_event,
+            ev_completed("resp-allow-prefix-1"),
+        ]),
+    )
+    .await;
+    let first_results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-allow-prefix-1", "done"),
+            ev_completed("resp-allow-prefix-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "allow-prefix-first",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let approval = expect_exec_approval(&test, expected_command.as_str()).await;
+    assert_eq!(
+        approval.proposed_execpolicy_amendment,
+        Some(expected_execpolicy_amendment.clone())
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: "0".into(),
+            decision: ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment: expected_execpolicy_amendment.clone(),
+            },
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let policy_path = test.home.path().join("policy").join("default.codexpolicy");
+    let policy_contents = fs::read_to_string(&policy_path)?;
+    assert!(
+        policy_contents
+            .contains(r#"prefix_rule(pattern=["touch", "allow-prefix.txt"], decision="allow")"#),
+        "unexpected policy contents: {policy_contents}"
+    );
+
+    let first_output = parse_result(
+        &first_results
+            .single_request()
+            .function_call_output(call_id_first),
+    );
+    assert_eq!(first_output.exit_code.unwrap_or(0), 0);
+    assert!(
+        first_output.stdout.is_empty(),
+        "unexpected stdout: {}",
+        first_output.stdout
+    );
+    assert_eq!(
+        fs::read_to_string(&allow_prefix_path)?,
+        "",
+        "unexpected file contents after first run"
+    );
+
+    let call_id_second = "allow-prefix-second";
+    let (second_event, second_command) = ActionKind::RunCommand {
+        command: "touch allow-prefix.txt",
+    }
+    .prepare(&test, &server, call_id_second, false)
+    .await?;
+    assert_eq!(second_command.as_deref(), Some(expected_command.as_str()));
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-allow-prefix-3"),
+            second_event,
+            ev_completed("resp-allow-prefix-3"),
+        ]),
+    )
+    .await;
+    let second_results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-allow-prefix-2", "done"),
+            ev_completed("resp-allow-prefix-4"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "allow-prefix-second",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    wait_for_completion_without_approval(&test).await;
+
+    let second_output = parse_result(
+        &second_results
+            .single_request()
+            .function_call_output(call_id_second),
+    );
+    assert_eq!(second_output.exit_code.unwrap_or(0), 0);
+    assert!(
+        second_output.stdout.is_empty(),
+        "unexpected stdout: {}",
+        second_output.stdout
+    );
+    assert_eq!(
+        fs::read_to_string(&allow_prefix_path)?,
+        "",
+        "unexpected file contents after second run"
+    );
 
     Ok(())
 }

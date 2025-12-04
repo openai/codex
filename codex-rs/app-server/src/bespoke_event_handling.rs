@@ -179,6 +179,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             cwd,
             reason,
             risk,
+            proposed_execpolicy_amendment: _,
             parsed_cmd,
         }) => match api_version {
             ApiVersion::V1 => {
@@ -661,6 +662,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::PlanUpdate(plan_update_event) => {
             handle_turn_plan_update(
+                conversation_id,
                 &event_turn_id,
                 plan_update_event,
                 api_version,
@@ -693,6 +695,7 @@ async fn handle_turn_diff(
 }
 
 async fn handle_turn_plan_update(
+    conversation_id: ConversationId,
     event_turn_id: &str,
     plan_update_event: UpdatePlanArgs,
     api_version: ApiVersion,
@@ -700,6 +703,7 @@ async fn handle_turn_plan_update(
 ) {
     if let ApiVersion::V2 = api_version {
         let notification = TurnPlanUpdatedNotification {
+            thread_id: conversation_id.to_string(),
             turn_id: event_turn_id.to_string(),
             explanation: plan_update_event.explanation,
             plan: plan_update_event
@@ -1422,7 +1426,16 @@ mod tests {
             ],
         };
 
-        handle_turn_plan_update("turn-123", update, ApiVersion::V2, &outgoing).await;
+        let conversation_id = ConversationId::new();
+
+        handle_turn_plan_update(
+            conversation_id,
+            "turn-123",
+            update,
+            ApiVersion::V2,
+            &outgoing,
+        )
+        .await;
 
         let msg = rx
             .recv()
@@ -1430,6 +1443,7 @@ mod tests {
             .ok_or_else(|| anyhow!("should send one notification"))?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnPlanUpdated(n)) => {
+                assert_eq!(n.thread_id, conversation_id.to_string());
                 assert_eq!(n.turn_id, "turn-123");
                 assert_eq!(n.explanation.as_deref(), Some("need plan"));
                 assert_eq!(n.plan.len(), 2);
