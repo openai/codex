@@ -35,5 +35,7 @@ tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 unicode-width = { workspace = true }
 
+[dependencies.async-trait]
+workspace = true
+
 [dev-dependencies]
-async-trait = { workspace = true }

@@ -35,6 +35,10 @@ pub struct ExecCommand {
         value_parser = parse_attempts
     )]
     pub attempts: usize,
+
+    /// Git branch to attribute to the task (defaults to repo default/current branch).
+    #[arg(long = "branch", value_name = "BRANCH")]
+    pub branch: Option<String>,
 }
 
 fn parse_attempts(input: &str) -> Result<usize, String> {
