@@ -179,7 +179,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             cwd,
             reason,
             risk,
-            proposed_execpolicy_amendment: _proposed_execpolicy_amendment,
+            proposed_execpolicy_amendment: _,
             parsed_cmd,
         }) => match api_version {
             ApiVersion::V1 => {
