@@ -10,7 +10,7 @@ Codex CLI will present the option to whitelist commands when a command causes a 
 
 <img width="513" height="168" alt="Screenshot 2025-12-04 at 9 23 54 AM" src="https://github.com/user-attachments/assets/4c8ee8ea-3101-4a81-bb13-3f4a9aa02502" />
 
-Whitelisted commands will no longer require your permission to run in current and subsequent sessions. 
+Whitelisted commands will no longer require your permission to run in current and subsequent sessions.
 
 Under the hood, when you approve and whitelist a command, codex will edit `~/.codex/policy/default.execpolicy`.
 
