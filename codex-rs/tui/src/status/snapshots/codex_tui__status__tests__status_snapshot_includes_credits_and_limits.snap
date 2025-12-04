@@ -14,7 +14,7 @@ expression: sanitized
 │  Directory: [[workspace]]                                         │
 │  Approval:         on-request                                     │
 │  Sandbox:          read-only                                      │
-│  Agents.md:        <none>                                         │
+│  AGENTS.md:        <none>                                         │
 │                                                                   │
 │  Token usage:      2K total  (1.4K input + 600 output)            │
 │  Context window:   100% left (2.2K used / 272K)                   │

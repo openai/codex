@@ -311,7 +311,7 @@ impl HistoryCell for StatusHistoryCell {
         });
 
         let mut labels: Vec<String> =
-            vec!["Model", "Directory", "Approval", "Sandbox", "Agents.md"]
+            vec!["Model", "Directory", "Approval", "Sandbox", "AGENTS.md"]
                 .into_iter()
                 .map(str::to_string)
                 .collect();
@@ -362,7 +362,7 @@ impl HistoryCell for StatusHistoryCell {
         lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
         lines.push(formatter.line("Approval", vec![Span::from(self.approval.clone())]));
         lines.push(formatter.line("Sandbox", vec![Span::from(self.sandbox.clone())]));
-        lines.push(formatter.line("Agents.md", vec![Span::from(self.agents_summary.clone())]));
+        lines.push(formatter.line("AGENTS.md", vec![Span::from(self.agents_summary.clone())]));
 
         if let Some(account_value) = account_value {
             lines.push(formatter.line("Account", vec![Span::from(account_value)]));
