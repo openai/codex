@@ -1581,8 +1581,7 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     .await?;
     let expected_command =
         expected_command.expect("execpolicy amendment scenario should produce a shell command");
-    let expected_execpolicy_amendment =
-        vec!["touch".to_string(), "allow-prefix.txt".to_string()];
+    let expected_execpolicy_amendment = vec!["touch".to_string(), "allow-prefix.txt".to_string()];
 
     let _ = mount_sse_once(
         &server,
