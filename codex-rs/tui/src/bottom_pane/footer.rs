@@ -1,10 +1,10 @@
+#[cfg(target_os = "linux")]
+use crate::clipboard_paste::is_probably_wsl;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::line_utils::prefix_lines;
 use crate::status::format_tokens_compact;
 use crate::ui_consts::FOOTER_INDENT_COLS;
-#[cfg(target_os = "linux")]
-use crate::clipboard_paste::is_probably_wsl;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
