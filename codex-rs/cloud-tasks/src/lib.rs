@@ -1768,7 +1768,7 @@ mod tests {
     }
 
     impl StubGitInfo {
-        const fn new(default_branch: Option<String>, current_branch: Option<String>) -> Self {
+        fn new(default_branch: Option<String>, current_branch: Option<String>) -> Self {
             Self {
                 default_branch,
                 current_branch,
@@ -1810,7 +1810,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prefers_default_branch_when_available() {
+    async fn test_prefers_default_branch_when_available() {
         let git_ref = resolve_git_ref_with_git_info(
             None,
             &StubGitInfo::new(
