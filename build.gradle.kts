@@ -24,8 +24,6 @@ kotlin {
             }
         }
     }
-    linuxX64()
-    mingwX64()
 
     sourceSets {
         val nativeMain by getting {
@@ -43,7 +41,7 @@ kotlin {
                 implementation("io.ktor:ktor-client-auth:2.3.7")
                 
                 // File I/O
-                implementation("com.squareup.okio:okio:3.16.4")
+                implementation("com.squareup.okio:okio:3.17.0-SNAPSHOT")
 
                 // Character encoding support (for legacy codepage conversion)
                 // fleeksoft-io provides JDK-like IO classes for Kotlin Multiplatform
