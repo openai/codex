@@ -47,8 +47,6 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
 use crate::openai_models::model_family::ModelFamily;
-use crate::tools::spec::create_tools_json_for_chat_completions_api;
-use crate::tools::spec::create_tools_json_for_responses_api;
 
 #[derive(Debug, Clone)]
 pub struct ModelClient {
