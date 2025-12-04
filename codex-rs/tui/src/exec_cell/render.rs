@@ -219,7 +219,12 @@ impl HistoryCell for ExecCell {
 
             if let Some(output) = call.output.as_ref() {
                 if !call.is_unified_exec_interaction() {
-                    lines.extend(output.formatted_output.lines().map(ansi_escape_line));
+                    let wrap_width = width.max(1) as usize;
+                    let wrap_opts = RtOptions::new(wrap_width);
+                    for unwrapped in output.formatted_output.lines().map(ansi_escape_line) {
+                        let wrapped = word_wrap_line(&unwrapped, wrap_opts.clone());
+                        push_owned_lines(&wrapped, &mut lines);
+                    }
                 }
                 let duration = call
                     .duration
