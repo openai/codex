@@ -34,8 +34,8 @@ struct ExecCommandArgs {
     workdir: Option<String>,
     #[serde(default)]
     shell: Option<String>,
-    #[serde(default = "default_login")]
-    login: bool,
+    #[serde(default)]
+    login: Option<bool>,
     #[serde(default = "default_exec_yield_time_ms")]
     yield_time_ms: u64,
     #[serde(default)]
@@ -64,10 +64,6 @@ fn default_exec_yield_time_ms() -> u64 {
 
 fn default_write_stdin_yield_time_ms() -> u64 {
     250
-}
-
-fn default_login() -> bool {
-    true
 }
 
 #[async_trait]
@@ -260,7 +256,7 @@ fn get_command(args: &ExecCommandArgs) -> Vec<String> {
         default_user_shell()
     };
 
-    shell.derive_exec_args(&args.cmd, args.login)
+    shell.build_command(&args.cmd, args.login)
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {
@@ -304,6 +300,7 @@ mod tests {
             serde_json::from_str(json).expect("deserialize ExecCommandArgs");
 
         assert!(args.shell.is_none());
+        assert!(args.login.is_none());
 
         let command = get_command(&args);
 
@@ -323,6 +320,42 @@ mod tests {
         let command = get_command(&args);
 
         assert_eq!(command[2], "echo hello");
+    }
+
+    #[test]
+    fn test_get_command_defaults_to_non_login_shell_for_allowlisted_commands() {
+        let json = r#"{"cmd": "echo hello", "shell": "/bin/bash"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        let command = get_command(&args);
+
+        assert_eq!(command[1], "-c");
+    }
+
+    #[test]
+    fn test_get_command_keeps_login_shell_for_non_allowlisted_commands() {
+        let json = r#"{"cmd": "python -c 'print(1)'", "shell": "/bin/bash"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        let command = get_command(&args);
+
+        assert_eq!(command[1], "-lc");
+    }
+
+    #[test]
+    fn test_get_command_respects_explicit_login_flag() {
+        let json = r#"{"cmd": "echo hello", "shell": "/bin/bash", "login": true}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        let command = get_command(&args);
+
+        assert_eq!(command[1], "-lc");
     }
 
     #[test]

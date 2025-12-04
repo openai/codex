@@ -337,7 +337,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     })
     .await;
 
-    assert_command(&begin_event.command, "-lc", "/bin/echo hello unified exec");
+    assert_command(&begin_event.command, "-c", "/bin/echo hello unified exec");
 
     assert_eq!(begin_event.cwd, cwd.path());
 

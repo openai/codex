@@ -1,6 +1,15 @@
+use crate::bash::parse_shell_lc_plain_commands;
 use serde::Deserialize;
 use serde::Serialize;
+use std::path::Path;
 use std::path::PathBuf;
+
+/// Plain commands (no redirects/subshell/etc.) that are safe to run without
+/// login-shell initialization.
+const NON_LOGIN_SHELL_ALLOWLIST: &[&str] = &[
+    "cat", "cd", "echo", "false", "find", "grep", "head", "ls", "nl", "pwd", "rm",
+    "rmdir", "sed", "tail", "true", "wc",
+];
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum ShellType {
@@ -58,6 +67,32 @@ impl Shell {
             }
         }
     }
+
+    /// Builds shell exec args for `script`, defaulting to login-shell semantics
+    /// unless we detect a safe, allowlisted script. An explicit `login` flag
+    /// overrides the default.
+    pub fn build_command(&self, script: &str, login: Option<bool>) -> Vec<String> {
+        let use_login_shell = login.unwrap_or_else(|| match self.shell_type {
+            ShellType::PowerShell | ShellType::Cmd => true,
+            ShellType::Zsh | ShellType::Bash | ShellType::Sh => {
+                !uses_allowlisted_plain_commands(&self.derive_exec_args(script, true))
+            }
+        });
+        self.derive_exec_args(script, use_login_shell)
+    }
+}
+
+fn uses_allowlisted_plain_commands(command: &[String]) -> bool {
+    parse_shell_lc_plain_commands(command)
+        .filter(|commands| !commands.is_empty())
+        .is_some_and(|commands| {
+            commands.iter().all(|cmd| {
+                cmd.first()
+                    .and_then(|cmd0| Path::new(cmd0).file_name())
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|cmd0| NON_LOGIN_SHELL_ALLOWLIST.contains(&cmd0))
+            })
+        })
 }
 
 #[cfg(unix)]
@@ -372,6 +407,41 @@ mod tests {
             shell_path == PathBuf::from("/bin/sh") || shell_path == PathBuf::from("/usr/bin/sh"),
             "shell path: {shell_path:?}",
         );
+    }
+
+    #[test]
+    fn allowlisted_bash_script_skips_login_shell() {
+        let shell = Shell {
+            shell_type: ShellType::Bash,
+            shell_path: PathBuf::from("/bin/bash"),
+        };
+        let command = shell.build_command("cd foo && ls", None);
+        assert_eq!(command[1], "-c");
+        let command = shell.build_command("cd foo && cargo build", None);
+        assert_eq!(command[1], "-lc");
+    }
+
+    #[test]
+    fn non_allowlisted_bash_script_keeps_login_shell() {
+        let shell = Shell {
+            shell_type: ShellType::Bash,
+            shell_path: PathBuf::from("/bin/bash"),
+        };
+        let command = shell.build_command("python -c 'print(1)'", None);
+        assert_eq!(command[1], "-lc");
+    }
+
+    #[test]
+    fn explicit_login_flag_is_respected() {
+        let shell = Shell {
+            shell_type: ShellType::Bash,
+            shell_path: PathBuf::from("/bin/bash"),
+        };
+        let login_command = shell.build_command("echo hello", Some(true));
+        assert_eq!(login_command[1], "-lc");
+
+        let non_login_command = shell.build_command("echo hello", Some(false));
+        assert_eq!(non_login_command[1], "-c");
     }
 
     #[test]
