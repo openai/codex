@@ -8,6 +8,7 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
+use codex_core::openai_models::models_manager::ModelsManager;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::SessionSource;
@@ -59,14 +60,19 @@ async fn responses_stream_includes_subagent_header_on_review() {
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
+    let auth_mode = AuthMode::ChatGPT;
+    let models_manager = Arc::new(ModelsManager::new(Some(auth_mode)));
 
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
-        config.model_family.slug.as_str(),
+        models_manager
+            .construct_model_family(&config.model)
+            .slug
+            .as_str(),
         None,
         Some("test@test.com".to_string()),
-        Some(AuthMode::ChatGPT),
+        Some(auth_mode),
         false,
         "test".to_string(),
     );
@@ -74,6 +80,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
+        models_manager.clone(),
         otel_event_manager,
         provider,
         effort,
@@ -147,14 +154,19 @@ async fn responses_stream_includes_subagent_header_on_other() {
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
+    let auth_mode = AuthMode::ChatGPT;
+    let models_manager = Arc::new(ModelsManager::new(Some(auth_mode)));
 
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
-        config.model_family.slug.as_str(),
+        models_manager
+            .construct_model_family(&config.model)
+            .slug
+            .as_str(),
         None,
         Some("test@test.com".to_string()),
-        Some(AuthMode::ChatGPT),
+        Some(auth_mode),
         false,
         "test".to_string(),
     );
@@ -162,6 +174,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
+        models_manager.clone(),
         otel_event_manager,
         provider,
         effort,

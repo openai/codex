@@ -469,6 +469,7 @@ impl ChatWidget {
             let cell = history_cell::new_reasoning_summary_block(
                 self.full_reasoning_buffer.clone(),
                 &self.config,
+                &self.models_manager,
             );
             self.add_boxed_history(cell);
         }

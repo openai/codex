@@ -6,6 +6,7 @@ use crate::openai_models::model_family::ModelFamily;
 use crate::openai_models::model_family::find_family_for_model;
 use crate::openai_models::model_presets::builtin_model_presets;
 
+#[derive(Debug)]
 pub struct ModelsManager {
     pub available_models: RwLock<Vec<ModelPreset>>,
     pub etag: String,

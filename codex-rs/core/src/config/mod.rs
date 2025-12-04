@@ -27,7 +27,6 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
-use crate::openai_models::model_family::ModelFamily;
 use crate::openai_models::model_family::find_family_for_model;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
@@ -80,9 +79,6 @@ pub struct Config {
 
     /// Model used specifically for review sessions. Defaults to "gpt-5.1-codex-max".
     pub review_model: String,
-
-    // todo(aibrahim): remove this field
-    pub model_family: ModelFamily,
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
@@ -1173,7 +1169,6 @@ impl Config {
         let config = Self {
             model,
             review_model,
-            model_family,
             model_context_window,
             model_auto_compact_token_limit,
             model_provider_id,
@@ -2954,7 +2949,6 @@ model_verbosity = "high"
             Config {
                 model: "o3".to_string(),
                 review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-                model_family: find_family_for_model("o3"),
                 model_context_window: Some(200_000),
                 model_auto_compact_token_limit: Some(180_000),
                 model_provider_id: "openai".to_string(),
@@ -3028,7 +3022,6 @@ model_verbosity = "high"
         let expected_gpt3_profile_config = Config {
             model: "gpt-3.5-turbo".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-3.5-turbo"),
             model_context_window: Some(16_385),
             model_auto_compact_token_limit: Some(14_746),
             model_provider_id: "openai-chat-completions".to_string(),
@@ -3117,7 +3110,6 @@ model_verbosity = "high"
         let expected_zdr_profile_config = Config {
             model: "o3".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("o3"),
             model_context_window: Some(200_000),
             model_auto_compact_token_limit: Some(180_000),
             model_provider_id: "openai".to_string(),
@@ -3192,7 +3184,6 @@ model_verbosity = "high"
         let expected_gpt5_profile_config = Config {
             model: "gpt-5.1".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-5.1"),
             model_context_window: Some(272_000),
             model_auto_compact_token_limit: Some(244_800),
             model_provider_id: "openai".to_string(),

@@ -396,7 +396,7 @@ pub(crate) struct SessionSettingsUpdate {
 impl Session {
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
-        models_manager: &ModelsManager,
+        models_manager: Arc<ModelsManager>,
         otel_event_manager: &OtelEventManager,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
@@ -408,7 +408,6 @@ impl Session {
         let model_family = models_manager.construct_model_family(&session_configuration.model);
         let mut per_turn_config = (*config).clone();
         per_turn_config.model = session_configuration.model.clone();
-        per_turn_config.model_family = model_family.clone();
         per_turn_config.model_reasoning_effort = session_configuration.model_reasoning_effort;
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.features = features.clone();
@@ -424,6 +423,7 @@ impl Session {
         let client = ModelClient::new(
             Arc::new(per_turn_config.clone()),
             auth_manager,
+            models_manager,
             otel_event_manager,
             provider,
             session_configuration.model_reasoning_effort,
@@ -453,7 +453,10 @@ impl Session {
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             exec_policy: session_configuration.exec_policy.clone(),
-            truncation_policy: TruncationPolicy::new(&per_turn_config),
+            truncation_policy: TruncationPolicy::new(
+                &per_turn_config,
+                model_family.truncation_policy,
+            ),
         }
     }
 
@@ -537,10 +540,14 @@ impl Session {
             });
         }
 
+        // todo(aibrahim): why are we passing model here while it can change?
         let otel_event_manager = OtelEventManager::new(
             conversation_id,
             config.model.as_str(),
-            config.model_family.slug.as_str(),
+            models_manager
+                .construct_model_family(&config.model)
+                .slug
+                .as_str(),
             auth_manager.auth().and_then(|a| a.get_account_id()),
             auth_manager.auth().and_then(|a| a.get_account_email()),
             auth_manager.auth().map(|a| a.mode),
@@ -760,7 +767,7 @@ impl Session {
 
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
-            &self.services.models_manager,
+            Arc::clone(&self.services.models_manager),
             &self.services.otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
@@ -860,6 +867,7 @@ impl Session {
             auth_manager,
             &otel,
             self.conversation_id,
+            self.services.models_manager.clone(),
             turn_context.client.get_session_source(),
             call_id,
             command,
@@ -1849,7 +1857,6 @@ async fn spawn_review_thread(
     // Build per‑turn client with the requested model/family.
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = model.clone();
-    per_turn_config.model_family = model_family.clone();
     per_turn_config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
     per_turn_config.model_reasoning_summary = ReasoningSummaryConfig::Detailed;
     per_turn_config.features = review_features.clone();
@@ -1862,13 +1869,18 @@ async fn spawn_review_thread(
         .get_otel_event_manager()
         .with_model(
             per_turn_config.model.as_str(),
-            per_turn_config.model_family.slug.as_str(),
+            sess.services
+                .models_manager
+                .construct_model_family(&per_turn_config.model)
+                .slug
+                .as_str(),
         );
 
     let per_turn_config = Arc::new(per_turn_config);
     let client = ModelClient::new(
         per_turn_config.clone(),
         auth_manager,
+        sess.services.models_manager.clone(),
         otel_event_manager,
         provider,
         per_turn_config.model_reasoning_effort,
@@ -1893,7 +1905,7 @@ async fn spawn_review_thread(
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         exec_policy: parent_turn_context.exec_policy.clone(),
-        truncation_policy: TruncationPolicy::new(&per_turn_config),
+        truncation_policy: TruncationPolicy::new(&per_turn_config, model_family.truncation_policy),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2725,11 +2737,18 @@ mod tests {
         })
     }
 
-    fn otel_event_manager(conversation_id: ConversationId, config: &Config) -> OtelEventManager {
+    fn otel_event_manager(
+        conversation_id: ConversationId,
+        config: &Config,
+        models_manager: &ModelsManager,
+    ) -> OtelEventManager {
         OtelEventManager::new(
             conversation_id,
             config.model.as_str(),
-            config.model_family.slug.as_str(),
+            models_manager
+                .construct_model_family(&config.model)
+                .slug
+                .as_str(),
             None,
             Some("test@test.com".to_string()),
             Some(AuthMode::ChatGPT),
@@ -2749,13 +2768,14 @@ mod tests {
         .expect("load default test config");
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
-        let otel_event_manager = otel_event_manager(conversation_id, config.as_ref());
         let auth_manager = AuthManager::shared(
             config.cwd.clone(),
             false,
             config.cli_auth_credentials_store_mode,
         );
         let models_manager = Arc::new(ModelsManager::new(auth_manager.get_auth_mode()));
+        let otel_event_manager =
+            otel_event_manager(conversation_id, config.as_ref(), &models_manager);
 
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -2792,7 +2812,7 @@ mod tests {
 
         let turn_context = Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
-            &models_manager,
+            models_manager,
             &otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
@@ -2830,13 +2850,14 @@ mod tests {
         .expect("load default test config");
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
-        let otel_event_manager = otel_event_manager(conversation_id, config.as_ref());
         let auth_manager = AuthManager::shared(
             config.cwd.clone(),
             false,
             config.cli_auth_credentials_store_mode,
         );
         let models_manager = Arc::new(ModelsManager::new(auth_manager.get_auth_mode()));
+        let otel_event_manager =
+            otel_event_manager(conversation_id, config.as_ref(), &models_manager);
 
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -2873,7 +2894,7 @@ mod tests {
 
         let turn_context = Arc::new(Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
-            &models_manager,
+            models_manager,
             &otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
