@@ -5,6 +5,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
 use crate::diff_render::DiffSummary;
 use crate::editor;
+use crate::editor::EditorError;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
@@ -1143,6 +1144,13 @@ impl App {
     async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
         let editor_cmd = match editor::resolve_editor_command() {
             Ok(cmd) => cmd,
+            Err(EditorError::MissingEditor) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(
+                        "Cannot open external editor: set $VISUAL or $EDITOR".to_string(),
+                    ));
+                return;
+            }
             Err(err) => {
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(format!(

@@ -1,23 +1,42 @@
 use std::env;
+use std::fmt;
 use std::fs;
 use std::process::Stdio;
 
 use color_eyre::eyre::Report;
 use color_eyre::eyre::Result;
-use color_eyre::eyre::WrapErr;
 use shlex::split as shlex_split;
 use tempfile::Builder;
 use tokio::process::Command;
 
+#[derive(Debug)]
+pub(crate) enum EditorError {
+    MissingEditor,
+    ParseFailed,
+    EmptyCommand,
+}
+
+impl fmt::Display for EditorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EditorError::MissingEditor => write!(f, "neither VISUAL nor EDITOR is set"),
+            EditorError::ParseFailed => write!(f, "failed to parse editor command"),
+            EditorError::EmptyCommand => write!(f, "editor command is empty"),
+        }
+    }
+}
+
+impl std::error::Error for EditorError {}
+
 /// Resolve the editor command from environment variables.
 /// Prefers `VISUAL` over `EDITOR`.
-pub(crate) fn resolve_editor_command() -> Result<Vec<String>> {
+pub(crate) fn resolve_editor_command() -> std::result::Result<Vec<String>, EditorError> {
     let raw = env::var("VISUAL")
         .or_else(|_| env::var("EDITOR"))
-        .wrap_err("VISUAL/EDITOR not set")?;
-    let parts = shlex_split(&raw).ok_or_else(|| Report::msg("failed to parse editor command"))?;
+        .map_err(|_| EditorError::MissingEditor)?;
+    let parts = shlex_split(&raw).ok_or(EditorError::ParseFailed)?;
     if parts.is_empty() {
-        return Err(Report::msg("editor command is empty"));
+        return Err(EditorError::EmptyCommand);
     }
     Ok(parts)
 }
@@ -112,11 +131,14 @@ mod tests {
             env::remove_var("VISUAL");
             env::remove_var("EDITOR");
         }
-        assert!(resolve_editor_command().is_err());
+        assert!(matches!(
+            resolve_editor_command(),
+            Err(EditorError::MissingEditor)
+        ));
     }
 
-    #[cfg(unix)]
     #[tokio::test]
+    #[cfg(unix)]
     async fn run_editor_returns_updated_content() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -132,8 +154,8 @@ mod tests {
         assert_eq!(result, Some("edited".to_string()));
     }
 
-    #[cfg(unix)]
     #[tokio::test]
+    #[cfg(unix)]
     async fn run_editor_returns_none_when_file_empty() {
         use std::os::unix::fs::PermissionsExt;
 
