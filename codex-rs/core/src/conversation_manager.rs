@@ -37,7 +37,7 @@ pub struct NewConversation {
 pub struct ConversationManager {
     conversations: Arc<RwLock<HashMap<ConversationId, Arc<CodexConversation>>>>,
     auth_manager: Arc<AuthManager>,
-    pub models_manager: Arc<ModelsManager>,
+    models_manager: Arc<ModelsManager>,
     session_source: SessionSource,
 }
 
@@ -200,6 +200,10 @@ impl ConversationManager {
 
     pub async fn list_models(&self) -> Vec<ModelPreset> {
         self.models_manager.available_models.read().await.clone()
+    }
+
+    pub fn get_models_manager(&self) -> Arc<ModelsManager> {
+        self.models_manager.clone()
     }
 }
 
