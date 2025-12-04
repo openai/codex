@@ -21,7 +21,7 @@ pub mod config;
 pub mod config_loader;
 mod context_manager;
 pub mod custom_prompts;
-pub mod environment_context;
+mod environment_context;
 pub mod error;
 pub mod exec;
 pub mod exec_env;

@@ -29,44 +29,17 @@ fn text_user_input(text: String) -> serde_json::Value {
     })
 }
 
-#[allow(dead_code)]
-fn has_wsl_env_markers() -> bool {
-    std::env::var_os("WSL_INTEROP").is_some()
-        || std::env::var_os("WSLENV").is_some()
-        || std::env::var_os("WSL_DISTRO_NAME").is_some()
-}
-
-fn operating_system_context_block() -> String {
-    if let Some(os) = codex_core::environment_context::get_operating_system_info() {
-        let mut lines = vec![
-            "  <operating_system>".to_string(),
-            format!("    <name>{}</name>", os.name),
-            format!("    <version>{}</version>", os.version),
-        ];
-        if let Some(is_wsl) = os.is_likely_windows_subsystem_for_linux {
-            lines.push(format!(
-                "    <is_likely_windows_subsystem_for_linux>{is_wsl}</is_likely_windows_subsystem_for_linux>"
-            ));
-        }
-        lines.push("  </operating_system>".to_string());
-        lines.join("\n") + "\n"
-    } else {
-        String::new()
-    }
-}
-
 fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
-    let mut lines = vec![
-        "<environment_context>".to_string(),
-        format!("  <cwd>{cwd}</cwd>"),
-        "  <approval_policy>on-request</approval_policy>".to_string(),
-        "  <sandbox_mode>read-only</sandbox_mode>".to_string(),
-        "  <network_access>restricted</network_access>".to_string(),
-        format!("  <shell>{}</shell>", shell.name()),
-    ];
-    lines.extend(operating_system_context_block().lines().map(str::to_string));
-    lines.push("</environment_context>".to_string());
-    lines.join("\n")
+    let shell_name = shell.name();
+    format!(
+        r#"<environment_context>
+  <cwd>{cwd}</cwd>
+  <approval_policy>on-request</approval_policy>
+  <sandbox_mode>read-only</sandbox_mode>
+  <network_access>restricted</network_access>
+  <shell>{shell_name}</shell>
+</environment_context>"#
+    )
 }
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
