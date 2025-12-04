@@ -73,3 +73,77 @@ pub struct ModelPreset {
     /// Whether this preset should appear in the picker UI.
     pub show_in_picker: bool,
 }
+
+/// Visibility of a model in the picker or APIs.
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema, EnumIter, Display,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ModelVisibility {
+    List,
+    Hide,
+    None,
+}
+
+/// Reasoning support level reported by the backend.
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema, EnumIter, Display,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ReasoningLevel {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+}
+
+/// Shell execution capability for a model.
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema, EnumIter, Display,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ShellType {
+    Default,
+    Local,
+    UnifiedExec,
+    Disabled,
+    ShellCommand,
+}
+
+/// Semantic version triple encoded as an array in JSON (e.g. [0, 62, 0]).
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
+pub struct ClientVersion(pub i32, pub i32, pub i32);
+
+/// Model metadata returned by the Codex backend `/models` endpoint.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct ModelInfo {
+    pub slug: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub default_reasoning_level: ReasoningLevel,
+    pub supported_reasoning_levels: Vec<ReasoningLevel>,
+    pub shell_type: ShellType,
+    #[serde(default = "default_visibility")]
+    pub visibility: ModelVisibility,
+    pub minimal_client_version: ClientVersion,
+    #[serde(default)]
+    pub supported_in_api: bool,
+    #[serde(default)]
+    pub priority: i32,
+}
+
+/// Response wrapper for `/models`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema, Default)]
+pub struct ModelsResponse {
+    pub models: Vec<ModelInfo>,
+}
+
+fn default_visibility() -> ModelVisibility {
+    ModelVisibility::None
+}
