@@ -11,6 +11,7 @@ use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::SandboxPermissions;
+use crate::shell::should_use_login_shell;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -49,7 +50,13 @@ impl ShellCommandHandler {
         turn_context: &TurnContext,
     ) -> ExecParams {
         let shell = session.user_shell();
-        let use_login_shell = true;
+        let use_login_shell = should_use_login_shell(
+            true,
+            &params.command,
+            shell,
+            turn_context.non_login_shell_heuristic_enabled,
+            &turn_context.non_login_shell_allowlist,
+        );
         let command = shell.derive_exec_args(&params.command, use_login_shell);
 
         ExecParams {

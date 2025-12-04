@@ -459,6 +459,15 @@ pub struct ShellEnvironmentPolicyToml {
     pub experimental_use_profile: Option<bool>,
 }
 
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ShellConfigToml {
+    /// Additional commands that can skip login shells when the
+    /// `non_login_shell_heuristic` feature flag is enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub non_login_allowlist: Option<Vec<String>>,
+}
+
 pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
 
 /// Deriving the `env` based on this policy works as follows:

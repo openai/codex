@@ -8,6 +8,7 @@ use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecOutputStream;
 use crate::shell::default_user_shell;
 use crate::shell::get_shell_by_model_provided_path;
+use crate::shell::should_use_login_shell;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -93,7 +94,15 @@ impl ToolHandler for UnifiedExecHandler {
         let Ok(params) = serde_json::from_str::<ExecCommandArgs>(arguments) else {
             return true;
         };
-        let command = get_command(&params);
+        let shell = resolve_shell(&params);
+        let use_login_shell = should_use_login_shell(
+            params.login,
+            &params.cmd,
+            &shell,
+            invocation.turn.non_login_shell_heuristic_enabled,
+            &invocation.turn.non_login_shell_allowlist,
+        );
+        let command = shell.derive_exec_args(&params.cmd, use_login_shell);
         !is_known_safe_command(&command)
     }
 
@@ -130,7 +139,15 @@ impl ToolHandler for UnifiedExecHandler {
                 })?;
                 let process_id = manager.allocate_process_id().await;
 
-                let command = get_command(&args);
+                let shell = resolve_shell(&args);
+                let use_login_shell = should_use_login_shell(
+                    args.login,
+                    &args.cmd,
+                    &shell,
+                    turn.non_login_shell_heuristic_enabled,
+                    &turn.non_login_shell_allowlist,
+                );
+                let command = shell.derive_exec_args(&args.cmd, use_login_shell);
                 let ExecCommandArgs {
                     workdir,
                     yield_time_ms,
@@ -253,14 +270,18 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
+#[cfg(test)]
 fn get_command(args: &ExecCommandArgs) -> Vec<String> {
-    let shell = if let Some(shell_str) = &args.shell {
+    let shell = resolve_shell(args);
+    shell.derive_exec_args(&args.cmd, args.login)
+}
+
+fn resolve_shell(args: &ExecCommandArgs) -> crate::shell::Shell {
+    if let Some(shell_str) = &args.shell {
         get_shell_by_model_provided_path(&PathBuf::from(shell_str))
     } else {
         default_user_shell()
-    };
-
-    shell.derive_exec_args(&args.cmd, args.login)
+    }
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {

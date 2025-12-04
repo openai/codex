@@ -1,5 +1,8 @@
+use crate::is_safe_command::is_known_safe_command;
 use serde::Deserialize;
 use serde::Serialize;
+use shlex::split as shlex_split;
+use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -58,6 +61,51 @@ impl Shell {
             }
         }
     }
+}
+
+pub fn should_use_login_shell(
+    requested_login_shell: bool,
+    command: &str,
+    shell: &Shell,
+    heuristic_enabled: bool,
+    allowlist: &[String],
+) -> bool {
+    if !requested_login_shell {
+        return false;
+    }
+    if !heuristic_enabled {
+        return true;
+    }
+    if !matches!(
+        shell.shell_type,
+        ShellType::Bash | ShellType::Zsh | ShellType::Sh
+    ) {
+        return requested_login_shell;
+    }
+
+    let is_allowlisted = shlex_split(command)
+        .and_then(|tokens| {
+            tokens.first().map(|token| {
+                let token_name = Path::new(token)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(token.as_str());
+                allowlist
+                    .iter()
+                    .any(|cmd| cmd == token || cmd == token_name)
+            })
+        })
+        .unwrap_or(false);
+    if !is_allowlisted {
+        return true;
+    }
+
+    let derived = shell.derive_exec_args(command, false);
+    if is_known_safe_command(&derived) {
+        return false;
+    }
+
+    true
 }
 
 #[cfg(unix)]
@@ -359,7 +407,8 @@ mod tests {
         assert!(
             shell_path == PathBuf::from("/bin/bash")
                 || shell_path == PathBuf::from("/usr/bin/bash")
-                || shell_path == PathBuf::from("/usr/local/bin/bash"),
+                || shell_path == PathBuf::from("/usr/local/bin/bash")
+                || shell_path == PathBuf::from("/opt/homebrew/bin/bash"),
             "shell path: {shell_path:?}",
         );
     }
@@ -450,5 +499,24 @@ mod tests {
         let shell_path = powershell_shell.shell_path;
 
         assert!(shell_path.ends_with("pwsh.exe") || shell_path.ends_with("powershell.exe"));
+    }
+
+    #[test]
+    fn non_login_shell_heuristic_respects_allowlist() {
+        let shell = Shell {
+            shell_type: ShellType::Bash,
+            shell_path: PathBuf::from("/bin/bash"),
+        };
+        let allowlist = vec!["ls".to_string()];
+        assert!(!should_use_login_shell(
+            true, "ls -la", &shell, true, &allowlist
+        ));
+        assert!(should_use_login_shell(
+            true,
+            "awk '{print $1}' file.txt",
+            &shell,
+            true,
+            &allowlist
+        ));
     }
 }

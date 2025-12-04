@@ -289,6 +289,8 @@ pub(crate) struct TurnContext {
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
+    pub(crate) non_login_shell_allowlist: Vec<String>,
+    pub(crate) non_login_shell_heuristic_enabled: bool,
     pub(crate) tools_config: ToolsConfig,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
@@ -405,6 +407,7 @@ impl Session {
     ) -> TurnContext {
         let config = session_configuration.original_config_do_not_use.clone();
         let features = &config.features;
+        let non_login_shell_heuristic_enabled = features.enabled(Feature::NonLoginShellHeuristic);
         let model_family = models_manager.construct_model_family(&session_configuration.model);
         let mut per_turn_config = (*config).clone();
         per_turn_config.model = session_configuration.model.clone();
@@ -448,6 +451,8 @@ impl Session {
             approval_policy: session_configuration.approval_policy,
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             shell_environment_policy: config.shell_environment_policy.clone(),
+            non_login_shell_allowlist: config.non_login_shell_allowlist.clone(),
+            non_login_shell_heuristic_enabled,
             tools_config,
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
@@ -1888,6 +1893,8 @@ async fn spawn_review_thread(
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
+        non_login_shell_allowlist: parent_turn_context.non_login_shell_allowlist.clone(),
+        non_login_shell_heuristic_enabled: parent_turn_context.non_login_shell_heuristic_enabled,
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),

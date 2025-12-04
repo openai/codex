@@ -24,6 +24,7 @@ use crate::protocol::ExecCommandSource;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::TaskStartedEvent;
 use crate::sandboxing::ExecEnv;
+use crate::shell::should_use_login_shell;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
 use crate::user_shell_command::user_shell_command_record_item;
@@ -66,7 +67,13 @@ impl SessionTask for UserShellCommandTask {
         // Execute the user's script under their default shell when known; this
         // allows commands that use shell features (pipes, &&, redirects, etc.).
         // We do not source rc files or otherwise reformat the script.
-        let use_login_shell = true;
+        let use_login_shell = should_use_login_shell(
+            true,
+            &self.command,
+            session.user_shell(),
+            turn_context.non_login_shell_heuristic_enabled,
+            &turn_context.non_login_shell_allowlist,
+        );
         let command = session
             .user_shell()
             .derive_exec_args(&self.command, use_login_shell);
