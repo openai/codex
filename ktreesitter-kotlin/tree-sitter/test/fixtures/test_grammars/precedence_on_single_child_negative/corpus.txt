@@ -1,0 +1,12 @@
+===========================
+function calls with blocks
+===========================
+
+foo bar { baz }
+
+---
+
+(expression (function_call
+  (identifier)
+  (expression (identifier))
+  (block (expression (identifier)))))

@@ -1,0 +1,29 @@
+[package]
+name = "tree-sitter-highlight"
+version.workspace = true
+description = "Library for performing syntax highlighting with Tree-sitter"
+authors = [
+  "Max Brunsfeld <maxbrunsfeld@gmail.com>",
+  "Tim Clem <timothy.clem@gmail.com>",
+]
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords = ["incremental", "parsing", "syntax", "highlighting"]
+categories = ["parsing", "text-editors"]
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["lib", "staticlib"]
+
+[dependencies]
+regex.workspace = true
+thiserror.workspace = true
+streaming-iterator.workspace = true
+
+tree-sitter.workspace = true

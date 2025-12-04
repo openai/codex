@@ -1,0 +1,8 @@
+===================
+chained operations
+===================
+x+y+z
+---
+(expression (math_operation
+  (expression (math_operation (expression (identifier)) (expression (identifier))))
+  (expression (identifier))))

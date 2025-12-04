@@ -1,0 +1,43 @@
+===============
+Uppercase words
+===============
+
+Δბㄱ  Ψ  Ɓƀ  Ƒ  Ɣ  Śřř
+
+---
+
+(program
+  (upper) (upper) (upper) (upper) (upper) (upper))
+
+================
+Lowercase words
+================
+
+śś  ťť  ßß
+
+---
+
+(program
+  (lower) (lower) (lower))
+
+================
+Math symbols
+================
+
+≺ ≼ ≠ ≝ ⨔∑
+
+---
+
+(program
+  (math_sym) (math_sym) (math_sym) (math_sym) (math_sym))
+
+================================
+Letterlike numeric characters
+================================
+
+ᛯ Ⅵ 〩
+
+---
+
+(program
+  (letter_number) (letter_number) (letter_number))

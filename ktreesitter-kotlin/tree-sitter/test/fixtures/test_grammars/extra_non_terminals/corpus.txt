@@ -1,0 +1,22 @@
+==============
+No extras
+==============
+
+a b c d
+
+---
+
+(module)
+
+==============
+Extras
+==============
+
+a (one) b (two) (three) c d
+
+---
+
+(module
+  (comment)
+  (comment)
+  (comment))

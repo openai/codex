@@ -1,0 +1,32 @@
+========================
+Expressions on one line
+=========================
+
+a
+b
+  .c
+d
+  .e
+  .f
+
+---
+
+(program
+  (statement (identifier) (line_break))
+  (statement (member_expression (identifier) (identifier)) (line_break))
+  (statement (member_expression (member_expression (identifier) (identifier)) (identifier)) (line_break)))
+
+=====================================
+Line breaks followed by whitespace
+=====================================
+
+a
+  b
+  c
+
+---
+
+(program
+  (statement (identifier) (line_break))
+  (statement (identifier) (line_break))
+  (statement (identifier) (line_break)))

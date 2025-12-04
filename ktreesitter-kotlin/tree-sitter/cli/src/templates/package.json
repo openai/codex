@@ -1,0 +1,53 @@
+{
+  "name": "tree-sitter-PARSER_NAME",
+  "version": "PARSER_VERSION",
+  "description": "PARSER_DESCRIPTION",
+  "repository": "PARSER_URL",
+  "funding": "FUNDING_URL",
+  "license": "PARSER_LICENSE",
+  "author": {
+    "name": "PARSER_AUTHOR_NAME",
+    "email": "PARSER_AUTHOR_EMAIL",
+    "url": "PARSER_AUTHOR_URL"
+  },
+  "main": "bindings/node",
+  "types": "bindings/node",
+  "keywords": [
+    "incremental",
+    "parsing",
+    "tree-sitter",
+    "LOWER_PARSER_NAME"
+  ],
+  "files": [
+    "grammar.js",
+    "tree-sitter.json",
+    "binding.gyp",
+    "prebuilds/**",
+    "bindings/node/*",
+    "queries/*",
+    "src/**",
+    "*.wasm"
+  ],
+  "dependencies": {
+    "node-addon-api": "^8.3.1",
+    "node-gyp-build": "^4.8.4"
+  },
+  "devDependencies": {
+    "prebuildify": "^6.0.1",
+    "tree-sitter-cli": "^CLI_VERSION"
+  },
+  "peerDependencies": {
+    "tree-sitter": "^0.22.4"
+  },
+  "peerDependenciesMeta": {
+    "tree-sitter": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "install": "node-gyp-build",
+    "prestart": "tree-sitter build --wasm",
+    "start": "tree-sitter playground",
+    "test": "node --test bindings/node/*_test.js"
+  }
+}

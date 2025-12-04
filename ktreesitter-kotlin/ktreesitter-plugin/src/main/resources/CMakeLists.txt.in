@@ -1,0 +1,28 @@
+# Automatically generated file. DO NOT MODIFY
+
+cmake_minimum_required(VERSION 3.12.0)
+
+project(@LIBRARY@ LANGUAGES C)
+
+find_package(JNI REQUIRED)
+
+set(CMAKE_C_STANDARD 11)
+
+if(MSVC)
+    add_compile_options(/W3 /wd4244)
+else()
+    set(CMAKE_C_VISIBILITY_PRESET hidden)
+    add_compile_options(-Wall -Wextra
+                        -Wno-unused-parameter
+                        -Werror=implicit-function-declaration)
+endif()
+
+include_directories(${JNI_INCLUDE_DIRS} @INCLUDE@)
+
+add_compile_definitions(TREE_SITTER_HIDE_SYMBOLS)
+
+add_library(@LIBRARY@ SHARED @SOURCES@)
+
+set_target_properties(@LIBRARY@ PROPERTIES DEFINE_SYMBOL "")
+
+install(TARGETS @LIBRARY@ ARCHIVE EXCLUDE_FROM_ALL)

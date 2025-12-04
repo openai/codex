@@ -1,0 +1,44 @@
+[package]
+name = "tree-sitter-loader"
+version.workspace = true
+description = "Locates, builds, and loads tree-sitter grammars at runtime"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[features]
+wasm = ["tree-sitter/wasm"]
+default = ["tree-sitter-highlight", "tree-sitter-tags"]
+
+[dependencies]
+anyhow.workspace = true
+cc.workspace = true
+etcetera.workspace = true
+fs4.workspace = true
+indoc.workspace = true
+libloading.workspace = true
+once_cell.workspace = true
+path-slash.workspace = true
+regex.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+url.workspace = true
+
+tree-sitter = { workspace = true }
+tree-sitter-highlight = { workspace = true, optional = true }
+tree-sitter-tags = { workspace = true, optional = true }

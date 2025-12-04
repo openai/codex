@@ -1,0 +1,43 @@
+name: Bug Report
+description: Report a problem
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: "Problem"
+      description: "Describe the current behavior. May include logs, images, or videos."
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: "Steps to reproduce"
+      placeholder: |
+        ```sh
+        git clone --depth=1 https://github.com/tree-sitter/tree-sitter-ruby
+        cd tree-sitter-ruby
+        tree-sitter generate
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: "Expected behavior"
+      description: "Describe the behavior you expect."
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: "Tree-sitter version (tree-sitter --version)"
+      placeholder: "tree-sitter 0.20.9"
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: "Operating system/version"
+      placeholder: "macOS 11.5"
+    validations:
+      required: true

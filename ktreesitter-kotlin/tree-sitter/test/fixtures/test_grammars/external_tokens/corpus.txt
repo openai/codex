@@ -1,0 +1,22 @@
+========================
+simple external tokens
+=========================
+
+x + %(sup (external) scanner?)
+
+---
+
+(expression (sum (expression (identifier)) (expression (string))))
+
+==================================
+external tokens that require state
+==================================
+
+%{sup {} #{x + y} {} scanner?}
+
+---
+
+(expression (string
+  (expression (sum
+    (expression (identifier))
+    (expression (identifier))))))

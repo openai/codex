@@ -1,0 +1,42 @@
+### Gradle ###
+.gradle/
+build/
+.kotlin/
+kotlin-js-store/
+dependency-graph-reports/
+local.properties
+
+### C ###
+.cache/
+.cmake/
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+
+### JetBrains ###
+.idea/*
+out/
+*.iws
+*.iml
+*.ipr
+*.trace
+*.log
+
+!.idea/conventionalCommit.json
+!.idea/conventionalCommit.xml
+!.idea/detekt.xml
+!.idea/ktlint-plugin.xml
+!.idea/vcs.xml
+
+### Vim ###
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+Session.vim
+.nvimrc
+tags
+*~

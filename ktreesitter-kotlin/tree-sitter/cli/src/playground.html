@@ -1,0 +1,410 @@
+<head>
+  <meta charset="utf-8">
+  <title>tree-sitter THE_LANGUAGE_NAME</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/clusterize.js/0.19.0/clusterize.min.css">
+  <link rel="icon" type="image/png" href="https://tree-sitter.github.io/tree-sitter/assets/images/favicon-32x32.png"
+    sizes="32x32" />
+  <link rel="icon" type="image/png" href="https://tree-sitter.github.io/tree-sitter/assets/images/favicon-16x16.png"
+    sizes="16x16" />
+</head>
+
+<body>
+  <div id="playground-container" style="visibility: hidden;">
+    <header>
+      <div class="header-item">
+        <span class="language-name">Language: THE_LANGUAGE_NAME</span>
+      </div>
+
+      <div class="header-item">
+        <input id="logging-checkbox" type="checkbox">
+        <label for="logging-checkbox">log</label>
+      </div>
+
+      <div class="header-item">
+        <input id="anonymous-nodes-checkbox" type="checkbox">
+        <label for="anonymous-nodes-checkbox">show anonymous nodes</label>
+      </div>
+
+      <div class="header-item">
+        <input id="query-checkbox" type="checkbox">
+        <label for="query-checkbox">query</label>
+      </div>
+
+      <div class="header-item">
+        <input id="accessibility-checkbox" type="checkbox">
+        <label for="accessibility-checkbox">accessibility</label>
+      </div>
+
+      <div class="header-item">
+        <label for="update-time">parse time: </label>
+        <span id="update-time"></span>
+      </div>
+
+      <div class="header-item">
+        <a href="https://tree-sitter.github.io/tree-sitter/7-playground.html#about">(?)</a>
+      </div>
+
+      <select id="language-select" style="display: none;">
+        <option value="parser">Parser</option>
+      </select>
+
+      <div class="header-item">
+        <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
+          <svg class="sun-icon" viewBox="0 0 24 24" width="16" height="16">
+            <path fill="currentColor"
+              d="M12 17.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11zm0 1.5a7 7 0 1 1 0-14 7 7 0 0 1 0 14zm0-16a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0V4a1 1 0 0 1 1-1zm0 15a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0v-2a1 1 0 0 1 1-1zm9-9a1 1 0 0 1-1 1h-2a1 1 0 1 1 0-2h2a1 1 0 0 1 1 1zM4 12a1 1 0 0 1-1 1H1a1 1 0 1 1 0-2h2a1 1 0 0 1 1 1z" />
+          </svg>
+          <svg class="moon-icon" viewBox="0 0 24 24" width="16" height="16">
+            <path fill="currentColor"
+              d="M12.1 22c-5.5 0-10-4.5-10-10s4.5-10 10-10c.2 0 .3 0 .5.1-1.3 1.4-2 3.2-2 5.2 0 4.1 3.4 7.5 7.5 7.5 2 0 3.8-.7 5.2-2 .1.2.1.3.1.5 0 5.4-4.5 9.7-10 9.7z" />
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <div id="input-pane">
+        <div class="panel-header">Code</div>
+        <div id="code-container">
+          <textarea id="code-input"></textarea>
+        </div>
+
+        <div id="query-container" style="visibility: hidden; position: absolute;">
+          <div class="panel-header">Query</div>
+          <textarea id="query-input"></textarea>
+        </div>
+      </div>
+
+      <div id="output-container-scroll">
+        <div class="panel-header">Tree</div>
+        <pre id="output-container" class="highlight"></pre>
+      </div>
+    </main>
+  </div>
+
+  <script src="https://code.jquery.com/jquery-3.3.1.min.js" crossorigin="anonymous">
+  </script>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/clusterize.js/0.19.0/clusterize.min.js"></script>
+
+  <script>LANGUAGE_BASE_URL = "";</script>
+  <script type="module" src="playground.js"></script>
+  <script type="module">
+    import * as TreeSitter from './tree-sitter.js';
+    window.TreeSitter = TreeSitter;
+    setTimeout(() => window.initializePlayground({local: true}), 1)
+  </script>
+
+  <style>
+    /* Base Variables */
+    :root {
+      --light-bg: #f9f9f9;
+      --light-border: #e0e0e0;
+      --light-text: #333;
+      --light-hover-border: #c1c1c1;
+      --light-scrollbar-track: #f1f1f1;
+      --light-scrollbar-thumb: #c1c1c1;
+      --light-scrollbar-thumb-hover: #a8a8a8;
+
+      --dark-bg: #1d1f21;
+      --dark-border: #2d2d2d;
+      --dark-text: #c5c8c6;
+      --dark-panel-bg: #252526;
+      --dark-code-bg: #1e1e1e;
+      --dark-scrollbar-track: #25282c;
+      --dark-scrollbar-thumb: #4a4d51;
+      --dark-scrollbar-thumb-hover: #5a5d61;
+
+      --primary-color: #0550ae;
+      --primary-color-alpha: rgba(5, 80, 174, 0.1);
+      --primary-color-alpha-dark: rgba(121, 192, 255, 0.1);
+      --selection-color: rgba(39, 95, 255, 0.3);
+    }
+
+    /* Theme Colors */
+    [data-theme="dark"] {
+      --bg-color: var(--dark-bg);
+      --border-color: var(--dark-border);
+      --text-color: var(--dark-text);
+      --panel-bg: var(--dark-panel-bg);
+      --code-bg: var(--dark-code-bg);
+    }
+
+    [data-theme="light"] {
+      --bg-color: var(--light-bg);
+      --border-color: var(--light-border);
+      --text-color: var(--light-text);
+      --panel-bg: white;
+      --code-bg: white;
+    }
+
+    /* Base Styles */
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+    }
+
+    /* Layout */
+    #playground-container {
+      width: 100%;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background-color: var(--bg-color);
+    }
+
+    header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      background-color: var(--panel-bg);
+      font-size: 14px;
+    }
+
+    .header-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .language-name {
+      font-weight: 600;
+    }
+
+    main {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    #input-pane {
+      width: 50%;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border-color);
+      background-color: var(--panel-bg);
+      overflow: hidden;
+    }
+
+    #code-container {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+    }
+
+    #query-container:not([style*="visibility: hidden"]) {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #query-container .panel-header {
+      flex: 0 0 auto;
+    }
+
+    #query-container .CodeMirror {
+      flex: 1;
+      position: relative;
+      min-height: 0;
+    }
+
+    #output-container-scroll {
+      width: 50%;
+      overflow: auto;
+      background-color: var(--panel-bg);
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #output-container {
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      line-height: 1.5;
+      margin: 0;
+      padding: 16px;
+    }
+
+    .panel-header {
+      padding: 8px 16px;
+      font-weight: 600;
+      font-size: 14px;
+      border-bottom: 1px solid var(--border-color);
+      background-color: var(--panel-bg);
+    }
+
+    .CodeMirror {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 100%;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 14px;
+      line-height: 1.6;
+      background-color: var(--code-bg) !important;
+      color: var(--text-color) !important;
+    }
+
+    .query-error {
+      text-decoration: underline red dashed;
+      -webkit-text-decoration: underline red dashed;
+    }
+
+    /* Scrollbars */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      border-radius: 4px;
+      background: var(--light-scrollbar-track);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      border-radius: 4px;
+      background: var(--light-scrollbar-thumb);
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--light-scrollbar-thumb-hover);
+    }
+
+    [data-theme="dark"] {
+      ::-webkit-scrollbar-track {
+        background: var(--dark-scrollbar-track) !important;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: var(--dark-scrollbar-thumb) !important;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: var(--dark-scrollbar-thumb-hover) !important;
+      }
+    }
+
+    /* Theme Toggle */
+    .theme-toggle {
+      background: none;
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      padding: 6px;
+      cursor: pointer;
+      color: var(--text-color);
+    }
+
+    .theme-toggle:hover {
+      background-color: var(--primary-color-alpha);
+    }
+
+    [data-theme="light"] .moon-icon,
+    [data-theme="dark"] .sun-icon {
+      display: none;
+    }
+
+    /* Form Elements */
+    input[type="checkbox"] {
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    label {
+      font-size: 14px;
+      margin-right: 16px;
+      cursor: pointer;
+    }
+
+    #output-container a {
+      cursor: pointer;
+      text-decoration: none;
+      color: #040404;
+      padding: 2px;
+    }
+
+    #output-container a:hover {
+      text-decoration: underline;
+    }
+
+    #output-container a.node-link.named {
+      color: #0550ae;
+    }
+
+    #output-container a.node-link.anonymous {
+      color: #116329;
+    }
+
+    #output-container a.node-link.anonymous:before {
+      content: '"';
+    }
+
+    #output-container a.node-link.anonymous:after {
+      content: '"';
+    }
+
+    #output-container a.node-link.error {
+      color: #cf222e;
+    }
+
+    #output-container a.highlighted {
+      background-color: #d9d9d9;
+      color: red;
+      border-radius: 3px;
+      text-decoration: underline;
+    }
+
+    /* Dark Theme Node Colors */
+    [data-theme="dark"] {
+      & #output-container a {
+        color: #d4d4d4;
+      }
+
+      & #output-container a.node-link.named {
+        color: #79c0ff;
+      }
+
+      & #output-container a.node-link.anonymous {
+        color: #7ee787;
+      }
+
+      & #output-container a.node-link.error {
+        color: #ff7b72;
+      }
+
+      & #output-container a.highlighted {
+        background-color: #373b41;
+        color: red;
+      }
+
+      & .CodeMirror {
+        background-color: var(--dark-code-bg) !important;
+        color: var(--dark-text) !important;
+      }
+
+      & .CodeMirror-gutters {
+        background-color: var(--dark-panel-bg) !important;
+        border-color: var(--dark-border) !important;
+      }
+
+      & .CodeMirror-cursor {
+        border-color: var(--dark-text) !important;
+      }
+
+      & .CodeMirror-selected {
+        background-color: rgba(255, 255, 255, 0.1) !important;
+      }
+    }
+  </style>
+</body>

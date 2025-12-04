@@ -1,0 +1,164 @@
+[workspace]
+default-members = ["cli"]
+members = [
+  "cli",
+  "cli/config",
+  "cli/generate",
+  "cli/loader",
+  "lib",
+  "lib/language",
+  "tags",
+  "highlight",
+  "xtask",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.25.8"
+authors = [
+  "Max Brunsfeld <maxbrunsfeld@gmail.com>",
+  "Amaan Qureshi <amaanq12@gmail.com>",
+]
+edition = "2021"
+rust-version = "1.82"
+homepage = "https://tree-sitter.github.io/tree-sitter"
+repository = "https://github.com/tree-sitter/tree-sitter"
+license = "MIT"
+keywords = ["incremental", "parsing"]
+categories = ["command-line-utilities", "parsing"]
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+
+# The lints below are a specific subset of the pedantic+nursery lints
+# that we explicitly allow in the tree-sitter codebase because they either:
+#
+# 1. Contain false positives,
+# 2. Are unnecessary, or
+# 3. Worsen the code
+
+branches_sharing_code = "allow"
+cast_lossless = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+checked_conversions = "allow"
+cognitive_complexity = "allow"
+collection_is_never_read = "allow"
+fallible_impl_from = "allow"
+fn_params_excessive_bools = "allow"
+inline_always = "allow"
+if_not_else = "allow"
+items_after_statements = "allow"
+match_wildcard_for_single_variants = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+multiple_crate_versions = "allow"
+needless_for_each = "allow"
+obfuscated_if_else = "allow"
+option_if_let_else = "allow"
+or_fun_call = "allow"
+range_plus_one = "allow"
+redundant_clone = "allow"
+redundant_closure_for_method_calls = "allow"
+ref_option = "allow"
+similar_names = "allow"
+string_lit_as_bytes = "allow"
+struct_excessive_bools = "allow"
+struct_field_names = "allow"
+transmute_undefined_repr = "allow"
+too_many_lines = "allow"
+unnecessary_wraps = "allow"
+unused_self = "allow"
+used_underscore_items = "allow"
+
+[workspace.lints.rust]
+mismatched_lifetime_syntaxes = "allow"
+
+[profile.optimize]
+inherits = "release"
+strip = true         # Automatically strip symbols from the binary.
+lto = true           # Link-time optimization.
+opt-level = 3        # Optimization level 3.
+codegen-units = 1    # Maximum size reduction optimizations.
+
+[profile.size]
+inherits = "optimize"
+opt-level = "s"       # Optimize for size.
+
+[profile.release-dev]
+inherits = "release"
+lto = false
+debug = true
+debug-assertions = true
+overflow-checks = true
+incremental = true
+codegen-units = 256
+
+[workspace.dependencies]
+ansi_colours = "1.2.3"
+anstyle = "1.0.10"
+anyhow = "1.0.95"
+bstr = "1.11.3"
+cc = "1.2.10"
+clap = { version = "4.5.27", features = [
+  "cargo",
+  "derive",
+  "env",
+  "help",
+  "unstable-styles",
+] }
+clap_complete = "4.5.42"
+clap_complete_nushell = "4.5.5"
+ctor = "0.2.9"
+ctrlc = { version = "3.4.5", features = ["termination"] }
+dialoguer = { version = "0.11.0", features = ["fuzzy-select"] }
+etcetera = "0.8.0"
+filetime = "0.2.25"
+fs4 = "0.12.0"
+git2 = "0.20.0"
+glob = "0.3.2"
+heck = "0.5.0"
+html-escape = "0.2.13"
+indexmap = "2.7.1"
+indoc = "2.0.5"
+libloading = "0.8.6"
+log = { version = "0.4.25", features = ["std"] }
+memchr = "2.7.4"
+once_cell = "1.20.2"
+path-slash = "0.2.1"
+pretty_assertions = "1.4.1"
+rand = "0.8.5"
+regex = "1.11.1"
+regex-syntax = "0.8.5"
+rustc-hash = "2.1.0"
+semver = { version = "1.0.25", features = ["serde"] }
+serde = { version = "1.0.217", features = ["derive"] }
+serde_derive = "1.0.217"
+serde_json = { version = "1.0.137", features = ["preserve_order"] }
+similar = "2.7.0"
+smallbitvec = "2.5.3"
+streaming-iterator = "0.1.9"
+tempfile = "3.15.0"
+thiserror = "2.0.11"
+tiny_http = "0.12.0"
+toml = "0.8.19"
+topological-sort = "0.2.2"
+unindent = "0.2.3"
+url = { version = "2.5.4", features = ["serde"] }
+walkdir = "2.5.0"
+wasmparser = "0.224.0"
+webbrowser = "1.0.3"
+
+tree-sitter = { version = "0.25.1", path = "./lib" }
+tree-sitter-generate = { version = "0.25.1", path = "./cli/generate" }
+tree-sitter-loader = { version = "0.25.1", path = "./cli/loader" }
+tree-sitter-config = { version = "0.25.1", path = "./cli/config" }
+tree-sitter-highlight = { version = "0.25.1", path = "./highlight" }
+tree-sitter-tags = { version = "0.25.1", path = "./tags" }

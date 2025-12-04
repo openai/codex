@@ -1,0 +1,114 @@
+=============================================
+incomplete condition in if statement
+=============================================
+
+if a is:
+  print b
+  print c
+print d
+
+---
+
+(module
+  (if_statement
+    condition: (identifier)
+    (ERROR)
+    consequence: (block
+      (print_statement argument: (identifier))
+      (print_statement argument: (identifier))))
+  (print_statement argument: (identifier)))
+
+==========================================
+extra colon in function definition
+==========================================
+
+def a()::
+  b
+  c
+d
+
+---
+
+(module
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    (ERROR)
+    body: (block
+      (expression_statement (identifier))
+      (expression_statement (identifier))))
+  (expression_statement (identifier)))
+
+========================================================
+stray if keyword in function definition
+========================================================
+
+def a():
+  if
+
+---
+
+(module
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    (ERROR)
+    body: (block)))
+
+========================================================
+incomplete if statement in function definition
+========================================================
+
+def a():
+  if a
+
+---
+
+(module
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    (ERROR (identifier))
+    body: (block)))
+
+========================================================
+incomplete expression before triple-quoted string
+========================================================
+
+def a():
+  b.
+  """
+  c
+  """
+
+---
+
+(module
+  (function_definition
+    name: (identifier)
+    parameters: (parameters)
+    (ERROR (identifier))
+    body: (block
+      (expression_statement (string
+        (string_start)
+        (string_content)
+        (string_end))))))
+
+===========================================
+incomplete definition in class definition
+===========================================
+
+class A:
+  def
+
+b
+
+---
+
+(module
+  (class_definition
+    name: (identifier)
+    (ERROR)
+    body: (block))
+  (expression_statement
+    (identifier)))

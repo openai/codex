@@ -1,0 +1,36 @@
+{
+  "name": "tree-sitter-cli",
+  "version": "0.25.8",
+  "author": {
+    "name": "Max Brunsfeld",
+    "email": "maxbrunsfeld@gmail.com"
+  },
+  "maintainers": [
+    {
+      "name": "Amaan Qureshi",
+      "email": "amaanq12@gmail.com"
+    }
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tree-sitter/tree-sitter.git"
+  },
+  "description": "CLI for generating fast incremental parsers",
+  "keywords": [
+    "parser",
+    "lexer"
+  ],
+  "main": "lib/api/index.js",
+  "engines": {
+    "node": ">=12.0.0"
+  },
+  "scripts": {
+    "install": "node install.js",
+    "prepack": "cp ../../LICENSE ../README.md .",
+    "postpack": "rm LICENSE README.md"
+  },
+  "bin": {
+    "tree-sitter": "cli.js"
+  }
+}

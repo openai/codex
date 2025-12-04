@@ -1,0 +1,58 @@
+==========================================
+obvious tokens
+==========================================
+
+// hi
+/* hi */
+hi
+/
+"hi"
+/hi/
+
+---
+
+(program
+  (comment)
+  (comment)
+  (identifier)
+  (slash)
+  (string)
+  (regex))
+
+==========================================
+strings starting with double slashes
+==========================================
+
+/*
+The lexer matches the string content correctly even though
+a comment could match all the way until the end of the line,
+because the string content token has a higher precedence
+than the comment token.
+*/
+
+"//one\n//two"
+
+---
+
+(program
+  (comment)
+  (string (escape_sequence)))
+
+==========================================
+comments that resemble regexes
+==========================================
+
+/*
+The lexer matches this as a comment followed by an identifier
+even though a regex token could match the entire thing, because
+the comment token has a higher precedence than the regex token
+*/
+
+/* hello */ui
+
+---
+
+(program
+  (comment)
+  (comment)
+  (identifier))

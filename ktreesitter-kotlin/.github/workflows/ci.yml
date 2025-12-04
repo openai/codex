@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "**/*.kt"
+      - "**/*.kts"
+      - "**/jni/*"
+      - gradle/**
+      - gradle.properties
+      - ktreesitter/gradle.lockfile
+  pull_request:
+    paths:
+      - "/*.kt"
+      - "**/*.kts"
+      - "**/jni/*"
+      - gradle/**
+      - gradle.properties
+      - ktreesitter/gradle.lockfile
+
+concurrency:
+  cancel-in-progress: true
+  group: ${{github.workflow}}-${{github.ref_name}}
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    name: Generate grammar files
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          submodules: true
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+          cache-dependency-path: |
+            gradle/libs.versions.toml
+            gradle/wrapper/gradle-wrapper.properties
+            ktreesitter/gradle.lockfile
+      - name: Set up Kotlin/Native
+        uses: ObserverOfTime/setup-konan-action@v1
+        with:
+          kotlin_version: 2.2.10
+      - name: Generate files
+        run: ./gradlew --no-daemon generateGrammarFiles
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-files
+          path: languages/*/build/generated/**
+          retention-days: 1
+  test:
+    runs-on: ${{matrix.os}}
+    name: >-
+      Test ${{matrix.platform}} platform
+      ${{matrix.lib_platform && format('({0}-{1})', matrix.lib_platform, matrix.lib_arch)}}
+    needs: [generate]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: JVM
+            targets: :ktreesitter:jvmTest
+            lib_platform: linux
+            lib_arch: x64
+          - os: windows-latest
+            platform: JVM
+            targets: :ktreesitter:jvmTest
+            lib_platform: windows
+            lib_arch: x64
+          - os: macos-latest
+            platform: JVM
+            targets: :ktreesitter:jvmTest
+            lib_platform: macos
+            lib_arch: aarch64
+          - os: ubuntu-latest
+            platform: Android
+            targets: :ktreesitter:assembleDebug
+          - os: ubuntu-latest
+            platform: Linux
+            targets: >-
+              :ktreesitter:compileKotlinLinuxArm64
+              :ktreesitter:linuxX64Test
+          - os: windows-latest
+            platform: Windows
+            targets: :ktreesitter:mingwX64Test
+          - os: macos-latest
+            platform: macOS/iOS
+            targets: >-
+              :ktreesitter:macosX64Test
+              :ktreesitter:macosArm64Test
+              :ktreesitter:iosSimulatorArm64Test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          submodules: true
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+          cache-dependency-path: |
+            gradle/libs.versions.toml
+            gradle/wrapper/gradle-wrapper.properties
+      - name: Set up Kotlin/Native
+        uses: ObserverOfTime/setup-konan-action@v1
+        with:
+          kotlin_version: 2.2.10
+      - name: Set up cross compilation
+        if: matrix.platform == 'Linux'
+        run: |-
+          sudo apt-get update
+          sudo apt-get install -qy {binutils,gcc}-aarch64-linux-gnu
+      - name: Set up Ninja
+        if: matrix.platform == 'Android'
+        run: |-
+          sudo apt-get update
+          sudo apt-get install -qy ninja-build
+      - name: Download generated files
+        uses: actions/download-artifact@v5
+        with:
+          path: languages
+          name: generated-files
+      - name: Build JNI libraries
+        if: matrix.platform == 'JVM'
+        run: .github/scripts/build-jni.${{matrix.os == 'windows-latest' && 'ps1' || 'sh'}}
+        env:
+          CMAKE_INSTALL_LIBDIR: lib/${{matrix.lib_platform}}/${{matrix.lib_arch}}
+      - name: Run tests
+        run: ./gradlew --no-daemon -Pcmake.version=3.31.6 ${{matrix.targets}}
+      - name: Report test results
+        uses: mikepenz/action-junit-report@v5
+        if: matrix.platform == 'JVM' && !cancelled()
+        with:
+          annotate_only: true
+          detailed_summary: true
+          report_paths: ktreesitter/build/reports/xml/*

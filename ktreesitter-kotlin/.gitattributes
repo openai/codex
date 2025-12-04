@@ -1,0 +1,6 @@
+* text=auto eol=lf
+
+/gradlew linguist-generated
+/gradlew.bat linguist-generated eol=crlf
+/.github/scripts/build-jni.ps1 eol=crlf
+/gradle/wrapper/gradle-wrapper.jar binary

@@ -1,0 +1,7 @@
+// Automatically generated file. DO NOT MODIFY
+
+package @PACKAGE@
+
+expect object @CLASS@ {
+@METHODS@
+}

@@ -1,0 +1,78 @@
+==============================
+Templates with errors
+==============================
+
+<div>
+  <% if notice.present? %>
+    <p id="notice"><% notice %></p>
+  <% end %>
+  <div>
+    <h1>Foods</h1>
+    <div>
+      <% link_to 'New food', new_food_path, class: "block font-medium" %>
+      <% link_to 'Search Database', database_foods_search_path, class: "block font-medium" %>
+    </div>
+  </div>
+
+  <% . render partial: "form", locals: { food: @new_food } %>
+
+  <% form_with url: "/search", method: :get do |form| %>
+    <% form.label :previous_query, 'Search previous foods:' %>
+    <% form.text_field :previous_query %>
+    <% form.submit "Search" %>
+  <% end %>
+
+  <div id="recipes">
+    <% render @foods %>
+  </div>
+</div>
+
+---
+
+(program
+  (if
+    (call (identifier) (identifier))
+    (then (identifier)))
+  (call
+    (identifier)
+    (argument_list
+      (string (string_content))
+      (identifier)
+      (pair (hash_key_symbol) (string (string_content)))))
+  (call
+    (identifier)
+    (argument_list
+      (string (string_content))
+      (identifier)
+      (pair (hash_key_symbol) (string (string_content)))))
+  (ERROR)
+  (call
+    (identifier)
+    (argument_list
+      (pair (hash_key_symbol) (string (string_content)))
+      (pair (hash_key_symbol) (hash (pair (hash_key_symbol) (instance_variable))))))
+  (call
+    (identifier)
+    (argument_list
+      (pair (hash_key_symbol) (string (string_content)))
+      (pair (hash_key_symbol) (simple_symbol)))
+    (do_block
+      (block_parameters
+        (identifier))
+      (body_statement
+        (call
+          (identifier)
+          (identifier)
+          (argument_list (simple_symbol) (string (string_content))))
+  (call
+    (identifier)
+    (identifier)
+    (argument_list
+      (simple_symbol)))
+  (call
+    (identifier)
+    (identifier)
+    (argument_list (string (string_content)))))))
+  (call
+    (identifier)
+    (argument_list (instance_variable))))

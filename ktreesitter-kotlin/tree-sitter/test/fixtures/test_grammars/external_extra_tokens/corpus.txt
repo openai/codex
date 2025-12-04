@@ -1,0 +1,10 @@
+========================
+extra external tokens
+========================
+
+x = # a comment
+y
+
+---
+
+(assignment (variable) (comment) (variable))

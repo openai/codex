@@ -1,0 +1,14 @@
+Unresolved conflict for symbol sequence:
+
+  '!'  expression  •  '<'  …
+
+Possible interpretations:
+
+  1:  (unary_a  '!'  expression)  •  '<'  …  (precedence: 2)
+  2:  (unary_b  '!'  expression)  •  '<'  …  (precedence: 2)
+
+Possible resolutions:
+
+  1:  Specify a higher precedence in `unary_a` than in the other rules.
+  2:  Specify a higher precedence in `unary_b` than in the other rules.
+  3:  Add a conflict for these rules: `unary_a`, `unary_b`

@@ -1,0 +1,13 @@
+==========================================
+Aliases on rules that are unit reductions
+==========================================
+
+one two three four;
+
+---
+
+(statement
+  (identifier)
+  (b_prime (identifier))
+  (c_prime (identifier))
+  (identifier))

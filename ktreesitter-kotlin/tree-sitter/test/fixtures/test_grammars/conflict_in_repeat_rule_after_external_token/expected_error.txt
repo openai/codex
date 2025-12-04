@@ -1,0 +1,14 @@
+Unresolved conflict for symbol sequence:
+
+  _program_start  '['  identifier  •  ']'  …
+
+Possible interpretations:
+
+  1:  _program_start  '['  (array_repeat1  identifier)  •  ']'  …
+  2:  _program_start  '['  (array_type_repeat1  identifier)  •  ']'  …
+
+Possible resolutions:
+
+  1:  Specify a higher precedence in `array_repeat1` than in the other rules.
+  2:  Specify a higher precedence in `array_type_repeat1` than in the other rules.
+  3:  Add a conflict for these rules: `array`, `array_type`

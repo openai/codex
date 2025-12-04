@@ -1,0 +1,290 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "grammars": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name of the grammar.",
+            "pattern": "^[a-z0-9_]+$"
+          },
+          "camelcase": {
+            "type": "string",
+            "description": "The name converted to CamelCase.",
+            "pattern": "^\\w+$",
+            "examples": [
+              "Rust",
+              "HTML"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "description": "The title of the language.",
+            "examples": [
+              "Rust",
+              "HTML"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "description": "The TextMate scope that represents this language.",
+            "pattern": "^(source|text)(\\.[\\w\\-]+)+$",
+            "examples": [
+              "source.rust",
+              "text.html"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "default": ".",
+            "description": "The relative path to the directory containing the grammar."
+          },
+          "external-files": {
+            "type": "array",
+            "description": "The relative paths to files that should be checked for modifications during recompilation.",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "file-types": {
+            "type": "array",
+            "description": "An array of filename suffix strings.",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "highlights": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              }
+            ],
+            "default": "queries/highlights.scm",
+            "description": "The path(s) to the grammar's highlight queries."
+          },
+          "injections": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              }
+            ],
+            "default": "queries/injections.scm",
+            "description": "The path(s) to the grammar's injection queries."
+          },
+          "locals": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              }
+            ],
+            "default": "queries/locals.scm",
+            "description": "The path(s) to the grammar's local variable queries."
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              }
+            ],
+            "default": "queries/tags.scm",
+            "description": "The path(s) to the grammar's code navigation queries."
+          },
+          "injection-regex": {
+            "type": "string",
+            "format": "regex",
+            "description": "A regex pattern that will be tested against a language name in order to determine whether this language should be used for a potential language injection site."
+          },
+          "first-line-regex": {
+            "type": "string",
+            "format": "regex",
+            "description": "A regex pattern that will be tested against the first line of a file in order to determine whether this language applies to the file."
+          },
+          "content-regex": {
+            "type": "string",
+            "format": "regex",
+            "description": "A regex pattern that will be tested against the contents of the file in order to break ties in cases where multiple grammars matched the file."
+          },
+          "class-name": {
+            "type": "string",
+            "pattern": "^TreeSitter\\w+$",
+            "description": "The class name for the Swift, Java & Kotlin bindings"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "scope"
+        ]
+      },
+      "minItems": 1
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "The current version of the project.",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+          "$comment": "The CLI will use this version to update package.json, Cargo.toml, pyproject.toml, Makefile."
+        },
+        "license": {
+          "type": "string",
+          "default": "MIT",
+          "description": "The project's license."
+        },
+        "description": {
+          "type": "string",
+          "description": "The project's description.",
+          "examples": [
+            "Rust grammar for tree-sitter"
+          ]
+        },
+        "links": {
+          "type": "object",
+          "properties": {
+            "repository": {
+              "type": "string",
+              "format": "uri",
+              "description": "The project's repository."
+            },
+            "funding": {
+              "type": "string",
+              "format": "uri",
+              "description": "The project's funding link."
+            },
+            "homepage": {
+              "type": "string",
+              "format": "uri",
+              "description": "The project's homepage."
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "repository"
+          ]
+        },
+        "authors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "The project's author(s).",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string",
+                "format": "email"
+              },
+              "url": {
+                "type": "string",
+                "format": "uri"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "name"
+            ]
+          },
+          "minItems": 1
+        },
+        "namespace": {
+          "type": "string",
+          "description": "The namespace for the Java & Kotlin packages.",
+          "default": "io.github.tree-sitter",
+          "$comment": "Used as is in the Maven/Gradle group name and transformed accordingly for the package names and directories (e.g. io.github.treesitter.jtreesitter.html - src/main/java/io/github/treesitter/jtreesitter/html)."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "links"
+      ]
+    },
+    "bindings": {
+      "type": "object",
+      "description": "The language bindings that will be generated.",
+      "properties": {
+        "c": {
+          "type": "boolean",
+          "default": true
+        },
+        "go": {
+          "type": "boolean",
+          "default": true
+        },
+        "java": {
+          "type": "boolean",
+          "default": false
+        },
+        "kotlin": {
+          "type": "boolean",
+          "default": false
+        },
+        "node": {
+          "type": "boolean",
+          "default": true
+        },
+        "python": {
+          "type": "boolean",
+          "default": true
+        },
+        "rust": {
+          "type": "boolean",
+          "default": true
+        },
+        "swift": {
+          "type": "boolean",
+          "default": true
+        },
+        "zig": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "grammars",
+    "metadata"
+  ]
+}

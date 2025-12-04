@@ -1,0 +1,45 @@
+{
+  "grammars": [
+    {
+      "name": "java",
+      "camelcase": "Java",
+      "scope": "source.java",
+      "path": ".",
+      "file-types": [
+        "java"
+      ],
+      "highlights": "queries/highlights.scm",
+      "tags": "queries/tags.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.23.5",
+    "license": "MIT",
+    "description": "Java grammar for tree-sitter",
+    "authors": [
+      {
+        "name": "Ayman Nadeem",
+        "email": "aymannadeem@github.com"
+      },
+      {
+        "name": "Max Brunsfeld",
+        "email": "maxbrunsfeld@gmail.com"
+      },
+      {
+        "name": "Amaan Qureshi",
+        "email": "amaanq12@gmail.com"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/tree-sitter/tree-sitter-java"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true
+  }
+}

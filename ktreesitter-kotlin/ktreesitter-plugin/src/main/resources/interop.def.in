@@ -1,0 +1,6 @@
+# Automatically generated file. DO NOT MODIFY
+
+package = @PACKAGE@.internal
+headers = tree-sitter-@GRAMMAR@.h
+compilerOpts = -DTREE_SITTER_HIDE_SYMBOLS
+staticLibraries = libtree-sitter-@GRAMMAR@.a

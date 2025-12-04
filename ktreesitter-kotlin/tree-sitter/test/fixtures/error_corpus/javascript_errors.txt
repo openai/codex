@@ -1,0 +1,189 @@
+===================================================
+Missing default values for function parameters
+===================================================
+
+class A {
+  constructor (a, b = ) {
+    this.a = a
+  }
+
+  foo() {}
+}
+
+---
+
+(program
+  (class_declaration (identifier) (class_body
+    (method_definition
+      (property_identifier)
+      (formal_parameters (identifier) (identifier) (ERROR))
+      (statement_block (expression_statement (assignment_expression (member_expression (this) (property_identifier)) (identifier)))))
+    (method_definition
+      (property_identifier)
+      (formal_parameters)
+      (statement_block)))))
+
+===================================================
+Missing object-literal values
+===================================================
+
+{
+  a: b,
+  c:
+}
+
+---
+
+(program (expression_statement (object
+  (pair (property_identifier) (identifier))
+  (pair (property_identifier) (MISSING identifier)))))
+
+===================================================
+Extra identifiers in expressions
+===================================================
+
+if (a b) {
+  c d;
+}
+e f;
+
+---
+
+(program
+  (if_statement
+    (parenthesized_expression
+      (identifier)
+      (ERROR (identifier)))
+    (statement_block
+      (ERROR (identifier))
+      (expression_statement (identifier))))
+  (expression_statement
+    (identifier)
+    (ERROR (identifier))))
+
+===================================================
+Extra complex literals in expressions
+===================================================
+
+if ({a: 'b'} {c: 'd'}) {
+  x = function(a) { b; } function(c) { d; }
+}
+
+---
+
+(program
+  (if_statement
+    (parenthesized_expression
+      (ERROR (object (pair (property_identifier) (string (string_fragment)))))
+      (object (pair (property_identifier) (string (string_fragment)))))
+    (statement_block
+      (expression_statement
+        (assignment_expression
+          (identifier)
+          (function_expression (formal_parameters (identifier)) (statement_block (expression_statement (identifier)))))
+        (MISSING ";"))
+      (expression_statement
+        (function_expression (formal_parameters (identifier)) (statement_block (expression_statement (identifier))))))))
+
+===================================================
+Extra tokens at the end of the file
+===================================================
+
+// skip the equals sign
+a.b =
+---
+
+(program
+  (comment)
+  (ERROR (member_expression (identifier) (property_identifier))))
+
+===================================================
+Errors after a sequence of function declarations
+===================================================
+
+/*
+ * The JS grammar has an ambiguity such that these functions
+ * can be parsed either as function declarations or as
+ * function expressions. This ambiguity causes a lot of
+ * splitting and merging in the parse stack. When iterating
+ * the parse stack during an error repair, there would then
+ * be a very large number (> 2^16) of paths through the parse
+ * stack.
+ */
+function a() {}
+function b() {}
+function c() {}
+function e() {}
+function f() {}
+function g() {}
+function h() {}
+function i() {}
+
+var x = !!!
+
+---
+
+(program
+  (comment)
+  (function_declaration (identifier) (formal_parameters) (statement_block))
+  (function_declaration (identifier) (formal_parameters) (statement_block))
+  (function_declaration (identifier) (formal_parameters) (statement_block))
+  (function_declaration (identifier) (formal_parameters) (statement_block))
+  (function_declaration (identifier) (formal_parameters) (statement_block))
+  (function_declaration (identifier) (formal_parameters) (statement_block))
+  (function_declaration (identifier) (formal_parameters) (statement_block))
+  (function_declaration (identifier) (formal_parameters) (statement_block))
+  (ERROR (identifier)))
+
+=========================================================
+Errors inside of a template string substitution
+=========================================================
+
+const a = `b c ${d += } f g`
+const h = `i ${j(k} l`
+
+---
+
+(program
+  (lexical_declaration
+    (variable_declarator
+      (identifier)
+      (template_string (string_fragment) (template_substitution
+        (augmented_assignment_expression (identifier) (MISSING identifier))) (string_fragment))))
+  (lexical_declaration
+    (variable_declarator
+      (identifier)
+      (template_string (string_fragment) (template_substitution (call_expression
+        (identifier)
+        (arguments (identifier) (MISSING ")")))) (string_fragment)))))
+
+=========================================================
+Long sequences of invalid tokens
+=========================================================
+
+function main(x) {
+  console.log('a');
+  what??????????????????????????????????????????????????
+  console.log('b');
+  return {};
+}
+
+---
+
+(program
+  (function_declaration
+    (identifier)
+    (formal_parameters (identifier))
+    (statement_block
+      (expression_statement
+        (call_expression
+          (member_expression (identifier) (property_identifier))
+          (arguments (string (string_fragment)))))
+      (expression_statement
+        (binary_expression
+          (identifier)
+          (ERROR)
+          (call_expression
+            (member_expression (identifier) (property_identifier))
+            (arguments (string (string_fragment))))))
+      (return_statement (object)))))

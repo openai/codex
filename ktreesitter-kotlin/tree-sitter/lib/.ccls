@@ -1,0 +1,4 @@
+-std=c99
+-Isrc
+-Iinclude
+-Iutf8proc

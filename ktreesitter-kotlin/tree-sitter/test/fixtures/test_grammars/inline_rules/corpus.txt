@@ -1,0 +1,20 @@
+==================================
+Expressions
+==================================
+
+1 + 2 * 3;
+4 * 5 + 6;
+7 * (8 + 9);
+
+---
+
+(program
+  (statement (sum
+    (number)
+    (product (number) (number))))
+  (statement (sum
+    (product (number) (number))
+    (number)))
+  (statement (product
+    (number)
+    (parenthesized_expression (sum (number) (number))))))

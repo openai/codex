@@ -1,0 +1,23 @@
+=====
+Extras
+=====
+
+;
+%;
+%foo:;
+;
+bar: baz:;
+;
+
+---
+
+(program
+  (statement)
+  (macro_statement (statement))
+  (macro_statement (statement
+    (label_declaration (identifier))))
+  (statement)
+  (statement
+    (label_declaration (identifier))
+    (label_declaration (identifier)))
+  (statement))

@@ -1,0 +1,12 @@
+==================================
+Statements
+==================================
+
+return 1;
+return 2;
+
+---
+
+(program
+  (return_statement (number))
+  (return_statement (number)))

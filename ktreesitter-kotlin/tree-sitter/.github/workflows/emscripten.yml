@@ -1,0 +1,30 @@
+name: Update Emscripten
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  update-emscripten:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up stable Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Run emscripten update xtask
+        run: |
+          git config --global user.name "dependabot[bot]"
+          git config --global user.email "49699333+dependabot[bot]@users.noreply.github.com"
+          cargo xtask upgrade-emscripten
+
+      - name: Push updated version
+        run: git push origin HEAD:$GITHUB_HEAD_REF

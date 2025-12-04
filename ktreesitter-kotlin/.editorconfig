@@ -1,0 +1,45 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_size = 4
+indent_style = space
+insert_final_newline = true
+trim_trailing_whitespace = true
+max_line_length = 100
+
+[LICENSE]
+max_line_length = off
+
+[README.md]
+indent_size = 2
+max_line_length = off
+
+[.editorconfig]
+max_line_length = off
+
+[*.{json,yml,toml,xml}]
+indent_size = 2
+
+[*.{bat,ps1}]
+end_of_line = crlf
+
+[*.toml]
+max_line_length = 120
+
+# noinspection EditorConfigKeyCorrectness
+[*.{kt,kts}]
+ktlint_code_style = android_studio
+ktlint_standard_filename = disabled
+ktlint_standard_annotation = disabled
+ktlint_standard_class-signature = disabled
+ktlint_standard_function-naming = disabled
+ktlint_standard_multiline-if-else = disabled
+ij_formatter_tags_enabled = true
+ij_kotlin_imports_layout = *
+ij_kotlin_allow_trailing_comma = false
+ij_kotlin_allow_trailing_comma_on_call_site = false
+ij_kotlin_name_count_to_use_star_import = 10
+ij_kotlin_name_count_to_use_star_import_for_members = 10
+ij_kotlin_packages_to_use_import_on_demand = kotlinx.cinterop.*,io.kotest.matchers.**,io.github.treesitter.ktreesitter.internal.*

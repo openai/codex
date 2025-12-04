@@ -1,0 +1,66 @@
+name: nvim-treesitter parser tests
+
+on:
+  pull_request:
+    paths:
+      - 'cli/**'
+      - '.github/workflows/nvim_ts.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check_compilation:
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        type: [generate, build]
+    name: ${{ matrix.os }} - ${{ matrix.type }}
+    runs-on: ${{ matrix.os }}
+    env:
+      NVIM: ${{ matrix.os == 'windows-latest' && 'nvim-win64\\bin\\nvim.exe' || 'nvim' }}
+      NVIM_TS_DIR: nvim-treesitter
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: nvim-treesitter/nvim-treesitter
+          path: ${{ env.NVIM_TS_DIR }}
+          ref: main
+
+      - if: runner.os != 'Windows'
+        run: echo ${{ github.workspace }}/target/release >> $GITHUB_PATH
+
+      - if: runner.os == 'Windows'
+        run: echo ${{ github.workspace }}/target/release >> $env:GITHUB_PATH
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo build --release
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install and prepare Neovim
+        run: bash ./scripts/ci-install.sh
+        working-directory: ${{ env.NVIM_TS_DIR }}
+
+      - if: matrix.type == 'generate'
+        name: Generate and compile parsers
+        run: $NVIM -l ./scripts/install-parsers.lua --generate --max-jobs=2
+        working-directory: ${{ env.NVIM_TS_DIR }}
+        shell: bash
+
+      - if: matrix.type == 'build'
+        name: Compile parsers
+        run: $NVIM -l ./scripts/install-parsers.lua
+        working-directory: ${{ env.NVIM_TS_DIR }}
+        shell: bash
+
+      - if: "!cancelled()"
+        name: Check query files
+        run: $NVIM -l ./scripts/check-queries.lua
+        working-directory: ${{ env.NVIM_TS_DIR }}
+        shell: bash

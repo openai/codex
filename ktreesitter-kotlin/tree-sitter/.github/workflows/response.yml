@@ -1,0 +1,48 @@
+name: No response
+
+on:
+  schedule:
+    - cron: "30 1 * * *" # Run every day at 01:30
+  workflow_dispatch:
+  issue_comment:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  close:
+    name: Close issues with no response
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout script
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts/close_unresponsive.js
+          sparse-checkout-cone-mode: false
+
+      - name: Run script
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const script = require('./.github/scripts/close_unresponsive.js')
+            await script({github, context})
+
+  remove_label:
+    name: Remove response label
+    if: github.event_name == 'issue_comment'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout script
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts/remove_response_label.js
+          sparse-checkout-cone-mode: false
+
+      - name: Run script
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const script = require('./.github/scripts/remove_response_label.js')
+            await script({github, context})

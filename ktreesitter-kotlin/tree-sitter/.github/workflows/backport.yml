@@ -1,0 +1,31 @@
+name: Backport Pull Request
+
+on:
+  pull_request_target:
+    types: [closed, labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  backport:
+    if: github.event.pull_request.merged
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create app token
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ vars.BACKPORT_APP }}
+          private-key: ${{ secrets.BACKPORT_KEY }}
+
+      - name: Create backport PR
+        uses: korthout/backport-action@v3
+        with:
+          pull_title: "${pull_title}"
+          label_pattern: "^ci:backport ([^ ]+)$"
+          github_token: ${{ steps.app-token.outputs.token }}

@@ -1,0 +1,1 @@
+A grammar's start rule must be visible.

@@ -1,0 +1,13 @@
+==================================
+the readme example
+==================================
+
+a + b * c
+
+---
+
+(expression (sum
+  (expression (variable))
+  (expression (product
+     (expression (variable))
+     (expression (variable))))))

@@ -1,0 +1,29 @@
+===============================
+prefix expressions as arguments
+===============================
+
+a ::b ::c
+
+---
+
+(program
+  (call
+    (call
+      (identifier)
+      (prefix (identifier)))
+    (prefix (identifier))))
+
+===============================
+infix expressions
+===============================
+
+a::b::c
+
+---
+
+(program
+  (infix
+    (infix
+      (identifier)
+      (identifier))
+    (identifier)))

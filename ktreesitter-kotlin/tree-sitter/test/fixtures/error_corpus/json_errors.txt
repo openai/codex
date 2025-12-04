@@ -1,0 +1,90 @@
+==========================================
+top-level errors
+==========================================
+
+[}
+
+---
+
+(document
+  (ERROR))
+
+==========================================
+unexpected tokens
+==========================================
+
+barf
+
+---
+
+(document
+  (ERROR
+    (UNEXPECTED 'b')))
+
+==========================================
+errors inside arrays
+==========================================
+
+[1, , 2]
+
+---
+
+(document
+  (array
+    (number)
+    (ERROR)
+    (number)))
+
+==========================================
+errors inside objects
+==========================================
+
+{ "key1": 1, oops }
+
+---
+
+(document
+  (object
+    (pair
+      (string
+        (string_content))
+      (number))
+    (ERROR
+      (UNEXPECTED 'o'))))
+
+==========================================
+errors inside nested objects
+==========================================
+
+{ "key1": { "key2": 1, 2 }, "key3": 3 [ }
+
+---
+
+(document
+  (object
+    (pair
+      (string
+        (string_content))
+      (object
+        (pair
+          (string
+            (string_content))
+          (number))
+        (ERROR
+          (number))))
+    (pair
+      (string
+        (string_content))
+      (number))
+    (ERROR)))
+
+===============================
+incomplete tokens at EOF
+========================
+
+nul
+---
+
+(document
+  (ERROR
+    (UNEXPECTED '\0')))

@@ -1,0 +1,13 @@
+======================================
+Aliases within the root node
+======================================
+
+# this is a comment
+foo foo
+
+---
+
+(document
+  (comment)
+  (bar)
+  (foo))

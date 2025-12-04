@@ -1,0 +1,101 @@
+==============
+Valid Code
+==============
+
+if (a) {
+  var b = {
+    c: d,
+    e: f,
+  };
+  while (g) {
+    h();
+  }
+}
+
+---
+
+(program
+  (if_statement
+    (parenthesized_expression (identifier))
+      (block
+        (var_declaration
+          (identifier)
+          (object
+            (pair (identifier) (identifier))
+            (pair (identifier) (identifier))))
+        (while_statement
+          (parenthesized_expression (identifier))
+          (block (expression_statement (call_expression (identifier))))))))
+
+================================================
+Error detected at globally-reserved word
+================================================
+
+var a =
+
+if (something) {
+  c();
+}
+
+---
+
+(program
+  (ERROR (identifier))
+  (if_statement
+    (parenthesized_expression (identifier))
+    (block
+      (expression_statement (call_expression (identifier))))))
+
+================================================
+Object keys that are reserved in other contexts
+================================================
+
+var x = {
+  if: a,
+  while: b,
+};
+
+---
+
+(program
+  (var_declaration
+    (identifier)
+    (object
+      (pair (identifier) (identifier))
+      (pair (identifier) (identifier)))))
+
+================================================
+Error detected at context-specific reserved word
+================================================
+
+var x = {
+var y = z;
+
+---
+
+(program
+  (ERROR (identifier))
+
+  ; Important - var declaration is still recognized,
+  ; because in this example grammar, `var` is a keyword
+  ; even within object literals.
+  (var_declaration
+    (identifier)
+    (identifier)))
+
+=============================================
+Other tokens that overlap with keyword tokens
+=============================================
+
+var a = /reserved-words-should-not-affect-this/;
+var d = /if/;
+
+---
+
+(program
+  (var_declaration
+    (identifier)
+    (regex (regex_pattern)))
+  (var_declaration
+    (identifier)
+    (regex (regex_pattern))))

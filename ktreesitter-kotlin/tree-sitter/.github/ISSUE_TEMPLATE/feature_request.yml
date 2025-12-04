@@ -1,0 +1,23 @@
+name: Feature request
+description: Request an enhancement
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before requesting: search [existing feature requests](https://github.com/tree-sitter/tree-sitter/labels/enhancement).
+
+  - type: textarea
+    attributes:
+      label: "Problem"
+      description: "Describe the problem to be solved."
+      placeholder: "No smurf icons available. Smurfs are useful because ..."
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: "Expected behavior"
+      description: "Describe what the new feature or behavior would look like. How does it solve the problem? Is it worth the cost?"
+    validations:
+      required: false

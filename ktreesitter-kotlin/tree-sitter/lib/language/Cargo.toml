@@ -1,0 +1,19 @@
+[package]
+name = "tree-sitter-language"
+description = "The tree-sitter Language type, used by the library and by language implementations"
+version = "0.1.5"
+authors.workspace = true
+edition.workspace = true
+rust-version = "1.76"
+readme = "README.md"
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories = ["api-bindings", "development-tools::ffi", "parsing"]
+
+[lints]
+workspace = true
+
+[lib]
+path = "language.rs"

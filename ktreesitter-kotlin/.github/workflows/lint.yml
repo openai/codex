@@ -1,0 +1,74 @@
+name: Lint
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "**/*.kt"
+      - "**.kts"
+      - .github/workflows/lint.yml
+  pull_request:
+    paths:
+      - "**/*.kt"
+      - "**.kts"
+      - .github/workflows/lint.yml
+
+concurrency:
+  cancel-in-progress: true
+  group: ${{github.workflow}}-${{github.ref_name}}
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  ktlint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install ktlint
+        run: |-
+          curl -sSLO https://github.com/pinterest/ktlint/releases/download/1.7.1/ktlint
+          chmod a+x ktlint && mv ktlint $RUNNER_TOOL_CACHE/ktlint
+      - name: Run ktlint
+        id: ktlint
+        run: $RUNNER_TOOL_CACHE/ktlint --reporter=sarif,output=build/reports/ktlint.sarif
+      - name: Upload report
+        uses: github/codeql-action/upload-sarif@v3
+        if: "!cancelled() && steps.ktlint.outcome == 'failure'"
+        with:
+          sarif_file: build/reports/ktlint.sarif
+          # FIXME: github/codeql-action#2215
+          checkout_path: ${{env.HOME}}
+          category: ktlint
+  detekt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install detekt
+        run: |-
+          curl -sSLO https://github.com/detekt/detekt/releases/download/v1.23.8/detekt-cli-1.23.8-all.jar
+          mv detekt-cli-1.23.8-all.jar $RUNNER_TOOL_CACHE/detekt-cli.jar
+      - name: Run detekt
+        id: detekt
+        run: >-
+          java -jar $RUNNER_TOOL_CACHE/detekt-cli.jar --build-upon-default-config
+          --jvm-target 17 -c .github/detekt.yml -r sarif:build/reports/detekt.sarif
+      - name: Upload report
+        uses: github/codeql-action/upload-sarif@v3
+        if: "!cancelled() && steps.detekt.outcome == 'failure'"
+        with:
+          sarif_file: build/reports/detekt.sarif
+          category: detekt

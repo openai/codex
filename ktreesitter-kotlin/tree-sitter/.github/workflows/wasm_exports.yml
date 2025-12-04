@@ -1,0 +1,40 @@
+name: Check WASM Exports
+
+on:
+  pull_request:
+    paths:
+      - lib/include/tree_sitter/api.h
+      - lib/binding_web/**
+  push:
+    branches: [master]
+    paths:
+      - lib/include/tree_sitter/api.h
+      - lib/binding_rust/bindings.rs
+      - lib/CMakeLists.txt
+
+jobs:
+  check-wasm-exports:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up stable Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install wasm-objdump
+        run: sudo apt-get update -y && sudo apt-get install -y wabt
+
+      - name: Build C library (make)
+        run: make -j CFLAGS="$CFLAGS"
+        env:
+          CFLAGS: -g -Werror -Wall -Wextra -Wshadow -Wpedantic -Werror=incompatible-pointer-types
+
+      - name: Build WASM Library
+        working-directory: lib/binding_web
+        run: npm ci && npm run build:debug
+
+      - name: Check WASM exports
+        run: cargo xtask check-wasm-exports

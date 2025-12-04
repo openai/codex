@@ -1,0 +1,30 @@
+name: Check Bindgen Output
+
+on:
+  pull_request:
+    paths:
+      - lib/include/tree_sitter/api.h
+      - lib/binding_rust/bindings.rs
+  push:
+    branches: [master]
+    paths:
+      - lib/include/tree_sitter/api.h
+      - lib/binding_rust/bindings.rs
+
+jobs:
+  check-bindgen:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up stable Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Generate bindings
+        run: cargo xtask generate-bindings
+
+      - name: Check if the bindgen output changed
+        run: git diff --exit-code lib/binding_rust/bindings.rs

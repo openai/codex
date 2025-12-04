@@ -1,0 +1,174 @@
+=======================================
+Statements with missing semicolons
+=======================================
+
+int main() {
+  puts("hello")
+  puts("world")
+}
+
+---
+
+(translation_unit
+  (function_definition
+    (primitive_type)
+    (function_declarator (identifier) (parameter_list))
+    (compound_statement
+      (expression_statement (call_expression (identifier) (argument_list (string_literal (string_content)))) (MISSING ";"))
+      (expression_statement (call_expression (identifier) (argument_list (string_literal (string_content)))) (MISSING ";")))))
+
+==============================================
+Top-level declarations with missing semicolons
+==============================================
+
+int x
+static int b
+
+---
+
+(translation_unit
+  (declaration (primitive_type) (identifier) (MISSING ";"))
+  (declaration (storage_class_specifier) (primitive_type) (identifier) (MISSING ";")))
+
+==========================================
+Partial declaration lists inside ifdefs
+==========================================
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// ok
+int b;
+
+int c() {
+  return 5;
+}
+
+#ifdef __cplusplus
+}
+#endif
+
+---
+
+(translation_unit
+  (preproc_ifdef (identifier)
+    (linkage_specification (string_literal (string_content)) (declaration_list
+      (preproc_call (preproc_directive))
+      (comment)
+      (declaration (primitive_type) (identifier))
+      (function_definition (primitive_type) (function_declarator (identifier) (parameter_list)) (compound_statement (return_statement (number_literal))))
+      (preproc_ifdef (identifier) (MISSING "#endif"))))))
+
+==========================================
+If statements with incomplete expressions
+==========================================
+
+int main() {
+  if (a.) {
+    b();
+    c();
+
+    if (*) d();
+  }
+}
+
+---
+
+(translation_unit
+  (function_definition
+    (primitive_type)
+    (function_declarator (identifier) (parameter_list))
+    (compound_statement
+      (if_statement
+        (parenthesized_expression (field_expression
+          (identifier)
+          (MISSING field_identifier)))
+        (compound_statement
+          (expression_statement (call_expression (identifier) (argument_list)))
+          (expression_statement (call_expression (identifier) (argument_list)))
+          (if_statement
+            (parenthesized_expression (pointer_expression (MISSING identifier)))
+            (expression_statement (call_expression (identifier) (argument_list)))))))))
+
+====================================
+Invalid characters in declarations
+====================================
+
+int main() {
+  int x;
+  int %$#@
+}
+
+---
+
+(translation_unit
+  (function_definition
+    (primitive_type)
+    (function_declarator (identifier) (parameter_list))
+    (compound_statement
+      (declaration (primitive_type) (identifier))
+      (ERROR (primitive_type) (ERROR) (identifier) (UNEXPECTED '@')))))
+
+=========================================
+Extra values in parenthesized expressions
+=========================================
+
+int main() {
+  int x = (123 123);
+}
+
+---
+
+(translation_unit
+  (function_definition
+    (primitive_type)
+    (function_declarator (identifier) (parameter_list))
+    (compound_statement
+      (declaration (primitive_type) (init_declarator
+        (identifier)
+        (parenthesized_expression
+          (ERROR (number_literal))
+          (number_literal)))))))
+
+========================================
+Extra identifiers in declarations
+========================================
+
+float x WTF;
+int y = 5;
+
+---
+
+(translation_unit
+  (declaration (primitive_type) (ERROR (identifier)) (identifier))
+  (declaration (primitive_type) (init_declarator (identifier) (number_literal))))
+
+==========================================
+Declarations with missing variable names
+==========================================
+
+int a() {
+  struct x = 1;
+  int = 2;
+}
+
+---
+
+(translation_unit
+  (function_definition
+    (primitive_type)
+    (function_declarator
+      (identifier)
+      (parameter_list))
+    (compound_statement
+      (declaration
+        (struct_specifier (type_identifier))
+        (init_declarator
+          (MISSING identifier)
+          (number_literal)))
+      (declaration
+        (primitive_type)
+        (init_declarator
+          (MISSING identifier)
+          (number_literal))))))

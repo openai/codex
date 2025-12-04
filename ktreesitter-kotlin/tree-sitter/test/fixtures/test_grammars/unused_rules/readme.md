@@ -1,0 +1,1 @@
+The generated parsers use the grammar's token count to distinguish between terminal and non-terminal symbols. When the grammar has unused tokens, these tokens don't appear in the parser, so they need to be omitted from the token count.

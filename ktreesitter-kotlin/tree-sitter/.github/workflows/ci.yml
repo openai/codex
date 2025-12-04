@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+    paths-ignore:
+      - docs/**
+      - "**/README.md"
+      - CONTRIBUTING.md
+      - LICENSE
+      - cli/src/templates
+  push:
+    branches: [master]
+    paths-ignore:
+      - docs/**
+      - "**/README.md"
+      - CONTRIBUTING.md
+      - LICENSE
+      - cli/src/templates
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up stable Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - name: Lint files
+        run: |
+          make lint
+          make lint-web
+
+  sanitize:
+    uses: ./.github/workflows/sanitize.yml
+
+  build:
+    uses: ./.github/workflows/build.yml

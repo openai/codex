@@ -1,0 +1,15 @@
+// Automatically generated file. DO NOT MODIFY
+
+package @PACKAGE@
+
+import dalvik.annotation.optimization.CriticalNative
+import javax.annotation.processing.Generated
+
+@Suppress("FunctionName")
+@Generated("io.github.treesitter.ktreesitter-plugin")
+actual object @CLASS@ {
+    init {
+        System.loadLibrary("@LIBRARY@")
+    }
+
+@METHODS@}

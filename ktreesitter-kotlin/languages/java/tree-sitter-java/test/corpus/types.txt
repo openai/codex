@@ -1,0 +1,69 @@
+===============
+integral types
+===============
+
+class Beyonce {
+  int formation() {
+    int x;
+    byte x;
+    short x;
+    long x;
+    char x;
+  }
+}
+
+---
+
+(program
+  (class_declaration
+    (identifier)
+    (class_body
+      (method_declaration
+        (integral_type)
+        (identifier)
+        (formal_parameters)
+        (block
+          (local_variable_declaration
+            (integral_type)
+              (variable_declarator (identifier)))
+          (local_variable_declaration
+            (integral_type)
+              (variable_declarator (identifier)))
+          (local_variable_declaration
+            (integral_type)
+              (variable_declarator (identifier)))
+          (local_variable_declaration
+            (integral_type)
+              (variable_declarator (identifier)))
+          (local_variable_declaration
+            (integral_type)
+              (variable_declarator (identifier))))))))
+
+=====================
+floating point types
+=====================
+
+class Beyonce {
+  int formation() {
+    float x;
+    double x;
+  }
+}
+
+---
+
+(program
+  (class_declaration
+    (identifier)
+    (class_body
+      (method_declaration
+        (integral_type)
+        (identifier)
+        (formal_parameters)
+        (block
+          (local_variable_declaration
+            (floating_point_type)
+            (variable_declarator (identifier)))
+          (local_variable_declaration
+            (floating_point_type)
+            (variable_declarator (identifier))))))))

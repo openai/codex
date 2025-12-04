@@ -1,0 +1,76 @@
+===============
+Simple blocks
+===============
+
+do a
+   e
+f
+
+---
+
+(block
+  (do_expression (block
+    (identifier)
+    (identifier)))
+  (identifier))
+
+=====================
+Nested blocks
+=====================
+
+a = do b
+       c + do e
+              f
+              g
+       h
+i
+
+---
+
+(block
+  (binary_expression
+    (identifier)
+    (do_expression (block
+      (identifier)
+      (binary_expression
+        (identifier)
+        (do_expression (block
+          (identifier)
+          (identifier)
+          (identifier))))
+      (identifier))))
+  (identifier))
+
+===============================
+Blocks with leading newlines
+===============================
+
+do
+
+
+   a = b
+   do
+      c
+      d
+   e
+ f
+
+---
+
+(block
+  (do_expression (block
+    (binary_expression (identifier) (identifier))
+    (do_expression (block
+      (identifier)
+      (identifier)))
+    (identifier)
+    (identifier))))
+
+=====================
+Unterminated blocks
+=====================
+
+do
+---
+
+(ERROR)

@@ -1,0 +1,53 @@
+package = io.github.treesitter.ktreesitter.internal
+headers = tree_sitter/api.h alloc.h
+headerFilter = tree_sitter/api.h
+compilerOpts = -DTREE_SITTER_HIDE_SYMBOLS -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200112L
+staticLibraries = libtree-sitter.a
+strictEnums = \
+    TSInputEncoding \
+    TSLogType \
+    TSQuantifier \
+    TSQueryError
+nonStrictEnums = \
+    TSQueryPredicateStepType \
+    TSSymbolType
+excludedFunctions = \
+    ts_language_is_wasm \
+    ts_parser_set_wasm_store \
+    ts_parser_take_wasm_store \
+    ts_set_allocator \
+    ts_wasm_store_delete \
+    ts_wasm_store_language_count \
+    ts_wasm_store_load_language \
+    ts_wasm_store_new
+
+---
+
+#define _isalnum(ch) \
+    ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'))
+
+static inline bool kts_is_valid_identifier_char(int ch) {
+    return _isalnum(ch) || ch == '_';
+}
+
+static inline bool kts_is_valid_predicate_char(int ch) {
+    return _isalnum(ch) || ch == '_' || ch == '-' || ch == '.' || ch == '?' || ch == '!';
+}
+
+static inline uintptr_t kts_node_id(TSNode node) {
+    return (uintptr_t)node.id;
+}
+
+static inline int32_t kts_node_hash(TSNode node) {
+    uintptr_t id = (uintptr_t)node.id;
+    uintptr_t tree = (uintptr_t)node.tree;
+    return (int32_t)(id == tree ? id : id ^ tree);
+}
+
+static inline void *kts_malloc(size_t size) {
+    return ts_malloc(size);
+}
+
+static inline void kts_free(void *ptr) {
+    return ts_free(ptr);
+}

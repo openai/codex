@@ -1,0 +1,384 @@
+/* Base Variables */
+:root {
+  --light-bg: #f9f9f9;
+  --light-border: #e0e0e0;
+  --light-text: #333;
+  --light-hover-border: #c1c1c1;
+  --light-scrollbar-track: #f1f1f1;
+  --light-scrollbar-thumb: #c1c1c1;
+  --light-scrollbar-thumb-hover: #a8a8a8;
+
+  --dark-bg: #1d1f21;
+  --dark-border: #2d2d2d;
+  --dark-text: #c5c8c6;
+  --dark-scrollbar-track: #25282c;
+  --dark-scrollbar-thumb: #4a4d51;
+  --dark-scrollbar-thumb-hover: #5a5d61;
+
+  --primary-color: #0550ae;
+  --primary-color-alpha: rgba(5, 80, 174, 0.1);
+  --primary-color-alpha-dark: rgba(121, 192, 255, 0.1);
+  --selection-color: rgba(39, 95, 255, 0.3);
+}
+
+/* Common Scrollbar Styles */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+}
+
+/* Base Light Theme Scrollbars */
+::-webkit-scrollbar-track {
+  background: var(--light-scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--light-scrollbar-thumb);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--light-scrollbar-thumb-hover);
+}
+
+/* Dropdown Styling */
+.custom-select {
+  position: relative;
+  display: inline-block;
+}
+
+#language-select {
+  background-color: var(--light-bg);
+  border: 1px solid var(--light-border);
+  border-radius: 4px;
+  padding: 4px 24px 4px 8px;
+  font-size: 14px;
+  color: var(--light-text);
+  cursor: pointer;
+  min-width: 120px;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+
+.select-button {
+  background-color: var(--light-bg);
+  border: 1px solid var(--light-border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 14px;
+  color: var(--light-text);
+  cursor: pointer;
+  min-width: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#language-select:hover,
+.select-button:hover {
+  border-color: var(--light-hover-border);
+}
+
+#language-select:focus,
+.select-button:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px var(--primary-color-alpha);
+}
+
+/* Custom Checkbox Styling */
+input[type="checkbox"] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--light-border);
+  border-radius: 3px;
+  margin-right: 6px;
+  position: relative;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+input[type="checkbox"]:checked {
+  background-color: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+input[type="checkbox"]:hover {
+  border-color: var(--light-hover-border);
+}
+
+input[type="checkbox"]:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px var(--primary-color-alpha);
+}
+
+/* Select Dropdown */
+.select-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background-color: var(--light-bg);
+  border: 1px solid var(--light-border);
+  border-radius: 4px;
+  margin-top: 4px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  display: none;
+  z-index: 1000;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.select-dropdown.show {
+  display: block;
+}
+
+.option {
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.option:hover {
+  background-color: var(--primary-color-alpha);
+}
+
+.option.selected {
+  background-color: var(--primary-color-alpha);
+}
+
+/* CodeMirror Base Styles */
+.ts-playground .CodeMirror {
+  border-radius: 6px;
+  background-color: var(--light-bg) !important;
+  color: #080808 !important;
+}
+
+.ts-playground .CodeMirror-scroll {
+  padding: 8px;
+  border: 1px solid var(--light-border);
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.ayu .ts-playground .CodeMirror-scroll,
+.coal .ts-playground .CodeMirror-scroll,
+.navy .ts-playground .CodeMirror-scroll {
+  border-color: var(--dark-border);
+}
+
+.ts-playground .CodeMirror-gutters {
+  background: #ebebeb !important;
+  border-right: 1px solid #e8e8e8 !important;
+}
+
+.ts-playground .CodeMirror-cursor {
+  border-left: 2px solid #000 !important;
+}
+
+.ts-playground .CodeMirror-selected {
+  background: var(--selection-color) !important;
+}
+
+.ts-playground .CodeMirror-activeline-background {
+  background: rgba(36, 99, 180, 0.12) !important;
+}
+
+.query-error {
+  text-decoration: underline red dashed;
+  -webkit-text-decoration: underline red dashed;
+}
+
+/* Output Container Styles */
+#output-container {
+  color: #080808;
+  background-color: var(--light-bg);
+  margin: 0;
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+#output-container-scroll {
+  max-height: 400px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--light-border);
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  background-color: var(--light-bg);
+}
+
+#output-container a {
+  color: var(--primary-color);
+  text-decoration: none;
+}
+
+#output-container a:hover {
+  text-decoration: underline;
+}
+
+#output-container a.node-link.anonymous {
+  color: #116329;
+}
+
+#output-container a.node-link.anonymous:before {
+  content: '"';
+}
+
+#output-container a.node-link.anonymous:after {
+  content: '"';
+}
+
+#output-container a.node-link.error {
+  color: #cf222e;
+}
+
+#output-container a.highlighted {
+  background-color: var(--selection-color);
+}
+
+/* Dark Theme Overrides */
+.ayu,
+.coal,
+.navy {
+
+  & #language-select,
+  & .select-button {
+    background-color: var(--dark-bg);
+    border-color: var(--dark-border);
+    color: var(--dark-text);
+  }
+
+  & input[type="checkbox"] {
+    border-color: var(--dark-border);
+    background-color: var(--dark-bg);
+  }
+
+  & input[type="checkbox"]:checked {
+    background-color: #79c0ff;
+    border-color: #79c0ff;
+  }
+
+  & label {
+    color: var(--dark-text);
+  }
+
+  & .select-dropdown {
+    background-color: var(--dark-bg);
+    border-color: var(--dark-border);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  }
+
+  & .option:hover {
+    background-color: var(--primary-color-alpha-dark);
+  }
+
+  & .option.selected {
+    background-color: var(--primary-color-alpha-dark);
+  }
+
+  & .ts-playground .CodeMirror {
+    background-color: var(--dark-bg) !important;
+    color: var(--dark-text) !important;
+  }
+
+  & .ts-playground .CodeMirror-gutters {
+    background: var(--dark-scrollbar-track) !important;
+    border-right-color: var(--dark-border) !important;
+  }
+
+  & .ts-playground .CodeMirror-cursor {
+    border-left-color: #aeafad !important;
+  }
+
+  & .ts-playground .CodeMirror-selected {
+    background: #373b41 !important;
+  }
+
+  & .ts-playground .CodeMirror-activeline-background {
+    background: #282a2e !important;
+  }
+
+  & #output-container {
+    color: var(--dark-text);
+    background-color: var(--dark-bg);
+  }
+
+  & #output-container-scroll {
+    background-color: var(--dark-bg);
+    border-color: var(--dark-border);
+  }
+
+  & #output-container a {
+    color: #79c0ff;
+  }
+
+  & #output-container a.node-link.anonymous {
+    color: #7ee787;
+  }
+
+  & #output-container a.node-link.error {
+    color: #ff7b72;
+  }
+
+  & #output-container a.highlighted {
+    background-color: #373b41;
+  }
+
+  /* Dark Theme Scrollbars */
+  & ::-webkit-scrollbar-track {
+    background: var(--dark-scrollbar-track) !important;
+  }
+
+  & ::-webkit-scrollbar-thumb {
+    background: var(--dark-scrollbar-thumb) !important;
+  }
+
+  & ::-webkit-scrollbar-thumb:hover {
+    background: var(--dark-scrollbar-thumb-hover) !important;
+  }
+
+  & * {
+    scrollbar-width: thin !important;
+    scrollbar-color: var(--dark-scrollbar-thumb) var(--dark-scrollbar-track) !important;
+  }
+}
+
+/* Spacing Utilities */
+#language-select,
+input[type="checkbox"],
+label {
+  margin: 0 4px;
+}
+
+#language-select {
+  margin-right: 16px;
+}
+
+label {
+  font-size: 14px;
+  margin-right: 16px;
+  cursor: pointer;
+}

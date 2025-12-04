@@ -1,0 +1,25 @@
+===============================
+Declarations
+===============================
+
+T * x
+
+---
+
+(program (declaration
+  (type (identifier))
+  (declarator (identifier))))
+
+===============================
+Expressions
+===============================
+
+w * x * y
+
+---
+
+(program (expression
+  (expression
+    (expression (identifier))
+    (expression (identifier)))
+  (expression (identifier))))

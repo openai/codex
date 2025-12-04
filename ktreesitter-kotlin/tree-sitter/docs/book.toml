@@ -1,0 +1,33 @@
+[book]
+authors = [
+  "Max Brunsfeld <maxbrunsfeld@gmail.com>",
+  "Amaan Qureshi <amaanq12@gmail.com>",
+]
+language = "en"
+multilingual = false
+src = "src"
+title = "Tree-sitter"
+
+[output.html]
+additional-css = [
+  "src/assets/css/playground.css",
+  "src/assets/css/mdbook-admonish.css",
+]
+additional-js = ["src/assets/js/playground.js"]
+git-repository-url = "https://github.com/tree-sitter/tree-sitter"
+git-repository-icon = "fa-github"
+edit-url-template = "https://github.com/tree-sitter/tree-sitter/edit/master/docs/{path}"
+
+[output.html.search]
+limit-results = 20
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 2
+boost-paragraph = 1
+expand = true
+
+[preprocessor]
+
+[preprocessor.admonish]
+command = "mdbook-admonish"
+assets_version = "3.0.2"    # do not edit: managed by `mdbook-admonish install`

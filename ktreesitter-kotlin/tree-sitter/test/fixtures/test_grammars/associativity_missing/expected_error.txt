@@ -1,0 +1,13 @@
+Unresolved conflict for symbol sequence:
+
+  expression  '+'  expression  •  '+'  …
+
+Possible interpretations:
+
+  1:  (math_operation  expression  '+'  expression)  •  '+'  …
+  2:  expression  '+'  (math_operation  expression  •  '+'  expression)
+
+Possible resolutions:
+
+  1:  Specify a left or right associativity in `math_operation`
+  2:  Add a conflict for these rules: `math_operation`

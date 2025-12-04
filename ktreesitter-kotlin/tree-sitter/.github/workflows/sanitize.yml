@@ -1,0 +1,51 @@
+name: Sanitize
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+on:
+  workflow_call:
+
+jobs:
+  check-undefined-behaviour:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TREE_SITTER: ${{ github.workspace }}/target/release/tree-sitter
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install UBSAN library
+        run: sudo apt-get update -y && sudo apt-get install -y libubsan1
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Build project
+        run: cargo build --release
+
+      - name: Cache fixtures
+        uses: ./.github/actions/cache
+        id: cache
+
+      - name: Fetch fixtures
+        run: cargo xtask fetch-fixtures
+
+      - name: Generate fixtures
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: cargo xtask generate-fixtures
+
+      - name: Run main tests with undefined behaviour sanitizer (UBSAN)
+        run: cargo test -- --test-threads 1
+        env:
+          CFLAGS: -fsanitize=undefined
+          RUSTFLAGS: ${{ env.RUSTFLAGS }} -lubsan
+
+      - name: Run main tests with address sanitizer (ASAN)
+        run: cargo test -- --test-threads 1
+        env:
+          ASAN_OPTIONS: verify_asan_link_order=0
+          CFLAGS: -fsanitize=address
+          RUSTFLAGS: ${{ env.RUSTFLAGS }} -lasan --cfg sanitizing

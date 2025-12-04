@@ -1,0 +1,25 @@
+name: Remove Reviewers
+
+on:
+  pull_request_target:
+    types: [converted_to_draft, closed]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  remove-reviewers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout script
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts/reviewers_remove.js
+          sparse-checkout-cone-mode: false
+
+      - name: Run script
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const script = require('./.github/scripts/reviewers_remove.js')
+            await script({github, context})

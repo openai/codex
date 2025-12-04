@@ -1,0 +1,26 @@
+name: Cache
+
+description: This action caches fixtures
+
+outputs:
+  cache-hit:
+    description: Cache hit
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v4
+      id: cache
+      with:
+        path: |
+          test/fixtures/grammars
+          target/release/tree-sitter-*.wasm
+        key: fixtures-${{ join(matrix.*, '_') }}-${{ hashFiles(
+          'cli/generate/src/**',
+          'lib/src/parser.h',
+          'lib/src/array.h',
+          'lib/src/alloc.h',
+          'xtask/src/*',
+          'test/fixtures/grammars/*/**/src/*.c',
+          '.github/actions/cache/action.yml') }}

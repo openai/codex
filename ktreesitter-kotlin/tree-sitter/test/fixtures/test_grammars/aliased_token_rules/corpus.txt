@@ -1,0 +1,9 @@
+======================
+Aliased token rules
+======================
+
+abcde
+
+---
+
+(expression (X) (Y))

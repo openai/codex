@@ -1,0 +1,22 @@
+==========================
+Heredocs with errors 2
+==========================
+
+joins <<~SQL
+  b
+SQL
+)
+c
+
+---
+
+(program
+  (call
+    method: (identifier)
+    arguments: (argument_list
+      (heredoc_beginning)))
+  (heredoc_body
+    (heredoc_content)
+    (heredoc_end))
+  (ERROR)
+  (identifier))

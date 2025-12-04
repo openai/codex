@@ -1,6 +1,6 @@
 plugins {
-    kotlin("multiplatform") version "2.2.21"
-    kotlin("plugin.serialization") version "2.2.21"
+    kotlin("multiplatform") version "2.2.10"
+    kotlin("plugin.serialization") version "2.2.10"
 }
 
 kotlin {
@@ -13,17 +13,20 @@ kotlin {
     macosArm64 {
         binaries {
             executable {
-                entryPoint = "com.auth0.jwt.main"
+                entryPoint = "main"
             }
         }
     }
     macosX64 {
         binaries {
             executable {
-                entryPoint = "com.auth0.jwt.main"
+                entryPoint = "main"
             }
         }
     }
+
+    // Define Linux target so we can confine certain dependencies/code to Linux only
+    linuxX64()
 
     sourceSets {
         val nativeMain by getting {
@@ -41,7 +44,7 @@ kotlin {
                 implementation("io.ktor:ktor-client-auth:2.3.7")
                 
                 // File I/O
-                implementation("com.squareup.okio:okio:3.17.0-SNAPSHOT")
+                implementation("com.squareup.okio:okio:3.9.0")
 
                 // Character encoding support (for legacy codepage conversion)
                 // fleeksoft-io provides JDK-like IO classes for Kotlin Multiplatform

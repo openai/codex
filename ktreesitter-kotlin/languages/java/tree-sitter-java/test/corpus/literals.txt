@@ -1,0 +1,412 @@
+========================
+decimal integer literals
+========================
+
+123;
+4l;
+50L;
+
+---
+
+(program
+  (expression_statement (decimal_integer_literal))
+  (expression_statement (decimal_integer_literal))
+  (expression_statement (decimal_integer_literal)))
+
+====================
+hex integer literals
+====================
+
+0xa_bcd_ef0;
+0Xa_bcd_ef0;
+0X8000L;
+0x7e-0x21;
+
+---
+
+(program
+  (expression_statement (hex_integer_literal))
+  (expression_statement (hex_integer_literal))
+  (expression_statement (hex_integer_literal))
+  (expression_statement (binary_expression (hex_integer_literal) (hex_integer_literal))))
+
+======================
+octal integer literals
+======================
+
+0o123;
+0O123;
+0123;
+
+---
+
+(program
+  (expression_statement (octal_integer_literal))
+  (expression_statement (octal_integer_literal))
+  (expression_statement (octal_integer_literal)))
+
+=======================
+binary integer literal
+=======================
+
+0b001;
+0B001;
+0b10;
+0B1000;
+
+---
+
+(program
+  (expression_statement (binary_integer_literal))
+  (expression_statement (binary_integer_literal))
+  (expression_statement (binary_integer_literal))
+  (expression_statement (binary_integer_literal)))
+
+===============================
+floating point literals
+===============================
+
+4.23e9;
+4.23e-9;
+4.23e+9;
+40.3e6;
+40.3e-6;
+1.234;
+0.123456;
+.12345;
+1e4;
+0.2e-2;
+0.0e-4;
+.2e-2;
+0x5.4;
+0x5.4p-10;
+
+---
+
+(program
+  (expression_statement (decimal_floating_point_literal))
+  (expression_statement (decimal_floating_point_literal))
+  (expression_statement (decimal_floating_point_literal))
+  (expression_statement (decimal_floating_point_literal))
+  (expression_statement (decimal_floating_point_literal))
+  (expression_statement (decimal_floating_point_literal))
+  (expression_statement (decimal_floating_point_literal))
+  (expression_statement (decimal_floating_point_literal))
+  (expression_statement (decimal_floating_point_literal))
+  (expression_statement (decimal_floating_point_literal))
+  (expression_statement (decimal_floating_point_literal))
+  (expression_statement (decimal_floating_point_literal))
+  (expression_statement (hex_floating_point_literal))
+  (expression_statement (hex_floating_point_literal)))
+
+================
+boolean literals
+================
+
+true;
+false;
+
+---
+
+(program
+  (expression_statement (true))
+  (expression_statement (false)))
+
+===================
+character literals
+===================
+
+'a';
+'%';
+'\t';
+'\\';
+'\'';
+'\u03a9';
+'\uFFFF';
+'\177';
+'™';
+
+---
+
+(program
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal)))
+
+===============
+string literals
+===============
+
+"";
+"\"";
+"This is a string";
+"'";
+
+---
+
+(program
+      (expression_statement
+        (string_literal))
+      (expression_statement
+        (string_literal
+          (escape_sequence)))
+      (expression_statement
+        (string_literal
+          (string_fragment)))
+      (expression_statement
+        (string_literal
+          (string_fragment))))
+
+===============
+text block
+===============
+
+"""
+""";
+"""
+Closing token
+at the same line""";
+"""   
+Spaces after
+opening token""";
+"""   
+Closing token
+at new line
+""";
+
+"""
+{
+  "foo": 4
+}
+""";
+"""
+"this is single double quotes"
+""this is double quotes""
+"" """;
+"""
+"hi
+""";
+"""
+\\
+""";
+
+"""
+string="has a quote with an escaped end quote\"""";
+
+---
+
+(program
+      (expression_statement
+        (string_literal
+          (multiline_string_fragment)))
+      (expression_statement
+        (string_literal
+          (multiline_string_fragment)))
+      (expression_statement
+        (string_literal
+          (multiline_string_fragment)))
+      (expression_statement
+        (string_literal
+          (multiline_string_fragment)))
+      (expression_statement
+        (string_literal
+          (multiline_string_fragment)
+          (multiline_string_fragment)
+          (multiline_string_fragment)))
+      (expression_statement
+        (string_literal
+          (multiline_string_fragment)
+          (multiline_string_fragment)
+          (multiline_string_fragment)
+          (multiline_string_fragment)
+          (multiline_string_fragment)
+          (multiline_string_fragment)
+          (multiline_string_fragment)
+          (multiline_string_fragment)
+          (multiline_string_fragment)))
+      (expression_statement
+        (string_literal
+          (multiline_string_fragment)
+          (multiline_string_fragment)))
+      (expression_statement
+        (string_literal
+        (multiline_string_fragment)
+        (escape_sequence)
+        (multiline_string_fragment)))
+      (expression_statement
+        (string_literal
+          (multiline_string_fragment)
+          (multiline_string_fragment))))
+
+===============
+escape sequences
+===============
+
+"\n\a\b\fhi im a piece of text\t\v and im some more text \\\'\"\?";
+
+---
+
+(program
+      (expression_statement
+        (string_literal
+          (escape_sequence)
+          (escape_sequence)
+          (escape_sequence)
+          (escape_sequence)
+          (string_fragment)
+          (escape_sequence)
+          (escape_sequence)
+          (string_fragment)
+          (escape_sequence)
+          (escape_sequence)
+          (escape_sequence)
+          (escape_sequence))))
+
+=============
+null literals
+=============
+
+null;
+
+---
+
+(program
+  (expression_statement (null_literal)))
+
+=========================================
+char escapes
+=========================================
+
+'\b';
+'\t';
+'\n';
+'\f';
+'\r';
+'\"';
+'\'';
+'\\' + 'a';
+
+---
+
+(program
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (binary_expression (character_literal) (character_literal))))
+
+=========================================
+octal escapes
+=========================================
+
+'\7';
+
+---
+
+(program
+  (expression_statement (character_literal)))
+
+=========================================
+unicode escapes
+=========================================
+
+'\\u2122=\u2122';
+
+---
+
+(program
+  (expression_statement (character_literal)))
+
+=================
+ascii escapes
+=================
+
+'\NUL';
+'\SOH';
+'\STX';
+'\ETX';
+'\EOT';
+'\ENQ';
+'\ACK';
+'\BEL';
+'\BS';
+'\TAB';
+'\LF';
+'\VT';
+'\FF';
+'\CR';
+'\SO';
+'\SI';
+'\DLE';
+'\DC1';
+'\DC2';
+'\DC3';
+'\DC4';
+'\NAK';
+'\SYN';
+'\ETB';
+'\CAN';
+'\EM';
+'\SUB';
+'\ESC';
+'\FS';
+'\GS';
+'\RS';
+'\US';
+
+---
+
+(program
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal))
+  (expression_statement (character_literal)))
+
+========================
+class literals
+========================
+
+String.class;
+
+---
+
+(program
+  (expression_statement
+    (class_literal (type_identifier))))

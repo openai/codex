@@ -1,0 +1,35 @@
+name: Publish packages
+
+on:
+  push:
+    tags: ["*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  github:
+    uses: tree-sitter/workflows/.github/workflows/release.yml@main
+    with:
+      generate: true
+      attestations: true
+  npm:
+    uses: tree-sitter/workflows/.github/workflows/package-npm.yml@main
+    secrets:
+      NODE_AUTH_TOKEN: ${{secrets.NPM_TOKEN}}
+    with:
+      generate: true
+  crates:
+    uses: tree-sitter/workflows/.github/workflows/package-crates.yml@main
+    secrets:
+      CARGO_REGISTRY_TOKEN: ${{secrets.CARGO_REGISTRY_TOKEN}}
+    with:
+      generate: true
+  pypi:
+    uses: tree-sitter/workflows/.github/workflows/package-pypi.yml@main
+    secrets:
+      PYPI_API_TOKEN: ${{secrets.PYPI_API_TOKEN}}
+    with:
+      generate: true

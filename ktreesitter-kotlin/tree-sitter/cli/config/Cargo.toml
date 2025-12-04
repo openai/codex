@@ -1,0 +1,22 @@
+[package]
+name = "tree-sitter-config"
+version.workspace = true
+description = "User configuration of tree-sitter's command line programs"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+etcetera.workspace = true
+serde.workspace = true
+serde_json.workspace = true

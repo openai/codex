@@ -1,0 +1,18 @@
+======================================
+Method calls
+======================================
+
+a.b(c(d.e));
+
+---
+
+(statement
+  (call_expression
+    (member_expression
+      (variable_name)
+      (property_name))
+    (call_expression
+      (variable_name)
+      (member_expression
+        (variable_name)
+        (property_name)))))

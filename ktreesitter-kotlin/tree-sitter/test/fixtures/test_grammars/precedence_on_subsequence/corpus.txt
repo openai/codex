@@ -1,0 +1,24 @@
+==========================================
+curly brace blocks with high precedence
+==========================================
+
+a b {}
+
+---
+
+(expression (function_call
+  (identifier)
+  (expression (function_call (identifier) (block)))))
+
+==========================================
+do blocks with low precedence
+==========================================
+
+a b do end
+
+---
+
+(expression (function_call
+  (identifier)
+  (expression (identifier))
+  (do_block)))

@@ -1,0 +1,15 @@
+Unresolved conflict for symbol sequence:
+
+  identifier  identifier  •  '{'  …
+
+Possible interpretations:
+
+  1:  identifier  (expression  identifier)  •  '{'  …
+  2:  identifier  (function_call  identifier  •  block)  (precedence: 0, associativity: Right)
+
+Possible resolutions:
+
+  1:  Specify a higher precedence in `function_call` than in the other rules.
+  2:  Specify a higher precedence in `expression` than in the other rules.
+  3:  Specify a left or right associativity in `expression`
+  4:  Add a conflict for these rules: `expression`, `function_call`

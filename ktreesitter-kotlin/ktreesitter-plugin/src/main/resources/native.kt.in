@@ -1,0 +1,11 @@
+// Automatically generated file. DO NOT MODIFY
+
+package @PACKAGE@
+
+@IMPORTS@
+import kotlinx.cinterop.ExperimentalForeignApi
+
+@OptIn(ExperimentalForeignApi::class)
+actual object @CLASS@ {
+@METHODS@
+}

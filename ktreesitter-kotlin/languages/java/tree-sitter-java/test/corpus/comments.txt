@@ -1,0 +1,37 @@
+====
+comment
+====
+
+// This is a comment
+/* This is also a comment */
+/* this comment /* // /** ends here: */
+/**/
+
+a /* dkjfhsdf + */ + b; /* ***** */
+
+---
+
+(program 
+  (line_comment) 
+  (block_comment) 
+  (block_comment) 
+  (block_comment) 
+  (expression_statement 
+    (binary_expression 
+      (identifier) 
+      (block_comment) 
+      (identifier))) 
+  (block_comment)) 
+
+======================
+comments and literals
+======================
+
+123;
+// comment
+
+---
+
+(program
+  (expression_statement (decimal_integer_literal))
+  (line_comment))

@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - grammar.js
+      - src/**
+      - test/**
+      - bindings/**
+      - binding.gyp
+  pull_request:
+    paths:
+      - grammar.js
+      - src/**
+      - test/**
+      - bindings/**
+      - binding.gyp
+
+concurrency:
+  group: ${{github.workflow}}-${{github.ref}}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test parser
+    runs-on: ${{matrix.os}}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up tree-sitter
+        uses: tree-sitter/setup-action/cli@v2
+      - name: Set up examples
+        run: |-
+          git clone https://github.com/elastic/elasticsearch examples/elasticsearch --single-branch --depth=1 --filter=blob:none
+          git clone https://github.com/google/guava examples/guava --single-branch --depth=1 --filter=blob:none
+          git clone https://github.com/ReactiveX/RxJava examples/RxJava --single-branch --depth=1 --filter=blob:none
+          git clone https://github.com/apache/flink examples/flink --single-branch --depth=1 --filter=blob:none
+          git clone https://github.com/apache/logging-log4j2 examples/log4j2 --single-branch --depth=1 --filter=blob:none
+          git clone https://github.com/apache/cassandra examples/cassandra --single-branch --depth=1 --filter=blob:none
+      - name: Run tests
+        uses: tree-sitter/parser-test-action@v2
+        with:
+          test-rust: true
+          test-node: true
+          test-python: true
+          test-go: true
+          test-swift: true
+      - name: Parse examples
+        id: examples
+        continue-on-error: true
+        uses: tree-sitter/parse-action@v4
+        with:
+          files: examples/**/*.java
+      - uses: actions/upload-artifact@v4
+        if: steps.examples.outputs.failures != ''
+        with:
+          name: failures-${{matrix.os}}
+          path: ${{steps.examples.outputs.failures}}

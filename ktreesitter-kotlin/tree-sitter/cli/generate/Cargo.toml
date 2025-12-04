@@ -1,0 +1,37 @@
+[package]
+name = "tree-sitter-generate"
+version.workspace = true
+description = "Library for generating C source code from a tree-sitter grammar"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+heck.workspace = true
+indexmap.workspace = true
+indoc.workspace = true
+log.workspace = true
+regex.workspace = true
+regex-syntax.workspace = true
+rustc-hash.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smallbitvec.workspace = true
+thiserror.workspace = true
+topological-sort.workspace = true
+
+tree-sitter.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+url.workspace = true

@@ -1,0 +1,42 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: sunday
+    commit-message:
+      prefix: ci
+    labels: [dependencies]
+    open-pull-requests-limit: 1
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: weekly
+      day: friday
+    commit-message:
+      prefix: build
+    labels: [dependencies]
+    open-pull-requests-limit: 1
+    groups:
+      submodules:
+        patterns: ["*"]
+
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: saturday
+    commit-message:
+      prefix: build
+    labels: [dependencies]
+    open-pull-requests-limit: 1
+    groups:
+      gradle:
+        patterns: ["*"]
+        exclude-patterns:
+          - android-gradle

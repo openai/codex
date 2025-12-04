@@ -1,0 +1,11 @@
+debug/
+dist/
+tree-sitter*
+lib/tree-sitter*
+lib/*.c
+lib/*.h
+!lib/tree-sitter.c
+!lib/tree-sitter.d.ts
+node_modules
+*.tgz
+LICENSE

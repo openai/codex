@@ -1,0 +1,1 @@
+This tests that `get_column` correctly counts codepoints since start of line.

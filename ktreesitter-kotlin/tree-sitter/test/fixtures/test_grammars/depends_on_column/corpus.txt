@@ -1,0 +1,21 @@
+==================
+X is at odd column
+==================
+
+ x
+
+---
+
+(x_is_at
+  (odd_column))
+
+===================
+X is at even column
+===================
+
+  x
+
+---
+
+(x_is_at
+  (even_column))

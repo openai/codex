@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tree-sitter-java"
+description = "Java grammar for tree-sitter"
+version = "0.23.5"
+keywords = ["incremental", "parsing", "tree-sitter", "java"]
+classifiers = [
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Software Development :: Compilers",
+  "Topic :: Text Processing :: Linguistic",
+  "Typing :: Typed",
+]
+authors = [
+  { name = "Ayman Nadeem", email = "aymannadeem@github.com" },
+  { name = "Max Brunsfeld", email = "maxbrunsfeld@gmail.com" },
+  { name = "Amaan Qureshi", email = "amaanq12@gmail.com" },
+]
+requires-python = ">=3.9"
+license.text = "MIT"
+readme = "README.md"
+
+[project.urls]
+Homepage = "https://github.com/tree-sitter/tree-sitter-java"
+
+[project.optional-dependencies]
+core = ["tree-sitter~=0.22"]
+
+[tool.cibuildwheel]
+build = "cp39-*"
+build-frontend = "build"

@@ -1,0 +1,10 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: tree-sitter-PARSER_NAME
+Description: @PROJECT_DESCRIPTION@
+URL: @PROJECT_HOMEPAGE_URL@
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -ltree-sitter-PARSER_NAME
+Cflags: -I${includedir}

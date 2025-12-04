@@ -1,0 +1,9 @@
+[submodule "tree-sitter"]
+    path = tree-sitter
+    url = https://github.com/tree-sitter/tree-sitter
+    branch = release-0.25
+
+[submodule "tree-sitter-java"]
+    path = languages/java/tree-sitter-java
+    url = https://github.com/tree-sitter/tree-sitter-java
+    shallow = true

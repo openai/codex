@@ -1,0 +1,24 @@
+{
+  "name": "eslint-config-treesitter",
+  "version": "1.0.2",
+  "description": "Eslint configuration for Tree-sitter grammar files",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tree-sitter/tree-sitter.git"
+  },
+  "license": "MIT",
+  "author": "Amaan Qureshi <amaanq12@gmail.com>",
+  "main": "index.js",
+  "type": "module",
+  "keywords": [
+    "eslint",
+    "eslintconfig",
+    "tree-sitter"
+  ],
+  "dependencies": {
+    "eslint-plugin-jsdoc": "^50.2.4"
+  },
+  "peerDependencies": {
+    "eslint": ">= 9"
+  }
+}

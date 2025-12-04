@@ -1,0 +1,9 @@
+BasedOnStyle: LLVM
+AlignEscapedNewlinesLeft: false
+DerivePointerAlignment: false
+PointerAlignment: Right
+IndentWidth: 4
+ColumnLimit: 100
+IncludeBlocks: Preserve
+BinPackArguments: true
+IndentCaseLabels: true

@@ -1,0 +1,268 @@
+name: Build & Test
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  CROSS_DEBUG: 1
+
+on:
+  workflow_call:
+    inputs:
+      run-test:
+        default: true
+        type: boolean
+
+jobs:
+  build:
+    name: ${{ matrix.platform }} (${{ matrix.target }}) (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux-arm64
+          - linux-arm
+          - linux-x64
+          - linux-x86
+          - linux-powerpc64
+          - windows-arm64
+          - windows-x64
+          - windows-x86
+          - macos-arm64
+          - macos-x64
+
+        include:
+          # When adding a new `target`:
+          # 1. Define a new platform alias above
+          # 2. Add a new record to the matrix map in `cli/npm/install.js`
+          - { platform: linux-arm64       , target: aarch64-unknown-linux-gnu   , os: ubuntu-latest    , use-cross: true }
+          - { platform: linux-arm         , target: arm-unknown-linux-gnueabi   , os: ubuntu-latest    , use-cross: true }
+          - { platform: linux-x64         , target: x86_64-unknown-linux-gnu    , os: ubuntu-22.04     , features: wasm  }
+          - { platform: linux-x86         , target: i686-unknown-linux-gnu      , os: ubuntu-latest    , use-cross: true }
+          - { platform: linux-powerpc64   , target: powerpc64-unknown-linux-gnu , os: ubuntu-latest    , use-cross: true }
+          - { platform: windows-arm64     , target: aarch64-pc-windows-msvc     , os: windows-latest                     }
+          - { platform: windows-x64       , target: x86_64-pc-windows-msvc      , os: windows-latest   , features: wasm  }
+          - { platform: windows-x86       , target: i686-pc-windows-msvc        , os: windows-latest                     }
+          - { platform: macos-arm64       , target: aarch64-apple-darwin        , os: macos-latest     , features: wasm  }
+          - { platform: macos-x64         , target: x86_64-apple-darwin         , os: macos-13         , features: wasm  }
+
+          # Cross compilers for C library
+          - { platform: linux-arm64       , cc: aarch64-linux-gnu-gcc           , ar: aarch64-linux-gnu-ar   }
+          - { platform: linux-arm         , cc: arm-linux-gnueabi-gcc           , ar: arm-linux-gnueabi-ar   }
+          - { platform: linux-x86         , cc: i686-linux-gnu-gcc              , ar: i686-linux-gnu-ar      }
+          - { platform: linux-powerpc64   , cc: powerpc64-linux-gnu-gcc         , ar: powerpc64-linux-gnu-ar }
+
+          # Prevent race condition (see #2041)
+          - { platform: windows-x64   , rust-test-threads: 1 }
+          - { platform: windows-x86   , rust-test-threads: 1 }
+
+          # Can't natively run CLI on Github runner's host
+          - { platform: windows-arm64 , no-run: true }
+
+    env:
+      BUILD_CMD: cargo
+      SUFFIX: ${{ contains(matrix.target, 'windows') && '.exe' || '' }}
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Read Emscripten version
+      run: printf 'EMSCRIPTEN_VERSION=%s\n' "$(<cli/loader/emscripten-version)" >> $GITHUB_ENV
+
+    - name: Install Emscripten
+      if: ${{ !matrix.no-run && !matrix.use-cross }}
+      uses: mymindstorm/setup-emsdk@v14
+      with:
+        version: ${{ env.EMSCRIPTEN_VERSION }}
+
+    - name: Set up Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        target: ${{ matrix.target }}
+
+    - name: Install cross
+      if: ${{ matrix.use-cross }}
+      run: |
+        if [ ! -x "$(command -v cross)" ]; then
+          # TODO: Remove 'RUSTFLAGS=""' once https://github.com/cross-rs/cross/issues/1561 is resolved
+          RUSTFLAGS="" cargo install cross --git https://github.com/cross-rs/cross
+        fi
+
+    - name: Configure cross
+      if: ${{ matrix.use-cross }}
+      run: |
+        printf '%s\n' > Cross.toml \
+          '[target.${{ matrix.target }}]'                                   \
+          'image = "ghcr.io/cross-rs/${{ matrix.target }}:edge"'            \
+          '[build]'                                                         \
+          'pre-build = ['                                                   \
+          '  "dpkg --add-architecture $CROSS_DEB_ARCH",'                    \
+          '  "curl -fsSL https://deb.nodesource.com/setup_22.x | bash -",'  \
+          '  "apt-get update && apt-get -y install libssl-dev nodejs"'      \
+          ']'
+        cat - Cross.toml <<< 'Cross.toml:'
+        printf '%s\n' >> $GITHUB_ENV \
+          "CROSS_CONFIG=$PWD/Cross.toml" \
+          "CROSS_IMAGE=ghcr.io/cross-rs/${{ matrix.target }}:edge"
+
+    - name: Set up environment
+      env:
+        RUST_TEST_THREADS: ${{ matrix.rust-test-threads }}
+        USE_CROSS: ${{ matrix.use-cross }}
+        TARGET: ${{ matrix.target }}
+        CC: ${{ matrix.cc }}
+        AR: ${{ matrix.ar }}
+      run: |
+        PATH="$PWD/.github/scripts:$PATH"
+        printf '%s/.github/scripts\n' "$PWD" >> $GITHUB_PATH
+
+        printf '%s\n' >> $GITHUB_ENV \
+          'TREE_SITTER=tree-sitter.sh' \
+          "TARGET=$TARGET" \
+          "ROOT=$PWD"
+
+        [[ -n $RUST_TEST_THREADS ]] && \
+          printf 'RUST_TEST_THREADS=%s\n' "$RUST_TEST_THREADS" >> $GITHUB_ENV
+
+        [[ -n $CC ]] && printf 'CC=%s\n' "$CC" >> $GITHUB_ENV
+        [[ -n $AR ]] && printf 'AR=%s\n' "$AR" >> $GITHUB_ENV
+
+        if [[ $USE_CROSS == true ]]; then
+          printf 'BUILD_CMD=cross\n' >> $GITHUB_ENV
+          runner=$(cross.sh bash -c "env | sed -n 's/^CARGO_TARGET_.*_RUNNER=//p'")
+          [[ -n $runner ]] && printf 'CROSS_RUNNER=%s\n' "$runner" >> $GITHUB_ENV
+        fi
+
+    # TODO: Remove RUSTFLAGS="--cap-lints allow" once we use a wasmtime release that addresses
+    # the `mismatched-lifetime-syntaxes` lint
+    - name: Build wasmtime library
+      if: ${{ !matrix.use-cross && contains(matrix.features, 'wasm') }}
+      run: |
+        mkdir -p target
+        WASMTIME_VERSION=$(cargo metadata --format-version=1 --locked --features wasm | \
+                           jq -r '.packages[] | select(.name == "wasmtime-c-api-impl") | .version')
+        curl -LSs "$WASMTIME_REPO/archive/refs/tags/v${WASMTIME_VERSION}.tar.gz" | tar xzf - -C target
+        cd target/wasmtime-${WASMTIME_VERSION}
+        cmake -S crates/c-api -B target/c-api \
+          -DCMAKE_INSTALL_PREFIX="$PWD/artifacts" \
+          -DWASMTIME_DISABLE_ALL_FEATURES=ON \
+          -DWASMTIME_FEATURE_CRANELIFT=ON \
+          -DWASMTIME_TARGET='${{ matrix.target }}'
+        cmake --build target/c-api && cmake --install target/c-api
+        printf 'CMAKE_PREFIX_PATH=%s\n' "$PWD/artifacts" >> $GITHUB_ENV
+      env:
+        WASMTIME_REPO: https://github.com/bytecodealliance/wasmtime
+        RUSTFLAGS: "--cap-lints allow"
+
+    - name: Build C library (make)
+      if: ${{ runner.os != 'Windows' }}
+      run: make.sh -j CFLAGS="$CFLAGS"
+      env:
+        CFLAGS: -g -Werror -Wall -Wextra -Wshadow -Wpedantic -Werror=incompatible-pointer-types
+
+    - name: Build C library (CMake)
+      if: ${{ !matrix.use-cross }}
+      run: |
+        cmake -S lib -B build/static \
+          -DBUILD_SHARED_LIBS=OFF \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
+          -DTREE_SITTER_FEATURE_WASM=$WASM
+        cmake --build build/static --verbose
+
+        cmake -S lib -B build/shared \
+          -DBUILD_SHARED_LIBS=ON \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
+          -DTREE_SITTER_FEATURE_WASM=$WASM
+        cmake --build build/shared --verbose
+      env:
+        CC: ${{ contains(matrix.target, 'linux') && 'clang' || '' }}
+        WASM: ${{ contains(matrix.features, 'wasm') && 'ON' || 'OFF' }}
+
+    - name: Build wasm library
+      # No reason to build on the same Github runner hosts many times
+      if: ${{ !matrix.no-run && !matrix.use-cross }}
+      shell: bash
+      run: |
+        cd lib/binding_web
+        npm ci
+        CJS=true npm run build
+        CJS=true npm run build:debug
+        npm run build
+        npm run build:debug
+
+    - name: Check no_std builds
+      if: ${{ !matrix.no-run && inputs.run-test }}
+      shell: bash
+      run: |
+        cd lib
+        $BUILD_CMD check --no-default-features
+
+    - name: Build target
+      run: $BUILD_CMD build --release --target=${{ matrix.target }} --features=${{ matrix.features }}
+
+    - name: Cache fixtures
+      id: cache
+      if: ${{ !matrix.no-run && inputs.run-test }}
+      uses: ./.github/actions/cache
+
+    - name: Fetch fixtures
+      if: ${{ !matrix.no-run && inputs.run-test }}
+      run: $BUILD_CMD run -p xtask -- fetch-fixtures
+
+    - name: Generate fixtures
+      if: ${{ !matrix.no-run && inputs.run-test && steps.cache.outputs.cache-hit != 'true' }}
+      run: $BUILD_CMD run -p xtask -- generate-fixtures
+
+    - name: Generate Wasm fixtures
+      if: ${{ !matrix.no-run && !matrix.use-cross && inputs.run-test && steps.cache.outputs.cache-hit != 'true' }}
+      run: $BUILD_CMD run -p xtask -- generate-fixtures --wasm
+
+    - name: Run main tests
+      if: ${{ !matrix.no-run && inputs.run-test }}
+      run: $BUILD_CMD test --target=${{ matrix.target }} --features=${{ matrix.features }}
+
+    - name: Run wasm tests
+      if: ${{ !matrix.no-run && !matrix.use-cross && inputs.run-test }}
+      run: $BUILD_CMD run -p xtask -- test-wasm
+
+    - name: Run benchmarks
+      # Cross-compiled benchmarks are pointless
+      if: ${{ !matrix.no-run && !matrix.use-cross && inputs.run-test }}
+      run: $BUILD_CMD bench benchmark -p tree-sitter-cli --target=${{ matrix.target }}
+
+    - name: Upload CLI artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: tree-sitter.${{ matrix.platform }}
+        path: target/${{ matrix.target }}/release/tree-sitter${{ env.SUFFIX }}
+        if-no-files-found: error
+        retention-days: 7
+
+    - name: Upload Wasm artifacts
+      if: ${{ matrix.platform == 'linux-x64' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: tree-sitter.wasm
+        path: |
+          lib/binding_web/tree-sitter.js
+          lib/binding_web/tree-sitter.js.map
+          lib/binding_web/tree-sitter.cjs
+          lib/binding_web/tree-sitter.cjs.map
+          lib/binding_web/tree-sitter.wasm
+          lib/binding_web/tree-sitter.wasm.map
+          lib/binding_web/debug/tree-sitter.cjs
+          lib/binding_web/debug/tree-sitter.cjs.map
+          lib/binding_web/debug/tree-sitter.js
+          lib/binding_web/debug/tree-sitter.js.map
+          lib/binding_web/debug/tree-sitter.wasm
+          lib/binding_web/debug/tree-sitter.wasm.map
+        if-no-files-found: error
+        retention-days: 7

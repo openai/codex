@@ -1,0 +1,33 @@
+========================
+regexes
+========================
+
+/a+/
+
+---
+
+(expression (regex))
+
+========================
+conditionals
+========================
+
+(if (1) /a+/)
+
+---
+
+(expression (parenthesized (expression (conditional
+  (parenthesized (expression (number)))
+  (expression (regex))))))
+
+========================
+quotients
+========================
+
+((1) / 2)
+
+---
+
+(expression (parenthesized (expression (quotient
+  (expression (parenthesized (expression (number))))
+  (expression (number))))))

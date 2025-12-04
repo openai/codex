@@ -1,0 +1,93 @@
+========================
+Single list, no boxes
+========================
+
+-
+-
+-
+
+----------------------
+
+(expression
+  (list
+    (list_item)
+    (list_item)
+    (list_item)
+  )
+)
+
+========================
+Two lists, no boxes
+========================
+
+ -
+ -
+ -
+  -
+  -
+
+----------------------
+
+(expression
+  (list
+    (list_item)
+    (list_item)
+    (list_item)
+  )
+  (list
+    (list_item)
+    (list_item)
+  )
+)
+
+========================
+List with boxes
+========================
+
+ -
+□-
+ -
+
+----------------------
+
+(expression
+  (list
+    (list_item)
+    (list_item)
+    (list_item)
+  )
+)
+
+========================
+Multiple lists with boxes
+========================
+
+   -
+□ □-
+ □ -
+□□□□□□-
+□ □ □ -
+      -
+□□□   -
+□□□-
+□ □-
+
+----------------------
+
+(expression
+  (list
+    (list_item)
+    (list_item)
+    (list_item)
+  )
+  (list
+    (list_item)
+    (list_item)
+    (list_item)
+    (list_item)
+  )
+  (list
+    (list_item)
+    (list_item)
+  )
+)

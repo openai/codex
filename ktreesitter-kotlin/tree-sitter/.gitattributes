@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+/lib/src/unicode/*.h linguist-vendored
+/lib/src/unicode/LICENSE linguist-vendored
+
+/cli/src/generate/prepare_grammar/*.json -diff
+Cargo.lock -diff

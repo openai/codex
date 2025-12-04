@@ -1,0 +1,1953 @@
+================================================================================
+standalone assignment expression
+================================================================================
+
+x = 3;
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (assignment_expression
+      (identifier)
+      (decimal_integer_literal))))
+
+================================================================================
+standalone binary expression
+================================================================================
+
+a > b;
+a < b;
+a == b;
+a >= b;
+a <= b;
+a != b;
+a && b;
+a || b;
+a & b;
+a | b;
+a ^ b;
+a % b;
+a << b;
+a >> b;
+a >>> b;
+3 + 2;
+3 - 2;
+3 * 2;
+9 / 3;
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (expression_statement
+    (binary_expression
+      (decimal_integer_literal)
+      (decimal_integer_literal)))
+  (expression_statement
+    (binary_expression
+      (decimal_integer_literal)
+      (decimal_integer_literal)))
+  (expression_statement
+    (binary_expression
+      (decimal_integer_literal)
+      (decimal_integer_literal)))
+  (expression_statement
+    (binary_expression
+      (decimal_integer_literal)
+      (decimal_integer_literal))))
+
+================================================================================
+instanceof expressions
+================================================================================
+
+a instanceof C.D;
+a instanceof List<B>;
+c instanceof C[];
+c instanceof C foo;
+d instanceof final D bar;
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (instanceof_expression
+      (identifier)
+      (scoped_type_identifier
+        (type_identifier)
+        (type_identifier))))
+  (expression_statement
+    (instanceof_expression
+      (identifier)
+      (generic_type
+        (type_identifier)
+        (type_arguments
+          (type_identifier)))))
+  (expression_statement
+    (instanceof_expression
+      (identifier)
+      (array_type
+        (type_identifier)
+        (dimensions))))
+  (expression_statement
+    (instanceof_expression
+      (identifier)
+      (type_identifier)
+      (identifier)))
+  (expression_statement
+    (instanceof_expression
+      (identifier)
+      (type_identifier)
+      (identifier))))
+
+================================================================================
+if statements
+================================================================================
+
+if (x)
+  y;
+
+--------------------------------------------------------------------------------
+
+(program
+  (if_statement
+    condition: (parenthesized_expression
+      (identifier))
+    consequence: (expression_statement
+      (identifier))))
+
+================================================================================
+if statements with nested parenthesized expression
+================================================================================
+
+if ((x))
+  y;
+
+--------------------------------------------------------------------------------
+
+(program
+  (if_statement
+    condition: (parenthesized_expression
+      (parenthesized_expression
+        (identifier)))
+    consequence: (expression_statement
+      (identifier))))
+
+================================================================================
+if statements with braces
+================================================================================
+
+if (x) {
+  y;
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (if_statement
+    condition: (parenthesized_expression
+      (identifier))
+    consequence: (block
+      (expression_statement
+        (identifier)))))
+
+================================================================================
+if statements with assignment without braces
+================================================================================
+
+if (x = 3)
+  y = 2;
+
+--------------------------------------------------------------------------------
+
+(program
+  (if_statement
+    condition: (parenthesized_expression
+      (assignment_expression
+        left: (identifier)
+        right: (decimal_integer_literal)))
+    consequence: (expression_statement
+      (assignment_expression
+        left: (identifier)
+        right: (decimal_integer_literal)))))
+
+================================================================================
+if then else statement
+================================================================================
+
+if (x = 3) {
+  y = 9;
+} else {
+  y = 0;
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (if_statement
+    condition: (parenthesized_expression
+      (assignment_expression
+        left: (identifier)
+        right: (decimal_integer_literal)))
+    consequence: (block
+      (expression_statement
+        (assignment_expression
+          left: (identifier)
+          right: (decimal_integer_literal))))
+    alternative: (block
+      (expression_statement
+        (assignment_expression
+          left: (identifier)
+          right: (decimal_integer_literal))))))
+
+================================================================================
+nested if then else statements
+================================================================================
+
+if (a)
+  if (b)
+    c();
+  else
+    d();
+
+--------------------------------------------------------------------------------
+
+(program
+  (if_statement
+    (parenthesized_expression
+      (identifier))
+    (if_statement
+      (parenthesized_expression
+        (identifier))
+      (expression_statement
+        (method_invocation
+          (identifier)
+          (argument_list)))
+      (expression_statement
+        (method_invocation
+          (identifier)
+          (argument_list))))))
+
+================================================================================
+ternary expressions
+================================================================================
+
+max = (a > b) ? a : b;
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (assignment_expression
+      left: (identifier)
+      right: (ternary_expression
+        condition: (parenthesized_expression
+          (binary_expression
+            left: (identifier)
+            right: (identifier)))
+        consequence: (identifier)
+        alternative: (identifier)))))
+
+================================================================================
+for statement
+================================================================================
+
+for(int i = 1; i < 11; i++) {
+  System.out.println("Count is: " + i);
+}
+
+for (j.init(i); j.check(); j.update()) {
+  System.out.println(j);
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (for_statement
+    init: (local_variable_declaration
+      type: (integral_type)
+      declarator: (variable_declarator
+        name: (identifier)
+        value: (decimal_integer_literal)))
+    condition: (binary_expression
+      left: (identifier)
+      right: (decimal_integer_literal))
+    update: (update_expression
+      (identifier))
+    body: (block
+      (expression_statement
+        (method_invocation
+          object: (field_access
+            object: (identifier)
+            field: (identifier))
+          name: (identifier)
+          arguments: (argument_list
+            (binary_expression
+              left: (string_literal
+                (string_fragment))
+              right: (identifier)))))))
+  (for_statement
+    init: (method_invocation
+      object: (identifier)
+      name: (identifier)
+      arguments: (argument_list
+        (identifier)))
+    condition: (method_invocation
+      object: (identifier)
+      name: (identifier)
+      arguments: (argument_list))
+    update: (method_invocation
+      object: (identifier)
+      name: (identifier)
+      arguments: (argument_list))
+    body: (block
+      (expression_statement
+        (method_invocation
+          object: (field_access
+            object: (identifier)
+            field: (identifier))
+          name: (identifier)
+          arguments: (argument_list
+            (identifier)))))))
+
+================================================================================
+Enhanced for statements
+================================================================================
+
+for (A b : c) {
+  d(b);
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (enhanced_for_statement
+    (type_identifier)
+    (identifier)
+    (identifier)
+    (block
+      (expression_statement
+        (method_invocation
+          (identifier)
+          (argument_list
+            (identifier)))))))
+
+================================================================================
+while statement
+================================================================================
+
+class WhileDemo {
+    public static void main(String[] args){
+        int count = 1;
+        while (count < 11) {
+            System.out.println("Count is: " + count);
+            count++;
+        }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    name: (identifier)
+    body: (class_body
+      (method_declaration
+        (modifiers)
+        type: (void_type)
+        name: (identifier)
+        parameters: (formal_parameters
+          (formal_parameter
+            type: (array_type
+              element: (type_identifier)
+              dimensions: (dimensions))
+            name: (identifier)))
+        body: (block
+          (local_variable_declaration
+            type: (integral_type)
+            declarator: (variable_declarator
+              name: (identifier)
+              value: (decimal_integer_literal)))
+          (while_statement
+            condition: (parenthesized_expression
+              (binary_expression
+                left: (identifier)
+                right: (decimal_integer_literal)))
+            body: (block
+              (expression_statement
+                (method_invocation
+                  object: (field_access
+                    object: (identifier)
+                    field: (identifier))
+                  name: (identifier)
+                  arguments: (argument_list
+                    (binary_expression
+                      left: (string_literal
+                        (string_fragment))
+                      right: (identifier)))))
+              (expression_statement
+                (update_expression
+                  (identifier))))))))))
+
+================================================================================
+try-with-resources statements
+================================================================================
+
+try (FileInputStream input = new FileInputStream("file.txt")) {
+  int data = input.read();
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (try_with_resources_statement
+    resources: (resource_specification
+      (resource
+        type: (type_identifier)
+        name: (identifier)
+        value: (object_creation_expression
+          type: (type_identifier)
+          arguments: (argument_list
+            (string_literal
+              (string_fragment))))))
+    body: (block
+      (local_variable_declaration
+        type: (integral_type)
+        declarator: (variable_declarator
+          name: (identifier)
+          value: (method_invocation
+            object: (identifier)
+            name: (identifier)
+            arguments: (argument_list)))))))
+
+================================================================================
+return statement
+================================================================================
+
+return x;
+return x * y;
+return x + 2;
+return fire(x);
+
+--------------------------------------------------------------------------------
+
+(program
+  (return_statement
+    (identifier))
+  (return_statement
+    (binary_expression
+      (identifier)
+      (identifier)))
+  (return_statement
+    (binary_expression
+      (identifier)
+      (decimal_integer_literal)))
+  (return_statement
+    (method_invocation
+      (identifier)
+      (argument_list
+        (identifier)))))
+
+================================================================================
+annotation
+================================================================================
+
+@SuppressWarnings(value = "unchecked")
+@GwtCompatible(module = "foo", emulated = true)
+class Duck {
+
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    (modifiers
+      (annotation
+        (identifier)
+        (annotation_argument_list
+          (element_value_pair
+            (identifier)
+            (string_literal
+              (string_fragment)))))
+      (annotation
+        (identifier)
+        (annotation_argument_list
+          (element_value_pair
+            (identifier)
+            (string_literal
+              (string_fragment)))
+          (element_value_pair
+            (identifier)
+            (true)))))
+    (identifier)
+    (class_body)))
+
+================================================================================
+marker annotation
+================================================================================
+
+@Override
+class Quack {
+  @bar
+  public void foo() {
+
+  }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    (modifiers
+      (marker_annotation
+        (identifier)))
+    (identifier)
+    (class_body
+      (method_declaration
+        (modifiers
+          (marker_annotation
+            (identifier)))
+        (void_type)
+        (identifier)
+        (formal_parameters)
+        (block)))))
+
+================================================================================
+single element annotation
+================================================================================
+
+@Duck(waddle.swim)
+@SuppressWarnings("unchecked")
+class Quack {
+
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    (modifiers
+      (annotation
+        (identifier)
+        (annotation_argument_list
+          (field_access
+            (identifier)
+            (identifier))))
+      (annotation
+        (identifier)
+        (annotation_argument_list
+          (string_literal
+            (string_fragment)))))
+    (identifier)
+    (class_body)))
+
+================================================================================
+annotation in array creation
+================================================================================
+
+String[] allMyStrings = new @Nullable String[5];
+
+--------------------------------------------------------------------------------
+
+(program
+  (local_variable_declaration
+    (array_type
+      (type_identifier)
+      (dimensions))
+    (variable_declarator
+      (identifier)
+      (array_creation_expression
+        (marker_annotation
+          (identifier))
+        (type_identifier)
+        (dimensions_expr
+          (decimal_integer_literal))))))
+
+================================================================================
+lambda expression
+================================================================================
+
+class LambdaTest {
+  void singleton() {
+    version -> create;
+    (record, b) -> record + b;
+  }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    (identifier)
+    (class_body
+      (method_declaration
+        (void_type)
+        (identifier)
+        (formal_parameters)
+        (block
+          (expression_statement
+            (lambda_expression
+              (identifier)
+              (identifier)))
+          (expression_statement
+            (lambda_expression
+              (inferred_parameters
+                (identifier)
+                (identifier))
+              (binary_expression
+                (identifier)
+                (identifier)))))))))
+
+================================================================================
+traditional switch statement
+================================================================================
+
+public class SwitchDemo {
+  public static void main(String[] args) {
+    int destinysChild = 2;
+    String destinysChildString;
+    switch (destinysChild) {
+        case 1:  destinysChildString = "Beyonce";
+                 break;
+        case 2:  destinysChildString = "Kelly";
+                 break;
+        case 3:  destinysChildString = "Michelle";
+                 break;
+        default: destinysChildString = "Invalid";
+                 break;
+    }
+    System.out.println(destinysChildString);
+  }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    (modifiers)
+    name: (identifier)
+    body: (class_body
+      (method_declaration
+        (modifiers)
+        type: (void_type)
+        name: (identifier)
+        parameters: (formal_parameters
+          (formal_parameter
+            type: (array_type
+              element: (type_identifier)
+              dimensions: (dimensions))
+            name: (identifier)))
+        body: (block
+          (local_variable_declaration
+            type: (integral_type)
+            declarator: (variable_declarator
+              name: (identifier)
+              value: (decimal_integer_literal)))
+          (local_variable_declaration
+            type: (type_identifier)
+            declarator: (variable_declarator
+              name: (identifier)))
+          (switch_expression
+            condition: (parenthesized_expression
+              (identifier))
+            body: (switch_block
+              (switch_block_statement_group
+                (switch_label
+                  (decimal_integer_literal))
+                (expression_statement
+                  (assignment_expression
+                    left: (identifier)
+                    right: (string_literal
+                      (string_fragment))))
+                (break_statement))
+              (switch_block_statement_group
+                (switch_label
+                  (decimal_integer_literal))
+                (expression_statement
+                  (assignment_expression
+                    left: (identifier)
+                    right: (string_literal
+                      (string_fragment))))
+                (break_statement))
+              (switch_block_statement_group
+                (switch_label
+                  (decimal_integer_literal))
+                (expression_statement
+                  (assignment_expression
+                    left: (identifier)
+                    right: (string_literal
+                      (string_fragment))))
+                (break_statement))
+              (switch_block_statement_group
+                (switch_label)
+                (expression_statement
+                  (assignment_expression
+                    left: (identifier)
+                    right: (string_literal
+                      (string_fragment))))
+                (break_statement))))
+          (expression_statement
+            (method_invocation
+              object: (field_access
+                object: (identifier)
+                field: (identifier))
+              name: (identifier)
+              arguments: (argument_list
+                (identifier)))))))))
+
+================================================================================
+functional switch statement
+================================================================================
+
+class Test {
+    int i;
+    int f(int i) {
+        return 0;
+    }
+
+    void main() {
+        switch (f(i)) {
+            case 0, 1 -> System.out.println(6);
+            case 2 -> System.out.println(7);
+        }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    name: (identifier)
+    body: (class_body
+      (field_declaration
+        type: (integral_type)
+        declarator: (variable_declarator
+          name: (identifier)))
+      (method_declaration
+        type: (integral_type)
+        name: (identifier)
+        parameters: (formal_parameters
+          (formal_parameter
+            type: (integral_type)
+            name: (identifier)))
+        body: (block
+          (return_statement
+            (decimal_integer_literal))))
+      (method_declaration
+        type: (void_type)
+        name: (identifier)
+        parameters: (formal_parameters)
+        body: (block
+          (switch_expression
+            condition: (parenthesized_expression
+              (method_invocation
+                name: (identifier)
+                arguments: (argument_list
+                  (identifier))))
+            body: (switch_block
+              (switch_rule
+                (switch_label
+                  (decimal_integer_literal)
+                  (decimal_integer_literal))
+                (expression_statement
+                  (method_invocation
+                    object: (field_access
+                      object: (identifier)
+                      field: (identifier))
+                    name: (identifier)
+                    arguments: (argument_list
+                      (decimal_integer_literal)))))
+              (switch_rule
+                (switch_label
+                  (decimal_integer_literal))
+                (expression_statement
+                  (method_invocation
+                    object: (field_access
+                      object: (identifier)
+                      field: (identifier))
+                    name: (identifier)
+                    arguments: (argument_list
+                      (decimal_integer_literal))))))))))))
+
+================================================================================
+traditional-style switch expression
+================================================================================
+
+class Test {
+    int d = 3;
+    static final int NUM = 2;
+    void main() {
+        int result = switch (d) {
+            case 5 + 6:
+                yield 1;
+            case NUM:
+                yield 2;
+            default:
+                System.out.println("hmmm...");
+                yield 0;
+        };
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    name: (identifier)
+    body: (class_body
+      (field_declaration
+        type: (integral_type)
+        declarator: (variable_declarator
+          name: (identifier)
+          value: (decimal_integer_literal)))
+      (field_declaration
+        (modifiers)
+        type: (integral_type)
+        declarator: (variable_declarator
+          name: (identifier)
+          value: (decimal_integer_literal)))
+      (method_declaration
+        type: (void_type)
+        name: (identifier)
+        parameters: (formal_parameters)
+        body: (block
+          (local_variable_declaration
+            type: (integral_type)
+            declarator: (variable_declarator
+              name: (identifier)
+              value: (switch_expression
+                condition: (parenthesized_expression
+                  (identifier))
+                body: (switch_block
+                  (switch_block_statement_group
+                    (switch_label
+                      (binary_expression
+                        left: (decimal_integer_literal)
+                        right: (decimal_integer_literal)))
+                    (yield_statement
+                      (decimal_integer_literal)))
+                  (switch_block_statement_group
+                    (switch_label
+                      (identifier))
+                    (yield_statement
+                      (decimal_integer_literal)))
+                  (switch_block_statement_group
+                    (switch_label)
+                    (expression_statement
+                      (method_invocation
+                        object: (field_access
+                          object: (identifier)
+                          field: (identifier))
+                        name: (identifier)
+                        arguments: (argument_list
+                          (string_literal
+                            (string_fragment)))))
+                    (yield_statement
+                      (decimal_integer_literal))))))))))))
+
+================================================================================
+functional switch expression
+================================================================================
+
+class Test {
+    int i;
+    static final int ZERO = 0;
+    void main() {
+        int a = switch (i) {
+            case ZERO, 1 -> 6;
+            case (int)(2.0) -> 7;
+            default -> 8;
+        };
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    name: (identifier)
+    body: (class_body
+      (field_declaration
+        type: (integral_type)
+        declarator: (variable_declarator
+          name: (identifier)))
+      (field_declaration
+        (modifiers)
+        type: (integral_type)
+        declarator: (variable_declarator
+          name: (identifier)
+          value: (decimal_integer_literal)))
+      (method_declaration
+        type: (void_type)
+        name: (identifier)
+        parameters: (formal_parameters)
+        body: (block
+          (local_variable_declaration
+            type: (integral_type)
+            declarator: (variable_declarator
+              name: (identifier)
+              value: (switch_expression
+                condition: (parenthesized_expression
+                  (identifier))
+                body: (switch_block
+                  (switch_rule
+                    (switch_label
+                      (identifier)
+                      (decimal_integer_literal))
+                    (expression_statement
+                      (decimal_integer_literal)))
+                  (switch_rule
+                    (switch_label
+                      (cast_expression
+                        type: (integral_type)
+                        value: (parenthesized_expression
+                          (decimal_floating_point_literal))))
+                    (expression_statement
+                      (decimal_integer_literal)))
+                  (switch_rule
+                    (switch_label)
+                    (expression_statement
+                      (decimal_integer_literal))))))))))))
+
+================================================================================
+switch expression with block
+================================================================================
+
+class Test {
+    int i;
+    void main() {
+        int a = switch (i) {
+            case 0, 1 -> 6;
+            case 2 -> 7;
+            default -> {
+                int result = 8;
+                yield result;
+            }
+        };
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    name: (identifier)
+    body: (class_body
+      (field_declaration
+        type: (integral_type)
+        declarator: (variable_declarator
+          name: (identifier)))
+      (method_declaration
+        type: (void_type)
+        name: (identifier)
+        parameters: (formal_parameters)
+        body: (block
+          (local_variable_declaration
+            type: (integral_type)
+            declarator: (variable_declarator
+              name: (identifier)
+              value: (switch_expression
+                condition: (parenthesized_expression
+                  (identifier))
+                body: (switch_block
+                  (switch_rule
+                    (switch_label
+                      (decimal_integer_literal)
+                      (decimal_integer_literal))
+                    (expression_statement
+                      (decimal_integer_literal)))
+                  (switch_rule
+                    (switch_label
+                      (decimal_integer_literal))
+                    (expression_statement
+                      (decimal_integer_literal)))
+                  (switch_rule
+                    (switch_label)
+                    (block
+                      (local_variable_declaration
+                        type: (integral_type)
+                        declarator: (variable_declarator
+                          name: (identifier)
+                          value: (decimal_integer_literal)))
+                      (yield_statement
+                        (identifier)))))))))))))
+
+================================================================================
+switch expressions added
+================================================================================
+
+class Test {
+    int i;
+    static void foo(int i, int j) {
+        // switch expressions inside of a binary expression
+        int x = switch (i) { default -> 1; } + switch (j) { default -> 2; };
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    name: (identifier)
+    body: (class_body
+      (field_declaration
+        type: (integral_type)
+        declarator: (variable_declarator
+          name: (identifier)))
+      (method_declaration
+        (modifiers)
+        type: (void_type)
+        name: (identifier)
+        parameters: (formal_parameters
+          (formal_parameter
+            type: (integral_type)
+            name: (identifier))
+          (formal_parameter
+            type: (integral_type)
+            name: (identifier)))
+        body: (block
+          (line_comment)
+          (local_variable_declaration
+            type: (integral_type)
+            declarator: (variable_declarator
+              name: (identifier)
+              value: (binary_expression
+                left: (switch_expression
+                  condition: (parenthesized_expression
+                    (identifier))
+                  body: (switch_block
+                    (switch_rule
+                      (switch_label)
+                      (expression_statement
+                        (decimal_integer_literal)))))
+                right: (switch_expression
+                  condition: (parenthesized_expression
+                    (identifier))
+                  body: (switch_block
+                    (switch_rule
+                      (switch_label)
+                      (expression_statement
+                        (decimal_integer_literal)))))))))))))
+
+================================================================================
+switch statement and pre-increment
+================================================================================
+
+class Test {
+    int i;
+    static void foo(boolean bar) {
+      int ddsd;
+      switch(bar) {
+        default:
+          i = 3;
+      }
+     ++ddsd;
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    (identifier)
+    (class_body
+      (field_declaration
+        (integral_type)
+        (variable_declarator
+          (identifier)))
+      (method_declaration
+        (modifiers)
+        (void_type)
+        (identifier)
+        (formal_parameters
+          (formal_parameter
+            (boolean_type)
+            (identifier)))
+        (block
+          (local_variable_declaration
+            (integral_type)
+            (variable_declarator
+              (identifier)))
+          (switch_expression
+            (parenthesized_expression
+              (identifier))
+            (switch_block
+              (switch_block_statement_group
+                (switch_label)
+                (expression_statement
+                  (assignment_expression
+                    (identifier)
+                    (decimal_integer_literal))))))
+          (expression_statement
+            (update_expression
+              (identifier))))))))
+
+================================================================================
+Pattern matching
+================================================================================
+
+public class Patterns {
+    static void patterns() {
+        Rectangle r = new Rectangle(new ColoredPoint(c1), new ColoredPoint(c2));
+        if (obj instanceof Point(int x)) {
+        }
+        if (r instanceof Rectangle(ColoredPoint ul)) {
+        }
+        if (r instanceof Rectangle(ColoredPoint(Point p, Color c),
+                  ColoredPoint lr)) {
+        }
+        if (r instanceof Rectangle(ColoredPoint(Point(var x, var y), var c),
+                    var lr)) {
+        }
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    (modifiers)
+    (identifier)
+    (class_body
+      (method_declaration
+        (modifiers)
+        (void_type)
+        (identifier)
+        (formal_parameters)
+        (block
+          (local_variable_declaration
+            (type_identifier)
+            (variable_declarator
+              (identifier)
+              (object_creation_expression
+                (type_identifier)
+                (argument_list
+                  (object_creation_expression
+                    (type_identifier)
+                    (argument_list
+                      (identifier)))
+                  (object_creation_expression
+                    (type_identifier)
+                    (argument_list
+                      (identifier)))))))
+          (if_statement
+            (parenthesized_expression
+              (instanceof_expression
+                (identifier)
+                (record_pattern
+                  (identifier)
+                  (record_pattern_body
+                    (record_pattern_component
+                      (integral_type)
+                      (identifier))))))
+            (block))
+          (if_statement
+            (parenthesized_expression
+              (instanceof_expression
+                (identifier)
+                (record_pattern
+                  (identifier)
+                  (record_pattern_body
+                    (record_pattern_component
+                      (type_identifier)
+                      (identifier))))))
+            (block))
+          (if_statement
+            (parenthesized_expression
+              (instanceof_expression
+                (identifier)
+                (record_pattern
+                  (identifier)
+                  (record_pattern_body
+                    (record_pattern
+                      (identifier)
+                      (record_pattern_body
+                        (record_pattern_component
+                          (type_identifier)
+                          (identifier))
+                        (record_pattern_component
+                          (type_identifier)
+                          (identifier))))
+                    (record_pattern_component
+                      (type_identifier)
+                      (identifier))))))
+            (block))
+          (if_statement
+            (parenthesized_expression
+              (instanceof_expression
+                (identifier)
+                (record_pattern
+                  (identifier)
+                  (record_pattern_body
+                    (record_pattern
+                      (identifier)
+                      (record_pattern_body
+                        (record_pattern
+                          (identifier)
+                          (record_pattern_body
+                            (record_pattern_component
+                              (type_identifier)
+                              (identifier))
+                            (record_pattern_component
+                              (type_identifier)
+                              (identifier))))
+                        (record_pattern_component
+                          (type_identifier)
+                          (identifier))))
+                    (record_pattern_component
+                      (type_identifier)
+                      (identifier))))))
+            (block)))))))
+
+================================================================================
+Switch statements
+================================================================================
+
+public class Switches {
+    static void switches() {
+        switch (s) {
+            case Rectangle r: return 2;
+        }
+        switch (pair) {
+          case MyPair(var f, var s) -> 2;
+        }
+        if (bbs instanceof Box<String>(Box(var s))) {
+        }
+        return switch (s) {
+            case rectangle r -> 2;
+        };
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    (modifiers)
+    (identifier)
+    (class_body
+      (method_declaration
+        (modifiers)
+        (void_type)
+        (identifier)
+        (formal_parameters)
+        (block
+          (switch_expression
+            (parenthesized_expression
+              (identifier))
+            (switch_block
+              (switch_block_statement_group
+                (switch_label
+                  (pattern
+                    (type_pattern
+                      (type_identifier)
+                      (identifier))))
+                (return_statement
+                  (decimal_integer_literal)))))
+          (switch_expression
+            (parenthesized_expression
+              (identifier))
+            (switch_block
+              (switch_rule
+                (switch_label
+                  (pattern
+                    (record_pattern
+                      (identifier)
+                      (record_pattern_body
+                        (record_pattern_component
+                          (type_identifier)
+                          (identifier))
+                        (record_pattern_component
+                          (type_identifier)
+                          (identifier))))))
+                (expression_statement
+                  (decimal_integer_literal)))))
+          (if_statement
+            (parenthesized_expression
+              (instanceof_expression
+                (identifier)
+                (record_pattern
+                  (generic_type
+                    (type_identifier)
+                    (type_arguments
+                      (type_identifier)))
+                  (record_pattern_body
+                    (record_pattern
+                      (identifier)
+                      (record_pattern_body
+                        (record_pattern_component
+                          (type_identifier)
+                          (identifier))))))))
+            (block))
+          (return_statement
+            (switch_expression
+              (parenthesized_expression
+                (identifier))
+              (switch_block
+                (switch_rule
+                  (switch_label
+                    (pattern
+                      (type_pattern
+                        (type_identifier)
+                        (identifier))))
+                  (expression_statement
+                    (decimal_integer_literal)))))))))))
+
+================================================================================
+type arguments
+================================================================================
+
+class Box <T> {
+  private T theObject;
+  public Box( T arg) { theObject = arg; }
+  // more code
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    (identifier)
+    (type_parameters
+      (type_parameter
+        (type_identifier)))
+    (class_body
+      (field_declaration
+        (modifiers)
+        (type_identifier)
+        (variable_declarator
+          (identifier)))
+      (constructor_declaration
+        (modifiers)
+        (identifier)
+        (formal_parameters
+          (formal_parameter
+            (type_identifier)
+            (identifier)))
+        (constructor_body
+          (expression_statement
+            (assignment_expression
+              (identifier)
+              (identifier)))))
+      (line_comment))))
+
+================================================================================
+wildcard
+================================================================================
+
+class WildcardDemo {
+  List<? extends B> a;
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    (identifier)
+    (class_body
+      (field_declaration
+        (generic_type
+          (type_identifier)
+          (type_arguments
+            (wildcard
+              (type_identifier))))
+        (variable_declarator
+          (identifier))))))
+
+================================================================================
+type arguments with generic types
+================================================================================
+
+class someClass <T> {
+  public List<T> someMethod() {
+     List< T > list = Collections.< T >emptyList();
+     return list;
+  }
+  public static <S> void anotherMethod(S arg) {
+     List< S > list = Collections.< S >emptyList();
+  }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (class_declaration
+    (identifier)
+    (type_parameters
+      (type_parameter
+        (type_identifier)))
+    (class_body
+      (method_declaration
+        (modifiers)
+        (generic_type
+          (type_identifier)
+          (type_arguments
+            (type_identifier)))
+        (identifier)
+        (formal_parameters)
+        (block
+          (local_variable_declaration
+            (generic_type
+              (type_identifier)
+              (type_arguments
+                (type_identifier)))
+            (variable_declarator
+              (identifier)
+              (method_invocation
+                (identifier)
+                (type_arguments
+                  (type_identifier))
+                (identifier)
+                (argument_list))))
+          (return_statement
+            (identifier))))
+      (method_declaration
+        (modifiers)
+        (type_parameters
+          (type_parameter
+            (type_identifier)))
+        (void_type)
+        (identifier)
+        (formal_parameters
+          (formal_parameter
+            (type_identifier)
+            (identifier)))
+        (block
+          (local_variable_declaration
+            (generic_type
+              (type_identifier)
+              (type_arguments
+                (type_identifier)))
+            (variable_declarator
+              (identifier)
+              (method_invocation
+                (identifier)
+                (type_arguments
+                  (type_identifier))
+                (identifier)
+                (argument_list)))))))))
+
+================================================================================
+empty type arguments
+================================================================================
+
+Box<Integer> integerBox = new Box<>();
+
+--------------------------------------------------------------------------------
+
+(program
+  (local_variable_declaration
+    (generic_type
+      (type_identifier)
+      (type_arguments
+        (type_identifier)))
+    (variable_declarator
+      (identifier)
+      (object_creation_expression
+        (generic_type
+          (type_identifier)
+          (type_arguments))
+        (argument_list)))))
+
+================================================================================
+method references
+================================================================================
+
+action = bar::method;
+foo.bar::method;
+String[]::new;
+Foo<T>::apply;
+super::something;
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (assignment_expression
+      (identifier)
+      (method_reference
+        (identifier)
+        (identifier))))
+  (expression_statement
+    (method_reference
+      (field_access
+        (identifier)
+        (identifier))
+      (identifier)))
+  (expression_statement
+    (method_reference
+      (array_type
+        (type_identifier)
+        (dimensions))))
+  (expression_statement
+    (method_reference
+      (generic_type
+        (type_identifier)
+        (type_arguments
+          (type_identifier)))
+      (identifier)))
+  (expression_statement
+    (method_reference
+      (super)
+      (identifier))))
+
+================================================================================
+Non-ascii identifiers
+================================================================================
+
+fügeKnotenEin = 1;
+$cibleVisée2 = 2;
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (assignment_expression
+      (identifier)
+      (decimal_integer_literal)))
+  (expression_statement
+    (assignment_expression
+      (identifier)
+      (decimal_integer_literal))))
+
+================================================================================
+Local variable declaration with scoped type identifiers
+================================================================================
+
+util.List<Integer> x = null;
+java.util.List<Integer> x = null;
+java.util.List<java.lang.Integer> x = null;
+
+--------------------------------------------------------------------------------
+
+(program
+  (local_variable_declaration
+    (generic_type
+      (scoped_type_identifier
+        (type_identifier)
+        (type_identifier))
+      (type_arguments
+        (type_identifier)))
+    (variable_declarator
+      (identifier)
+      (null_literal)))
+  (local_variable_declaration
+    (generic_type
+      (scoped_type_identifier
+        (scoped_type_identifier
+          (type_identifier)
+          (type_identifier))
+        (type_identifier))
+      (type_arguments
+        (type_identifier)))
+    (variable_declarator
+      (identifier)
+      (null_literal)))
+  (local_variable_declaration
+    (generic_type
+      (scoped_type_identifier
+        (scoped_type_identifier
+          (type_identifier)
+          (type_identifier))
+        (type_identifier))
+      (type_arguments
+        (scoped_type_identifier
+          (scoped_type_identifier
+            (type_identifier)
+            (type_identifier))
+          (type_identifier))))
+    (variable_declarator
+      (identifier)
+      (null_literal))))
+
+================================================================================
+binary expression
+================================================================================
+
+(a & b) + c;
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (binary_expression
+      (parenthesized_expression
+        (binary_expression
+          (identifier)
+          (identifier)))
+      (identifier))))
+
+================================================================================
+string interpolation
+================================================================================
+
+STR."Hello There";
+STR."Hello \{x + y}";
+STR."We can have \{many(of)} \{them.in} a \{row}";
+compPass("""
+        StringTemplate result = RAW.\"""
+              \\{}
+              \""";
+         """);
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (template_expression
+      (identifier)
+      (string_literal
+        (string_fragment))))
+  (expression_statement
+    (template_expression
+      (identifier)
+      (string_literal
+        (string_fragment)
+        (string_interpolation
+          (binary_expression
+            (identifier)
+            (identifier))))))
+  (expression_statement
+    (template_expression
+      (identifier)
+      (string_literal
+        (string_fragment)
+        (string_interpolation
+          (method_invocation
+            (identifier)
+            (argument_list
+              (identifier))))
+        (string_fragment)
+        (string_interpolation
+          (field_access
+            (identifier)
+            (identifier)))
+        (string_fragment)
+        (string_interpolation
+          (identifier)))))
+  (expression_statement
+    (method_invocation
+      (identifier)
+      (argument_list
+        (string_literal
+          (multiline_string_fragment)
+          (escape_sequence)
+          (multiline_string_fragment)
+          (multiline_string_fragment)
+          (escape_sequence)
+          (multiline_string_fragment)
+          (escape_sequence)
+          (multiline_string_fragment)
+          (multiline_string_fragment))))))
+
+================================================================================
+switch with qualified enum constant
+================================================================================
+
+switch (c) {
+    case Coin.HEADS -> {
+    }
+    case Coin.TAILS -> {
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (switch_expression
+    (parenthesized_expression
+      (identifier))
+    (switch_block
+      (switch_rule
+        (switch_label
+          (field_access
+            (identifier)
+            (identifier)))
+        (block))
+      (switch_rule
+        (switch_label
+          (field_access
+            (identifier)
+            (identifier)))
+        (block)))))
+
+================================================================================
+switch with guarded case
+================================================================================
+
+switch (c) {
+    case 1 when true -> {
+    }
+    case 2 when f("hi") == "foo" -> {
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (switch_expression
+    (parenthesized_expression
+      (identifier))
+    (switch_block
+      (switch_rule
+        (switch_label
+          (decimal_integer_literal)
+          (guard
+            (true)))
+        (block))
+      (switch_rule
+        (switch_label
+          (decimal_integer_literal)
+          (guard
+            (binary_expression
+              (method_invocation
+                (identifier)
+                (argument_list
+                  (string_literal
+                    (string_fragment))))
+              (string_literal
+                (string_fragment)))))
+        (block)))))
+
+================================================================================
+switch with complex type
+================================================================================
+
+switch (c) {
+    case int[] a -> {
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (switch_expression
+    (parenthesized_expression
+      (identifier))
+    (switch_block
+      (switch_rule
+        (switch_label
+          (pattern
+            (type_pattern
+              (array_type
+                (integral_type)
+                (dimensions))
+              (identifier))))
+        (block)))))
+
+================================================================================
+switch with unnamed pattern
+================================================================================
+
+switch (c) {
+    case Point(int x, _) -> {
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (switch_expression
+    (parenthesized_expression
+      (identifier))
+    (switch_block
+      (switch_rule
+        (switch_label
+          (pattern
+            (record_pattern
+              (identifier)
+              (record_pattern_body
+                (record_pattern_component
+                  (integral_type)
+                  (identifier))
+                (record_pattern_component
+                  (underscore_pattern))))))
+        (block)))))
+
+================================================================================
+switch with unnamed pattern variable
+================================================================================
+
+switch (c) {
+    case Point(int x, int _) -> {
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (switch_expression
+    (parenthesized_expression
+      (identifier))
+    (switch_block
+      (switch_rule
+        (switch_label
+          (pattern
+            (record_pattern
+              (identifier)
+              (record_pattern_body
+                (record_pattern_component
+                  (integral_type)
+                  (identifier))
+                (record_pattern_component
+                  (integral_type)
+                  (identifier))))))
+        (block)))))
+
+================================================================================
+underscore pattern
+================================================================================
+
+int _ = 2;
+
+try {
+} catch (NumberFormatException _) {
+}
+
+(int x, int _) -> x + x;
+
+--------------------------------------------------------------------------------
+
+(program
+  (local_variable_declaration
+    (integral_type)
+    (variable_declarator
+      (underscore_pattern)
+      (decimal_integer_literal)))
+  (try_statement
+    (block)
+    (catch_clause
+      (catch_formal_parameter
+        (catch_type
+          (type_identifier))
+        (underscore_pattern))
+      (block)))
+  (expression_statement
+    (lambda_expression
+      (formal_parameters
+        (formal_parameter
+          (integral_type)
+          (identifier))
+        (formal_parameter
+          (integral_type)
+          (underscore_pattern)))
+      (binary_expression
+        (identifier)
+        (identifier)))))
+
+================================================================================
+for loops and underscore pattern
+================================================================================
+
+for (Order _ : orders) {
+}
+
+for (int i = 0, _ = sideEffect(); i < 10; i++) { }
+
+--------------------------------------------------------------------------------
+
+(program
+  (enhanced_for_statement
+    (type_identifier)
+    (underscore_pattern)
+    (identifier)
+    (block))
+  (for_statement
+    (local_variable_declaration
+      (integral_type)
+      (variable_declarator
+        (identifier)
+        (decimal_integer_literal))
+      (variable_declarator
+        (underscore_pattern)
+        (method_invocation
+          (identifier)
+          (argument_list))))
+    (binary_expression
+      (identifier)
+      (decimal_integer_literal))
+    (update_expression
+      (identifier))
+    (block)))
+
+================================================================================
+Annotations before a spread parameter's ellipsis
+================================================================================
+
+void foo(int... @Foo x) {
+}
+
+---
+
+(program
+  (method_declaration
+    (void_type)
+    (identifier)
+    (formal_parameters
+      (spread_parameter
+        (integral_type)
+        (marker_annotation
+          (identifier))
+        (variable_declarator
+          (identifier))))
+    (block)))

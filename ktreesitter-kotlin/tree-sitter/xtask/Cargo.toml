@@ -1,0 +1,32 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anstyle.workspace = true
+anyhow.workspace = true
+bindgen = { version = "0.71.1" }
+cc.workspace = true
+clap.workspace = true
+git2.workspace = true
+indoc.workspace = true
+toml.workspace = true
+regex.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq = "3.0.0"
+notify = "8.0.0"
+notify-debouncer-full = "0.5.0"

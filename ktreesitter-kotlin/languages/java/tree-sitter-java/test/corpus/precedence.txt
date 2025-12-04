@@ -1,0 +1,58 @@
+==========
+Precedence
+==========
+
+class A {
+  public void b() {
+    int a = 1;
+    int b = 2;
+
+    bool c = (1*1) + a > 5;
+    bool d = a+b == a+b;
+  }
+}
+---
+
+(program
+  (class_declaration
+    (identifier)
+    (class_body
+      (method_declaration
+      (modifiers)
+      (void_type)
+      (identifier)
+      (formal_parameters)
+      (block
+        (local_variable_declaration
+          (integral_type)
+          (variable_declarator
+            (identifier)
+            (decimal_integer_literal)))
+        (local_variable_declaration
+          (integral_type)
+          (variable_declarator
+            (identifier)
+            (decimal_integer_literal)))
+        (local_variable_declaration
+          (type_identifier)
+          (variable_declarator
+            (identifier)
+            (binary_expression
+              (binary_expression
+                (parenthesized_expression
+                  (binary_expression
+                    (decimal_integer_literal)
+                    (decimal_integer_literal)))
+                (identifier))
+              (decimal_integer_literal))))
+        (local_variable_declaration
+          (type_identifier)
+          (variable_declarator
+            (identifier)
+            (binary_expression
+              (binary_expression
+                (identifier)
+                (identifier))
+              (binary_expression
+                (identifier)
+                (identifier))))))))))

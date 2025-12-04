@@ -1,0 +1,41 @@
+=========================================
+single-line statements - internal tokens
+=========================================
+
+a b
+
+---
+
+(statement (variable) (variable))
+
+=========================================
+multi-line statements - internal tokens
+=========================================
+
+a
+b
+
+---
+
+(statement (variable) (variable))
+
+=========================================
+single-line statements - external tokens
+=========================================
+
+'hello' 'world'
+
+---
+
+(statement (string) (string))
+
+=========================================
+multi-line statements - external tokens
+=========================================
+
+'hello'
+'world'
+
+---
+
+(statement (string) (string))
