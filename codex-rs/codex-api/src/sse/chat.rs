@@ -162,9 +162,10 @@ pub async fn process_chat_sse<S>(
 
                         if let Some(func) = tool_call.get("function") {
                             if let Some(fname) = func.get("name").and_then(|n| n.as_str())
-                                && !fname.is_empty() {
-                                    call_state.name.get_or_insert_with(|| fname.to_string());
-                                }
+                                && !fname.is_empty()
+                            {
+                                call_state.name.get_or_insert_with(|| fname.to_string());
+                            }
                             if let Some(arguments) = func.get("arguments").and_then(|a| a.as_str())
                             {
                                 call_state.arguments.push_str(arguments);
