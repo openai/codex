@@ -38,11 +38,11 @@ use crate::util::resolve_path;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use dirs::home_dir;
 use dunce::canonicalize;
@@ -250,10 +250,6 @@ pub struct Config {
 
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
-
-    /// If set to `true`, use the experimental official Rust MCP client.
-    /// https://github.com/modelcontextprotocol/rust-sdk
-    pub use_experimental_use_rmcp_client: bool,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
@@ -718,7 +714,6 @@ pub struct ConfigToml {
     pub experimental_instructions_file: Option<PathBuf>,
     pub experimental_compact_prompt_file: Option<PathBuf>,
     pub experimental_use_unified_exec_tool: Option<bool>,
-    pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_sandbox_command_assessment: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
@@ -1088,7 +1083,6 @@ impl Config {
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
-        let use_experimental_use_rmcp_client = features.enabled(Feature::RmcpClient);
         let experimental_sandbox_command_assessment =
             features.enabled(Feature::SandboxCommandAssessment);
 
@@ -1241,7 +1235,6 @@ impl Config {
             tools_web_search_request,
             experimental_sandbox_command_assessment,
             use_experimental_unified_exec_tool,
-            use_experimental_use_rmcp_client,
             features,
             active_profile: active_profile_name,
             active_project,
@@ -1809,7 +1802,6 @@ trust_level = "trusted"
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {
             experimental_use_unified_exec_tool: Some(true),
-            experimental_use_rmcp_client: Some(true),
             experimental_use_freeform_apply_patch: Some(true),
             ..Default::default()
         };
@@ -1822,12 +1814,10 @@ trust_level = "trusted"
 
         assert!(config.features.enabled(Feature::ApplyPatchFreeform));
         assert!(config.features.enabled(Feature::UnifiedExec));
-        assert!(config.features.enabled(Feature::RmcpClient));
 
         assert!(config.include_apply_patch_tool);
 
         assert!(config.use_experimental_unified_exec_tool);
-        assert!(config.use_experimental_use_rmcp_client);
 
         Ok(())
     }
@@ -2994,7 +2984,6 @@ model_verbosity = "high"
                 tools_web_search_request: false,
                 experimental_sandbox_command_assessment: false,
                 use_experimental_unified_exec_tool: false,
-                use_experimental_use_rmcp_client: false,
                 features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
@@ -3068,7 +3057,6 @@ model_verbosity = "high"
             tools_web_search_request: false,
             experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
-            use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -3157,7 +3145,6 @@ model_verbosity = "high"
             tools_web_search_request: false,
             experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
-            use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -3232,7 +3219,6 @@ model_verbosity = "high"
             tools_web_search_request: false,
             experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
-            use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },

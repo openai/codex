@@ -23,6 +23,7 @@ use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
+use codex_app_server_protocol::AuthMode;
 use codex_protocol::ConversationId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::FileChange;
@@ -127,12 +128,12 @@ use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
 use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
@@ -640,6 +641,14 @@ impl Session {
         sess.record_initial_history(initial_history).await;
 
         Ok(sess)
+    }
+
+    pub(crate) fn get_auth_mode(&self) -> AuthMode {
+        self.services
+            .auth_manager
+            .auth()
+            .map(|a| a.mode)
+            .unwrap_or(AuthMode::ApiKey)
     }
 
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
@@ -1477,6 +1486,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Review { review_request } => {
                 handlers::review(&sess, &config, sub.id.clone(), review_request).await;
             }
+            Op::ListModels => {
+                handlers::list_models(&sess, sub.id.clone(), Some(sess.get_auth_mode())).await;
+            }
             _ => {} // Ignore unknown ops; enum is non_exhaustive to allow extensions.
         }
     }
@@ -1493,12 +1505,15 @@ mod handlers {
     use crate::config::Config;
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
+    use crate::openai_models::model_presets::builtin_model_presets;
     use crate::review_prompts::resolve_review_request;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
+    use codex_app_server_protocol::AuthMode;
     use codex_protocol::custom_prompts::CustomPrompt;
+    use codex_protocol::openai_models::AvailableModelsEvent;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -1812,6 +1827,15 @@ mod handlers {
                 sess.send_event(&turn_context, event.msg).await;
             }
         }
+    }
+
+    pub async fn list_models(sess: &Arc<Session>, sub_id: String, auth_mode: Option<AuthMode>) {
+        let models = builtin_model_presets(auth_mode);
+        let event = Event {
+            id: sub_id,
+            msg: EventMsg::ListModelsResponse(AvailableModelsEvent { models }),
+        };
+        sess.send_event_raw(event).await;
     }
 }
 

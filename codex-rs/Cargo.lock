@@ -1117,12 +1117,10 @@ name = "codex-common"
 version = "0.0.0"
 dependencies = [
  "clap",
- "codex-app-server-protocol",
  "codex-core",
  "codex-lmstudio",
  "codex-ollama",
  "codex-protocol",
- "once_cell",
  "serde",
  "toml",
 ]
@@ -1625,6 +1623,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width 0.2.1",
  "url",
+ "uuid",
  "vt100",
 ]
 

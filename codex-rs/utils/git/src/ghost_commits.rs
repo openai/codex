@@ -42,6 +42,7 @@ const DEFAULT_IGNORED_DIR_NAMES: &[&str] = &[
     ".mypy_cache",
     ".cache",
     ".tox",
+    "__pycache__",
 ];
 
 /// Options to control ghost commit creation.
