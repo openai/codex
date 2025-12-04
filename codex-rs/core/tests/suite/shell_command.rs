@@ -22,24 +22,19 @@ const ECHO_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
     bash: "/bin/echo 'hello, world'",
 };
 
-const ECHO_GOODBYE_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
-    powershell: "Out-String 'goodbye, world'",
-    bash: "/bin/echo 'goodbye, world'",
-};
-
 const ECHO_FIRST_EXTRA_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
-    powershell: "Out-String 'first extra case'",
-    bash: "/bin/echo 'first extra case'",
+    powershell: "\"first line`nsecond line\" | Out-String",
+    bash: "printf $'first line\nsecond line\n'",
 };
 
 const ECHO_SECOND_EXTRA_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
-    powershell: "Out-String 'second extra case'",
-    bash: "/bin/echo 'second extra case'",
+    powershell: "'mixed Case' | ForEach-Object { $_.ToUpper() } | Out-String",
+    bash: "printf 'mixed Case' | tr '[:lower:]' '[:upper:]'",
 };
 
 const ECHO_THIRD_EXTRA_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
-    powershell: "Out-String 'third extra case'",
-    bash: "/bin/echo 'third extra case'",
+    powershell: "if ($true) { 'always true' } else { 'never' } | Out-String",
+    bash: "if [ 1 -eq 1 ]; then printf 'always true'; else printf 'never'; fi",
 };
 
 fn shell_responses(
@@ -155,22 +150,6 @@ async fn shell_command_works_with_login_false() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_command_works_with_goodbye_output() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
-
-    let call_id = "shell-command-call-goodbye";
-    mount_shell_responses(&harness, call_id, ECHO_GOODBYE_COMMAND, None).await;
-    harness.submit("run the goodbye command").await?;
-
-    let output = harness.function_call_stdout(call_id).await;
-    assert_shell_command_output(&output, "goodbye, world")?;
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_command_works_with_first_extra_output_and_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -183,7 +162,7 @@ async fn shell_command_works_with_first_extra_output_and_login() -> anyhow::Resu
         .await?;
 
     let output = harness.function_call_stdout(call_id).await;
-    assert_shell_command_output(&output, "first extra case")?;
+    assert_shell_command_output(&output, "first line\nsecond line")?;
 
     Ok(())
 }
@@ -201,7 +180,7 @@ async fn shell_command_works_with_second_extra_output_without_login() -> anyhow:
         .await?;
 
     let output = harness.function_call_stdout(call_id).await;
-    assert_shell_command_output(&output, "second extra case")?;
+    assert_shell_command_output(&output, "MIXED CASE")?;
 
     Ok(())
 }
@@ -219,7 +198,7 @@ async fn shell_command_works_with_third_extra_output_and_login_false() -> anyhow
         .await?;
 
     let output = harness.function_call_stdout(call_id).await;
-    assert_shell_command_output(&output, "third extra case")?;
+    assert_shell_command_output(&output, "always true")?;
 
     Ok(())
 }

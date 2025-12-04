@@ -408,6 +408,48 @@ mod tests {
         }
     }
 
+    #[test]
+    fn derive_exec_args() {
+        let test_bash_shell = Shell {
+            shell_type: ShellType::Bash,
+            shell_path: PathBuf::from("/bin/bash"),
+        };
+        assert_eq!(
+            test_bash_shell.derive_exec_args("echo hello", false),
+            vec!["/bin/bash", "-c", "echo hello"]
+        );
+        assert_eq!(
+            test_bash_shell.derive_exec_args("echo hello", true),
+            vec!["/bin/bash", "-lc", "echo hello"]
+        );
+
+        let test_zsh_shell = Shell {
+            shell_type: ShellType::Zsh,
+            shell_path: PathBuf::from("/bin/zsh"),
+        };
+        assert_eq!(
+            test_zsh_shell.derive_exec_args("echo hello", false),
+            vec!["/bin/zsh", "-c", "echo hello"]
+        );
+        assert_eq!(
+            test_zsh_shell.derive_exec_args("echo hello", true),
+            vec!["/bin/zsh", "-lc", "echo hello"]
+        );
+
+        let test_powershell_shell = Shell {
+            shell_type: ShellType::PowerShell,
+            shell_path: PathBuf::from("pwsh.exe"),
+        };
+        assert_eq!(
+            test_powershell_shell.derive_exec_args("echo hello", false),
+            vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"]
+        );
+        assert_eq!(
+            test_powershell_shell.derive_exec_args("echo hello", true),
+            vec!["pwsh.exe", "-Command", "echo hello"]
+        );
+    }
+
     #[tokio::test]
     async fn test_current_shell_detects_zsh() {
         let shell = Command::new("sh")
