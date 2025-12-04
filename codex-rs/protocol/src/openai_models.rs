@@ -86,21 +86,6 @@ pub enum ModelVisibility {
     None,
 }
 
-/// Reasoning support level reported by the backend.
-#[derive(
-    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema, EnumIter, Display,
-)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum ReasoningLevel {
-    None,
-    Minimal,
-    Low,
-    Medium,
-    High,
-    XHigh,
-}
-
 /// Shell execution capability for a model.
 #[derive(
     Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema, EnumIter, Display,
@@ -126,8 +111,8 @@ pub struct ModelInfo {
     pub display_name: String,
     #[serde(default)]
     pub description: Option<String>,
-    pub default_reasoning_level: ReasoningLevel,
-    pub supported_reasoning_levels: Vec<ReasoningLevel>,
+    pub default_reasoning_level: ReasoningEffort,
+    pub supported_reasoning_levels: Vec<ReasoningEffort>,
     pub shell_type: ShellType,
     #[serde(default = "default_visibility")]
     pub visibility: ModelVisibility,
@@ -146,4 +131,29 @@ pub struct ModelsResponse {
 
 fn default_visibility() -> ModelVisibility {
     ModelVisibility::None
+}
+
+// convert ModelInfo to ModelPreset
+impl From<ModelInfo> for ModelPreset {
+    fn from(info: ModelInfo) -> Self {
+        ModelPreset {
+            id: info.slug.clone(),
+            model: info.slug,
+            display_name: info.display_name,
+            description: info.description.unwrap_or_default(),
+            default_reasoning_effort: info.default_reasoning_level,
+            supported_reasoning_efforts: info
+                .supported_reasoning_levels
+                .into_iter()
+                .map(|level| ReasoningEffortPreset {
+                    effort: level,
+                    // todo: add description for each reasoning effort
+                    description: level.to_string(),
+                })
+                .collect(),
+            is_default: false, // default is the highest priority available model
+            upgrade: None,     // no upgrade available (todo: think about it)
+            show_in_picker: info.visibility == ModelVisibility::List,
+        }
+    }
 }

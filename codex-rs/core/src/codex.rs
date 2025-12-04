@@ -2768,7 +2768,7 @@ mod tests {
             false,
             config.cli_auth_credentials_store_mode,
         );
-        let models_manager = Arc::new(ModelsManager::new(auth_manager.get_auth_mode()));
+        let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
         let otel_event_manager =
             otel_event_manager(conversation_id, config.as_ref(), &models_manager);
 
@@ -2799,7 +2799,7 @@ mod tests {
             rollout: Mutex::new(None),
             user_shell: default_user_shell(),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
-            auth_manager: Arc::clone(&auth_manager),
+            auth_manager: auth_manager.clone(),
             otel_event_manager: otel_event_manager.clone(),
             models_manager: models_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
@@ -2850,7 +2850,7 @@ mod tests {
             false,
             config.cli_auth_credentials_store_mode,
         );
-        let models_manager = Arc::new(ModelsManager::new(auth_manager.get_auth_mode()));
+        let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
         let otel_event_manager =
             otel_event_manager(conversation_id, config.as_ref(), &models_manager);
 

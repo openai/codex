@@ -47,7 +47,7 @@ impl ConversationManager {
             conversations: Arc::new(RwLock::new(HashMap::new())),
             auth_manager: auth_manager.clone(),
             session_source,
-            models_manager: Arc::new(ModelsManager::new(auth_manager.get_auth_mode())),
+            models_manager: Arc::new(ModelsManager::new(auth_manager)),
         }
     }
 
@@ -65,6 +65,13 @@ impl ConversationManager {
     }
 
     pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
+        let result = self
+            .models_manager
+            .refresh_available_models(&config.model_provider)
+            .await;
+        if let Err(e) = result {
+            tracing::error!("Failed to refresh available models: {:?}", e);
+        }
         self.spawn_conversation(
             config,
             self.auth_manager.clone(),

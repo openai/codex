@@ -1,6 +1,7 @@
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
+use serde_json::json;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Respond;
@@ -23,6 +24,26 @@ pub async fn create_mock_chat_completions_server(responses: Vec<String>) -> Mock
         .and(path("/v1/chat/completions"))
         .respond_with(seq_responder)
         .expect(num_calls as u64)
+        .mount(&server)
+        .await;
+
+    let models_response = json!({
+        "models": [{
+            "slug": "o3",
+            "display_name": "o3",
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": ["medium"],
+            "shell_type": "default",
+            "visibility": "list",
+            "minimal_client_version": [0, 1, 0],
+            "supported_in_api": true,
+            "priority": 0
+        }]
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(models_response))
         .mount(&server)
         .await;
 

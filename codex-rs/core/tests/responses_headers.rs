@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use codex_app_server_protocol::AuthMode;
+use codex_core::AuthManager;
 use codex_core::ContentItem;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
@@ -63,7 +64,12 @@ async fn responses_stream_includes_subagent_header_on_review() {
 
     let conversation_id = ConversationId::new();
     let auth_mode = AuthMode::ChatGPT;
-    let models_manager = Arc::new(ModelsManager::new(Some(auth_mode)));
+    let auth_manager = AuthManager::shared(
+        config.cwd.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
+    let models_manager = Arc::new(ModelsManager::new(auth_manager));
     let model_family = models_manager.construct_model_family(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
@@ -154,7 +160,12 @@ async fn responses_stream_includes_subagent_header_on_other() {
 
     let conversation_id = ConversationId::new();
     let auth_mode = AuthMode::ChatGPT;
-    let models_manager = Arc::new(ModelsManager::new(Some(auth_mode)));
+    let auth_manager = AuthManager::shared(
+        config.cwd.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
+    let models_manager = Arc::new(ModelsManager::new(auth_manager));
     let model_family = models_manager.construct_model_family(&config.model, &config);
 
     let otel_event_manager = OtelEventManager::new(
@@ -246,8 +257,12 @@ async fn responses_respects_model_family_overrides_from_config() {
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
-    let auth_mode = AuthMode::ChatGPT;
-    let models_manager = Arc::new(ModelsManager::new(Some(auth_mode)));
+    let auth_manager = AuthManager::shared(
+        config.cwd.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
+    let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
     let model_family = models_manager.construct_model_family(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
@@ -255,7 +270,7 @@ async fn responses_respects_model_family_overrides_from_config() {
         model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        Some(auth_mode),
+        auth_manager.get_auth_mode(),
         false,
         "test".to_string(),
     );
