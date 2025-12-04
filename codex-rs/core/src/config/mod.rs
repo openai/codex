@@ -48,12 +48,14 @@ use dunce::canonicalize;
 use serde::Deserialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 
 use crate::config::profile::ConfigProfile;
+use crate::is_safe_command::DEFAULT_NON_LOGIN_SHELL_ALLOWLIST;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
@@ -109,6 +111,9 @@ pub struct Config {
     pub forced_auto_mode_downgraded_on_windows: bool,
 
     pub shell_environment_policy: ShellEnvironmentPolicy,
+    /// Commands considered safe to run without a login shell when the heuristic
+    /// feature flag is enabled.
+    pub non_login_shell_allowlist: Vec<String>,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -584,6 +589,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
+    /// Shell-specific configuration.
+    #[serde(default)]
+    pub shell: Option<crate::config::types::ShellConfigToml>,
+
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
 
@@ -998,6 +1007,24 @@ impl Config {
             crate::safety::set_windows_sandbox_enabled(features.enabled(Feature::WindowsSandbox));
         }
 
+        let non_login_shell_allowlist: Vec<String> = {
+            let mut merged = BTreeSet::new();
+            for cmd in DEFAULT_NON_LOGIN_SHELL_ALLOWLIST {
+                merged.insert((*cmd).to_string());
+            }
+            if let Some(shell_cfg) = &cfg.shell
+                && let Some(user_allowlist) = shell_cfg.non_login_allowlist.as_ref()
+            {
+                for cmd in user_allowlist {
+                    let trimmed = cmd.trim();
+                    if !trimmed.is_empty() {
+                        merged.insert(trimmed.to_string());
+                    }
+                }
+            }
+            merged.into_iter().collect()
+        };
+
         let resolved_cwd = {
             use std::env;
 
@@ -1183,6 +1210,7 @@ impl Config {
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
+            non_login_shell_allowlist,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -2963,6 +2991,10 @@ model_verbosity = "high"
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
+                non_login_shell_allowlist: DEFAULT_NON_LOGIN_SHELL_ALLOWLIST
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect(),
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -3037,6 +3069,10 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            non_login_shell_allowlist: DEFAULT_NON_LOGIN_SHELL_ALLOWLIST
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -3126,6 +3162,10 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            non_login_shell_allowlist: DEFAULT_NON_LOGIN_SHELL_ALLOWLIST
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -3201,6 +3241,10 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            non_login_shell_allowlist: DEFAULT_NON_LOGIN_SHELL_ALLOWLIST
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),

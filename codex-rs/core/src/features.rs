@@ -55,6 +55,8 @@ pub enum Feature {
     Skills,
     /// Send warnings to the model to correct it on the tool usage.
     ModelWarnings,
+    /// Skip login shell for known-safe commands when enabled.
+    NonLoginShellHeuristic,
 }
 
 impl Feature {
@@ -339,6 +341,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Skills,
         key: "skills",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::NonLoginShellHeuristic,
+        key: "non_login_shell_heuristic",
         stage: Stage::Experimental,
         default_enabled: false,
     },

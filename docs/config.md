@@ -48,6 +48,7 @@ Supported features:
 | `web_search_request`                      |  false  | Stable       | Allow the model to issue web searches                |
 | `experimental_sandbox_command_assessment` |  false  | Experimental | Enable model-based sandbox risk assessment           |
 | `ghost_commit`                            |  false  | Experimental | Create a ghost commit each turn                      |
+| `non_login_shell_heuristic`               |  false  | Experimental | Skip login shells for allow-listed safe commands     |
 | `enable_experimental_windows_sandbox`     |  false  | Experimental | Use the Windows restricted-token sandbox             |
 
 Notes:
@@ -415,6 +416,28 @@ set = { PATH = "/usr/bin", MY_FLAG = "1" }
 ```
 
 Currently, `CODEX_SANDBOX_NETWORK_DISABLED=1` is also added to the environment, assuming network is disabled. This is not configurable.
+
+### shell.non_login_allowlist
+
+When the `non_login_shell_heuristic` feature flag is enabled, Codex will skip `-l`
+for obviously safe commands (e.g., `ls`, `rg --files`) to avoid loading login
+profiles on every exec. You can extend the allow-list via `config.toml`:
+
+```toml
+[shell]
+non_login_allowlist = ["ls", "rg", "git", "cat", "rm", "rmdir"]
+```
+
+The defaults include common read-only commands (`ls`, `cat`, `rg`, `git status`,
+`sed -n`, `rm <file>`, `rmdir <dir>`, etc.); entries you add are merged on top.
+The heuristic only applies when the feature flag is enabled, and it keeps using
+login shells for commands that are not known-safe.
+
+You can compare login vs non-login startup costs locally via:
+
+```bash
+cargo run -p codex-core --example non_login_shell_bench -- --iterations 5
+```
 
 ## MCP integration
 

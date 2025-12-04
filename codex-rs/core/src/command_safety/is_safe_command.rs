@@ -1,6 +1,11 @@
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 
+pub const DEFAULT_NON_LOGIN_SHELL_ALLOWLIST: &[&str] = &[
+    "cat", "cd", "echo", "false", "find", "git", "grep", "head", "ls", "nl", "pwd", "rg", "rm",
+    "rmdir", "sed", "tail", "true", "wc",
+];
+
 pub fn is_known_safe_command(command: &[String]) -> bool {
     let command: Vec<String> = command
         .iter()
@@ -43,6 +48,20 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         return false;
     };
 
+    if cmd0 == "rm" {
+        return command
+            .iter()
+            .skip(1)
+            .all(|arg| !arg.starts_with('-') && !arg.starts_with("--"));
+    }
+
+    if cmd0 == "rmdir" {
+        return command
+            .iter()
+            .skip(1)
+            .all(|arg| !arg.starts_with('-') && !arg.starts_with("--"));
+    }
+
     match std::path::Path::new(&cmd0)
         .file_name()
         .and_then(|osstr| osstr.to_str())
@@ -60,8 +79,7 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
             "pwd" |
             "tail" |
             "true" |
-            "wc" |
-            "which") => {
+            "wc") => {
             true
         },
 
@@ -112,9 +130,6 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
             command.get(1).map(String::as_str),
             Some("branch" | "status" | "log" | "diff" | "show")
         ),
-
-        // Rust
-        Some("cargo") if command.get(1).map(String::as_str) == Some("check") => true,
 
         // Special-case `sed -n {N|M,N}p`
         Some("sed")
@@ -268,6 +283,17 @@ mod tests {
     }
 
     #[test]
+    fn rm_rules() {
+        assert!(is_safe_to_call_with_exec(&vec_str(&["rm", "file.txt"])));
+        assert!(!is_safe_to_call_with_exec(&vec_str(&["rm", "-rf", "/"])));
+
+        assert!(is_safe_to_call_with_exec(&vec_str(&["rmdir", "tmp_dir"])));
+        assert!(!is_safe_to_call_with_exec(&vec_str(&[
+            "rmdir", "-p", "tmp_dir"
+        ])));
+    }
+
+    #[test]
     fn windows_powershell_full_path_is_safe() {
         if !cfg!(windows) {
             // Windows only because on Linux path splitting doesn't handle `/` separators properly
@@ -310,6 +336,16 @@ mod tests {
             "bash",
             "-lc",
             "find . -name file.txt"
+        ])));
+    }
+
+    #[test]
+    fn bash_c_safe_examples() {
+        assert!(is_known_safe_command(&vec_str(&["bash", "-c", "ls"])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-c",
+            "git status"
         ])));
     }
 
