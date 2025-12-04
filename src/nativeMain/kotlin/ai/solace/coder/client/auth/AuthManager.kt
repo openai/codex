@@ -5,11 +5,9 @@ package ai.solace.coder.client.auth
 
 import ai.solace.coder.core.error.CodexError
 import ai.solace.coder.core.error.CodexResult
+import ai.solace.coder.utils.Environment
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import platform.posix.getenv
-import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.cinterop.toKString
 
 /**
  * Central manager providing a single source of truth for authentication data.
@@ -159,17 +157,16 @@ class AuthManager(
         }
     }
 
-    @OptIn(ExperimentalForeignApi::class)
     private fun loadAuth(): CodexAuth? {
         // First, check environment variables
         if (enableCodexApiKeyEnv) {
-            val codexApiKey = getenv(CODEX_API_KEY_ENV_VAR)?.toKString()?.trim()
+            val codexApiKey = Environment.get(CODEX_API_KEY_ENV_VAR)?.trim()
             if (!codexApiKey.isNullOrEmpty()) {
                 return CodexAuth.fromApiKey(codexApiKey)
             }
         }
 
-        val openaiApiKey = getenv(OPENAI_API_KEY_ENV_VAR)?.toKString()?.trim()
+        val openaiApiKey = Environment.get(OPENAI_API_KEY_ENV_VAR)?.trim()
         if (!openaiApiKey.isNullOrEmpty()) {
             return CodexAuth.fromApiKey(openaiApiKey)
         }
