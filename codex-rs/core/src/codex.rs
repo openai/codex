@@ -1871,11 +1871,7 @@ async fn spawn_review_thread(
         .get_otel_event_manager()
         .with_model(
             per_turn_config.model.as_str(),
-            sess.services
-                .models_manager
-                .construct_model_family(&per_turn_config.model, &per_turn_config)
-                .slug
-                .as_str(),
+            review_model_family.slug.as_str(),
         );
 
     let per_turn_config = Arc::new(per_turn_config);
