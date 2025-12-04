@@ -125,7 +125,7 @@ impl Features {
     }
 
     pub fn enabled(&self, f: Feature) -> bool {
-        self.enabled.contains(&f)
+        f == Feature::RmcpClient || self.enabled.contains(&f)
     }
 
     pub fn enable(&mut self, f: Feature) -> &mut Self {
@@ -134,7 +134,9 @@ impl Features {
     }
 
     pub fn disable(&mut self, f: Feature) -> &mut Self {
-        self.enabled.remove(&f);
+        if f != Feature::RmcpClient {
+            self.enabled.remove(&f);
+        }
         self
     }
 
@@ -162,6 +164,18 @@ impl Features {
     pub fn apply_map(&mut self, m: &BTreeMap<String, bool>) {
         for (k, v) in m {
             match feature_for_key(k) {
+                Some(Feature::RmcpClient) => {
+                    if k != Feature::RmcpClient.key() {
+                        self.record_legacy_usage(k.as_str(), Feature::RmcpClient);
+                    }
+                    if !*v {
+                        tracing::warn!(
+                            "[features].{k} is ignored; the RMCP client is always enabled"
+                        );
+                        continue;
+                    }
+                    self.enable(Feature::RmcpClient);
+                }
                 Some(feat) => {
                     if k != feat.key() {
                         self.record_legacy_usage(k.as_str(), feat);
@@ -190,7 +204,6 @@ impl Features {
             experimental_sandbox_command_assessment: cfg.experimental_sandbox_command_assessment,
             experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
-            experimental_use_rmcp_client: cfg.experimental_use_rmcp_client,
             tools_web_search: cfg.tools.as_ref().and_then(|t| t.web_search),
             tools_view_image: cfg.tools.as_ref().and_then(|t| t.view_image),
             ..Default::default()
@@ -209,7 +222,6 @@ impl Features {
                 .experimental_use_freeform_apply_patch,
 
             experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
-            experimental_use_rmcp_client: config_profile.experimental_use_rmcp_client,
             tools_web_search: config_profile.tools_web_search,
             tools_view_image: config_profile.tools_view_image,
         };
@@ -275,16 +287,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Stable,
         default_enabled: true,
     },
+    FeatureSpec {
+        id: Feature::RmcpClient,
+        key: "rmcp_client",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
     // Unstable features.
     FeatureSpec {
         id: Feature::UnifiedExec,
         key: "unified_exec",
-        stage: Stage::Experimental,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::RmcpClient,
-        key: "rmcp_client",
         stage: Stage::Experimental,
         default_enabled: false,
     },
@@ -343,3 +355,25 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn rmcp_client_feature_is_always_enabled() {
+        let mut features = Features::with_defaults();
+        assert!(features.enabled(Feature::RmcpClient));
+
+        let mut map = BTreeMap::new();
+        map.insert("rmcp_client".to_string(), false);
+        features.apply_map(&map);
+
+        assert!(features.enabled(Feature::RmcpClient));
+
+        features.disable(Feature::RmcpClient);
+
+        assert!(features.enabled(Feature::RmcpClient));
+    }
+}
