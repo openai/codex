@@ -431,6 +431,9 @@ pub fn ev_apply_patch_call(
         ApplyPatchModelOutput::ShellViaHeredoc => {
             ev_apply_patch_shell_call_via_heredoc(call_id, patch)
         }
+        ApplyPatchModelOutput::ShellCommandViaHeredoc => {
+            ev_apply_patch_shell_command_call_via_heredoc(call_id, patch)
+        }
     }
 }
 
@@ -492,6 +495,13 @@ pub fn ev_apply_patch_shell_call_via_heredoc(call_id: &str, patch: &str) -> Valu
     ev_function_call(call_id, "shell", &arguments)
 }
 
+pub fn ev_apply_patch_shell_command_call_via_heredoc(call_id: &str, patch: &str) -> Value {
+    let args = serde_json::json!({ "command": format!("apply_patch <<'EOF'\n{patch}\nEOF\n") });
+    let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");
+
+    ev_function_call(call_id, "shell_command", &arguments)
+}
+
 pub fn sse_failed(id: &str, code: &str, message: &str) -> String {
     sse(vec![serde_json::json!({
         "type": "response.failed",
@@ -506,6 +516,32 @@ pub fn sse_response(body: String) -> ResponseTemplate {
     ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
         .set_body_raw(body, "text/event-stream")
+}
+
+pub async fn mount_response_once(server: &MockServer, response: ResponseTemplate) -> ResponseMock {
+    let (mock, response_mock) = base_mock();
+    mock.respond_with(response)
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+    response_mock
+}
+
+pub async fn mount_response_once_match<M>(
+    server: &MockServer,
+    matcher: M,
+    response: ResponseTemplate,
+) -> ResponseMock
+where
+    M: wiremock::Match + Send + Sync + 'static,
+{
+    let (mock, response_mock) = base_mock();
+    mock.and(matcher)
+        .respond_with(response)
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+    response_mock
 }
 
 fn base_mock() -> (MockBuilder, ResponseMock) {

@@ -15,6 +15,7 @@ use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
+use crate::tooltips;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
@@ -30,7 +31,7 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
-use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -408,6 +409,19 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
+        ApprovedExecpolicyAmendment { .. } => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "approved".bold(),
+                    " codex to run ".into(),
+                    snippet,
+                    " and applied the execpolicy amendment".bold(),
+                ],
+            )
+        }
         ApprovedForSession => {
             let snippet = Span::from(exec_snippet(&command)).dim();
             (
@@ -560,6 +574,35 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
 }
 
 #[derive(Debug)]
+struct TooltipHistoryCell {
+    tip: &'static str,
+}
+
+impl TooltipHistoryCell {
+    fn new(tip: &'static str) -> Self {
+        Self { tip }
+    }
+}
+
+impl HistoryCell for TooltipHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let indent = "  ";
+        let indent_width = UnicodeWidthStr::width(indent);
+        let wrap_width = usize::from(width.max(1))
+            .saturating_sub(indent_width)
+            .max(1);
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        append_markdown(
+            &format!("**Tip:** {}", self.tip),
+            Some(wrap_width),
+            &mut lines,
+        );
+
+        prefix_lines(lines, indent.into(), indent.into())
+    }
+}
+
+#[derive(Debug)]
 pub struct SessionInfoCell(CompositeHistoryCell);
 
 impl HistoryCell for SessionInfoCell {
@@ -586,15 +629,16 @@ pub(crate) fn new_session_info(
         reasoning_effort,
         ..
     } = event;
-    SessionInfoCell(if is_first_event {
-        // Header box rendered as history (so it appears at the very top)
-        let header = SessionHeaderHistoryCell::new(
-            model,
-            reasoning_effort,
-            config.cwd.clone(),
-            crate::version::CODEX_CLI_VERSION,
-        );
+    // Header box rendered as history (so it appears at the very top)
+    let header = SessionHeaderHistoryCell::new(
+        model.clone(),
+        reasoning_effort,
+        config.cwd.clone(),
+        CODEX_CLI_VERSION,
+    );
+    let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
+    if is_first_event {
         // Help lines below the header (new copy and list)
         let help_lines: Vec<Line<'static>> = vec![
             "  To get started, describe a task or try one of these commands:"
@@ -628,24 +672,24 @@ pub(crate) fn new_session_info(
             ]),
         ];
 
-        CompositeHistoryCell {
-            parts: vec![
-                Box::new(header),
-                Box::new(PlainHistoryCell { lines: help_lines }),
-            ],
-        }
-    } else if config.model == model {
-        CompositeHistoryCell { parts: vec![] }
+        parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
     } else {
-        let lines = vec![
-            "model changed:".magenta().bold().into(),
-            format!("requested: {}", config.model).into(),
-            format!("used: {model}").into(),
-        ];
-        CompositeHistoryCell {
-            parts: vec![Box::new(PlainHistoryCell { lines })],
+        if config.show_tooltips
+            && let Some(tooltips) = tooltips::random_tooltip().map(TooltipHistoryCell::new)
+        {
+            parts.push(Box::new(tooltips));
         }
-    })
+        if config.model != model {
+            let lines = vec![
+                "model changed:".magenta().bold().into(),
+                format!("requested: {}", config.model).into(),
+                format!("used: {model}").into(),
+            ];
+            parts.push(Box::new(PlainHistoryCell { lines }));
+        }
+    }
+
+    SessionInfoCell(CompositeHistoryCell { parts })
 }
 
 pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {

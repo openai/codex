@@ -180,6 +180,7 @@ async fn run_codex_tool_session_inner(
                         call_id,
                         reason: _,
                         risk,
+                        proposed_execpolicy_amendment: _,
                         parsed_cmd,
                     }) => {
                         handle_exec_approval_request(

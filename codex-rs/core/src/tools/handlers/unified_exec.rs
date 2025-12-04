@@ -6,6 +6,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecOutputStream;
+use crate::shell::default_user_shell;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -13,6 +14,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
+use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
@@ -30,8 +32,8 @@ struct ExecCommandArgs {
     cmd: String,
     #[serde(default)]
     workdir: Option<String>,
-    #[serde(default = "default_shell")]
-    shell: String,
+    #[serde(default)]
+    shell: Option<String>,
     #[serde(default = "default_login")]
     login: bool,
     #[serde(default = "default_exec_yield_time_ms")]
@@ -46,6 +48,7 @@ struct ExecCommandArgs {
 
 #[derive(Debug, Deserialize)]
 struct WriteStdinArgs {
+    // The model is trained on `session_id`.
     session_id: i32,
     #[serde(default)]
     chars: String,
@@ -61,10 +64,6 @@ fn default_exec_yield_time_ms() -> u64 {
 
 fn default_write_stdin_yield_time_ms() -> u64 {
     250
-}
-
-fn default_shell() -> String {
-    "/bin/bash".to_string()
 }
 
 fn default_login() -> bool {
@@ -102,6 +101,7 @@ impl ToolHandler for UnifiedExecHandler {
         let ToolInvocation {
             session,
             turn,
+            tracker,
             call_id,
             tool_name,
             payload,
@@ -128,6 +128,7 @@ impl ToolHandler for UnifiedExecHandler {
                         "failed to parse exec_command arguments: {err:?}"
                     ))
                 })?;
+                let process_id = manager.allocate_process_id().await;
 
                 let command = get_command(&args);
                 let ExecCommandArgs {
@@ -151,11 +152,25 @@ impl ToolHandler for UnifiedExecHandler {
                     )));
                 }
 
-                let workdir = workdir
-                    .as_deref()
-                    .filter(|value| !value.is_empty())
-                    .map(PathBuf::from);
+                let workdir = workdir.filter(|value| !value.is_empty());
+
+                let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
                 let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
+
+                if let Some(output) = intercept_apply_patch(
+                    &command,
+                    &cwd,
+                    Some(yield_time_ms),
+                    context.session.as_ref(),
+                    context.turn.as_ref(),
+                    Some(&tracker),
+                    &context.call_id,
+                    tool_name.as_str(),
+                )
+                .await?
+                {
+                    return Ok(output);
+                }
 
                 let event_ctx = ToolEventCtx::new(
                     context.session.as_ref(),
@@ -168,6 +183,7 @@ impl ToolHandler for UnifiedExecHandler {
                     cwd.clone(),
                     ExecCommandSource::UnifiedExecStartup,
                     None,
+                    Some(process_id.clone()),
                 );
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
@@ -175,6 +191,7 @@ impl ToolHandler for UnifiedExecHandler {
                     .exec_command(
                         ExecCommandRequest {
                             command,
+                            process_id,
                             yield_time_ms,
                             max_output_tokens,
                             workdir,
@@ -197,7 +214,7 @@ impl ToolHandler for UnifiedExecHandler {
                 manager
                     .write_stdin(WriteStdinRequest {
                         call_id: &call_id,
-                        session_id: args.session_id,
+                        process_id: &args.session_id.to_string(),
                         input: &args.chars,
                         yield_time_ms: args.yield_time_ms,
                         max_output_tokens: args.max_output_tokens,
@@ -237,7 +254,12 @@ impl ToolHandler for UnifiedExecHandler {
 }
 
 fn get_command(args: &ExecCommandArgs) -> Vec<String> {
-    let shell = get_shell_by_model_provided_path(&PathBuf::from(args.shell.clone()));
+    let shell = if let Some(shell_str) = &args.shell {
+        get_shell_by_model_provided_path(&PathBuf::from(shell_str))
+    } else {
+        default_user_shell()
+    };
+
     shell.derive_exec_args(&args.cmd, args.login)
 }
 
@@ -255,8 +277,9 @@ fn format_response(response: &UnifiedExecResponse) -> String {
         sections.push(format!("Process exited with code {exit_code}"));
     }
 
-    if let Some(session_id) = response.session_id {
-        sections.push(format!("Process running with session ID {session_id}"));
+    if let Some(process_id) = &response.process_id {
+        // Training still uses "session ID".
+        sections.push(format!("Process running with session ID {process_id}"));
     }
 
     if let Some(original_token_count) = response.original_token_count {
@@ -267,4 +290,66 @@ fn format_response(response: &UnifiedExecResponse) -> String {
     sections.push(response.output.clone());
 
     sections.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_command_uses_default_shell_when_unspecified() {
+        let json = r#"{"cmd": "echo hello"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        assert!(args.shell.is_none());
+
+        let command = get_command(&args);
+
+        assert_eq!(command.len(), 3);
+        assert_eq!(command[2], "echo hello");
+    }
+
+    #[test]
+    fn test_get_command_respects_explicit_bash_shell() {
+        let json = r#"{"cmd": "echo hello", "shell": "/bin/bash"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
+
+        let command = get_command(&args);
+
+        assert_eq!(command[2], "echo hello");
+    }
+
+    #[test]
+    fn test_get_command_respects_explicit_powershell_shell() {
+        let json = r#"{"cmd": "echo hello", "shell": "powershell"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        assert_eq!(args.shell.as_deref(), Some("powershell"));
+
+        let command = get_command(&args);
+
+        assert_eq!(command[2], "echo hello");
+    }
+
+    #[test]
+    fn test_get_command_respects_explicit_cmd_shell() {
+        let json = r#"{"cmd": "echo hello", "shell": "cmd"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        assert_eq!(args.shell.as_deref(), Some("cmd"));
+
+        let command = get_command(&args);
+
+        assert_eq!(command[2], "echo hello");
+    }
 }

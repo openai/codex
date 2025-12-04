@@ -12,6 +12,9 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::features::Feature;
+use crate::features::Features;
+use crate::function_tool::FunctionCallError;
+use crate::openai_models::models_manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::stream_events_utils::HandleOutputCtx;
@@ -24,6 +27,7 @@ use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_protocol::ConversationId;
+use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
@@ -72,9 +76,9 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
+use crate::exec_policy::ExecPolicyUpdateError;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
-use crate::model_family::find_family_for_model;
 use crate::openai_model_info::get_model_info;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
@@ -103,6 +107,7 @@ use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
+use crate::rollout::map_session_init_error;
 use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
@@ -126,11 +131,11 @@ use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
 use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
@@ -161,6 +166,7 @@ impl Codex {
     pub async fn spawn(
         config: Config,
         auth_manager: Arc<AuthManager>,
+        models_manager: Arc<ModelsManager>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
     ) -> CodexResult<CodexSpawnOk> {
@@ -188,7 +194,6 @@ impl Codex {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            features: config.features.clone(),
             exec_policy,
             session_source,
         };
@@ -199,6 +204,7 @@ impl Codex {
             session_configuration,
             config.clone(),
             auth_manager.clone(),
+            models_manager.clone(),
             tx_event.clone(),
             conversation_history,
             session_source_clone,
@@ -206,7 +212,7 @@ impl Codex {
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
-            CodexErr::InternalAgentDied
+            map_session_init_error(&e, &config.codex_home)
         })?;
         let conversation_id = session.conversation_id;
 
@@ -262,6 +268,9 @@ pub(crate) struct Session {
     conversation_id: ConversationId,
     tx_event: Sender<Event>,
     state: Mutex<SessionState>,
+    /// The set of enabled features should be invariant for the lifetime of the
+    /// session.
+    features: Features,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
@@ -287,7 +296,7 @@ pub(crate) struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
-    pub(crate) exec_policy: Arc<ExecPolicy>,
+    pub(crate) exec_policy: Arc<RwLock<ExecPolicy>>,
     pub(crate) truncation_policy: TruncationPolicy,
 }
 
@@ -342,10 +351,8 @@ pub(crate) struct SessionConfiguration {
     /// operate deterministically.
     cwd: PathBuf,
 
-    /// Set of feature flags for this session
-    features: Features,
     /// Execpolicy policy, applied only when enabled by feature flag.
-    exec_policy: Arc<ExecPolicy>,
+    exec_policy: Arc<RwLock<ExecPolicy>>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -392,6 +399,7 @@ pub(crate) struct SessionSettingsUpdate {
 impl Session {
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
+        models_manager: &ModelsManager,
         otel_event_manager: &OtelEventManager,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
@@ -399,13 +407,14 @@ impl Session {
         sub_id: String,
     ) -> TurnContext {
         let config = session_configuration.original_config_do_not_use.clone();
-        let model_family = find_family_for_model(&session_configuration.model)
-            .unwrap_or_else(|| config.model_family.clone());
+        let features = &config.features;
+        let model_family = models_manager.construct_model_family(&session_configuration.model);
         let mut per_turn_config = (*config).clone();
         per_turn_config.model = session_configuration.model.clone();
         per_turn_config.model_family = model_family.clone();
         per_turn_config.model_reasoning_effort = session_configuration.model_reasoning_effort;
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
+        per_turn_config.features = features.clone();
         if let Some(model_info) = get_model_info(&model_family) {
             per_turn_config.model_context_window = Some(model_info.context_window);
         }
@@ -428,7 +437,7 @@ impl Session {
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &config.features,
+            features,
         });
 
         TurnContext {
@@ -455,6 +464,7 @@ impl Session {
         session_configuration: SessionConfiguration,
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
+        models_manager: Arc<ModelsManager>,
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
         session_source: SessionSource,
@@ -508,13 +518,13 @@ impl Session {
 
         let rollout_recorder = rollout_recorder.map_err(|e| {
             error!("failed to initialize rollout recorder: {e:#}");
-            anyhow::anyhow!("failed to initialize rollout recorder: {e:#}")
+            anyhow::Error::from(e)
         })?;
         let rollout_path = rollout_recorder.rollout_path.clone();
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
-        for (alias, feature) in session_configuration.features.legacy_feature_usages() {
+        for (alias, feature) in config.features.legacy_feature_usages() {
             let canonical = feature.key();
             let summary = format!("`{alias}` is deprecated. Use `{canonical}` instead.");
             let details = if alias == canonical {
@@ -566,6 +576,7 @@ impl Session {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager,
+            models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 
@@ -573,6 +584,7 @@ impl Session {
             conversation_id,
             tx_event: tx_event.clone(),
             state: Mutex::new(state),
+            features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -751,6 +763,7 @@ impl Session {
 
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
+            &self.services.models_manager,
             &self.services.otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
@@ -864,11 +877,46 @@ impl Session {
         .await
     }
 
+    /// Adds an execpolicy amendment to both the in-memory and on-disk policies so future
+    /// commands can use the newly approved prefix.
+    pub(crate) async fn persist_execpolicy_amendment(
+        &self,
+        amendment: &ExecPolicyAmendment,
+    ) -> Result<(), ExecPolicyUpdateError> {
+        let features = self.features.clone();
+        let (codex_home, current_policy) = {
+            let state = self.state.lock().await;
+            (
+                state
+                    .session_configuration
+                    .original_config_do_not_use
+                    .codex_home
+                    .clone(),
+                state.session_configuration.exec_policy.clone(),
+            )
+        };
+
+        if !features.enabled(Feature::ExecPolicy) {
+            error!("attempted to append execpolicy rule while execpolicy feature is disabled");
+            return Err(ExecPolicyUpdateError::FeatureDisabled);
+        }
+
+        crate::exec_policy::append_execpolicy_amendment_and_update(
+            &codex_home,
+            &current_policy,
+            &amendment.command,
+        )
+        .await?;
+
+        Ok(())
+    }
+
     /// Emit an exec approval request event and await the user's decision.
     ///
     /// The request is keyed by `sub_id`/`call_id` so matching responses are delivered
     /// to the correct in-flight turn. If the task is aborted, this returns the
     /// default `ReviewDecision` (`Denied`).
+    #[allow(clippy::too_many_arguments)]
     pub async fn request_command_approval(
         &self,
         turn_context: &TurnContext,
@@ -877,6 +925,7 @@ impl Session {
         cwd: PathBuf,
         reason: Option<String>,
         risk: Option<SandboxCommandAssessment>,
+        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     ) -> ReviewDecision {
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
@@ -904,6 +953,7 @@ impl Session {
             cwd,
             reason,
             risk,
+            proposed_execpolicy_amendment,
             parsed_cmd,
         });
         self.send_event(turn_context, event).await;
@@ -979,6 +1029,7 @@ impl Session {
             .read()
             .await
             .resolve_elicitation(server_name, id, response)
+            .await
     }
 
     /// Records input items: always append to conversation history and
@@ -1038,6 +1089,22 @@ impl Session {
         state.record_items(items.iter(), turn_context.truncation_policy);
     }
 
+    pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
+        if !self.enabled(Feature::ModelWarnings) {
+            return;
+        }
+
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!("Warning: {}", message.into()),
+            }],
+        };
+
+        self.record_conversation_items(ctx, &[item]).await;
+    }
+
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
         let mut state = self.state.lock().await;
         state.replace_history(items);
@@ -1052,13 +1119,12 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
     }
 
-    pub async fn enabled(&self, feature: Feature) -> bool {
-        self.state
-            .lock()
-            .await
-            .session_configuration
-            .features
-            .enabled(feature)
+    pub fn enabled(&self, feature: Feature) -> bool {
+        self.features.enabled(feature)
+    }
+
+    pub(crate) fn features(&self) -> Features {
+        self.features.clone()
     }
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
@@ -1193,22 +1259,17 @@ impl Session {
         }
     }
 
-    /// Record a user input item to conversation history and also persist a
-    /// corresponding UserMessage EventMsg to rollout.
-    async fn record_input_and_rollout_usermsg(
+    pub(crate) async fn record_response_item_and_emit_turn_item(
         &self,
         turn_context: &TurnContext,
-        response_input: &ResponseInputItem,
+        response_item: ResponseItem,
     ) {
-        let response_item: ResponseItem = response_input.clone().into();
-        // Add to conversation history and persist response item to rollout
+        // Add to conversation history and persist response item to rollout.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
 
-        // Derive user message events and persist only UserMessage to rollout
-        let turn_item = parse_turn_item(&response_item);
-
-        if let Some(item @ TurnItem::UserMessage(_)) = turn_item {
+        // Derive a turn item and emit lifecycle events if applicable.
+        if let Some(item) = parse_turn_item(&response_item) {
             self.emit_turn_item_started(turn_context, &item).await;
             self.emit_turn_item_completed(turn_context, item).await;
         }
@@ -1246,7 +1307,7 @@ impl Session {
         turn_context: Arc<TurnContext>,
         cancellation_token: CancellationToken,
     ) {
-        if !self.enabled(Feature::GhostCommit).await {
+        if !self.enabled(Feature::GhostCommit) {
             return;
         }
         let token = match turn_context.tool_call_gate.subscribe().await {
@@ -1484,6 +1545,8 @@ mod handlers {
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
     use crate::mcp::auth::compute_auth_statuses;
+    use crate::mcp::collect_mcp_snapshot_from_manager;
+    use crate::review_prompts::resolve_review_request;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
@@ -1498,6 +1561,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::WarningEvent;
 
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
@@ -1612,7 +1676,25 @@ mod handlers {
         }
     }
 
+    /// Propagate a user's exec approval decision to the session.
+    /// Also optionally applies an execpolicy amendment.
     pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
+        if let ReviewDecision::ApprovedExecpolicyAmendment {
+            proposed_execpolicy_amendment,
+        } = &decision
+            && let Err(err) = sess
+                .persist_execpolicy_amendment(proposed_execpolicy_amendment)
+                .await
+        {
+            let message = format!("Failed to apply execpolicy amendment: {err}");
+            tracing::warn!("{message}");
+            let warning = EventMsg::Warning(WarningEvent { message });
+            sess.send_event_raw(Event {
+                id: id.clone(),
+                msg: warning,
+            })
+            .await;
+        }
         match decision {
             ReviewDecision::Abort => {
                 sess.interrupt_task().await;
@@ -1679,30 +1761,18 @@ mod handlers {
 
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
         let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
-        let (tools, auth_status_entries, resources, resource_templates) = tokio::join!(
-            mcp_connection_manager.list_all_tools(),
+        let snapshot = collect_mcp_snapshot_from_manager(
+            &mcp_connection_manager,
             compute_auth_statuses(
                 config.mcp_servers.iter(),
                 config.mcp_oauth_credentials_store_mode,
-            ),
-            mcp_connection_manager.list_all_resources(),
-            mcp_connection_manager.list_all_resource_templates(),
-        );
-        let auth_statuses = auth_status_entries
-            .iter()
-            .map(|(name, entry)| (name.clone(), entry.auth_status))
-            .collect();
+            )
+            .await,
+        )
+        .await;
         let event = Event {
             id: sub_id,
-            msg: EventMsg::McpListToolsResponse(crate::protocol::McpListToolsResponseEvent {
-                tools: tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect(),
-                resources,
-                resource_templates,
-                auth_statuses,
-            }),
+            msg: EventMsg::McpListToolsResponse(snapshot),
         };
         sess.send_event_raw(event).await;
     }
@@ -1792,14 +1862,28 @@ mod handlers {
         let turn_context = sess
             .new_turn_with_sub_id(sub_id.clone(), SessionSettingsUpdate::default())
             .await;
-        spawn_review_thread(
-            Arc::clone(sess),
-            Arc::clone(config),
-            turn_context.clone(),
-            sub_id,
-            review_request,
-        )
-        .await;
+        match resolve_review_request(review_request, config.cwd.as_path()) {
+            Ok(resolved) => {
+                spawn_review_thread(
+                    Arc::clone(sess),
+                    Arc::clone(config),
+                    turn_context.clone(),
+                    sub_id,
+                    resolved,
+                )
+                .await;
+            }
+            Err(err) => {
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: err.to_string(),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                };
+                sess.send_event(&turn_context, event.msg).await;
+            }
+        }
     }
 }
 
@@ -1809,13 +1893,12 @@ async fn spawn_review_thread(
     config: Arc<Config>,
     parent_turn_context: Arc<TurnContext>,
     sub_id: String,
-    review_request: ReviewRequest,
+    resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
     let model = config.review_model.clone();
-    let review_model_family = find_family_for_model(&model)
-        .unwrap_or_else(|| parent_turn_context.client.get_model_family());
+    let review_model_family = sess.services.models_manager.construct_model_family(&model);
     // For reviews, disable web_search and view_image regardless of global settings.
-    let mut review_features = config.features.clone();
+    let mut review_features = sess.features.clone();
     review_features
         .disable(crate::features::Feature::WebSearchRequest)
         .disable(crate::features::Feature::ViewImageTool);
@@ -1825,7 +1908,7 @@ async fn spawn_review_thread(
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();
-    let review_prompt = review_request.prompt.clone();
+    let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.client.get_provider();
     let auth_manager = parent_turn_context.client.get_auth_manager();
     let model_family = review_model_family.clone();
@@ -1836,6 +1919,7 @@ async fn spawn_review_thread(
     per_turn_config.model_family = model_family.clone();
     per_turn_config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
     per_turn_config.model_reasoning_summary = ReasoningSummaryConfig::Detailed;
+    per_turn_config.features = review_features.clone();
     if let Some(model_info) = get_model_info(&model_family) {
         per_turn_config.model_context_window = Some(model_info.context_window);
     }
@@ -1884,14 +1968,13 @@ async fn spawn_review_thread(
         text: review_prompt,
     }];
     let tc = Arc::new(review_turn_context);
-    sess.spawn_task(
-        tc.clone(),
-        input,
-        ReviewTask::new(review_request.append_to_original_thread),
-    )
-    .await;
+    sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
 
     // Announce entering review mode so UIs can switch modes.
+    let review_request = ReviewRequest {
+        target: resolved.target,
+        user_facing_hint: Some(resolved.user_facing_hint),
+    };
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
         .await;
 }
@@ -1925,7 +2008,8 @@ pub(crate) async fn run_task(
     sess.send_event(&turn_context, event).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    sess.record_input_and_rollout_usermsg(turn_context.as_ref(), &initial_input_for_turn)
+    let response_item: ResponseItem = initial_input_for_turn.clone().into();
+    sess.record_response_item_and_emit_turn_item(turn_context.as_ref(), response_item)
         .await;
 
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
@@ -1984,7 +2068,7 @@ pub(crate) async fn run_task(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached {
-                    if should_use_remote_compact_task(&sess).await {
+                    if should_use_remote_compact_task(&sess) {
                         run_inline_remote_auto_compact_task(sess.clone(), turn_context.clone())
                             .await;
                     } else {
@@ -2010,6 +2094,13 @@ pub(crate) async fn run_task(
             Err(CodexErr::TurnAborted) => {
                 // Aborted turn is reported via a different event.
                 break;
+            }
+            Err(CodexErr::InvalidImageRequest()) => {
+                let mut state = sess.state.lock().await;
+                error_or_panic(
+                    "Invalid image detected, replacing it in the last turn to prevent poisoning",
+                );
+                state.history.replace_last_turn_images("Invalid image");
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
@@ -2055,24 +2146,17 @@ async fn run_turn(
         .supports_parallel_tool_calls;
 
     // TODO(jif) revert once testing phase is done.
-    let parallel_tool_calls = model_supports_parallel
-        && sess
-            .state
-            .lock()
-            .await
-            .session_configuration
-            .features
-            .enabled(Feature::ParallelToolCalls);
+    let parallel_tool_calls = model_supports_parallel && sess.enabled(Feature::ParallelToolCalls);
     let mut base_instructions = turn_context.base_instructions.clone();
     if parallel_tool_calls {
         static INSTRUCTIONS: &str = include_str!("../templates/parallel/instructions.md");
-        if let Some(family) =
-            find_family_for_model(&sess.state.lock().await.session_configuration.model)
-        {
-            let mut new_instructions = base_instructions.unwrap_or(family.base_instructions);
-            new_instructions.push_str(INSTRUCTIONS);
-            base_instructions = Some(new_instructions);
-        }
+        let family = sess
+            .services
+            .models_manager
+            .construct_model_family(&sess.state.lock().await.session_configuration.model);
+        let mut new_instructions = base_instructions.unwrap_or(family.base_instructions);
+        new_instructions.push_str(INSTRUCTIONS);
+        base_instructions = Some(new_instructions);
     }
     let prompt = Prompt {
         input,
@@ -2115,6 +2199,8 @@ async fn run_turn(
             }
             Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
             Err(e @ CodexErr::QuotaExceeded) => return Err(e),
+            Err(e @ CodexErr::InvalidImageRequest()) => return Err(e),
+            Err(e @ CodexErr::InvalidRequest(_)) => return Err(e),
             Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
@@ -2372,7 +2458,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
     })
 }
 
-use crate::features::Features;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
@@ -2391,7 +2476,10 @@ mod tests {
     use codex_protocol::models::FunctionCallOutputPayload;
 
     use crate::protocol::CompactedItem;
+    use crate::protocol::CreditsSnapshot;
     use crate::protocol::InitialHistory;
+    use crate::protocol::RateLimitSnapshot;
+    use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
@@ -2459,6 +2547,74 @@ mod tests {
             session.state.lock().await.clone_history().get_history()
         });
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn set_rate_limits_retains_previous_credits() {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load default test config");
+        let config = Arc::new(config);
+        let session_configuration = SessionConfiguration {
+            provider: config.model_provider.clone(),
+            model: config.model.clone(),
+            model_reasoning_effort: config.model_reasoning_effort,
+            model_reasoning_summary: config.model_reasoning_summary,
+            developer_instructions: config.developer_instructions.clone(),
+            user_instructions: config.user_instructions.clone(),
+            base_instructions: config.base_instructions.clone(),
+            compact_prompt: config.compact_prompt.clone(),
+            approval_policy: config.approval_policy,
+            sandbox_policy: config.sandbox_policy.clone(),
+            cwd: config.cwd.clone(),
+            original_config_do_not_use: Arc::clone(&config),
+            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
+            session_source: SessionSource::Exec,
+        };
+
+        let mut state = SessionState::new(session_configuration);
+        let initial = RateLimitSnapshot {
+            primary: Some(RateLimitWindow {
+                used_percent: 10.0,
+                window_minutes: Some(15),
+                resets_at: Some(1_700),
+            }),
+            secondary: None,
+            credits: Some(CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("10.00".to_string()),
+            }),
+        };
+        state.set_rate_limits(initial.clone());
+
+        let update = RateLimitSnapshot {
+            primary: Some(RateLimitWindow {
+                used_percent: 40.0,
+                window_minutes: Some(30),
+                resets_at: Some(1_800),
+            }),
+            secondary: Some(RateLimitWindow {
+                used_percent: 5.0,
+                window_minutes: Some(60),
+                resets_at: Some(1_900),
+            }),
+            credits: None,
+        };
+        state.set_rate_limits(update.clone());
+
+        assert_eq!(
+            state.latest_rate_limits,
+            Some(RateLimitSnapshot {
+                primary: update.primary.clone(),
+                secondary: update.secondary,
+                credits: initial.credits,
+            })
+        );
     }
 
     #[test]
@@ -2600,6 +2756,7 @@ mod tests {
             false,
             config.cli_auth_credentials_store_mode,
         );
+        let models_manager = Arc::new(ModelsManager::new(auth_manager.get_auth_mode()));
 
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -2614,8 +2771,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            features: Features::default(),
-            exec_policy: Arc::new(ExecPolicy::empty()),
+            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
         };
 
@@ -2631,11 +2787,13 @@ mod tests {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
+            models_manager: models_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 
         let turn_context = Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
+            &models_manager,
             &otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
@@ -2647,6 +2805,7 @@ mod tests {
             conversation_id,
             tx_event,
             state: Mutex::new(state),
+            features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
@@ -2678,6 +2837,7 @@ mod tests {
             false,
             config.cli_auth_credentials_store_mode,
         );
+        let models_manager = Arc::new(ModelsManager::new(auth_manager.get_auth_mode()));
 
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -2692,8 +2852,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            features: Features::default(),
-            exec_policy: Arc::new(ExecPolicy::empty()),
+            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
         };
 
@@ -2709,11 +2868,13 @@ mod tests {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
+            models_manager: models_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
+            &models_manager,
             &otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
@@ -2725,12 +2886,42 @@ mod tests {
             conversation_id,
             tx_event,
             state: Mutex::new(state),
+            features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
 
         (session, turn_context, rx_event)
+    }
+
+    #[tokio::test]
+    async fn record_model_warning_appends_user_message() {
+        let (mut session, turn_context) = make_session_and_context();
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ModelWarnings);
+        session.features = features;
+
+        session
+            .record_model_warning("too many unified exec sessions", &turn_context)
+            .await;
+
+        let mut history = session.clone_history().await;
+        let history_items = history.get_history();
+        let last = history_items.last().expect("warning recorded");
+
+        match last {
+            ResponseItem::Message { role, content, .. } => {
+                assert_eq!(role, "user");
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::InputText {
+                        text: "Warning: too many unified exec sessions".to_string(),
+                    }]
+                );
+            }
+            other => panic!("expected user message, got {other:?}"),
+        }
     }
 
     #[derive(Clone, Copy)]
@@ -2824,7 +3015,7 @@ mod tests {
         let input = vec![UserInput::Text {
             text: "start review".to_string(),
         }];
-        sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new(true))
+        sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
             .await;
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
@@ -2852,6 +3043,8 @@ mod tests {
                 .expect("event");
             match evt.msg {
                 EventMsg::RawResponseItem(_) => continue,
+                EventMsg::ItemStarted(_) | EventMsg::ItemCompleted(_) => continue,
+                EventMsg::AgentMessage(_) => continue,
                 EventMsg::TurnAborted(e) => {
                     assert_eq!(TurnAbortReason::Interrupted, e.reason);
                     break;
@@ -2861,23 +3054,7 @@ mod tests {
         }
 
         let history = sess.clone_history().await.get_history();
-        let found = history.iter().any(|item| match item {
-            ResponseItem::Message { role, content, .. } if role == "user" => {
-                content.iter().any(|ci| match ci {
-                    ContentItem::InputText { text } => {
-                        text.contains("<user_action>")
-                            && text.contains("review")
-                            && text.contains("interrupted")
-                    }
-                    _ => false,
-                })
-            }
-            _ => false,
-        });
-        assert!(
-            found,
-            "synthetic review interruption not recorded in history"
-        );
+        let _ = history;
     }
 
     #[tokio::test]

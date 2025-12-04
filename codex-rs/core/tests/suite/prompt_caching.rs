@@ -1,16 +1,16 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_core::features::Feature;
-use codex_core::model_family::find_family_for_model;
+use codex_core::openai_models::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses::mount_sse_once;
@@ -74,7 +74,6 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
             config.features.disable(Feature::ApplyPatchFreeform);
             config.model = "codex-mini-latest".to_string();
             config.model_family = find_family_for_model("codex-mini-latest")
-                .expect("model family for codex-mini-latest");
         })
         .build(&server)
         .await?;

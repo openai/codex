@@ -8,6 +8,9 @@ use futures::stream::BoxStream;
 use http::HeaderMap;
 use http::Method;
 use http::StatusCode;
+use tracing::Level;
+use tracing::enabled;
+use tracing::trace;
 
 pub type ByteStream = BoxStream<'static, Result<Bytes, TransportError>>;
 
@@ -83,6 +86,15 @@ impl HttpTransport for ReqwestTransport {
     }
 
     async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError> {
+        if enabled!(Level::TRACE) {
+            trace!(
+                "{} to {}: {}",
+                req.method,
+                req.url,
+                req.body.as_ref().unwrap_or_default()
+            );
+        }
+
         let builder = self.build(req)?;
         let resp = builder.send().await.map_err(Self::map_error)?;
         let status = resp.status();

@@ -78,6 +78,8 @@ tokio = { workspace = true, features = [
     "process",
     "rt-multi-thread",
     "signal",
+    "test-util",
+    "time",
 ] }
 tokio-stream = { workspace = true }
 toml = { workspace = true }
@@ -91,6 +93,7 @@ unicode-width = { workspace = true }
 url = { workspace = true }
 
 codex-windows-sandbox = { workspace = true }
+tokio-util = { workspace = true, features = ["time"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
@@ -109,3 +112,4 @@ pretty_assertions = { workspace = true }
 rand = { workspace = true }
 serial_test = { workspace = true }
 vt100 = { workspace = true }
+uuid = { workspace = true }

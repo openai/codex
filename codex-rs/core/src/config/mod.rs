@@ -22,26 +22,26 @@ use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
 use crate::git_info::resolve_root_git_project_for_trust;
-use crate::model_family::ModelFamily;
-use crate::model_family::derive_default_model_family;
-use crate::model_family::find_family_for_model;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
+use crate::openai_models::model_family::ModelFamily;
+use crate::openai_models::model_family::find_family_for_model;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::util::resolve_path;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use dirs::home_dir;
 use dunce::canonicalize;
@@ -61,9 +61,8 @@ pub mod edit;
 pub mod profile;
 pub mod types;
 
-pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex";
-const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex";
-pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5.1-codex";
+pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex-max";
+const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex-max";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -81,6 +80,7 @@ pub struct Config {
     /// Model used specifically for review sessions. Defaults to "gpt-5.1-codex-max".
     pub review_model: String,
 
+    // todo(aibrahim): remove this field
     pub model_family: ModelFamily,
 
     /// Size of the context window for the model, in tokens.
@@ -159,6 +159,9 @@ pub struct Config {
 
     /// Enable ASCII animations and shimmer effects in the TUI.
     pub animations: bool,
+
+    /// Show startup tooltips in the TUI welcome screen.
+    pub show_tooltips: bool,
 
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
@@ -1016,15 +1019,8 @@ impl Config {
         let additional_writable_roots: Vec<PathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| {
-                let absolute = if path.is_absolute() {
-                    path
-                } else {
-                    resolved_cwd.join(path)
-                };
-                match canonicalize(&absolute) {
-                    Ok(canonical) => canonical,
-                    Err(_) => absolute,
-                }
+                let absolute = resolve_path(&resolved_cwd, &path);
+                canonicalize(&absolute).unwrap_or(absolute)
             })
             .collect();
         let active_project = cfg
@@ -1112,8 +1108,7 @@ impl Config {
             .or(cfg.model)
             .unwrap_or_else(default_model);
 
-        let mut model_family =
-            find_family_for_model(&model).unwrap_or_else(|| derive_default_model_family(&model));
+        let mut model_family = find_family_for_model(&model);
 
         if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
             model_family.supports_reasoning_summaries = supports_reasoning_summaries;
@@ -1258,6 +1253,7 @@ impl Config {
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
+            show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1299,11 +1295,7 @@ impl Config {
             return Ok(None);
         };
 
-        let full_path = if p.is_relative() {
-            cwd.join(p)
-        } else {
-            p.to_path_buf()
-        };
+        let full_path = resolve_path(cwd, p);
 
         let contents = std::fs::read_to_string(&full_path).map_err(|e| {
             std::io::Error::new(
@@ -1436,6 +1428,7 @@ persistence = "none"
         let tui = parsed.tui.expect("config should include tui section");
 
         assert_eq!(tui.notifications, Notifications::Enabled(true));
+        assert!(tui.show_tooltips);
     }
 
     #[test]
@@ -2960,7 +2953,7 @@ model_verbosity = "high"
             Config {
                 model: "o3".to_string(),
                 review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-                model_family: find_family_for_model("o3").expect("known model slug"),
+                model_family: find_family_for_model("o3"),
                 model_context_window: Some(200_000),
                 model_auto_compact_token_limit: Some(180_000),
                 model_provider_id: "openai".to_string(),
@@ -3009,6 +3002,7 @@ model_verbosity = "high"
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
                 animations: true,
+                show_tooltips: true,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -3033,7 +3027,7 @@ model_verbosity = "high"
         let expected_gpt3_profile_config = Config {
             model: "gpt-3.5-turbo".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
+            model_family: find_family_for_model("gpt-3.5-turbo"),
             model_context_window: Some(16_385),
             model_auto_compact_token_limit: Some(14_746),
             model_provider_id: "openai-chat-completions".to_string(),
@@ -3082,6 +3076,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             animations: true,
+            show_tooltips: true,
             otel: OtelConfig::default(),
         };
 
@@ -3121,7 +3116,7 @@ model_verbosity = "high"
         let expected_zdr_profile_config = Config {
             model: "o3".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("o3").expect("known model slug"),
+            model_family: find_family_for_model("o3"),
             model_context_window: Some(200_000),
             model_auto_compact_token_limit: Some(180_000),
             model_provider_id: "openai".to_string(),
@@ -3170,6 +3165,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             animations: true,
+            show_tooltips: true,
             otel: OtelConfig::default(),
         };
 
@@ -3195,7 +3191,7 @@ model_verbosity = "high"
         let expected_gpt5_profile_config = Config {
             model: "gpt-5.1".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-5.1").expect("known model slug"),
+            model_family: find_family_for_model("gpt-5.1"),
             model_context_window: Some(272_000),
             model_auto_compact_token_limit: Some(244_800),
             model_provider_id: "openai".to_string(),
@@ -3244,6 +3240,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             animations: true,
+            show_tooltips: true,
             otel: OtelConfig::default(),
         };
 

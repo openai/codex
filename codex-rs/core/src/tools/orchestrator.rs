@@ -11,14 +11,14 @@ use crate::error::get_error_message_ui;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::SandboxManager;
 use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ApprovalRequirement;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
-use crate::tools::sandboxing::default_approval_requirement;
+use crate::tools::sandboxing::default_exec_approval_requirement;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 
@@ -54,17 +54,17 @@ impl ToolOrchestrator {
         // 1) Approval
         let mut already_approved = false;
 
-        let requirement = tool.approval_requirement(req).unwrap_or_else(|| {
-            default_approval_requirement(approval_policy, &turn_ctx.sandbox_policy)
+        let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
+            default_exec_approval_requirement(approval_policy, &turn_ctx.sandbox_policy)
         });
         match requirement {
-            ApprovalRequirement::Skip { .. } => {
-                otel.tool_decision(otel_tn, otel_ci, ReviewDecision::Approved, otel_cfg);
+            ExecApprovalRequirement::Skip { .. } => {
+                otel.tool_decision(otel_tn, otel_ci, &ReviewDecision::Approved, otel_cfg);
             }
-            ApprovalRequirement::Forbidden { reason } => {
+            ExecApprovalRequirement::Forbidden { reason } => {
                 return Err(ToolError::Rejected(reason));
             }
-            ApprovalRequirement::NeedsApproval { reason } => {
+            ExecApprovalRequirement::NeedsApproval { reason, .. } => {
                 let mut risk = None;
 
                 if let Some(metadata) = req.sandbox_retry_data() {
@@ -88,13 +88,15 @@ impl ToolOrchestrator {
                 };
                 let decision = tool.start_approval_async(req, approval_ctx).await;
 
-                otel.tool_decision(otel_tn, otel_ci, decision, otel_user.clone());
+                otel.tool_decision(otel_tn, otel_ci, &decision, otel_user.clone());
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
                         return Err(ToolError::Rejected("rejected by user".to_string()));
                     }
-                    ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {}
+                    ReviewDecision::Approved
+                    | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                    | ReviewDecision::ApprovedForSession => {}
                 }
                 already_approved = true;
             }
@@ -169,13 +171,15 @@ impl ToolOrchestrator {
                     };
 
                     let decision = tool.start_approval_async(req, approval_ctx).await;
-                    otel.tool_decision(otel_tn, otel_ci, decision, otel_user);
+                    otel.tool_decision(otel_tn, otel_ci, &decision, otel_user);
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
                             return Err(ToolError::Rejected("rejected by user".to_string()));
                         }
-                        ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {}
+                        ReviewDecision::Approved
+                        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                        | ReviewDecision::ApprovedForSession => {}
                     }
                 }
 

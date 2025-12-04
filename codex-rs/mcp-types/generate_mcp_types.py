@@ -38,6 +38,13 @@ SERVER_NOTIFICATION_TYPE_NAMES: list[str] = []
 # order to compile without warnings.
 LARGE_ENUMS = {"ServerResult"}
 
+# some types need setting a default value for `r#type`
+# ref: [#7417](https://github.com/openai/codex/pull/7417)
+default_type_values: dict[str, str] = {
+    "ToolInputSchema": "object",
+    "ToolOutputSchema": "object",
+}
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -351,6 +358,14 @@ class StructField:
             out.append(f"    pub {self.name}: {self.type_name},\n")
 
 
+def append_serde_attr(existing: str | None, fragment: str) -> str:
+    if existing is None:
+        return f"#[serde({fragment})]"
+    assert existing.startswith("#[serde(") and existing.endswith(")]"), existing
+    body = existing[len("#[serde(") : -2]
+    return f"#[serde({body}, {fragment})]"
+
+
 def define_struct(
     name: str,
     properties: dict[str, Any],
@@ -358,6 +373,14 @@ def define_struct(
     description: str | None,
 ) -> list[str]:
     out: list[str] = []
+
+    type_default_fn: str | None = None
+    if name in default_type_values:
+        snake_name = to_snake_case(name) or name
+        type_default_fn = f"{snake_name}_type_default_str"
+        out.append(f"fn {type_default_fn}() -> String {{\n")
+        out.append(f'    "{default_type_values[name]}".to_string()\n')
+        out.append("}\n\n")
 
     fields: list[StructField] = []
     for prop_name, prop in properties.items():
@@ -380,6 +403,10 @@ def define_struct(
         if is_optional:
             prop_type = f"Option<{prop_type}>"
         rs_prop = rust_prop_name(prop_name, is_optional)
+
+        if prop_name == "type" and type_default_fn:
+            rs_prop.serde = append_serde_attr(rs_prop.serde, f'default = "{type_default_fn}"')
+
         if prop_type.startswith("&'static str"):
             fields.append(StructField("const", rs_prop.name, prop_type, rs_prop.serde, rs_prop.ts))
         else:

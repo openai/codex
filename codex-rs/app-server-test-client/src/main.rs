@@ -563,7 +563,9 @@ impl CodexClient {
                 ServerNotification::TurnCompleted(payload) => {
                     if payload.turn.id == turn_id {
                         println!("\n< turn/completed notification: {:?}", payload.turn.status);
-                        if let TurnStatus::Failed { error } = &payload.turn.status {
+                        if payload.turn.status == TurnStatus::Failed
+                            && let Some(error) = payload.turn.error
+                        {
                             println!("[turn error] {}", error.message);
                         }
                         break;

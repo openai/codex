@@ -1,4 +1,4 @@
-use crate::model_family::ModelFamily;
+use crate::openai_models::model_family::ModelFamily;
 
 // Shared constants for commonly used window/token sizes.
 pub(crate) const CONTEXT_WINDOW_272K: i64 = 272_000;
@@ -75,6 +75,8 @@ pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
         _ if slug.starts_with("gpt-5") => Some(ModelInfo::new(CONTEXT_WINDOW_272K)),
 
         _ if slug.starts_with("codex-") => Some(ModelInfo::new(CONTEXT_WINDOW_272K)),
+
+        _ if slug.starts_with("exp-") => Some(ModelInfo::new(CONTEXT_WINDOW_272K)),
 
         _ => None,
     }
