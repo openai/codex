@@ -455,5 +455,16 @@ mod tests {
             "-Command",
             "Get-Content (New-Item bar.txt)",
         ])));
+
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-Command",
+            "ls $(calc.exe)",
+        ])));
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-Command",
+            "ls @(calc.exe)",
+        ])));
     }
 }

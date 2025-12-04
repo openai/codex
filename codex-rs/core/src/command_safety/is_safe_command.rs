@@ -374,5 +374,13 @@ mod tests {
             !is_known_safe_command(&vec_str(&["bash", "-lc", "ls > out.txt"])),
             "> redirection should be rejected"
         );
+        assert!(
+            !is_known_safe_command(&vec_str(&["bash", "-lc", "ls $(do_bad_stuff)"])),
+            "$() command substitution should be rejected"
+        );
+        assert!(
+            !is_known_safe_command(&vec_str(&["bash", "-lc", "ls @(do_bad_stuff)"])),
+            "@() command substitution should be rejected"
+        );
     }
 }
