@@ -27,5 +27,6 @@ include(":ansi-to-tui-kotlin")
 includeBuild("ktreesitter-kotlin") {
     dependencySubstitution {
         substitute(module("io.github.tree-sitter:ktreesitter")).using(project(":ktreesitter"))
+        substitute(module("io.github.tree-sitter:ktreesitter-bash")).using(project(":languages:bash"))
     }
 }

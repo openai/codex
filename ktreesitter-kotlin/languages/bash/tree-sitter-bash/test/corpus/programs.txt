@@ -1,0 +1,108 @@
+===============================
+Comments
+===============================
+
+#!/bin/bash
+# hi
+
+---
+
+(program
+  (comment)
+  (comment))
+
+===============================
+Escaped newlines
+===============================
+
+abc \
+  d \
+  e
+
+f=g   \
+  h=i \
+  j   \
+  --k
+
+---
+
+(program
+  (command
+    (command_name
+      (word))
+    (word)
+    (word))
+  (command
+    (variable_assignment
+      (variable_name)
+      (word))
+    (variable_assignment
+      (variable_name)
+      (word))
+    (command_name
+      (word))
+    (word)))
+
+=============================
+escaped newline immediately after a char
+=============================
+
+echo a \
+    b
+
+echo a\
+    b
+
+echo a\
+    b\
+    c
+
+
+-----------------------------
+
+(program
+  (command
+    (command_name
+      (word))
+    (word)
+    (word))
+  (command
+    (command_name
+      (word))
+    (word)
+    (word))
+  (command
+    (command_name
+      (word))
+    (word)
+    (word)
+    (word)))
+
+=============================
+Escaped whitespace
+=============================
+
+echo 1 \ 2 \ 3
+
+---
+
+(program
+  (command
+    (command_name
+      (word))
+    (number)
+    (number)
+    (number)))
+
+====================================
+Files without trailing terminators
+====================================
+
+echo hi
+---
+
+(program
+  (command
+    (command_name
+      (word))
+    (word)))

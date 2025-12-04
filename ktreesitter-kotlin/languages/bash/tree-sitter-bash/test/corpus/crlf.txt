@@ -1,0 +1,17 @@
+================================
+Variables with CRLF line endings
+================================
+
+A=one
+
+B=two
+
+---
+
+(program
+  (variable_assignment
+    (variable_name)
+    (word))
+  (variable_assignment
+    (variable_name)
+    (word)))

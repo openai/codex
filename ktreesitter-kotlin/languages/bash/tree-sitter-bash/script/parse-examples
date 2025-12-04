@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+files=(
+  examples/*.sh
+  examples/bash-it/**/*.sh
+  examples/bash-it/**/*.bash
+  examples/bash/**/*.sh
+  examples/bash/**/*.tests
+  examples/gentoo/**/*.sh
+  examples/gentoo/**/*.eclass
+  examples/gentoo/**/*.ebuild
+  examples/wild-corpus/**/*.sh
+)
+
+clone() {
+  if [[ -d examples/$1 ]]; then
+    git -C "examples/$1" fetch origin "$3:$3" -f -u --depth=1
+  else
+    git clone "$2" "examples/$1" -b "$3" --single-branch --depth=1
+  fi
+}
+
+cd "${0%/script/parse-examples}"
+
+clone bash-it https://github.com/Bash-it/bash-it master
+clone bash https://git.savannah.gnu.org/git/bash.git master
+clone gentoo https://anongit.gentoo.org/git/repo/gentoo.git master
+clone wild-corpus https://github.com/oilshell/wild-corpus main
+
+find examples \( -name '*.sh' -or -name '*.bash' -or -name '*.tests' -or \
+  -name '*.eclass' -or -name '*.ebuild' \) -and -type f -print > script/example-files.txt
+
+tree-sitter parse --scope source.bash -q -s --paths script/example-files.txt | \
+  tee >(awk '/ERROR|MISSING/{print $1}' | sort > script/known-failures.txt)

@@ -1,0 +1,26 @@
+name: Fuzz
+
+on:
+  push:
+    paths:
+      - src/scanner.c
+  pull_request:
+    paths:
+      - src/scanner.c
+  workflow_dispatch:
+
+concurrency:
+  group: ${{github.workflow}}-${{github.ref}}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Fuzz scanner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Run fuzzer
+        uses: tree-sitter/fuzz-action@v4
+        with:
+          corpus: examples

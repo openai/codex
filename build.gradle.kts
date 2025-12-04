@@ -55,6 +55,7 @@ kotlin {
 
                 // Tree-sitter parsing library bindings
                 implementation("io.github.tree-sitter:ktreesitter:0.24.1")
+                implementation("io.github.tree-sitter:ktreesitter-bash:0.23.3")
             }
         }
         

@@ -7,6 +7,7 @@ import io.github.treesitter.ktreesitter.Language
 import io.github.treesitter.ktreesitter.Node
 import io.github.treesitter.ktreesitter.Parser
 import io.github.treesitter.ktreesitter.Tree
+import io.github.treesitter.ktreesitter.bash.TreeSitterBash
 
 /**
  * Parse the provided bash source using tree-sitter-bash, returning a Tree on
@@ -14,7 +15,7 @@ import io.github.treesitter.ktreesitter.Tree
  */
 fun tryParseShell(shellLcArg: String): Tree? {
     return try {
-        val language = Language.load("bash")
+        val language = Language(TreeSitterBash.language())
         val parser = Parser(language)
         parser.parse(shellLcArg)
     } catch (_: Exception) {
