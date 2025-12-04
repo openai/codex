@@ -1,8 +1,7 @@
 // port-lint: source core/src/tools/spec.rs
 package ai.solace.coder.core.tools
 
-import ai.solace.coder.client.common.tools.ResponsesApiTool
-import ai.solace.coder.client.common.tools.ToolSpec
+import ai.solace.coder.core.common.tools.ResponsesApiTool
 import ai.solace.coder.core.features.Feature
 import ai.solace.coder.core.features.Features
 import ai.solace.coder.core.model_family.ModelFamily
