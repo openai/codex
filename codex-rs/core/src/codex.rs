@@ -14,6 +14,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::function_tool::FunctionCallError;
+use crate::openai_models::models_manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::response_processing::process_items;
@@ -74,7 +75,6 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
-use crate::model_family::find_family_for_model;
 use crate::openai_model_info::get_model_info;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
@@ -163,6 +163,7 @@ impl Codex {
     pub async fn spawn(
         config: Config,
         auth_manager: Arc<AuthManager>,
+        models_manager: Arc<ModelsManager>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
     ) -> CodexResult<CodexSpawnOk> {
@@ -200,6 +201,7 @@ impl Codex {
             session_configuration,
             config.clone(),
             auth_manager.clone(),
+            models_manager.clone(),
             tx_event.clone(),
             conversation_history,
             session_source_clone,
@@ -394,6 +396,7 @@ pub(crate) struct SessionSettingsUpdate {
 impl Session {
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
+        models_manager: &ModelsManager,
         otel_event_manager: &OtelEventManager,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
@@ -402,8 +405,7 @@ impl Session {
     ) -> TurnContext {
         let config = session_configuration.original_config_do_not_use.clone();
         let features = &config.features;
-        let model_family = find_family_for_model(&session_configuration.model)
-            .unwrap_or_else(|| config.model_family.clone());
+        let model_family = models_manager.construct_model_family(&session_configuration.model);
         let mut per_turn_config = (*config).clone();
         per_turn_config.model = session_configuration.model.clone();
         per_turn_config.model_family = model_family.clone();
@@ -459,6 +461,7 @@ impl Session {
         session_configuration: SessionConfiguration,
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
+        models_manager: Arc<ModelsManager>,
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
         session_source: SessionSource,
@@ -570,6 +573,7 @@ impl Session {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager,
+            models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 
@@ -756,6 +760,7 @@ impl Session {
 
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
+            &self.services.models_manager,
             &self.services.otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
@@ -1824,8 +1829,7 @@ async fn spawn_review_thread(
     resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
     let model = config.review_model.clone();
-    let review_model_family = find_family_for_model(&model)
-        .unwrap_or_else(|| parent_turn_context.client.get_model_family());
+    let review_model_family = sess.services.models_manager.construct_model_family(&model);
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
     review_features
@@ -2083,13 +2087,13 @@ async fn run_turn(
     let mut base_instructions = turn_context.base_instructions.clone();
     if parallel_tool_calls {
         static INSTRUCTIONS: &str = include_str!("../templates/parallel/instructions.md");
-        if let Some(family) =
-            find_family_for_model(&sess.state.lock().await.session_configuration.model)
-        {
-            let mut new_instructions = base_instructions.unwrap_or(family.base_instructions);
-            new_instructions.push_str(INSTRUCTIONS);
-            base_instructions = Some(new_instructions);
-        }
+        let family = sess
+            .services
+            .models_manager
+            .construct_model_family(&sess.state.lock().await.session_configuration.model);
+        let mut new_instructions = base_instructions.unwrap_or(family.base_instructions);
+        new_instructions.push_str(INSTRUCTIONS);
+        base_instructions = Some(new_instructions);
     }
     let prompt = Prompt {
         input,
@@ -2781,6 +2785,7 @@ mod tests {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
+            models_manager: Arc::new(ModelsManager::new(auth_manager.get_auth_mode())),
             tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 
@@ -2859,6 +2864,7 @@ mod tests {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
+            models_manager: Arc::new(ModelsManager::new(auth_manager.get_auth_mode())),
             tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 

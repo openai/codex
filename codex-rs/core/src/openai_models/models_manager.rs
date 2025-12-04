@@ -2,6 +2,8 @@ use codex_app_server_protocol::AuthMode;
 use codex_protocol::openai_models::ModelPreset;
 use tokio::sync::RwLock;
 
+use crate::openai_models::model_family::ModelFamily;
+use crate::openai_models::model_family::find_family_for_model;
 use crate::openai_models::model_presets::builtin_model_presets;
 
 pub struct ModelsManager {
@@ -22,5 +24,9 @@ impl ModelsManager {
     pub async fn refresh_available_models(&self) {
         let models = builtin_model_presets(self.auth_mode);
         *self.available_models.write().await = models;
+    }
+
+    pub fn construct_model_family(&self, model: &str) -> ModelFamily {
+        find_family_for_model(model)
     }
 }

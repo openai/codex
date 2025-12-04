@@ -2,7 +2,7 @@ use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::features::Features;
-use crate::model_family::ModelFamily;
+use crate::openai_models::model_family::ModelFamily;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
@@ -1118,7 +1118,7 @@ pub(crate) fn build_specs(
 #[cfg(test)]
 mod tests {
     use crate::client_common::tools::FreeformTool;
-    use crate::model_family::find_family_for_model;
+    use crate::openai_models::model_family::find_family_for_model;
     use crate::tools::registry::ConfiguredToolSpec;
     use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
@@ -1763,8 +1763,7 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_integer_normalized_to_number() {
-        let model_family = find_family_for_model("gpt-5-codex")
-            .expect("gpt-5-codex should be a valid model family");
+        let model_family = find_family_for_model("gpt-5-codex");
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
