@@ -776,3 +776,31 @@ fn test_update_file_chunk() {
         ))
     );
 }
+
+#[test]
+fn test_update_file_chunk_multiple_change_context_lines() {
+    assert_eq!(
+        parse_update_file_chunk(
+            &[
+                "@@ class BaseClass:",
+                "@@     def method():",
+                "-        # to_remove",
+                "+        # to_add",
+            ],
+            200,
+            false
+        ),
+        Ok((
+            (UpdateFileChunk {
+                change_context: vec![
+                    "class BaseClass:".to_string(),
+                    "    def method():".to_string()
+                ],
+                old_lines: vec!["        # to_remove".to_string()],
+                new_lines: vec!["        # to_add".to_string()],
+                is_end_of_file: false
+            }),
+            4
+        ))
+    );
+}
