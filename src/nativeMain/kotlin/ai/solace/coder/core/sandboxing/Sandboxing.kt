@@ -120,9 +120,20 @@ class SandboxManager {
     }
 
     /**
+     * Get the platform-specific sandbox type if available.
+     */
+    private fun getPlatformSandbox(): SandboxType? {
+        // Minimal implementation: prefer macOS seatbelt when running on macOS, else none.
+        return when {
+            ai.solace.coder.core.platformIsMacOS() -> SandboxType.MacosSeatbelt
+            else -> null
+        }
+    }
+
+    /**
      * Check if execution was likely denied by sandbox
      */
-    fun denied(sandbox: SandboxType, output: ai.solace.coder.exec.process.ExecToolCallOutput): Boolean {
+    fun denied(sandbox: SandboxType, output: ExecToolCallOutput): Boolean {
         return isLikelySandboxDenied(sandbox, output)
     }
 
@@ -249,7 +260,7 @@ class SandboxManager {
      */
     private fun isLikelySandboxDenied(
         sandbox: SandboxType,
-        output: ai.solace.coder.exec.process.ExecToolCallOutput
+        output: ExecToolCallOutput
     ): Boolean {
         if (sandbox == SandboxType.None || output.exitCode == 0) {
             return false

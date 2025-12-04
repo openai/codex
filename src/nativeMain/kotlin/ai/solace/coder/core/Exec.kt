@@ -3,7 +3,7 @@ package ai.solace.coder.core
 
 import ai.solace.coder.core.error.CodexError
 import ai.solace.coder.core.error.CodexResult
-import ai.solace.coder.exec.sandbox.SandboxManager
+import ai.solace.coder.core.sandboxing.SandboxManager
 import ai.solace.coder.exec.shell.ShellDetector
 import ai.solace.coder.protocol.SandboxPolicy
 import kotlinx.coroutines.Dispatchers
@@ -153,7 +153,7 @@ class Exec {
 
             lateinit var rawOutput: RawExecToolCallOutput
             val duration = measureTime {
-                rawOutput = executeEnv(execEnv, sandboxPolicy, stdoutStream, this)
+                rawOutput = executeEnv(execEnv, sandboxPolicy, stdoutStream)
             }
             val output = finalizeExecResult(rawOutput, execEnv.sandbox, duration)
             
@@ -227,7 +227,7 @@ class Exec {
     /**
      * Execute the transformed environment (internal, raw output)
      */
-    internal suspend fun executeEnv(
+    private suspend fun executeEnv(
         env: ExecEnv,
         sandboxPolicy: SandboxPolicy,
         stdoutStream: StdoutStream?
@@ -380,17 +380,10 @@ class Exec {
 
         // Check for sandbox denial
         if (isLikelySandboxDenied(sandboxType, execOutput)) {
-             // In Rust this returns an error. Here we might want to flag it or return failure?
-             // Rust: return Err(CodexErr::Sandbox(SandboxErr::Denied { ... }))
-             // Kotlin: We return ExecToolCallOutput. Maybe we should throw or return Result?
-             // The signature returns ExecToolCallOutput.
-             // But the caller wraps it in CodexResult.success.
-             // If denied, we should probably throw an exception that is caught in execute() and converted to failure?
-             // Or change finalizeExecResult to return CodexResult?
-             // Let's throw a specific exception for now or just log it?
-             // Rust returns Err.
-             // I'll throw a SandboxDeniedException (need to define it or use CodexError)
-             throw CodexError.Sandbox("Sandbox denied execution")
+            // Convert to exception so caller's try/catch will turn it into a failure CodexResult
+            throw ai.solace.coder.core.error.CodexException(
+                CodexError.SandboxError.ApplicationFailed("Sandbox denied execution")
+            )
         }
 
         return execOutput

@@ -80,7 +80,8 @@ actual fun createPlatformProcess(
     task.launchPath = program
     task.arguments = args
     task.currentDirectoryPath = cwd
-    task.environment = env as Map<Any?, *>
+    // NSTask.environment expects Map<Any?, *>?
+    task.environment = env.entries.associate { (k, v) -> k as Any? to v } as Map<Any?, *>
     
     val stdoutPipe = NSPipe()
     val stderrPipe = NSPipe()
