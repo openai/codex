@@ -16,7 +16,11 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
 
-fn resume_history(config: &codex_core::config::Config, previous_model: &str, rollout_path: &std::path::Path) -> InitialHistory {
+fn resume_history(
+    config: &codex_core::config::Config,
+    previous_model: &str,
+    rollout_path: &std::path::Path,
+) -> InitialHistory {
     let turn_ctx = TurnContextItem {
         cwd: config.cwd.clone(),
         approval_policy: config.approval_policy,
@@ -47,7 +51,8 @@ async fn emits_warning_when_resumed_model_differs() {
 
     let initial_history = resume_history(&config, "previous-model", &rollout_path);
 
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("test"));
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("test")).await;
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
 
     // Act: resume the conversation.

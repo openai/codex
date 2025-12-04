@@ -872,7 +872,7 @@ async fn start_test_conversation(
     if let Some(model) = model {
         config.model = model.to_string();
     }
-    let manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy")).await;
     let NewConversation { conversation, .. } = manager
         .new_conversation(config.clone())
         .await

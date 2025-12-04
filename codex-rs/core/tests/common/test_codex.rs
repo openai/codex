@@ -96,7 +96,7 @@ impl TestCodexBuilder {
         let (config, cwd) = self.prepare_config(server, &home).await?;
 
         let auth = self.auth.clone();
-        let conversation_manager = ConversationManager::with_auth(auth.clone());
+        let conversation_manager = ConversationManager::with_auth(auth.clone()).await;
 
         let new_conversation = match resume_from {
             Some(path) => {

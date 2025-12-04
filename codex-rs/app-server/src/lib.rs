@@ -131,7 +131,8 @@ pub async fn run_main(
             std::sync::Arc::new(config),
             cli_overrides,
             feedback.clone(),
-        );
+        )
+        .await;
         async move {
             while let Some(msg) = incoming_rx.recv().await {
                 match msg {

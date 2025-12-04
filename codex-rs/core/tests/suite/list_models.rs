@@ -8,7 +8,7 @@ use pretty_assertions::assert_eq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_models_returns_api_key_models() -> Result<()> {
-    let manager = ConversationManager::with_auth(CodexAuth::from_api_key("sk-test"));
+    let manager = ConversationManager::with_auth(CodexAuth::from_api_key("sk-test")).await;
     let models = manager.list_models().await;
 
     let expected_models = expected_models_for_api_key();
@@ -20,7 +20,7 @@ async fn list_models_returns_api_key_models() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_models_returns_chatgpt_models() -> Result<()> {
     let manager =
-        ConversationManager::with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        ConversationManager::with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()).await;
     let models = manager.list_models().await;
 
     let expected_models = expected_models_for_chatgpt();

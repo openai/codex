@@ -744,7 +744,7 @@ where
     config.model_provider = model_provider;
     mutator(&mut config);
     let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key")).await;
     conversation_manager
         .new_conversation(config)
         .await
@@ -771,7 +771,7 @@ where
     config.model_provider = model_provider;
     mutator(&mut config);
     let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key")).await;
     let auth_manager =
         codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     conversation_manager

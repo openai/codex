@@ -43,7 +43,7 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
     config.cwd = cwd.path().to_path_buf();
 
     let conversation_manager =
-        ConversationManager::with_auth(codex_core::CodexAuth::from_api_key("dummy"));
+        ConversationManager::with_auth(codex_core::CodexAuth::from_api_key("dummy")).await;
     let NewConversation {
         conversation: codex,
         ..
@@ -100,7 +100,7 @@ async fn user_shell_cmd_can_be_interrupted() {
     let codex_home = TempDir::new().unwrap();
     let config = load_default_config_for_test(&codex_home);
     let conversation_manager =
-        ConversationManager::with_auth(codex_core::CodexAuth::from_api_key("dummy"));
+        ConversationManager::with_auth(codex_core::CodexAuth::from_api_key("dummy")).await;
     let NewConversation {
         conversation: codex,
         ..

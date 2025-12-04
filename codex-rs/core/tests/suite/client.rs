@@ -254,7 +254,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     config.user_instructions = Some("be nice".to_string());
 
     let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key")).await;
     let auth_manager =
         codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let NewConversation {
@@ -338,7 +338,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     config.model_provider = model_provider;
 
     let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key")).await;
     let NewConversation {
         conversation: codex,
         conversation_id,
@@ -394,7 +394,7 @@ async fn includes_base_instructions_override_in_request() {
     config.model_provider = model_provider;
 
     let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key")).await;
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -451,7 +451,7 @@ async fn chatgpt_auth_sends_correct_request() {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
-    let conversation_manager = ConversationManager::with_auth(create_dummy_codex_auth());
+    let conversation_manager = ConversationManager::with_auth(create_dummy_codex_auth()).await;
     let NewConversation {
         conversation: codex,
         conversation_id,
@@ -543,7 +543,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
             Ok(None) => panic!("No CodexAuth found in codex_home"),
             Err(e) => panic!("Failed to load CodexAuth: {e}"),
         };
-    let conversation_manager = ConversationManager::new(auth_manager, SessionSource::Exec);
+    let conversation_manager = ConversationManager::new(auth_manager, SessionSource::Exec).await;
     let NewConversation {
         conversation: codex,
         ..
@@ -582,7 +582,7 @@ async fn includes_user_instructions_message_in_request() {
     config.user_instructions = Some("be nice".to_string());
 
     let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key")).await;
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -649,7 +649,7 @@ async fn skills_append_to_instructions_when_feature_enabled() {
     config.cwd = codex_home.path().to_path_buf();
 
     let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key")).await;
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -928,7 +928,7 @@ async fn includes_developer_instructions_message_in_request() {
     config.developer_instructions = Some("be useful".to_string());
 
     let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key")).await;
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -1156,7 +1156,8 @@ async fn token_count_includes_rate_limits_snapshot() {
     let mut config = load_default_config_for_test(&home);
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("test"));
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("test")).await;
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -1504,7 +1505,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_auth(create_dummy_codex_auth());
+    let conversation_manager = ConversationManager::with_auth(create_dummy_codex_auth()).await;
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -1582,7 +1583,7 @@ async fn env_var_overrides_loaded_auth() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_auth(create_dummy_codex_auth());
+    let conversation_manager = ConversationManager::with_auth(create_dummy_codex_auth()).await;
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -1661,7 +1662,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     config.model_provider = model_provider;
 
     let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key")).await;
     let NewConversation {
         conversation: codex,
         ..

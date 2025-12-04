@@ -103,7 +103,8 @@ pub async fn run_main(
             outgoing_message_sender,
             codex_linux_sandbox_exe,
             std::sync::Arc::new(config),
-        );
+        )
+        .await;
         async move {
             while let Some(msg) = incoming_rx.recv().await {
                 match msg {

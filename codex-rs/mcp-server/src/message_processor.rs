@@ -47,7 +47,7 @@ pub(crate) struct MessageProcessor {
 impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
-    pub(crate) fn new(
+    pub(crate) async fn new(
         outgoing: OutgoingMessageSender,
         codex_linux_sandbox_exe: Option<PathBuf>,
         config: Arc<Config>,
@@ -59,7 +59,7 @@ impl MessageProcessor {
             config.cli_auth_credentials_store_mode,
         );
         let conversation_manager =
-            Arc::new(ConversationManager::new(auth_manager, SessionSource::Mcp));
+            Arc::new(ConversationManager::new(auth_manager, SessionSource::Mcp).await);
         Self {
             outgoing,
             initialized: false,

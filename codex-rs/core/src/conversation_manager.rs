@@ -42,7 +42,7 @@ pub struct ConversationManager {
 }
 
 impl ConversationManager {
-    pub fn new(auth_manager: Arc<AuthManager>, session_source: SessionSource) -> Self {
+    pub async fn new(auth_manager: Arc<AuthManager>, session_source: SessionSource) -> Self {
         Self {
             conversations: Arc::new(RwLock::new(HashMap::new())),
             auth_manager: auth_manager.clone(),
@@ -53,11 +53,12 @@ impl ConversationManager {
 
     /// Construct with a dummy AuthManager containing the provided CodexAuth.
     /// Used for integration tests: should not be used by ordinary business logic.
-    pub fn with_auth(auth: CodexAuth) -> Self {
+    pub async fn with_auth(auth: CodexAuth) -> Self {
         Self::new(
             crate::AuthManager::from_auth_for_testing(auth),
             SessionSource::Exec,
         )
+        .await
     }
 
     pub fn session_source(&self) -> SessionSource {

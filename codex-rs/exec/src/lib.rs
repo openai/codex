@@ -278,7 +278,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         true,
         config.cli_auth_credentials_store_mode,
     );
-    let conversation_manager = ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
+    let conversation_manager =
+        ConversationManager::new(auth_manager.clone(), SessionSource::Exec).await;
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
     let NewConversation {

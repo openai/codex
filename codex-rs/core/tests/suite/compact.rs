@@ -135,7 +135,8 @@ async fn summarize_context_three_requests_and_instructions() {
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("dummy")).await;
     let NewConversation {
         conversation: codex,
         session_configured,
@@ -329,12 +330,15 @@ async fn manual_compact_uses_custom_prompt() {
     config.model_provider = model_provider;
     config.compact_prompt = Some(custom_prompt.to_string());
 
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
-    let codex = conversation_manager
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("dummy")).await;
+    let NewConversation {
+        conversation: codex,
+        ..
+    } = conversation_manager
         .new_conversation(config)
         .await
-        .expect("create conversation")
-        .conversation;
+        .expect("create conversation");
 
     codex.submit(Op::Compact).await.expect("trigger compact");
     let warning_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
@@ -409,7 +413,8 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
 
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("dummy")).await;
     let NewConversation {
         conversation: codex,
         ..
@@ -1050,7 +1055,8 @@ async fn auto_compact_runs_after_token_limit_hit() {
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("dummy")).await;
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -1295,7 +1301,8 @@ async fn auto_compact_persists_rollout_entries() {
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("dummy")).await;
     let NewConversation {
         conversation: codex,
         session_configured,
@@ -1398,6 +1405,7 @@ async fn manual_compact_retries_after_context_window_error() {
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
     let codex = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"))
+        .await
         .new_conversation(config)
         .await
         .unwrap()
@@ -1530,6 +1538,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     let codex = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"))
+        .await
         .new_conversation(config)
         .await
         .unwrap()
@@ -1731,7 +1740,8 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200);
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("dummy")).await;
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -1846,6 +1856,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     config.model_auto_compact_token_limit = Some(limit);
 
     let codex = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"))
+        .await
         .new_conversation(config)
         .await
         .unwrap()
