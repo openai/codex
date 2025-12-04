@@ -214,13 +214,13 @@ view_image = true
 [features]
 # Leave this table empty to accept defaults. Set explicit booleans to opt in/out.
 unified_exec = false
-rmcp_client = false
 apply_patch_freeform = false
 view_image_tool = true
 web_search_request = false
 experimental_sandbox_command_assessment = false
 ghost_commit = false
 enable_experimental_windows_sandbox = false
+# The RMCP client is always enabled; legacy toggles are ignored.
 
 ################################################################################
 # Experimental toggles (legacy; prefer [features])
@@ -228,9 +228,6 @@ enable_experimental_windows_sandbox = false
 
 # Use experimental unified exec tool. Default: false
 experimental_use_unified_exec_tool = false
-
-# Use experimental Rust MCP client (enables OAuth for HTTP MCP). Default: false
-experimental_use_rmcp_client = false
 
 # Include apply_patch via freeform editing path (affects default tool set). Default: false
 experimental_use_freeform_apply_patch = false
@@ -320,7 +317,6 @@ experimental_use_freeform_apply_patch = false
 # experimental_compact_prompt_file = "compact_prompt.txt"
 # include_apply_patch_tool = false
 # experimental_use_unified_exec_tool = false
-# experimental_use_rmcp_client = false
 # experimental_use_freeform_apply_patch = false
 # experimental_sandbox_command_assessment = false
 # tools_web_search = false

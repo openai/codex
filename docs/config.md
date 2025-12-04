@@ -42,7 +42,6 @@ Supported features:
 | Key                                       | Default | Stage        | Description                                          |
 | ----------------------------------------- | :-----: | ------------ | ---------------------------------------------------- |
 | `unified_exec`                            |  false  | Experimental | Use the unified PTY-backed exec tool                 |
-| `rmcp_client`                             |  false  | Experimental | Enable oauth support for streamable HTTP MCP servers |
 | `apply_patch_freeform`                    |  false  | Beta         | Include the freeform `apply_patch` tool              |
 | `view_image_tool`                         |  true   | Stable       | Include the `view_image` tool                        |
 | `web_search_request`                      |  false  | Stable       | Allow the model to issue web searches                |
@@ -53,6 +52,8 @@ Supported features:
 Notes:
 
 - Omit a key to accept its default.
+- The RMCP client is always enabled; legacy `rmcp_client` and `experimental_use_rmcp_client`
+  toggles are ignored.
 - Legacy booleans such as `experimental_use_exec_command_tool`, `experimental_use_unified_exec_tool`, `include_apply_patch_tool`, and similar `experimental_use_*` keys are deprecated; setting the corresponding `[features].<key>` avoids repeated warnings.
 
 ## Model selection
@@ -464,13 +465,9 @@ http_headers = { "HEADER_NAME" = "HEADER_VALUE" }
 env_http_headers = { "HEADER_NAME" = "ENV_VAR" }
 ```
 
-Streamable HTTP connections always use the experimental Rust MCP client under the hood, so expect occasional rough edges. OAuth login flows are gated on the `experimental_use_rmcp_client = true` flag:
-
-```toml
-experimental_use_rmcp_client = true
-```
-
-After enabling it, run `codex mcp login <server-name>` when the server supports OAuth.
+Streamable HTTP connections always use the Rust MCP client under the hood. OAuth login
+flows are supported by default; run `codex mcp login <server-name>` when the server
+supports OAuth to store credentials.
 
 #### Other configuration options
 
@@ -488,17 +485,6 @@ disabled_tools = ["search"]
 ```
 
 When both `enabled_tools` and `disabled_tools` are specified, Codex first restricts the server to the allow-list and then removes any tools that appear in the deny-list.
-
-#### Experimental RMCP client
-
-This flag enables OAuth support for streamable HTTP servers.
-
-```toml
-experimental_use_rmcp_client = true
-
-[mcp_servers.server_name]
-…
-```
 
 #### MCP CLI commands
 
