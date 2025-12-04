@@ -206,7 +206,7 @@ model = "gpt-old"
 
     let write_id = mcp
         .send_config_value_write_request(ConfigValueWriteParams {
-            file_path: codex_home.path().join("config.toml").display().to_string(),
+            file_path: None,
             key_path: "model".to_string(),
             value: json!("gpt-new"),
             merge_strategy: MergeStrategy::Replace,
@@ -219,8 +219,16 @@ model = "gpt-old"
     )
     .await??;
     let write: ConfigWriteResponse = to_response(write_resp)?;
+    let expected_file_path = codex_home
+        .path()
+        .join("config.toml")
+        .canonicalize()
+        .unwrap()
+        .display()
+        .to_string();
 
     assert_eq!(write.status, WriteStatus::Ok);
+    assert_eq!(write.file_path, expected_file_path);
     assert!(write.overridden_metadata.is_none());
 
     let verify_id = mcp
@@ -254,7 +262,7 @@ model = "gpt-old"
 
     let write_id = mcp
         .send_config_value_write_request(ConfigValueWriteParams {
-            file_path: codex_home.path().join("config.toml").display().to_string(),
+            file_path: Some(codex_home.path().join("config.toml").display().to_string()),
             key_path: "model".to_string(),
             value: json!("gpt-new"),
             merge_strategy: MergeStrategy::Replace,
@@ -288,7 +296,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
 
     let batch_id = mcp
         .send_config_batch_write_request(ConfigBatchWriteParams {
-            file_path: codex_home.path().join("config.toml").display().to_string(),
+            file_path: Some(codex_home.path().join("config.toml").display().to_string()),
             edits: vec![
                 ConfigEdit {
                     key_path: "sandbox_mode".to_string(),
@@ -314,6 +322,14 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     .await??;
     let batch_write: ConfigWriteResponse = to_response(batch_resp)?;
     assert_eq!(batch_write.status, WriteStatus::Ok);
+    let expected_file_path = codex_home
+        .path()
+        .join("config.toml")
+        .canonicalize()
+        .unwrap()
+        .display()
+        .to_string();
+    assert_eq!(batch_write.file_path, expected_file_path);
 
     let read_id = mcp
         .send_config_read_request(ConfigReadParams {

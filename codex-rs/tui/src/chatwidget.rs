@@ -1074,8 +1074,10 @@ impl ChatWidget {
             command: ev.command,
             reason: ev.reason,
             risk: ev.risk,
+            proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
         };
-        self.bottom_pane.push_approval_request(request);
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
         self.request_redraw();
     }
 
@@ -1092,7 +1094,8 @@ impl ChatWidget {
             changes: ev.changes.clone(),
             cwd: self.config.cwd.clone(),
         };
-        self.bottom_pane.push_approval_request(request);
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
         self.request_redraw();
         self.notify(Notification::EditApprovalRequested {
             cwd: self.config.cwd.clone(),
@@ -1112,7 +1115,8 @@ impl ChatWidget {
             request_id: ev.id,
             message: ev.message,
         };
-        self.bottom_pane.push_approval_request(request);
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
         self.request_redraw();
     }
 
@@ -2031,7 +2035,7 @@ impl ChatWidget {
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let models = self.models_manager.available_models.blocking_read();
+        let models = self.models_manager.available_models.try_read().ok()?;
         models
             .iter()
             .find(|preset| preset.model == NUDGE_MODEL_SLUG)
@@ -2138,13 +2142,17 @@ impl ChatWidget {
     /// a second popup is shown to choose the reasoning effort.
     pub(crate) fn open_model_popup(&mut self) {
         let current_model = self.config.model.clone();
-        let presets: Vec<ModelPreset> = self
-            .models_manager
-            .available_models
-            .blocking_read()
-            .iter()
-            .cloned()
-            .collect();
+        let presets: Vec<ModelPreset> =
+            // todo(aibrahim): make this async function
+            if let Ok(models) = self.models_manager.available_models.try_read() {
+                models.clone()
+            } else {
+                self.add_info_message(
+                    "Models are being updated; please try /model again in a moment.".to_string(),
+                    None,
+                );
+                return;
+            };
 
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {

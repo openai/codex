@@ -22,14 +22,13 @@ use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
 use crate::git_info::resolve_root_git_project_for_trust;
-use crate::model_family::ModelFamily;
-use crate::model_family::derive_default_model_family;
-use crate::model_family::find_family_for_model;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
+use crate::openai_models::model_family::ModelFamily;
+use crate::openai_models::model_family::find_family_for_model;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
@@ -62,9 +61,8 @@ pub mod edit;
 pub mod profile;
 pub mod types;
 
-pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex";
-const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex";
-pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5.1-codex";
+pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex-max";
+const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex-max";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -82,6 +80,7 @@ pub struct Config {
     /// Model used specifically for review sessions. Defaults to "gpt-5.1-codex-max".
     pub review_model: String,
 
+    // todo(aibrahim): remove this field
     pub model_family: ModelFamily,
 
     /// Size of the context window for the model, in tokens.
@@ -1109,8 +1108,7 @@ impl Config {
             .or(cfg.model)
             .unwrap_or_else(default_model);
 
-        let mut model_family =
-            find_family_for_model(&model).unwrap_or_else(|| derive_default_model_family(&model));
+        let mut model_family = find_family_for_model(&model);
 
         if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
             model_family.supports_reasoning_summaries = supports_reasoning_summaries;
@@ -2955,7 +2953,7 @@ model_verbosity = "high"
             Config {
                 model: "o3".to_string(),
                 review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-                model_family: find_family_for_model("o3").expect("known model slug"),
+                model_family: find_family_for_model("o3"),
                 model_context_window: Some(200_000),
                 model_auto_compact_token_limit: Some(180_000),
                 model_provider_id: "openai".to_string(),
@@ -3029,7 +3027,7 @@ model_verbosity = "high"
         let expected_gpt3_profile_config = Config {
             model: "gpt-3.5-turbo".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
+            model_family: find_family_for_model("gpt-3.5-turbo"),
             model_context_window: Some(16_385),
             model_auto_compact_token_limit: Some(14_746),
             model_provider_id: "openai-chat-completions".to_string(),
@@ -3118,7 +3116,7 @@ model_verbosity = "high"
         let expected_zdr_profile_config = Config {
             model: "o3".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("o3").expect("known model slug"),
+            model_family: find_family_for_model("o3"),
             model_context_window: Some(200_000),
             model_auto_compact_token_limit: Some(180_000),
             model_provider_id: "openai".to_string(),
@@ -3193,7 +3191,7 @@ model_verbosity = "high"
         let expected_gpt5_profile_config = Config {
             model: "gpt-5.1".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-5.1").expect("known model slug"),
+            model_family: find_family_for_model("gpt-5.1"),
             model_context_window: Some(272_000),
             model_auto_compact_token_limit: Some(244_800),
             model_provider_id: "openai".to_string(),

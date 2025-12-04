@@ -209,6 +209,8 @@ pub struct OverriddenMetadata {
 pub struct ConfigWriteResponse {
     pub status: WriteStatus,
     pub version: String,
+    /// Canonical path to the config file that was written.
+    pub file_path: String,
     pub overridden_metadata: Option<OverriddenMetadata>,
 }
 
@@ -245,10 +247,11 @@ pub struct ConfigReadResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigValueWriteParams {
-    pub file_path: String,
     pub key_path: String,
     pub value: JsonValue,
     pub merge_strategy: MergeStrategy,
+    /// Path to the config file to write; defaults to the user's `config.toml` when omitted.
+    pub file_path: Option<String>,
     pub expected_version: Option<String>,
 }
 
@@ -256,8 +259,9 @@ pub struct ConfigValueWriteParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigBatchWriteParams {
-    pub file_path: String,
     pub edits: Vec<ConfigEdit>,
+    /// Path to the config file to write; defaults to the user's `config.toml` when omitted.
+    pub file_path: Option<String>,
     pub expected_version: Option<String>,
 }
 

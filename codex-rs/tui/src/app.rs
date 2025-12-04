@@ -26,7 +26,7 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::features::Feature;
-use codex_core::model_family::find_family_for_model;
+use codex_core::openai_models::model_family::find_family_for_model;
 use codex_core::openai_models::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::openai_models::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::openai_models::models_manager::ModelsManager;
@@ -63,7 +63,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use crate::history_cell::UpdateAvailableHistoryCell;
 
 const GPT_5_1_MIGRATION_AUTH_MODES: [AuthMode; 2] = [AuthMode::ChatGPT, AuthMode::ApiKey];
-const GPT_5_1_CODEX_MIGRATION_AUTH_MODES: [AuthMode; 1] = [AuthMode::ChatGPT];
+const GPT_5_1_CODEX_MIGRATION_AUTH_MODES: [AuthMode; 2] = [AuthMode::ChatGPT, AuthMode::ApiKey];
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -162,9 +162,7 @@ async fn handle_model_migration_prompt_if_needed(
                     migration_config: migration_config_key.to_string(),
                 });
                 config.model = target_model.to_string();
-                if let Some(family) = find_family_for_model(&target_model) {
-                    config.model_family = family;
-                }
+                config.model_family = find_family_for_model(&target_model);
 
                 let mapped_effort = if let Some(reasoning_effort_mapping) = reasoning_effort_mapping
                     && let Some(reasoning_effort) = config.model_reasoning_effort
@@ -683,9 +681,8 @@ impl App {
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
                 self.config.model = model.clone();
-                if let Some(family) = find_family_for_model(&model) {
-                    self.config.model_family = family;
-                }
+                let family = find_family_for_model(&model);
+                self.config.model_family = family;
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
@@ -1441,7 +1438,7 @@ mod tests {
             Some(AuthMode::ChatGPT),
             HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
         ));
-        assert!(!migration_prompt_allows_auth_mode(
+        assert!(migration_prompt_allows_auth_mode(
             Some(AuthMode::ApiKey),
             HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
         ));

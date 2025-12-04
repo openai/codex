@@ -23,6 +23,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
+use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
@@ -688,6 +689,7 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
             "this is a test reason such as one that would be produced by the model".into(),
         ),
         risk: None,
+        proposed_execpolicy_amendment: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -732,6 +734,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
             "this is a test reason such as one that would be produced by the model".into(),
         ),
         risk: None,
+        proposed_execpolicy_amendment: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -782,6 +785,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
         risk: None,
+        proposed_execpolicy_amendment: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -1990,6 +1994,11 @@ fn approval_modal_exec_snapshot() {
             "this is a test reason such as one that would be produced by the model".into(),
         ),
         risk: None,
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+            "echo".into(),
+            "hello".into(),
+            "world".into(),
+        ])),
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -1998,11 +2007,12 @@ fn approval_modal_exec_snapshot() {
     });
     // Render to a fixed-size test terminal and snapshot.
     // Call desired_height first and use that exact height for rendering.
-    let height = chat.desired_height(80);
+    let width = 100;
+    let height = chat.desired_height(width);
     let mut terminal =
-        crate::custom_terminal::Terminal::with_options(VT100Backend::new(80, height))
+        crate::custom_terminal::Terminal::with_options(VT100Backend::new(width, height))
             .expect("create terminal");
-    let viewport = Rect::new(0, 0, 80, height);
+    let viewport = Rect::new(0, 0, width, height);
     terminal.set_viewport_area(viewport);
 
     terminal
@@ -2036,6 +2046,11 @@ fn approval_modal_exec_without_reason_snapshot() {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
         risk: None,
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+            "echo".into(),
+            "hello".into(),
+            "world".into(),
+        ])),
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -2043,10 +2058,11 @@ fn approval_modal_exec_without_reason_snapshot() {
         msg: EventMsg::ExecApprovalRequest(ev),
     });
 
-    let height = chat.desired_height(80);
+    let width = 100;
+    let height = chat.desired_height(width);
     let mut terminal =
-        ratatui::Terminal::new(VT100Backend::new(80, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, 80, height));
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw approval modal (no reason)");
@@ -2249,6 +2265,10 @@ fn status_widget_and_approval_modal_snapshot() {
             "this is a test reason such as one that would be produced by the model".into(),
         ),
         risk: None,
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+            "echo".into(),
+            "hello world".into(),
+        ])),
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -2257,9 +2277,11 @@ fn status_widget_and_approval_modal_snapshot() {
     });
 
     // Render at the widget's desired height and snapshot.
-    let height = chat.desired_height(80);
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+    let width: u16 = 100;
+    let height = chat.desired_height(width);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
         .expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status + approval modal");

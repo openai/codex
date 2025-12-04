@@ -352,7 +352,7 @@ impl OtelEventManager {
         &self,
         tool_name: &str,
         call_id: &str,
-        decision: ReviewDecision,
+        decision: &ReviewDecision,
         source: ToolDecisionSource,
     ) {
         tracing::event!(
@@ -369,7 +369,7 @@ impl OtelEventManager {
             slug = %self.metadata.slug,
             tool_name = %tool_name,
             call_id = %call_id,
-            decision = %decision.to_string().to_lowercase(),
+            decision = %decision.clone().to_string().to_lowercase(),
             source = %source.to_string(),
         );
     }
