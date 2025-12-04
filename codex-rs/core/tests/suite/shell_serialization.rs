@@ -103,10 +103,12 @@ fn configure_shell_model(
     output_type: ShellModelOutput,
     include_apply_patch_tool: bool,
 ) -> TestCodexBuilder {
-    let builder = match output_type {
-        ShellModelOutput::ShellCommand => builder.with_model("test-gpt-5-codex"),
-        ShellModelOutput::LocalShell => builder.with_model("codex-mini-latest"),
-        ShellModelOutput::Shell => builder.with_model("gpt-4.1"),
+    let builder = match (output_type, include_apply_patch_tool) {
+        (ShellModelOutput::ShellCommand, _) => builder.with_model("test-gpt-5-codex"),
+        (ShellModelOutput::LocalShell, true) => builder.with_model("gpt-5.1-codex"),
+        (ShellModelOutput::Shell, true) => builder.with_model("gpt-5.1-codex"),
+        (ShellModelOutput::LocalShell, false) => builder.with_model("codex-mini-latest"),
+        (ShellModelOutput::Shell, false) => builder.with_model("gpt-5"),
     };
 
     builder.with_config(move |config| {
