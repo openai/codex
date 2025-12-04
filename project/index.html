@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sovereign Beta Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --bg-primary: #1a1614;
+      --bg-secondary: #0f0d0c;
+      --text-bright: #fafaf9;
+      --text-soft: #d6d3d1;
+      --accent-emerald: #10b981;
+      --accent-purple: #7c3aed;
+      --accent-gold: #fbbf24;
+    }
+
+    body {
+      background: radial-gradient(circle at 20% 20%, rgba(16, 185, 129, 0.07), transparent 25%),
+        radial-gradient(circle at 80% 0%, rgba(124, 58, 237, 0.08), transparent 30%),
+        radial-gradient(circle at 10% 90%, rgba(251, 191, 36, 0.06), transparent 25%),
+        linear-gradient(135deg, var(--bg-primary), var(--bg-secondary));
+      color: var(--text-bright);
+      min-height: 100vh;
+      font-family: 'Inter', sans-serif;
+      overflow-x: hidden;
+    }
+
+    .glass {
+      background: rgba(24, 20, 18, 0.75);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 20px 80px rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(20px);
+    }
+
+    .orb {
+      position: absolute;
+      width: 340px;
+      height: 340px;
+      filter: blur(80px);
+      opacity: 0.6;
+      animation: float 8s ease-in-out infinite;
+      border-radius: 999px;
+    }
+
+    .orb-emerald { background: rgba(16, 185, 129, 0.24); left: 5%; top: 12%; }
+    .orb-purple { background: rgba(124, 58, 237, 0.22); right: 2%; top: 20%; animation-delay: 2s; }
+    .orb-gold { background: rgba(251, 191, 36, 0.18); left: 10%; bottom: 8%; animation-delay: 4s; }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); opacity: 0.6; }
+      50% { transform: translateY(-20px); opacity: 0.8; }
+    }
+
+    .zodiac-wheel {
+      position: absolute;
+      width: 420px;
+      height: 420px;
+      top: -40px;
+      right: -40px;
+      opacity: 0.14;
+      background: radial-gradient(circle, rgba(255,255,255,0.08) 1px, transparent 1px);
+      background-size: 22px 22px;
+      border-radius: 999px;
+      animation: spin 60s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .glow-button {
+      background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+      box-shadow: 0 10px 30px rgba(16, 185, 129, 0.3);
+    }
+
+    .glow-button-secondary {
+      background: linear-gradient(135deg, #7c3aed 0%, #8b5cf6 100%);
+      box-shadow: 0 10px 30px rgba(124, 58, 237, 0.25);
+    }
+
+    .glow-button-gold {
+      background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%);
+      box-shadow: 0 10px 30px rgba(251, 191, 36, 0.25);
+    }
+
+    .modal-backdrop {
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(12px);
+    }
+
+    .field {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text-bright);
+    }
+  </style>
+</head>
+<body class="relative">
+  <div class="orb orb-emerald"></div>
+  <div class="orb orb-purple"></div>
+  <div class="orb orb-gold"></div>
+  <div class="zodiac-wheel"></div>
+
+  <header class="max-w-6xl mx-auto px-6 pt-12 pb-8 relative z-10">
+    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+      <div>
+        <p class="text-sm uppercase tracking-[0.35em] text-amber-200/80">Sovereign astrology portal</p>
+        <h1 class="font-[\"Playfair Display\",serif] text-4xl md:text-5xl lg:text-6xl leading-tight text-white">
+          The Sovereign Beta Portal
+        </h1>
+        <p class="mt-4 text-lg text-stone-200 max-w-2xl">
+          Decode your karmic code through precise transit intelligence, bespoke strategy calls, and a living grimoire of your natal promise. Every reading honors your sovereignty and delivers a clear path to activate your next house.
+        </p>
+        <div class="mt-6 flex flex-wrap gap-3 text-sm text-stone-300">
+          <span class="px-3 py-1 rounded-full border border-white/10 bg-white/5">☉ Solar calibration</span>
+          <span class="px-3 py-1 rounded-full border border-white/10 bg-white/5">♇ Pluto transmutation</span>
+          <span class="px-3 py-1 rounded-full border border-white/10 bg-white/5">Zodiacal sovereignty</span>
+        </div>
+      </div>
+      <div class="glass rounded-2xl p-6 w-full lg:w-96">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-stone-300 text-sm">Portal closes in</p>
+            <div id="countdown" class="text-3xl font-semibold text-white mt-1">--d --h --m --s</div>
+          </div>
+          <div class="text-right">
+            <p class="text-stone-300 text-sm">Timezone</p>
+            <select id="timezone" class="field rounded-lg px-3 py-2 mt-1 text-sm">
+              <option value="America/New_York">Eastern (EST/EDT)</option>
+              <option value="America/Los_Angeles">Pacific (PST/PDT)</option>
+              <option value="Europe/London">London (GMT/BST)</option>
+              <option value="UTC">UTC</option>
+            </select>
+          </div>
+        </div>
+        <p class="mt-4 text-stone-300 text-sm leading-relaxed">
+          A living countdown to Samhain: midnight on October 31, 2025 in your chosen timezone. The portal remains awake even while modals are open.
+        </p>
+        <div class="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <button data-modal="guideModal" class="glow-button text-black font-semibold rounded-xl py-3 px-4">Unlock the Guide</button>
+          <button data-modal="transitModal" class="glow-button-secondary text-white font-semibold rounded-xl py-3 px-4">Request Transit Report</button>
+          <button data-modal="strategyModal" class="glow-button-gold text-black font-semibold rounded-xl py-3 px-4 sm:col-span-2">Book Strategy Call</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-6 pb-16 relative z-10">
+    <section class="grid gap-6 lg:grid-cols-3">
+      <article class="glass rounded-2xl p-6">
+        <p class="text-emerald-300 text-sm uppercase tracking-[0.25em]">Guide • $22</p>
+        <h2 class="font-[\"Playfair Display\",serif] text-2xl mt-2">Sovereign Grimoire</h2>
+        <p class="text-stone-300 mt-3">Download the encrypted field notes to anchor your natal houses, daily rituals, and lunar activations.</p>
+        <button data-modal="guideModal" class="mt-4 glow-button w-full text-black font-semibold rounded-xl py-3">Buy the Guide</button>
+      </article>
+      <article class="glass rounded-2xl p-6">
+        <p class="text-purple-200 text-sm uppercase tracking-[0.25em]">Transit Report • $77</p>
+        <h2 class="font-[\"Playfair Display\",serif] text-2xl mt-2">Precision Transits</h2>
+        <p class="text-stone-300 mt-3">Receive a bespoke PDF with solar arcs, progressed Moon windows, and the exact aspects shaping your storyline.</p>
+        <button data-modal="transitModal" class="mt-4 glow-button-secondary w-full text-white font-semibold rounded-xl py-3">Request Report</button>
+      </article>
+      <article class="glass rounded-2xl p-6">
+        <p class="text-amber-200 text-sm uppercase tracking-[0.25em]">Strategy Call • $222</p>
+        <h2 class="font-[\"Playfair Display\",serif] text-2xl mt-2">Sovereign Navigation</h2>
+        <p class="text-stone-300 mt-3">A 1:1 council to align your houses, roles, and future moves with the sovereign currents of your chart.</p>
+        <button data-modal="strategyModal" class="mt-4 glow-button-gold w-full text-black font-semibold rounded-xl py-3">Book Your Call</button>
+      </article>
+    </section>
+
+    <section class="glass rounded-2xl p-6 mt-8 grid gap-6 lg:grid-cols-2">
+      <div>
+        <p class="text-stone-300 text-sm">Birth data intake</p>
+        <h3 class="font-[\"Playfair Display\",serif] text-3xl">Your celestial dossier</h3>
+        <p class="text-stone-300 mt-3">All offerings require accurate birth data to calculate transits, synastry, and timing windows. Your information is encrypted in transit and never stored client-side.</p>
+        <ul class="mt-4 space-y-2 text-stone-200">
+          <li>☿ Precise Mercury-grade timestamps</li>
+          <li>☽ Lunar gates and house rulers</li>
+          <li>♄ Saturnian guardrails for timing activations</li>
+        </ul>
+      </div>
+      <div>
+        <form id="intakeForm" class="space-y-3" aria-label="Birth data form">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label class="flex flex-col text-sm text-stone-200">Full name<input required name="fullName" class="field mt-1 rounded-lg px-3 py-2" type="text" aria-label="Full name"></label>
+            <label class="flex flex-col text-sm text-stone-200">Email<input required name="email" class="field mt-1 rounded-lg px-3 py-2" type="email" aria-label="Email"></label>
+            <label class="flex flex-col text-sm text-stone-200">Birth date<input required name="birthDate" class="field mt-1 rounded-lg px-3 py-2" type="date" aria-label="Birth date"></label>
+            <label class="flex flex-col text-sm text-stone-200">Birth time<input required name="birthTime" class="field mt-1 rounded-lg px-3 py-2" type="time" aria-label="Birth time"></label>
+            <label class="flex flex-col text-sm text-stone-200">Timezone<select required name="tz" class="field mt-1 rounded-lg px-3 py-2" aria-label="Timezone">
+              <option value="">Select timezone</option>
+              <option value="America/New_York">Eastern (EST/EDT)</option>
+              <option value="America/Los_Angeles">Pacific (PST/PDT)</option>
+              <option value="Europe/London">London (GMT/BST)</option>
+              <option value="UTC">UTC</option>
+            </select></label>
+            <label class="flex flex-col text-sm text-stone-200 sm:col-span-2">Birth location<input required name="birthLocation" class="field mt-1 rounded-lg px-3 py-2" type="text" aria-label="Birth location"></label>
+          </div>
+          <label class="flex flex-col text-sm text-stone-200">Notes / focus area<textarea name="notes" class="field mt-1 rounded-lg px-3 py-3 h-24 resize-none" aria-label="Notes"></textarea></label>
+          <button type="submit" class="glow-button-secondary text-white font-semibold rounded-xl py-3 px-4 w-full">Share birth data</button>
+        </form>
+        <p id="intakeMessage" class="text-emerald-300 text-sm mt-2 hidden">Form validated. We will route you to the correct ritual after submission.</p>
+      </div>
+    </section>
+
+    <section class="mt-10 text-center text-stone-300">
+      <p id="footerNote" class="text-sm">Portal set to close at midnight on October 31, 2025 (Eastern).</p>
+      <p class="text-xs text-stone-400 mt-1">Stay sovereign. The countdown honors your chosen timezone and continues while you explore the offerings.</p>
+    </section>
+  </main>
+
+  <div id="modalContainer" class="hidden fixed inset-0 z-30 flex items-center justify-center modal-backdrop">
+    <div class="bg-[rgba(24,20,18,0.95)] border border-white/10 rounded-2xl shadow-2xl max-w-lg w-[92%] md:w-[560px] p-6 relative">
+      <button id="closeModal" class="absolute top-4 right-4 text-stone-300 hover:text-white" aria-label="Close modal">✕</button>
+      <div id="modalContent"></div>
+    </div>
+  </div>
+
+  <template id="guideModal">
+    <div class="space-y-3">
+      <h3 class="font-[\"Playfair Display\",serif] text-3xl">Guide • $22</h3>
+      <p class="text-stone-300">Unlock the digital grimoire of rites, prompts, and planetary decodes. Instant download after payment.</p>
+      <a href="[YOUR_GUMROAD_OR_STRIPE_LINK]" class="glow-button inline-flex justify-center w-full rounded-xl py-3 font-semibold text-black">Pay & Download</a>
+    </div>
+  </template>
+
+  <template id="transitModal">
+    <div class="space-y-3">
+      <h3 class="font-[\"Playfair Display\",serif] text-3xl">Transit Report • $77</h3>
+      <p class="text-stone-300">We weave your submitted birth data into a 12-house transit scan and deliver a PDF to your email.</p>
+      <button id="transitSubmit" class="glow-button-secondary inline-flex justify-center w-full rounded-xl py-3 font-semibold text-white">Submit & Pay</button>
+      <p class="text-xs text-stone-400">Completing this sends your stored intake data; you will be redirected to payment.</p>
+    </div>
+  </template>
+
+  <template id="strategyModal">
+    <div class="space-y-3">
+      <h3 class="font-[\"Playfair Display\",serif] text-3xl">Strategy Call • $222</h3>
+      <p class="text-stone-300">Book a 60-minute sovereign council. We will confirm your time and send a Calendly link aligned to your timezone.</p>
+      <a href="[YOUR_GUMROAD_OR_STRIPE_LINK]" class="glow-button-gold inline-flex justify-center w-full rounded-xl py-3 font-semibold text-black">Reserve Your Seat</a>
+    </div>
+  </template>
+
+  <script>
+    const countdownEl = document.getElementById('countdown');
+    const timezoneSelect = document.getElementById('timezone');
+    const footerNote = document.getElementById('footerNote');
+    const baseDate = { year: 2025, month: 10, day: 31, hour: 0, minute: 0, second: 0 };
+    let countdownTimer = null;
+    let countdownTarget = null;
+
+    // Derive the timezone offset (in minutes) for a specific instant by
+    // formatting the same UTC timestamp in the requested zone. This keeps
+    // daylight saving adjustments accurate for the 2025-10-31 target.
+    const getTimeZoneOffsetMinutes = (date, timeZone) => {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        hour12: false,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      }).formatToParts(date).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
+
+      const asUTC = Date.UTC(parts.year, Number(parts.month) - 1, parts.day, parts.hour, parts.minute, parts.second);
+      return (asUTC - date.getTime()) / 60000;
+    };
+
+    // Rebuild the countdown target for the currently selected timezone so
+    // the timer can reset to the correct wall-clock midnight when the user
+    // switches zones from the header selector.
+    const buildZonedTargetDate = (timeZone) => {
+      const utcDate = Date.UTC(baseDate.year, baseDate.month - 1, baseDate.day, baseDate.hour, baseDate.minute, baseDate.second);
+      const reference = new Date(utcDate);
+      const offsetMinutes = getTimeZoneOffsetMinutes(reference, timeZone);
+      return new Date(utcDate - offsetMinutes * 60000);
+    };
+
+    const formatDuration = (ms) => {
+      if (ms <= 0) return '0d 0h 0m 0s';
+      const totalSeconds = Math.floor(ms / 1000);
+      const days = Math.floor(totalSeconds / 86400);
+      const hours = Math.floor((totalSeconds % 86400) / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      return `${days}d ${hours}h ${minutes}m ${seconds}s`;
+    };
+
+    const updateFooter = () => {
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: timezoneSelect.value,
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZoneName: 'short'
+      });
+      footerNote.textContent = `Portal set to close at ${formatter.format(countdownTarget)} in your selected timezone.`;
+    };
+
+    // Keep the countdown updating even when overlays are open so the portal
+    // always reflects the true time remaining.
+    const tick = () => {
+      const now = new Date();
+      const diff = countdownTarget - now;
+      countdownEl.textContent = formatDuration(diff);
+    };
+
+    const startCountdown = () => {
+      if (countdownTimer) clearInterval(countdownTimer);
+      countdownTarget = buildZonedTargetDate(timezoneSelect.value);
+      tick();
+      countdownTimer = setInterval(tick, 1000);
+      updateFooter();
+    };
+
+    startCountdown();
+    timezoneSelect.addEventListener('change', startCountdown);
+
+    const modalContainer = document.getElementById('modalContainer');
+    const modalContent = document.getElementById('modalContent');
+    const closeModalButton = document.getElementById('closeModal');
+
+    const openModal = (id) => {
+      const template = document.getElementById(id);
+      if (!template) return;
+      modalContent.innerHTML = template.innerHTML;
+      modalContainer.classList.remove('hidden');
+    };
+
+    const closeModal = () => {
+      modalContainer.classList.add('hidden');
+      modalContent.innerHTML = '';
+    };
+
+    document.addEventListener('click', (event) => {
+      const modalTarget = event.target.closest('[data-modal]');
+      if (modalTarget) {
+        event.preventDefault();
+        openModal(modalTarget.dataset.modal);
+      }
+    });
+
+    modalContainer.addEventListener('click', (event) => {
+      if (event.target === modalContainer) {
+        closeModal();
+      }
+    });
+
+    closeModalButton.addEventListener('click', closeModal);
+
+    document.addEventListener('submit', (event) => {
+      if (event.target.id === 'intakeForm') {
+        event.preventDefault();
+        const form = event.target;
+        if (form.checkValidity()) {
+          document.getElementById('intakeMessage').classList.remove('hidden');
+        }
+      }
+    });
+
+    document.addEventListener('click', (event) => {
+      if (event.target.id === 'transitSubmit') {
+        event.preventDefault();
+        alert('Transit report checkout placeholder. Replace with payment redirect.');
+      }
+    });
+  </script>
+</body>
+</html>
