@@ -1652,8 +1652,8 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn composer_text(&self) -> String {
-        self.bottom_pane.composer_text()
+    pub(crate) fn composer_text_with_pending(&self) -> String {
+        self.bottom_pane.composer_text_with_pending()
     }
 
     pub(crate) fn apply_external_edit(&mut self, text: String) {

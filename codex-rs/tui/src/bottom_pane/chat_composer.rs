@@ -304,11 +304,11 @@ impl ChatComposer {
         // Keep attachments only while we have matching occurrences left.
         let mut kept_images = Vec::new();
         for img in self.attached_images.drain(..) {
-            if let Some(count) = placeholder_counts.get_mut(&img.placeholder) {
-                if *count > 0 {
-                    *count -= 1;
-                    kept_images.push(img);
-                }
+            if let Some(count) = placeholder_counts.get_mut(&img.placeholder)
+                && *count > 0
+            {
+                *count -= 1;
+                kept_images.push(img);
             }
         }
         self.attached_images = kept_images;
@@ -321,7 +321,7 @@ impl ChatComposer {
         }
 
         let mut occurrences: Vec<(usize, &str)> = Vec::new();
-        for (placeholder, _) in &remaining {
+        for placeholder in remaining.keys() {
             for (pos, _) in text.match_indices(placeholder) {
                 occurrences.push((pos, *placeholder));
             }
@@ -348,8 +348,17 @@ impl ChatComposer {
         }
 
         self.textarea.set_cursor(self.textarea.text().len());
-        self.sync_command_popup();
-        self.sync_file_search_popup();
+        self.sync_popups();
+    }
+
+    pub(crate) fn current_text_with_pending(&self) -> String {
+        let mut text = self.textarea.text().to_string();
+        for (placeholder, actual) in &self.pending_pastes {
+            if text.contains(placeholder) {
+                text = text.replace(placeholder, actual);
+            }
+        }
+        text
     }
 
     /// Override the footer hint items displayed beneath the composer. Passing
@@ -4160,6 +4169,31 @@ mod tests {
     }
 
     #[test]
+    fn current_text_with_pending_expands_placeholders() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let placeholder = "[Pasted Content 5 chars]".to_string();
+        composer.textarea.insert_element(&placeholder);
+        composer
+            .pending_pastes
+            .push((placeholder.clone(), "hello".to_string()));
+
+        assert_eq!(
+            composer.current_text_with_pending(),
+            "hello".to_string(),
+            "placeholder should expand to actual text"
+        );
+    }
+
+    #[test]
     fn apply_external_edit_limits_duplicates_to_occurrences() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -4214,5 +4248,23 @@ mod tests {
 
         assert_eq!(composer.current_text(), placeholder);
         assert_eq!(composer.attached_images.len(), 1);
+    }
+
+    #[test]
+    fn apply_external_edit_keeps_cursor_at_end() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.apply_external_edit("hello\n".to_string());
+
+        assert_eq!(composer.current_text(), "hello\n".to_string());
+        assert_eq!(composer.textarea.cursor(), "hello\n".len());
     }
 }

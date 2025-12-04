@@ -1152,7 +1152,14 @@ impl App {
             }
         };
 
-        let seed = self.chat_widget.composer_text();
+        let seed = self.chat_widget.composer_text_with_pending();
+
+        // Leave alt screen if active to avoid conflicts with editor.
+        // This is defensive as we gate the external editor launch on there being no overlay.
+        let was_alt_screen = tui.is_alt_screen_active();
+        if was_alt_screen {
+            let _ = tui.leave_alt_screen();
+        }
 
         let restore_modes = tui::restore();
         if let Err(err) = restore_modes {
@@ -1165,13 +1172,21 @@ impl App {
             tracing::warn!("failed to re-enable terminal modes after editor: {err}");
         }
 
+        if was_alt_screen {
+            let _ = tui.enter_alt_screen();
+        }
+
         match editor_result {
             Ok(Some(new_text)) => {
-                self.chat_widget.apply_external_edit(new_text);
+                // Trim trailing whitespace
+                let cleaned = new_text.trim_end().to_string();
+                self.chat_widget.apply_external_edit(cleaned);
                 tui.frame_requester().schedule_frame();
             }
             Ok(None) => {
-                // Empty file means no change; do nothing.
+                // Empty file clears the composer.
+                self.chat_widget.apply_external_edit(String::new());
+                tui.frame_requester().schedule_frame();
             }
             Err(err) => {
                 self.chat_widget

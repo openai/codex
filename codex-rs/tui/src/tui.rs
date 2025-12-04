@@ -215,6 +215,10 @@ impl Tui {
         self.enhanced_keys_supported
     }
 
+    pub fn is_alt_screen_active(&self) -> bool {
+        self.alt_screen_active.load(Ordering::Relaxed)
+    }
+
     // todo(sayan) unused for now; intend to use to enable opening external editors
     #[allow(unused)]
     pub fn pause_events(&mut self) {
