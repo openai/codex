@@ -573,6 +573,10 @@ async fn review_input_isolated_from_parent_history() {
         review_prompt,
         "user message should only contain the raw review prompt"
     );
+    assert!(
+        env_text.contains("<sandbox_mode>read-only</sandbox_mode>"),
+        "review environment context must run with read-only sandbox"
+    );
 
     // Ensure the REVIEW_PROMPT rubric is sent via instructions.
     let instructions = body["instructions"].as_str().expect("instructions string");

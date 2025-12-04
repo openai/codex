@@ -22,14 +22,12 @@ use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
 use crate::git_info::resolve_root_git_project_for_trust;
-use crate::model_family::ModelFamily;
-use crate::model_family::derive_default_model_family;
-use crate::model_family::find_family_for_model;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
+use crate::openai_models::model_family::find_family_for_model;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
@@ -62,9 +60,8 @@ pub mod edit;
 pub mod profile;
 pub mod types;
 
-pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex";
-const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex";
-pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5.1-codex";
+pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.1-codex-max";
+const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex-max";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -81,8 +78,6 @@ pub struct Config {
 
     /// Model used specifically for review sessions. Defaults to "gpt-5.1-codex-max".
     pub review_model: String,
-
-    pub model_family: ModelFamily,
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
@@ -196,6 +191,7 @@ pub struct Config {
     /// Additional filenames to try when looking for project-level docs.
     pub project_doc_fallback_filenames: Vec<String>,
 
+    // todo(aibrahim): this should be used in the override model family
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
@@ -225,6 +221,12 @@ pub struct Config {
     /// If not "none", the value to use for `reasoning.summary` when making a
     /// request using the Responses API.
     pub model_reasoning_summary: ReasoningSummary,
+
+    /// Optional override to force-enable reasoning summaries for the configured model.
+    pub model_supports_reasoning_summaries: Option<bool>,
+
+    /// Optional override to force reasoning summary format for the configured model.
+    pub model_reasoning_summary_format: Option<ReasoningSummaryFormat>,
 
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
@@ -1109,15 +1111,7 @@ impl Config {
             .or(cfg.model)
             .unwrap_or_else(default_model);
 
-        let mut model_family =
-            find_family_for_model(&model).unwrap_or_else(|| derive_default_model_family(&model));
-
-        if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
-            model_family.supports_reasoning_summaries = supports_reasoning_summaries;
-        }
-        if let Some(model_reasoning_summary_format) = cfg.model_reasoning_summary_format {
-            model_family.reasoning_summary_format = model_reasoning_summary_format;
-        }
+        let model_family = find_family_for_model(&model);
 
         let openai_model_info = get_model_info(&model_family);
         let model_context_window = cfg
@@ -1174,7 +1168,6 @@ impl Config {
         let config = Self {
             model,
             review_model,
-            model_family,
             model_context_window,
             model_auto_compact_token_limit,
             model_provider_id,
@@ -1230,6 +1223,8 @@ impl Config {
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary)
                 .unwrap_or_default(),
+            model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
+            model_reasoning_summary_format: cfg.model_reasoning_summary_format.clone(),
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
@@ -2955,7 +2950,6 @@ model_verbosity = "high"
             Config {
                 model: "o3".to_string(),
                 review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-                model_family: find_family_for_model("o3").expect("known model slug"),
                 model_context_window: Some(200_000),
                 model_auto_compact_token_limit: Some(180_000),
                 model_provider_id: "openai".to_string(),
@@ -2983,6 +2977,8 @@ model_verbosity = "high"
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
                 model_reasoning_summary: ReasoningSummary::Detailed,
+                model_supports_reasoning_summaries: None,
+                model_reasoning_summary_format: None,
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
@@ -3029,7 +3025,6 @@ model_verbosity = "high"
         let expected_gpt3_profile_config = Config {
             model: "gpt-3.5-turbo".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
             model_context_window: Some(16_385),
             model_auto_compact_token_limit: Some(14_746),
             model_provider_id: "openai-chat-completions".to_string(),
@@ -3057,6 +3052,8 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
+            model_supports_reasoning_summaries: None,
+            model_reasoning_summary_format: None,
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
@@ -3118,7 +3115,6 @@ model_verbosity = "high"
         let expected_zdr_profile_config = Config {
             model: "o3".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("o3").expect("known model slug"),
             model_context_window: Some(200_000),
             model_auto_compact_token_limit: Some(180_000),
             model_provider_id: "openai".to_string(),
@@ -3146,6 +3142,8 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
+            model_supports_reasoning_summaries: None,
+            model_reasoning_summary_format: None,
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
@@ -3193,7 +3191,6 @@ model_verbosity = "high"
         let expected_gpt5_profile_config = Config {
             model: "gpt-5.1".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-5.1").expect("known model slug"),
             model_context_window: Some(272_000),
             model_auto_compact_token_limit: Some(244_800),
             model_provider_id: "openai".to_string(),
@@ -3221,6 +3218,8 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
             model_reasoning_summary: ReasoningSummary::Detailed,
+            model_supports_reasoning_summaries: None,
+            model_reasoning_summary_format: None,
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,

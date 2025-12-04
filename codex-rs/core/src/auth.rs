@@ -1201,4 +1201,8 @@ impl AuthManager {
         self.reload();
         Ok(removed)
     }
+
+    pub fn get_auth_mode(&self) -> Option<AuthMode> {
+        self.auth().map(|a| a.mode)
+    }
 }

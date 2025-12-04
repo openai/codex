@@ -1,12 +1,15 @@
-use codex_app_server_protocol::AuthMode;
+use std::sync::Arc;
+
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ReasoningEffortOption;
-use codex_core::openai_models::model_presets::builtin_model_presets;
+use codex_core::ConversationManager;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
-pub fn supported_models(auth_mode: Option<AuthMode>) -> Vec<Model> {
-    builtin_model_presets(auth_mode)
+pub async fn supported_models(conversation_manager: Arc<ConversationManager>) -> Vec<Model> {
+    conversation_manager
+        .list_models()
+        .await
         .into_iter()
         .map(model_from_preset)
         .collect()

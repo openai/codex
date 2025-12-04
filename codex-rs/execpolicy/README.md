@@ -30,32 +30,24 @@ codex execpolicy check --policy path/to/policy.codexpolicy git status
 cargo run -p codex-execpolicy -- check --policy path/to/policy.codexpolicy git status
 ```
 - Example outcomes:
-  - Match: `{"match": { ... "decision": "allow" ... }}`
-  - No match: `{"noMatch": {}}`
+  - Match: `{"matchedRules":[{...}],"decision":"allow"}`
+  - No match: `{"matchedRules":[]}`
 
-## Response shapes
-- Match:
+## Response shape
 ```json
 {
-  "match": {
-    "decision": "allow|prompt|forbidden",
-    "matchedRules": [
-      {
-        "prefixRuleMatch": {
-          "matchedPrefix": ["<token>", "..."],
-          "decision": "allow|prompt|forbidden"
-        }
+  "matchedRules": [
+    {
+      "prefixRuleMatch": {
+        "matchedPrefix": ["<token>", "..."],
+        "decision": "allow|prompt|forbidden"
       }
-    ]
-  }
+    }
+  ],
+  "decision": "allow|prompt|forbidden"
 }
 ```
-
-- No match:
-```json
-{"noMatch": {}}
-```
-
+- When no rules match, `matchedRules` is an empty array and `decision` is omitted.
 - `matchedRules` lists every rule whose prefix matched the command; `matchedPrefix` is the exact prefix that matched.
 - The effective `decision` is the strictest severity across all matches (`forbidden` > `prompt` > `allow`).
 

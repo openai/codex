@@ -1862,8 +1862,7 @@ impl CodexMessageProcessor {
 
     async fn list_models(&self, request_id: RequestId, params: ModelListParams) {
         let ModelListParams { limit, cursor } = params;
-        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
-        let models = supported_models(auth_mode);
+        let models = supported_models(self.conversation_manager.clone()).await;
         let total = models.len();
 
         if total == 0 {

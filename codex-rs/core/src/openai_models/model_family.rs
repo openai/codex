@@ -1,6 +1,7 @@
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ReasoningEffort;
 
+use crate::config::Config;
 use crate::config::types::ReasoningSummaryFormat;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 use crate::tools::spec::ConfigShellToolType;
@@ -8,11 +9,11 @@ use crate::truncate::TruncationPolicy;
 
 /// The `instructions` field in the payload sent to a model should always start
 /// with this content.
-const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
+const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
 
-const GPT_5_CODEX_INSTRUCTIONS: &str = include_str!("../gpt_5_codex_prompt.md");
-const GPT_5_1_INSTRUCTIONS: &str = include_str!("../gpt_5_1_prompt.md");
-const GPT_5_1_CODEX_MAX_INSTRUCTIONS: &str = include_str!("../gpt-5.1-codex-max_prompt.md");
+const GPT_5_CODEX_INSTRUCTIONS: &str = include_str!("../../gpt_5_codex_prompt.md");
+const GPT_5_1_INSTRUCTIONS: &str = include_str!("../../gpt_5_1_prompt.md");
+const GPT_5_1_CODEX_MAX_INSTRUCTIONS: &str = include_str!("../../gpt-5.1-codex-max_prompt.md");
 
 /// A model family is a group of models that share certain characteristics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -72,6 +73,18 @@ pub struct ModelFamily {
     pub truncation_policy: TruncationPolicy,
 }
 
+impl ModelFamily {
+    pub fn with_config_overrides(mut self, config: &Config) -> Self {
+        if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries {
+            self.supports_reasoning_summaries = supports_reasoning_summaries;
+        }
+        if let Some(reasoning_summary_format) = config.model_reasoning_summary_format.as_ref() {
+            self.reasoning_summary_format = reasoning_summary_format.clone();
+        }
+        self
+    }
+}
+
 macro_rules! model_family {
     (
         $slug:expr, $family:expr $(, $key:ident : $value:expr )* $(,)?
@@ -100,13 +113,14 @@ macro_rules! model_family {
         $(
             mf.$key = $value;
         )*
-        Some(mf)
+        mf
     }};
 }
 
+// todo(aibrahim): remove this function
 /// Returns a `ModelFamily` for the given model slug, or `None` if the slug
 /// does not match any known model family.
-pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
+pub fn find_family_for_model(slug: &str) -> ModelFamily {
     if slug.starts_with("o3") {
         model_family!(
             slug, "o3",
@@ -238,11 +252,11 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             truncation_policy: TruncationPolicy::Bytes(10_000),
         )
     } else {
-        None
+        derive_default_model_family(slug)
     }
 }
 
-pub fn derive_default_model_family(model: &str) -> ModelFamily {
+fn derive_default_model_family(model: &str) -> ModelFamily {
     ModelFamily {
         slug: model.to_string(),
         family: model.to_string(),

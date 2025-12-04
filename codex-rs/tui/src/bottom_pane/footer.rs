@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+use crate::clipboard_paste::is_probably_wsl;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::line_utils::prefix_lines;
@@ -94,10 +96,19 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             ]);
             vec![line]
         }
-        FooterMode::ShortcutOverlay => shortcut_overlay_lines(ShortcutsState {
-            use_shift_enter_hint: props.use_shift_enter_hint,
-            esc_backtrack_hint: props.esc_backtrack_hint,
-        }),
+        FooterMode::ShortcutOverlay => {
+            #[cfg(target_os = "linux")]
+            let is_wsl = is_probably_wsl();
+            #[cfg(not(target_os = "linux"))]
+            let is_wsl = false;
+
+            let state = ShortcutsState {
+                use_shift_enter_hint: props.use_shift_enter_hint,
+                esc_backtrack_hint: props.esc_backtrack_hint,
+                is_wsl,
+            };
+            shortcut_overlay_lines(state)
+        }
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
         FooterMode::ContextOnly => vec![context_window_line(
             props.context_window_percent,
@@ -115,6 +126,7 @@ struct CtrlCReminderState {
 struct ShortcutsState {
     use_shift_enter_hint: bool,
     esc_backtrack_hint: bool,
+    is_wsl: bool,
 }
 
 fn ctrl_c_reminder_line(state: CtrlCReminderState) -> Line<'static> {
@@ -271,6 +283,7 @@ enum DisplayCondition {
     Always,
     WhenShiftEnterHint,
     WhenNotShiftEnterHint,
+    WhenUnderWSL,
 }
 
 impl DisplayCondition {
@@ -279,6 +292,7 @@ impl DisplayCondition {
             DisplayCondition::Always => true,
             DisplayCondition::WhenShiftEnterHint => state.use_shift_enter_hint,
             DisplayCondition::WhenNotShiftEnterHint => !state.use_shift_enter_hint,
+            DisplayCondition::WhenUnderWSL => state.is_wsl,
         }
     }
 }
@@ -352,10 +366,18 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     },
     ShortcutDescriptor {
         id: ShortcutId::PasteImage,
-        bindings: &[ShortcutBinding {
-            key: key_hint::ctrl(KeyCode::Char('v')),
-            condition: DisplayCondition::Always,
-        }],
+        // Show Ctrl+Alt+V when running under WSL (terminals often intercept plain
+        // Ctrl+V); otherwise fall back to Ctrl+V.
+        bindings: &[
+            ShortcutBinding {
+                key: key_hint::ctrl_alt(KeyCode::Char('v')),
+                condition: DisplayCondition::WhenUnderWSL,
+            },
+            ShortcutBinding {
+                key: key_hint::ctrl(KeyCode::Char('v')),
+                condition: DisplayCondition::Always,
+            },
+        ],
         prefix: "",
         label: " to paste images",
     },

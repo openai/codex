@@ -180,6 +180,7 @@ async fn run_codex_tool_session_inner(
                         call_id,
                         reason: _,
                         risk,
+                        proposed_execpolicy_amendment: _,
                         parsed_cmd,
                     }) => {
                         handle_exec_approval_request(
@@ -307,7 +308,6 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::UndoCompleted(_)
                     | EventMsg::ExitedReviewMode(_)
                     | EventMsg::ContextCompacted(_)
-                    | EventMsg::ListModelsResponse(_)
                     | EventMsg::DeprecationNotice(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that

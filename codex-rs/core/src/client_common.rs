@@ -1,6 +1,6 @@
 use crate::client_common::tools::ToolSpec;
 use crate::error::Result;
-use crate::model_family::ModelFamily;
+use crate::openai_models::model_family::ModelFamily;
 pub use codex_api::common::ResponseEvent;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::models::ResponseItem;
@@ -252,7 +252,7 @@ impl Stream for ResponseStream {
 
 #[cfg(test)]
 mod tests {
-    use crate::model_family::find_family_for_model;
+    use crate::openai_models::model_family::find_family_for_model;
     use codex_api::ResponsesApiRequest;
     use codex_api::common::OpenAiVerbosity;
     use codex_api::common::TextControls;
@@ -309,7 +309,7 @@ mod tests {
             },
         ];
         for test_case in test_cases {
-            let model_family = find_family_for_model(test_case.slug).expect("known model slug");
+            let model_family = find_family_for_model(test_case.slug);
             let expected = if test_case.expects_apply_patch_instructions {
                 format!(
                     "{}\n{}",

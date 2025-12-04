@@ -16,7 +16,7 @@ use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::error::CodexErr;
 use codex_core::features::Feature;
-use codex_core::model_family::find_family_for_model;
+use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
@@ -1017,11 +1017,13 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
-
+    let auth_mode = AuthMode::ChatGPT;
+    let models_manager = Arc::new(ModelsManager::new(Some(auth_mode)));
+    let model_family = models_manager.construct_model_family(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
-        config.model_family.slug.as_str(),
+        model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
         Some(AuthMode::ChatGPT),
@@ -1032,6 +1034,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
+        model_family,
         otel_event_manager,
         provider,
         effort,
@@ -1378,8 +1381,6 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.model = "gpt-5.1".to_string();
-            config.model_family =
-                find_family_for_model("gpt-5.1").expect("known gpt-5.1 model family");
             config.model_context_window = Some(272_000);
         })
         .build(&server)

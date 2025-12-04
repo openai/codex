@@ -78,6 +78,8 @@ tokio = { workspace = true, features = [
     "process",
     "rt-multi-thread",
     "signal",
+    "test-util",
+    "time",
 ] }
 tokio-stream = { workspace = true }
 toml = { workspace = true }
