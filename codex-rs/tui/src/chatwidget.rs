@@ -2139,6 +2139,7 @@ impl ChatWidget {
     pub(crate) fn open_model_popup(&mut self) {
         let current_model = self.config.model.clone();
         let presets: Vec<ModelPreset> =
+            // todo(aibrahim): make this async function
             if let Ok(models) = self.models_manager.available_models.try_read() {
                 models.clone()
             } else {
