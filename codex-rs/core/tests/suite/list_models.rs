@@ -30,7 +30,12 @@ async fn list_models_returns_chatgpt_models() -> Result<()> {
 }
 
 fn expected_models_for_api_key() -> Vec<ModelPreset> {
-    vec![gpt_5_1_codex(), gpt_5_1_codex_mini(), gpt_5_1()]
+    vec![
+        gpt_5_1_codex_max(),
+        gpt_5_1_codex(),
+        gpt_5_1_codex_mini(),
+        gpt_5_1(),
+    ]
 }
 
 fn expected_models_for_chatgpt() -> Vec<ModelPreset> {

@@ -1441,7 +1441,7 @@ mod tests {
             Some(AuthMode::ChatGPT),
             HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
         ));
-        assert!(!migration_prompt_allows_auth_mode(
+        assert!(migration_prompt_allows_auth_mode(
             Some(AuthMode::ApiKey),
             HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
         ));
