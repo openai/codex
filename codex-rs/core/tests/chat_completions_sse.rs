@@ -77,7 +77,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         conversation_id,
         config.model.as_str(),
         models_manager
-            .construct_model_family(&config.model)
+            .construct_model_family(&config.model, &config)
             .slug
             .as_str(),
         None,

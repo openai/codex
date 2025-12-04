@@ -129,7 +129,7 @@ pub(crate) async fn assess_command(
     let child_otel = parent_otel.with_model(
         config.model.as_str(),
         models_manager
-            .construct_model_family(&config.model)
+            .construct_model_family(&config.model, &config)
             .slug
             .as_str(),
     );

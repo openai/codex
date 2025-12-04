@@ -405,12 +405,13 @@ impl Session {
     ) -> TurnContext {
         let config = session_configuration.original_config_do_not_use.clone();
         let features = &config.features;
-        let model_family = models_manager.construct_model_family(&session_configuration.model);
         let mut per_turn_config = (*config).clone();
         per_turn_config.model = session_configuration.model.clone();
         per_turn_config.model_reasoning_effort = session_configuration.model_reasoning_effort;
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.features = features.clone();
+        let model_family =
+            models_manager.construct_model_family(&per_turn_config.model, &per_turn_config);
         if let Some(model_info) = get_model_info(&model_family) {
             per_turn_config.model_context_window = Some(model_info.context_window);
         }
@@ -545,7 +546,7 @@ impl Session {
             conversation_id,
             config.model.as_str(),
             models_manager
-                .construct_model_family(&config.model)
+                .construct_model_family(&config.model, &config)
                 .slug
                 .as_str(),
             auth_manager.auth().and_then(|a| a.get_account_id()),
@@ -1837,7 +1838,10 @@ async fn spawn_review_thread(
     resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
     let model = config.review_model.clone();
-    let review_model_family = sess.services.models_manager.construct_model_family(&model);
+    let review_model_family = sess
+        .services
+        .models_manager
+        .construct_model_family(&model, &config);
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
     review_features
@@ -1871,7 +1875,7 @@ async fn spawn_review_thread(
             per_turn_config.model.as_str(),
             sess.services
                 .models_manager
-                .construct_model_family(&per_turn_config.model)
+                .construct_model_family(&per_turn_config.model, &per_turn_config)
                 .slug
                 .as_str(),
         );
@@ -2099,10 +2103,7 @@ async fn run_turn(
     let mut base_instructions = turn_context.base_instructions.clone();
     if parallel_tool_calls {
         static INSTRUCTIONS: &str = include_str!("../templates/parallel/instructions.md");
-        let family = sess
-            .services
-            .models_manager
-            .construct_model_family(&sess.state.lock().await.session_configuration.model);
+        let family = turn_context.client.get_model_family();
         let mut new_instructions = base_instructions.unwrap_or(family.base_instructions);
         new_instructions.push_str(INSTRUCTIONS);
         base_instructions = Some(new_instructions);
@@ -2746,7 +2747,7 @@ mod tests {
             conversation_id,
             config.model.as_str(),
             models_manager
-                .construct_model_family(&config.model)
+                .construct_model_family(&config.model, config)
                 .slug
                 .as_str(),
             None,

@@ -77,7 +77,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         conversation_id,
         config.model.as_str(),
         models_manager
-            .construct_model_family(&config.model)
+            .construct_model_family(&config.model, &config)
             .slug
             .as_str(),
         None,

@@ -308,7 +308,7 @@ impl ModelClient {
     /// Returns the currently configured model family.
     pub fn get_model_family(&self) -> ModelFamily {
         self.models_manager
-            .construct_model_family(&self.config.model)
+            .construct_model_family(&self.config.model, &self.config)
     }
 
     /// Returns the current reasoning effort setting.

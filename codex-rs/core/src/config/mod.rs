@@ -222,6 +222,12 @@ pub struct Config {
     /// request using the Responses API.
     pub model_reasoning_summary: ReasoningSummary,
 
+    /// Optional override to force-enable reasoning summaries for the configured model.
+    pub model_supports_reasoning_summaries: Option<bool>,
+
+    /// Optional override to force reasoning summary format for the configured model.
+    pub model_reasoning_summary_format: Option<ReasoningSummaryFormat>,
+
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
 
@@ -1110,8 +1116,8 @@ impl Config {
         if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
             model_family.supports_reasoning_summaries = supports_reasoning_summaries;
         }
-        if let Some(model_reasoning_summary_format) = cfg.model_reasoning_summary_format {
-            model_family.reasoning_summary_format = model_reasoning_summary_format;
+        if let Some(ref model_reasoning_summary_format) = cfg.model_reasoning_summary_format {
+            model_family.reasoning_summary_format = model_reasoning_summary_format.clone();
         }
 
         let openai_model_info = get_model_info(&model_family);
@@ -1224,6 +1230,8 @@ impl Config {
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary)
                 .unwrap_or_default(),
+            model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
+            model_reasoning_summary_format: cfg.model_reasoning_summary_format.clone(),
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
@@ -2976,6 +2984,8 @@ model_verbosity = "high"
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
                 model_reasoning_summary: ReasoningSummary::Detailed,
+                model_supports_reasoning_summaries: None,
+                model_reasoning_summary_format: None,
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
@@ -3049,6 +3059,8 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
+            model_supports_reasoning_summaries: None,
+            model_reasoning_summary_format: None,
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
@@ -3137,6 +3149,8 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
+            model_supports_reasoning_summaries: None,
+            model_reasoning_summary_format: None,
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
@@ -3211,6 +3225,8 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
             model_reasoning_summary: ReasoningSummary::Detailed,
+            model_supports_reasoning_summaries: None,
+            model_reasoning_summary_format: None,
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,

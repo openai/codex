@@ -1,6 +1,7 @@
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ReasoningEffort;
 
+use crate::config::Config;
 use crate::config::types::ReasoningSummaryFormat;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 use crate::tools::spec::ConfigShellToolType;
@@ -70,6 +71,18 @@ pub struct ModelFamily {
     pub shell_type: ConfigShellToolType,
 
     pub truncation_policy: TruncationPolicy,
+}
+
+impl ModelFamily {
+    pub fn with_config_overrides(mut self, config: &Config) -> Self {
+        if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries {
+            self.supports_reasoning_summaries = supports_reasoning_summaries;
+        }
+        if let Some(reasoning_summary_format) = config.model_reasoning_summary_format.as_ref() {
+            self.reasoning_summary_format = reasoning_summary_format.clone();
+        }
+        self
+    }
 }
 
 macro_rules! model_family {

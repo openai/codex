@@ -1410,7 +1410,7 @@ pub(crate) fn new_reasoning_summary_block(
     config: &Config,
     models_manager: &ModelsManager,
 ) -> Box<dyn HistoryCell> {
-    let model_family = models_manager.construct_model_family(&config.model);
+    let model_family = models_manager.construct_model_family(&config.model, config);
     if model_family.reasoning_summary_format == ReasoningSummaryFormat::Experimental {
         // Experimental format is following:
         // ** header **
@@ -2340,6 +2340,30 @@ mod tests {
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• Detailed reasoning goes here."]);
+    }
+
+    #[test]
+    fn reasoning_summary_block_respects_config_overrides() {
+        let mut config = test_config();
+        config.model = "gpt-3.5-turbo".to_string();
+        config.model_supports_reasoning_summaries = Some(true);
+        config.model_reasoning_summary_format = Some(ReasoningSummaryFormat::Experimental);
+        let models_manager = Arc::new(ModelsManager::new(Some(AuthMode::ApiKey)));
+
+        let model_family = models_manager.construct_model_family(&config.model, &config);
+        assert_eq!(
+            model_family.reasoning_summary_format,
+            ReasoningSummaryFormat::Experimental
+        );
+
+        let cell = new_reasoning_summary_block(
+            "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
+            &config,
+            &models_manager,
+        );
+
+        let rendered_display = render_lines(&cell.display_lines(80));
+        assert_eq!(rendered_display, vec!["• Detailed reasoning goes here."]);
     }
 
     #[test]
