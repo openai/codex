@@ -1762,11 +1762,6 @@ fn model_reasoning_selection_popup_snapshot() {
     chat.config.model = "gpt-5.1-codex-max".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
-    eprintln!(
-        "available models: {:?}",
-        chat.models_manager.available_models.blocking_read()
-    );
-
     let preset = chat
         .models_manager
         .available_models
