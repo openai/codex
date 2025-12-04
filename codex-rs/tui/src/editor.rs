@@ -1,5 +1,4 @@
 use std::env;
-use std::fmt;
 use std::fs;
 use std::process::Stdio;
 
@@ -7,26 +6,18 @@ use color_eyre::eyre::Report;
 use color_eyre::eyre::Result;
 use shlex::split as shlex_split;
 use tempfile::Builder;
+use thiserror::Error;
 use tokio::process::Command;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(crate) enum EditorError {
+    #[error("neither VISUAL nor EDITOR is set")]
     MissingEditor,
+    #[error("failed to parse editor command")]
     ParseFailed,
+    #[error("editor command is empty")]
     EmptyCommand,
 }
-
-impl fmt::Display for EditorError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            EditorError::MissingEditor => write!(f, "neither VISUAL nor EDITOR is set"),
-            EditorError::ParseFailed => write!(f, "failed to parse editor command"),
-            EditorError::EmptyCommand => write!(f, "editor command is empty"),
-        }
-    }
-}
-
-impl std::error::Error for EditorError {}
 
 /// Resolve the editor command from environment variables.
 /// Prefers `VISUAL` over `EDITOR`.
@@ -42,9 +33,7 @@ pub(crate) fn resolve_editor_command() -> std::result::Result<Vec<String>, Edito
 }
 
 /// Write `seed` to a temp file, launch the editor command, and return the updated content.
-///
-/// Returns `Ok(None)` when the file is left empty after the editor exits.
-pub(crate) async fn run_editor(seed: &str, editor_cmd: &[String]) -> Result<Option<String>> {
+pub(crate) async fn run_editor(seed: &str, editor_cmd: &[String]) -> Result<String> {
     if editor_cmd.is_empty() {
         return Err(Report::msg("editor command is empty"));
     }
@@ -69,11 +58,7 @@ pub(crate) async fn run_editor(seed: &str, editor_cmd: &[String]) -> Result<Opti
     }
 
     let contents = fs::read_to_string(tempfile.path())?;
-    if contents.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(contents))
-    }
+    Ok(contents)
 }
 
 #[cfg(test)]
@@ -152,7 +137,7 @@ mod tests {
 
         let cmd = vec![script_path.to_string_lossy().to_string()];
         let result = run_editor("seed", &cmd).await.unwrap();
-        assert_eq!(result, Some("edited".to_string()));
+        assert_eq!(result, "edited".to_string());
     }
 
     #[tokio::test]
@@ -169,6 +154,6 @@ mod tests {
 
         let cmd = vec![script_path.to_string_lossy().to_string()];
         let result = run_editor("seed", &cmd).await.unwrap();
-        assert_eq!(result, None);
+        assert_eq!(result, "");
     }
 }

@@ -1185,15 +1185,10 @@ impl App {
         }
 
         match editor_result {
-            Ok(Some(new_text)) => {
+            Ok(new_text) => {
                 // Trim trailing whitespace
                 let cleaned = new_text.trim_end().to_string();
                 self.chat_widget.apply_external_edit(cleaned);
-                tui.frame_requester().schedule_frame();
-            }
-            Ok(None) => {
-                // Empty file clears the composer.
-                self.chat_widget.apply_external_edit(String::new());
                 tui.frame_requester().schedule_frame();
             }
             Err(err) => {

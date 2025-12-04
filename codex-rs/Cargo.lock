@@ -1747,6 +1747,7 @@ dependencies = [
  "supports-color 3.0.2",
  "tempfile",
  "textwrap 0.16.2",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
  "tokio-util",

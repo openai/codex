@@ -105,6 +105,7 @@ pub(crate) struct ChatComposer {
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
     large_paste_counters: HashMap<usize, usize>,
+    image_placeholder_counters: HashMap<String, usize>,
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
@@ -155,6 +156,7 @@ impl ChatComposer {
             current_file_query: None,
             pending_pastes: Vec::new(),
             large_paste_counters: HashMap::new(),
+            image_placeholder_counters: HashMap::new(),
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
@@ -400,7 +402,8 @@ impl ChatComposer {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "image".to_string());
-        let placeholder = format!("[{file_label} {width}x{height}]");
+        let base_placeholder = format!("{file_label} {width}x{height}");
+        let placeholder = self.next_image_placeholder(&base_placeholder);
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
         self.textarea.insert_element(&placeholder);
@@ -460,6 +463,19 @@ impl ChatComposer {
             base
         } else {
             format!("{base} #{next_suffix}")
+        }
+    }
+
+    fn next_image_placeholder(&mut self, base: &str) -> String {
+        let counter = self
+            .image_placeholder_counters
+            .entry(base.to_string())
+            .or_insert(0);
+        *counter += 1;
+        if *counter == 1 {
+            format!("[{base}]")
+        } else {
+            format!("[{base} #{counter}]")
         }
     }
 
@@ -3257,6 +3273,35 @@ mod tests {
         assert_eq!(imgs.len(), 1);
         assert_eq!(imgs[0], path);
         assert!(composer.attached_images.is_empty());
+    }
+
+    #[test]
+    fn duplicate_image_placeholders_get_suffix() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        let path = PathBuf::from("/tmp/image_dup.png");
+        composer.attach_image(path.clone(), 10, 5, "PNG");
+        composer.handle_paste(" ".into());
+        composer.attach_image(path, 10, 5, "PNG");
+
+        let text = composer.textarea.text().to_string();
+        assert!(text.contains("[image_dup.png 10x5]"));
+        assert!(text.contains("[image_dup.png 10x5 #2]"));
+        assert_eq!(
+            composer.attached_images[0].placeholder,
+            "[image_dup.png 10x5]"
+        );
+        assert_eq!(
+            composer.attached_images[1].placeholder,
+            "[image_dup.png 10x5 #2]"
+        );
     }
 
     #[test]
