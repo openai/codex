@@ -89,12 +89,13 @@ use Hunk::*;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct UpdateFileChunk {
-    /// A single line of context used to narrow down the position of the chunk
-    /// (this is usually a class, method, or function definition.)
-    pub change_context: Option<String>,
+    /// Lines of context used to narrow down the position of the chunk.
+    /// These are usually class, method, or function definitions. If empty,
+    /// the chunk has no explicit context.
+    pub change_context: Vec<String>,
 
     /// A contiguous block of lines that should be replaced with `new_lines`.
-    /// `old_lines` must occur strictly after `change_context`.
+    /// `old_lines` must occur strictly after the last `change_context` line.
     pub old_lines: Vec<String>,
     pub new_lines: Vec<String>,
 
@@ -351,28 +352,42 @@ fn parse_update_file_chunk(
             line_number,
         });
     }
-    // If we see an explicit context marker @@ or @@ <context>, consume it; otherwise, optionally
-    // allow treating the chunk as starting directly with diff lines.
-    let (change_context, start_index) = if lines[0] == EMPTY_CHANGE_CONTEXT_MARKER {
-        (None, 1)
-    } else if let Some(context) = lines[0].strip_prefix(CHANGE_CONTEXT_MARKER) {
-        (Some(context.to_string()), 1)
-    } else {
-        if !allow_missing_context {
-            return Err(InvalidHunkError {
-                message: format!(
-                    "Expected update hunk to start with a @@ context marker, got: '{}'",
-                    lines[0]
-                ),
-                line_number,
-            });
+    // Consume one or more explicit context markers (`@@` or `@@ <context>`). This
+    // supports multiple `@@` lines to narrow down the target location, e.g.:
+    // @@ class BaseClass:
+    // @@     def method():
+    // -old
+    // +new
+    let mut change_context: Vec<String> = Vec::new();
+    let mut start_index = 0;
+    while start_index < lines.len() {
+        let line = lines[start_index];
+        if line == EMPTY_CHANGE_CONTEXT_MARKER {
+            start_index += 1;
+            continue;
         }
-        (None, 0)
-    };
+        if let Some(context) = line.strip_prefix(CHANGE_CONTEXT_MARKER) {
+            change_context.push(context.to_string());
+            start_index += 1;
+            continue;
+        }
+        break;
+    }
+
+    if start_index == 0 && !allow_missing_context {
+        return Err(InvalidHunkError {
+            message: format!(
+                "Expected update hunk to start with a @@ context marker, got: '{}'",
+                lines[0]
+            ),
+            line_number,
+        });
+    }
+
     if start_index >= lines.len() {
         return Err(InvalidHunkError {
             message: "Update hunk does not contain any lines".to_string(),
-            line_number: line_number + 1,
+            line_number: line_number + start_index,
         });
     }
     let mut chunk = UpdateFileChunk {
@@ -517,7 +532,7 @@ fn test_parse_patch() {
                 path: PathBuf::from("path/update.py"),
                 move_path: Some(PathBuf::from("path/update2.py")),
                 chunks: vec![UpdateFileChunk {
-                    change_context: Some("def f():".to_string()),
+                    change_context: vec!["def f():".to_string()],
                     old_lines: vec!["    pass".to_string()],
                     new_lines: vec!["    return 123".to_string()],
                     is_end_of_file: false
@@ -544,7 +559,7 @@ fn test_parse_patch() {
                 path: PathBuf::from("file.py"),
                 move_path: None,
                 chunks: vec![UpdateFileChunk {
-                    change_context: None,
+                    change_context: Vec::new(),
                     old_lines: vec![],
                     new_lines: vec!["line".to_string()],
                     is_end_of_file: false
@@ -574,7 +589,7 @@ fn test_parse_patch() {
             path: PathBuf::from("file2.py"),
             move_path: None,
             chunks: vec![UpdateFileChunk {
-                change_context: None,
+                change_context: Vec::new(),
                 old_lines: vec!["import foo".to_string()],
                 new_lines: vec!["import foo".to_string(), "bar".to_string()],
                 is_end_of_file: false,
@@ -594,7 +609,7 @@ fn test_parse_patch_lenient() {
         path: PathBuf::from("file2.py"),
         move_path: None,
         chunks: vec![UpdateFileChunk {
-            change_context: None,
+            change_context: Vec::new(),
             old_lines: vec!["import foo".to_string()],
             new_lines: vec!["import foo".to_string(), "bar".to_string()],
             is_end_of_file: false,
@@ -730,7 +745,7 @@ fn test_update_file_chunk() {
         ),
         Ok((
             (UpdateFileChunk {
-                change_context: Some("change_context".to_string()),
+                change_context: vec!["change_context".to_string()],
                 old_lines: vec![
                     "".to_string(),
                     "context".to_string(),
@@ -752,7 +767,7 @@ fn test_update_file_chunk() {
         parse_update_file_chunk(&["@@", "+line", "*** End of File"], 123, false),
         Ok((
             (UpdateFileChunk {
-                change_context: None,
+                change_context: Vec::new(),
                 old_lines: vec![],
                 new_lines: vec!["line".to_string()],
                 is_end_of_file: true

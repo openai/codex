@@ -383,9 +383,12 @@ fn compute_replacements(
     let mut line_index: usize = 0;
 
     for chunk in chunks {
-        // If a chunk has a `change_context`, we use seek_sequence to find it, then
-        // adjust our `line_index` to continue from there.
-        if let Some(ctx_line) = &chunk.change_context {
+        // If a chunk has one or more `change_context` lines, seek them in order
+        // to progressively narrow down the position of the chunk. This supports
+        // multiple @@ context headers such as:
+        // @@ class BaseClass:
+        // @@     def method():
+        for ctx_line in &chunk.change_context {
             if let Some(idx) = seek_sequence::seek_sequence(
                 original_lines,
                 std::slice::from_ref(ctx_line),
