@@ -219,9 +219,16 @@ model = "gpt-old"
     )
     .await??;
     let write: ConfigWriteResponse = to_response(write_resp)?;
+    let expected_file_path = codex_home
+        .path()
+        .join("config.toml")
+        .canonicalize()
+        .unwrap()
+        .display()
+        .to_string();
 
     assert_eq!(write.status, WriteStatus::Ok);
-    assert!(write.file_path.is_empty());
+    assert_eq!(write.file_path, expected_file_path);
     assert!(write.overridden_metadata.is_none());
 
     let verify_id = mcp
@@ -315,10 +322,14 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     .await??;
     let batch_write: ConfigWriteResponse = to_response(batch_resp)?;
     assert_eq!(batch_write.status, WriteStatus::Ok);
-    assert_eq!(
-        batch_write.file_path,
-        codex_home.path().join("config.toml").display().to_string()
-    );
+    let expected_file_path = codex_home
+        .path()
+        .join("config.toml")
+        .canonicalize()
+        .unwrap()
+        .display()
+        .to_string();
+    assert_eq!(batch_write.file_path, expected_file_path);
 
     let read_id = mcp
         .send_config_read_request(ConfigReadParams {

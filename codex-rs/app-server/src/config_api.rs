@@ -114,7 +114,10 @@ impl ConfigApi {
         edits: Vec<(String, JsonValue, MergeStrategy)>,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
         let allowed_path = self.codex_home.join(CONFIG_FILE_NAME);
-        let provided_path = file_path.unwrap_or_else(|| allowed_path.display().to_string());
+        let provided_path = file_path
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| allowed_path.clone());
 
         if !paths_match(&allowed_path, &provided_path) {
             return Err(config_write_error(
@@ -192,10 +195,16 @@ impl ConfigApi {
             .map(|_| WriteStatus::OkOverridden)
             .unwrap_or(WriteStatus::Ok);
 
+        let file_path = provided_path
+            .canonicalize()
+            .unwrap_or(provided_path.clone())
+            .display()
+            .to_string();
+
         Ok(ConfigWriteResponse {
             status,
             version: updated_layers.user.version.clone(),
-            file_path: provided_path,
+            file_path,
             overridden_metadata: overridden,
         })
     }
@@ -590,15 +599,14 @@ fn canonical_json(value: &JsonValue) -> JsonValue {
     }
 }
 
-fn paths_match(expected: &Path, provided: &str) -> bool {
-    let provided_path = PathBuf::from(provided);
+fn paths_match(expected: &Path, provided: &Path) -> bool {
     if let (Ok(expanded_expected), Ok(expanded_provided)) =
-        (expected.canonicalize(), provided_path.canonicalize())
+        (expected.canonicalize(), provided.canonicalize())
     {
         return expanded_expected == expanded_provided;
     }
 
-    expected == provided_path
+    expected == provided
 }
 
 fn value_at_path<'a>(root: &'a TomlValue, segments: &[String]) -> Option<&'a TomlValue> {

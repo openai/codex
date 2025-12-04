@@ -209,6 +209,7 @@ pub struct OverriddenMetadata {
 pub struct ConfigWriteResponse {
     pub status: WriteStatus,
     pub version: String,
+    /// Canonical path to the config file that was written.
     pub file_path: String,
     pub overridden_metadata: Option<OverriddenMetadata>,
 }
