@@ -1,15 +1,11 @@
 // port-lint: source utils/git/src/ghost_commits.rs
 package ai.solace.coder.utils.git
 
-import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.cinterop.toKString
+import ai.solace.coder.utils.Environment
 import kotlinx.serialization.Serializable
-import platform.posix.ENOENT
-import platform.posix.S_IFDIR
-import platform.posix.S_IFMT
-import platform.posix.errno
-import platform.posix.getenv
-import platform.posix.stat
+import okio.FileSystem
+import okio.IOException
+import okio.Path.Companion.toPath
 
 /**
  * Default commit message used for ghost commits when none is provided.
@@ -474,21 +470,18 @@ class ShellGitOperations : GitOperations {
 
     // ---- Platform/file helpers (expect/actual pattern for full implementation) ----
 
-    @OptIn(ExperimentalForeignApi::class)
     private fun createTempIndexPath(): String {
         // Create a unique temp file path for the git index
-        val tempDir = getenv("TMPDIR")?.toKString() ?: "/tmp"
-        return "$tempDir/codex-git-index-${kotlin.random.Random.nextLong()}"
+        return "${Environment.TMPDIR}/codex-git-index-${kotlin.random.Random.nextLong()}"
     }
 
-    @OptIn(ExperimentalForeignApi::class)
     private fun isDirectory(path: String): Boolean {
         // Ported from Rust ghost_commits.rs symlink_metadata behavior:
         // If stat fails with ENOENT, treat as "not a directory" (return false)
         // Log other errors but still return false for safety
         return try {
-            platformIsDirectory(path)
-        } catch (e: Exception) {
+            FileSystem.SYSTEM.metadata(path.toPath()).isDirectory
+        } catch (e: IOException) {
             // Log unexpected errors (not "file not found")
             if (!e.message.orEmpty().contains("ENOENT") &&
                 !e.message.orEmpty().contains("No such file")) {
@@ -498,15 +491,16 @@ class ShellGitOperations : GitOperations {
         }
     }
 
-    @OptIn(ExperimentalForeignApi::class)
     private fun deleteTempFile(path: String) {
         // Ported from Rust ghost_commits.rs remove_path behavior:
-        // Only ignore ENOENT (file not found), log other errors
-        val result = platform.posix.remove(path)
-        if (result != 0) {
-            val err = errno
-            if (err != ENOENT) {
-                println("WARN: failed to delete temp file '$path': errno=$err")
+        // Only ignore "file not found", log other errors
+        try {
+            FileSystem.SYSTEM.delete(path.toPath())
+        } catch (e: IOException) {
+            // Ignore "file not found" errors, log others
+            if (!e.message.orEmpty().contains("ENOENT") &&
+                !e.message.orEmpty().contains("No such file")) {
+                println("WARN: failed to delete temp file '$path': ${e.message}")
             }
         }
     }
@@ -540,8 +534,3 @@ internal expect fun platformExecuteGit(
  * Execute a general command using platform-specific process APIs.
  */
 internal expect fun platformExecuteCommand(args: List<String>): Int
-
-/**
- * Check if a path is a directory using platform-specific APIs.
- */
-internal expect fun platformIsDirectory(path: String): Boolean

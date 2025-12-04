@@ -1,16 +1,10 @@
 package ai.solace.coder.utils.git
 
 import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.cinterop.alloc
-import kotlinx.cinterop.memScoped
-import kotlinx.cinterop.ptr
 import kotlinx.cinterop.refTo
 import kotlinx.cinterop.toKString
-import platform.posix.S_IFDIR
-import platform.posix.S_IFMT
 import platform.posix._pclose
 import platform.posix._popen
-import platform.posix._stat64
 import platform.posix.fgets
 import platform.posix.putenv
 
@@ -83,19 +77,4 @@ internal actual fun platformExecuteCommand(args: List<String>): Int {
     }
 
     return platform.posix.system(command)
-}
-
-/**
- * Windows implementation of directory check.
- */
-@OptIn(ExperimentalForeignApi::class)
-internal actual fun platformIsDirectory(path: String): Boolean {
-    return memScoped {
-        val statBuf = alloc<_stat64>()
-        if (platform.posix._stat64(path, statBuf.ptr) != 0) {
-            false
-        } else {
-            (statBuf.st_mode.toInt() and S_IFMT) == S_IFDIR
-        }
-    }
 }
