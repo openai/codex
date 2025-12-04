@@ -8,7 +8,7 @@ use std::process::Command;
 use tempfile::tempdir;
 
 #[test]
-fn test_apply_patch_scenario_add_file() -> anyhow::Result<()> {
+fn test_apply_patch_scenarios() -> anyhow::Result<()> {
     for scenario in fs::read_dir("tests/fixtures/scenarios")? {
         let scenario = scenario?;
         let path = scenario.path();
