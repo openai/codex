@@ -1046,7 +1046,7 @@ dependencies = [
  "pretty_assertions",
  "regex-lite",
  "serde_json",
- "supports-color",
+ "supports-color 3.0.2",
  "tempfile",
  "tokio",
  "toml",
@@ -1086,10 +1086,13 @@ dependencies = [
  "codex-login",
  "codex-tui",
  "crossterm",
+ "owo-colors",
+ "pretty_assertions",
  "ratatui",
  "reqwest",
  "serde",
  "serde_json",
+ "supports-color 3.0.2",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -1235,7 +1238,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
- "supports-color",
+ "supports-color 3.0.2",
  "tempfile",
  "tokio",
  "tracing",
@@ -1608,7 +1611,7 @@ dependencies = [
  "shlex",
  "strum 0.27.2",
  "strum_macros 0.27.2",
- "supports-color",
+ "supports-color 3.0.2",
  "tempfile",
  "textwrap 0.16.2",
  "tokio",
@@ -4431,6 +4434,10 @@ name = "owo-colors"
 version = "4.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48dd4f4a2c8405440fd0462561f0e5806bd0f77e86f51c761481bdd4018b545e"
+dependencies = [
+ "supports-color 2.1.0",
+ "supports-color 3.0.2",
+]
 
 [[package]]
 name = "parking"
@@ -6166,6 +6173,16 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "supports-color"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6398cde53adc3c4557306a96ce67b302968513830a77a95b2b17305d9719a89"
+dependencies = [
+ "is-terminal",
+ "is_ci",
+]
 
 [[package]]
 name = "supports-color"
