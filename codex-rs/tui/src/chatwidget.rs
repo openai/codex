@@ -1076,7 +1076,8 @@ impl ChatWidget {
             risk: ev.risk,
             proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
         };
-        self.bottom_pane.push_approval_request(request);
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
         self.request_redraw();
     }
 
@@ -1093,7 +1094,8 @@ impl ChatWidget {
             changes: ev.changes.clone(),
             cwd: self.config.cwd.clone(),
         };
-        self.bottom_pane.push_approval_request(request);
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
         self.request_redraw();
         self.notify(Notification::EditApprovalRequested {
             cwd: self.config.cwd.clone(),
@@ -1113,7 +1115,8 @@ impl ChatWidget {
             request_id: ev.id,
             message: ev.message,
         };
-        self.bottom_pane.push_approval_request(request);
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
         self.request_redraw();
     }
 

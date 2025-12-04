@@ -8,6 +8,7 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
+use codex_core::features::Features;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyCode;
@@ -409,7 +410,7 @@ impl BottomPane {
     }
 
     /// Called when the agent requests user approval.
-    pub fn push_approval_request(&mut self, request: ApprovalRequest) {
+    pub fn push_approval_request(&mut self, request: ApprovalRequest, features: &Features) {
         let request = if let Some(view) = self.view_stack.last_mut() {
             match view.try_consume_approval_request(request) {
                 Some(request) => request,
@@ -423,7 +424,7 @@ impl BottomPane {
         };
 
         // Otherwise create a new approval modal overlay.
-        let modal = ApprovalOverlay::new(request, self.app_event_tx.clone());
+        let modal = ApprovalOverlay::new(request, self.app_event_tx.clone(), features.clone());
         self.pause_status_timer_for_modal();
         self.push_view(Box::new(modal));
     }
@@ -578,6 +579,7 @@ mod tests {
     fn ctrl_c_on_modal_consumes_and_shows_quit_hint() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
             frame_requester: FrameRequester::test_dummy(),
@@ -588,7 +590,7 @@ mod tests {
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
-        pane.push_approval_request(exec_request());
+        pane.push_approval_request(exec_request(), &features);
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
         assert!(pane.ctrl_c_quit_hint_visible());
         assert_eq!(CancellationEvent::NotHandled, pane.on_ctrl_c());
@@ -600,6 +602,7 @@ mod tests {
     fn overlay_not_shown_above_approval_modal() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
             frame_requester: FrameRequester::test_dummy(),
@@ -612,7 +615,7 @@ mod tests {
         });
 
         // Create an approval modal (active view).
-        pane.push_approval_request(exec_request());
+        pane.push_approval_request(exec_request(), &features);
 
         // Render and verify the top row does not include an overlay.
         let area = Rect::new(0, 0, 60, 6);
@@ -633,6 +636,7 @@ mod tests {
     fn composer_shown_after_denied_while_task_running() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
             frame_requester: FrameRequester::test_dummy(),
@@ -648,7 +652,7 @@ mod tests {
         pane.set_task_running(true);
 
         // Push an approval modal (e.g., command approval) which should hide the status view.
-        pane.push_approval_request(exec_request());
+        pane.push_approval_request(exec_request(), &features);
 
         // Simulate pressing 'n' (No) on the modal.
         use crossterm::event::KeyCode;
