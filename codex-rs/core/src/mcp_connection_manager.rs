@@ -151,8 +151,10 @@ impl ElicitationRequestManager {
             let server_name = server_name.clone();
             async move {
                 let (tx, rx) = oneshot::channel();
-                let mut lock = elicitation_requests.lock().await;
-                lock.insert((server_name.clone(), id.clone()), tx);
+                {
+                    let mut lock = elicitation_requests.lock().await;
+                    lock.insert((server_name.clone(), id.clone()), tx);
+                }
                 let _ = tx_event
                     .send(Event {
                         id: "mcp_elicitation_request".to_string(),

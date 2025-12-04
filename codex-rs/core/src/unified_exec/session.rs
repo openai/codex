@@ -148,7 +148,7 @@ impl UnifiedExecSession {
         guard.snapshot()
     }
 
-    fn sandboxed(&self) -> bool {
+    pub(crate) fn sandboxed(&self) -> bool {
         self.sandboxed
     }
 
@@ -171,10 +171,8 @@ impl UnifiedExecSession {
         let exec_output = ExecToolCallOutput {
             exit_code,
             stdout: StreamOutput::new(aggregated_text.clone()),
-            stderr: StreamOutput::new(String::new()),
             aggregated_output: StreamOutput::new(aggregated_text.clone()),
-            duration: Duration::ZERO,
-            timed_out: false,
+            ..Default::default()
         };
 
         if is_likely_sandbox_denied(&exec_output) {
@@ -183,7 +181,7 @@ impl UnifiedExecSession {
                 TruncationPolicy::Tokens(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
             );
             let message = if snippet.is_empty() {
-                format!("exit code {exit_code}")
+                format!("Session creation failed with exit code {exit_code}")
             } else {
                 snippet
             };
@@ -204,10 +202,7 @@ impl UnifiedExecSession {
         } = spawned;
         let managed = Self::new(session, output_rx, sandboxed);
 
-        let exit_ready = match exit_rx.try_recv() {
-            Ok(_) | Err(TryRecvError::Closed) => true,
-            Err(TryRecvError::Empty) => false,
-        };
+        let exit_ready = matches!(exit_rx.try_recv(), Ok(_) | Err(TryRecvError::Closed));
 
         if exit_ready {
             managed.signal_exit();
@@ -215,7 +210,7 @@ impl UnifiedExecSession {
             return Ok(managed);
         }
 
-        if tokio::time::timeout(Duration::from_millis(50), &mut exit_rx)
+        if tokio::time::timeout(Duration::from_millis(150), &mut exit_rx)
             .await
             .is_ok()
         {

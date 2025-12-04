@@ -16,13 +16,11 @@ use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::list::ConversationItem;
 use crate::rollout::list::ConversationsPage;
 use crate::rollout::list::Cursor;
-use crate::rollout::list::get_conversation;
 use crate::rollout::list::get_conversations;
 use anyhow::Result;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -226,28 +224,28 @@ async fn test_list_conversations_latest_first() {
         "model_provider": "test-provider",
     })];
 
+    let updated_times: Vec<Option<String>> =
+        page.items.iter().map(|i| i.updated_at.clone()).collect();
+
     let expected = ConversationsPage {
         items: vec![
             ConversationItem {
                 path: p1,
                 head: head_3,
-                tail: Vec::new(),
                 created_at: Some("2025-01-03T12-00-00".into()),
-                updated_at: Some("2025-01-03T12-00-00".into()),
+                updated_at: updated_times.first().cloned().flatten(),
             },
             ConversationItem {
                 path: p2,
                 head: head_2,
-                tail: Vec::new(),
                 created_at: Some("2025-01-02T12-00-00".into()),
-                updated_at: Some("2025-01-02T12-00-00".into()),
+                updated_at: updated_times.get(1).cloned().flatten(),
             },
             ConversationItem {
                 path: p3,
                 head: head_1,
-                tail: Vec::new(),
                 created_at: Some("2025-01-01T12-00-00".into()),
-                updated_at: Some("2025-01-01T12-00-00".into()),
+                updated_at: updated_times.get(2).cloned().flatten(),
             },
         ],
         next_cursor: None,
@@ -355,6 +353,8 @@ async fn test_pagination_cursor() {
         "source": "vscode",
         "model_provider": "test-provider",
     })];
+    let updated_page1: Vec<Option<String>> =
+        page1.items.iter().map(|i| i.updated_at.clone()).collect();
     let expected_cursor1: Cursor =
         serde_json::from_str(&format!("\"2025-03-04T09-00-00|{u4}\"")).unwrap();
     let expected_page1 = ConversationsPage {
@@ -362,16 +362,14 @@ async fn test_pagination_cursor() {
             ConversationItem {
                 path: p5,
                 head: head_5,
-                tail: Vec::new(),
                 created_at: Some("2025-03-05T09-00-00".into()),
-                updated_at: Some("2025-03-05T09-00-00".into()),
+                updated_at: updated_page1.first().cloned().flatten(),
             },
             ConversationItem {
                 path: p4,
                 head: head_4,
-                tail: Vec::new(),
                 created_at: Some("2025-03-04T09-00-00".into()),
-                updated_at: Some("2025-03-04T09-00-00".into()),
+                updated_at: updated_page1.get(1).cloned().flatten(),
             },
         ],
         next_cursor: Some(expected_cursor1.clone()),
@@ -422,6 +420,8 @@ async fn test_pagination_cursor() {
         "source": "vscode",
         "model_provider": "test-provider",
     })];
+    let updated_page2: Vec<Option<String>> =
+        page2.items.iter().map(|i| i.updated_at.clone()).collect();
     let expected_cursor2: Cursor =
         serde_json::from_str(&format!("\"2025-03-02T09-00-00|{u2}\"")).unwrap();
     let expected_page2 = ConversationsPage {
@@ -429,16 +429,14 @@ async fn test_pagination_cursor() {
             ConversationItem {
                 path: p3,
                 head: head_3,
-                tail: Vec::new(),
                 created_at: Some("2025-03-03T09-00-00".into()),
-                updated_at: Some("2025-03-03T09-00-00".into()),
+                updated_at: updated_page2.first().cloned().flatten(),
             },
             ConversationItem {
                 path: p2,
                 head: head_2,
-                tail: Vec::new(),
                 created_at: Some("2025-03-02T09-00-00".into()),
-                updated_at: Some("2025-03-02T09-00-00".into()),
+                updated_at: updated_page2.get(1).cloned().flatten(),
             },
         ],
         next_cursor: Some(expected_cursor2.clone()),
@@ -473,13 +471,14 @@ async fn test_pagination_cursor() {
         "source": "vscode",
         "model_provider": "test-provider",
     })];
+    let updated_page3: Vec<Option<String>> =
+        page3.items.iter().map(|i| i.updated_at.clone()).collect();
     let expected_page3 = ConversationsPage {
         items: vec![ConversationItem {
             path: p1,
             head: head_1,
-            tail: Vec::new(),
             created_at: Some("2025-03-01T09-00-00".into()),
-            updated_at: Some("2025-03-01T09-00-00".into()),
+            updated_at: updated_page3.first().cloned().flatten(),
         }],
         next_cursor: None,
         num_scanned_files: 5, // scanned 05, 04 (anchor), 03, 02 (anchor), 01
@@ -510,7 +509,7 @@ async fn test_get_conversation_contents() {
     .unwrap();
     let path = &page.items[0].path;
 
-    let content = get_conversation(path).await.unwrap();
+    let content = tokio::fs::read_to_string(path).await.unwrap();
 
     // Page equality (single item)
     let expected_path = home
@@ -533,9 +532,8 @@ async fn test_get_conversation_contents() {
         items: vec![ConversationItem {
             path: expected_path,
             head: expected_head,
-            tail: Vec::new(),
             created_at: Some(ts.into()),
-            updated_at: Some(ts.into()),
+            updated_at: page.items[0].updated_at.clone(),
         }],
         next_cursor: None,
         num_scanned_files: 1,
@@ -570,7 +568,7 @@ async fn test_get_conversation_contents() {
 }
 
 #[tokio::test]
-async fn test_tail_includes_last_response_items() -> Result<()> {
+async fn test_updated_at_uses_file_mtime() -> Result<()> {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
 
@@ -636,229 +634,16 @@ async fn test_tail_includes_last_response_items() -> Result<()> {
     )
     .await?;
     let item = page.items.first().expect("conversation item");
-    let tail_len = item.tail.len();
-    assert_eq!(tail_len, 10usize.min(total_messages));
-
-    let expected: Vec<serde_json::Value> = (total_messages - tail_len..total_messages)
-        .map(|idx| {
-            serde_json::json!({
-                "type": "message",
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": format!("reply-{idx}"),
-                    }
-                ],
-            })
-        })
-        .collect();
-
-    assert_eq!(item.tail, expected);
     assert_eq!(item.created_at.as_deref(), Some(ts));
-    let expected_updated = format!("{ts}-{last:02}", last = total_messages - 1);
-    assert_eq!(item.updated_at.as_deref(), Some(expected_updated.as_str()));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_tail_handles_short_sessions() -> Result<()> {
-    let temp = TempDir::new().unwrap();
-    let home = temp.path();
-
-    let ts = "2025-06-02T08-30-00";
-    let uuid = Uuid::from_u128(7);
-    let day_dir = home.join("sessions").join("2025").join("06").join("02");
-    fs::create_dir_all(&day_dir)?;
-    let file_path = day_dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
-    let mut file = File::create(&file_path)?;
-
-    let conversation_id = ConversationId::from_string(&uuid.to_string())?;
-    let meta_line = RolloutLine {
-        timestamp: ts.to_string(),
-        item: RolloutItem::SessionMeta(SessionMetaLine {
-            meta: SessionMeta {
-                id: conversation_id,
-                timestamp: ts.to_string(),
-                instructions: None,
-                cwd: ".".into(),
-                originator: "test_originator".into(),
-                cli_version: "test_version".into(),
-                source: SessionSource::VSCode,
-                model_provider: Some("test-provider".into()),
-            },
-            git: None,
-        }),
-    };
-    writeln!(file, "{}", serde_json::to_string(&meta_line)?)?;
-
-    let user_event_line = RolloutLine {
-        timestamp: ts.to_string(),
-        item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
-            message: "hi".into(),
-            images: None,
-        })),
-    };
-    writeln!(file, "{}", serde_json::to_string(&user_event_line)?)?;
-
-    for idx in 0..3 {
-        let response_line = RolloutLine {
-            timestamp: format!("{ts}-{idx:02}"),
-            item: RolloutItem::ResponseItem(ResponseItem::Message {
-                id: None,
-                role: "assistant".into(),
-                content: vec![ContentItem::OutputText {
-                    text: format!("short-{idx}"),
-                }],
-            }),
-        };
-        writeln!(file, "{}", serde_json::to_string(&response_line)?)?;
-    }
-    drop(file);
-
-    let provider_filter = provider_vec(&[TEST_PROVIDER]);
-    let page = get_conversations(
-        home,
-        1,
-        None,
-        INTERACTIVE_SESSION_SOURCES,
-        Some(provider_filter.as_slice()),
-        TEST_PROVIDER,
-    )
-    .await?;
-    let tail = &page.items.first().expect("conversation item").tail;
-
-    assert_eq!(tail.len(), 3);
-
-    let expected: Vec<serde_json::Value> = (0..3)
-        .map(|idx| {
-            serde_json::json!({
-                "type": "message",
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": format!("short-{idx}"),
-                    }
-                ],
-            })
-        })
-        .collect();
-
-    assert_eq!(tail, &expected);
-    let expected_updated = format!("{ts}-{last:02}", last = 2);
-    assert_eq!(
-        page.items[0].updated_at.as_deref(),
-        Some(expected_updated.as_str())
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_tail_skips_trailing_non_responses() -> Result<()> {
-    let temp = TempDir::new().unwrap();
-    let home = temp.path();
-
-    let ts = "2025-06-03T10-00-00";
-    let uuid = Uuid::from_u128(11);
-    let day_dir = home.join("sessions").join("2025").join("06").join("03");
-    fs::create_dir_all(&day_dir)?;
-    let file_path = day_dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
-    let mut file = File::create(&file_path)?;
-
-    let conversation_id = ConversationId::from_string(&uuid.to_string())?;
-    let meta_line = RolloutLine {
-        timestamp: ts.to_string(),
-        item: RolloutItem::SessionMeta(SessionMetaLine {
-            meta: SessionMeta {
-                id: conversation_id,
-                timestamp: ts.to_string(),
-                instructions: None,
-                cwd: ".".into(),
-                originator: "test_originator".into(),
-                cli_version: "test_version".into(),
-                source: SessionSource::VSCode,
-                model_provider: Some("test-provider".into()),
-            },
-            git: None,
-        }),
-    };
-    writeln!(file, "{}", serde_json::to_string(&meta_line)?)?;
-
-    let user_event_line = RolloutLine {
-        timestamp: ts.to_string(),
-        item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
-            message: "hello".into(),
-            images: None,
-        })),
-    };
-    writeln!(file, "{}", serde_json::to_string(&user_event_line)?)?;
-
-    for idx in 0..4 {
-        let response_line = RolloutLine {
-            timestamp: format!("{ts}-{idx:02}"),
-            item: RolloutItem::ResponseItem(ResponseItem::Message {
-                id: None,
-                role: "assistant".into(),
-                content: vec![ContentItem::OutputText {
-                    text: format!("response-{idx}"),
-                }],
-            }),
-        };
-        writeln!(file, "{}", serde_json::to_string(&response_line)?)?;
-    }
-
-    let compacted_line = RolloutLine {
-        timestamp: format!("{ts}-compacted"),
-        item: RolloutItem::Compacted(CompactedItem {
-            message: "compacted".into(),
-            replacement_history: None,
-        }),
-    };
-    writeln!(file, "{}", serde_json::to_string(&compacted_line)?)?;
-
-    let shutdown_event = RolloutLine {
-        timestamp: format!("{ts}-shutdown"),
-        item: RolloutItem::EventMsg(EventMsg::ShutdownComplete),
-    };
-    writeln!(file, "{}", serde_json::to_string(&shutdown_event)?)?;
-    drop(file);
-
-    let provider_filter = provider_vec(&[TEST_PROVIDER]);
-    let page = get_conversations(
-        home,
-        1,
-        None,
-        INTERACTIVE_SESSION_SOURCES,
-        Some(provider_filter.as_slice()),
-        TEST_PROVIDER,
-    )
-    .await?;
-    let tail = &page.items.first().expect("conversation item").tail;
-
-    let expected: Vec<serde_json::Value> = (0..4)
-        .map(|idx| {
-            serde_json::json!({
-                "type": "message",
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": format!("response-{idx}"),
-                    }
-                ],
-            })
-        })
-        .collect();
-
-    assert_eq!(tail, &expected);
-    let expected_updated = format!("{ts}-{last:02}", last = 3);
-    assert_eq!(
-        page.items[0].updated_at.as_deref(),
-        Some(expected_updated.as_str())
-    );
+    let updated = item
+        .updated_at
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .expect("updated_at set from file mtime");
+    let now = chrono::Utc::now();
+    let age = now - updated;
+    assert!(age.num_seconds().abs() < 30);
 
     Ok(())
 }
@@ -913,22 +698,22 @@ async fn test_stable_ordering_same_second_pagination() {
             "model_provider": "test-provider",
         })]
     };
+    let updated_page1: Vec<Option<String>> =
+        page1.items.iter().map(|i| i.updated_at.clone()).collect();
     let expected_cursor1: Cursor = serde_json::from_str(&format!("\"{ts}|{u2}\"")).unwrap();
     let expected_page1 = ConversationsPage {
         items: vec![
             ConversationItem {
                 path: p3,
                 head: head(u3),
-                tail: Vec::new(),
                 created_at: Some(ts.to_string()),
-                updated_at: Some(ts.to_string()),
+                updated_at: updated_page1.first().cloned().flatten(),
             },
             ConversationItem {
                 path: p2,
                 head: head(u2),
-                tail: Vec::new(),
                 created_at: Some(ts.to_string()),
-                updated_at: Some(ts.to_string()),
+                updated_at: updated_page1.get(1).cloned().flatten(),
             },
         ],
         next_cursor: Some(expected_cursor1.clone()),
@@ -953,13 +738,14 @@ async fn test_stable_ordering_same_second_pagination() {
         .join("07")
         .join("01")
         .join(format!("rollout-2025-07-01T00-00-00-{u1}.jsonl"));
+    let updated_page2: Vec<Option<String>> =
+        page2.items.iter().map(|i| i.updated_at.clone()).collect();
     let expected_page2 = ConversationsPage {
         items: vec![ConversationItem {
             path: p1,
             head: head(u1),
-            tail: Vec::new(),
             created_at: Some(ts.to_string()),
-            updated_at: Some(ts.to_string()),
+            updated_at: updated_page2.first().cloned().flatten(),
         }],
         next_cursor: None,
         num_scanned_files: 3, // scanned u3, u2 (anchor), u1

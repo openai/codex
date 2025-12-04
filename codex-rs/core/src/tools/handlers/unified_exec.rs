@@ -6,6 +6,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecOutputStream;
+use crate::shell::default_user_shell;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -31,8 +32,8 @@ struct ExecCommandArgs {
     cmd: String,
     #[serde(default)]
     workdir: Option<String>,
-    #[serde(default = "default_shell")]
-    shell: String,
+    #[serde(default)]
+    shell: Option<String>,
     #[serde(default = "default_login")]
     login: bool,
     #[serde(default = "default_exec_yield_time_ms")]
@@ -63,10 +64,6 @@ fn default_exec_yield_time_ms() -> u64 {
 
 fn default_write_stdin_yield_time_ms() -> u64 {
     250
-}
-
-fn default_shell() -> String {
-    "/bin/bash".to_string()
 }
 
 fn default_login() -> bool {
@@ -257,7 +254,12 @@ impl ToolHandler for UnifiedExecHandler {
 }
 
 fn get_command(args: &ExecCommandArgs) -> Vec<String> {
-    let shell = get_shell_by_model_provided_path(&PathBuf::from(args.shell.clone()));
+    let shell = if let Some(shell_str) = &args.shell {
+        get_shell_by_model_provided_path(&PathBuf::from(shell_str))
+    } else {
+        default_user_shell()
+    };
+
     shell.derive_exec_args(&args.cmd, args.login)
 }
 
@@ -288,4 +290,66 @@ fn format_response(response: &UnifiedExecResponse) -> String {
     sections.push(response.output.clone());
 
     sections.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_command_uses_default_shell_when_unspecified() {
+        let json = r#"{"cmd": "echo hello"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        assert!(args.shell.is_none());
+
+        let command = get_command(&args);
+
+        assert_eq!(command.len(), 3);
+        assert_eq!(command[2], "echo hello");
+    }
+
+    #[test]
+    fn test_get_command_respects_explicit_bash_shell() {
+        let json = r#"{"cmd": "echo hello", "shell": "/bin/bash"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
+
+        let command = get_command(&args);
+
+        assert_eq!(command[2], "echo hello");
+    }
+
+    #[test]
+    fn test_get_command_respects_explicit_powershell_shell() {
+        let json = r#"{"cmd": "echo hello", "shell": "powershell"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        assert_eq!(args.shell.as_deref(), Some("powershell"));
+
+        let command = get_command(&args);
+
+        assert_eq!(command[2], "echo hello");
+    }
+
+    #[test]
+    fn test_get_command_respects_explicit_cmd_shell() {
+        let json = r#"{"cmd": "echo hello", "shell": "cmd"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        assert_eq!(args.shell.as_deref(), Some("cmd"));
+
+        let command = get_command(&args);
+
+        assert_eq!(command[2], "echo hello");
+    }
 }

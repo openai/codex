@@ -1117,12 +1117,10 @@ name = "codex-common"
 version = "0.0.0"
 dependencies = [
  "clap",
- "codex-app-server-protocol",
  "codex-core",
  "codex-lmstudio",
  "codex-ollama",
  "codex-protocol",
- "once_cell",
  "serde",
  "toml",
 ]
@@ -1283,6 +1281,7 @@ dependencies = [
  "serde_json",
  "shlex",
  "starlark",
+ "tempfile",
  "thiserror 2.0.17",
 ]
 
@@ -1614,6 +1613,7 @@ dependencies = [
  "textwrap 0.16.2",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "toml",
  "tracing",
  "tracing-appender",
@@ -1623,6 +1623,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width 0.2.1",
  "url",
+ "uuid",
  "vt100",
 ]
 
@@ -6599,6 +6600,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "pin-project-lite",
+ "slab",
  "tokio",
 ]
 

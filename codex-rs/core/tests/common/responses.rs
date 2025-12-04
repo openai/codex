@@ -518,6 +518,32 @@ pub fn sse_response(body: String) -> ResponseTemplate {
         .set_body_raw(body, "text/event-stream")
 }
 
+pub async fn mount_response_once(server: &MockServer, response: ResponseTemplate) -> ResponseMock {
+    let (mock, response_mock) = base_mock();
+    mock.respond_with(response)
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+    response_mock
+}
+
+pub async fn mount_response_once_match<M>(
+    server: &MockServer,
+    matcher: M,
+    response: ResponseTemplate,
+) -> ResponseMock
+where
+    M: wiremock::Match + Send + Sync + 'static,
+{
+    let (mock, response_mock) = base_mock();
+    mock.and(matcher)
+        .respond_with(response)
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+    response_mock
+}
+
 fn base_mock() -> (MockBuilder, ResponseMock) {
     let response_mock = ResponseMock::new();
     let mock = Mock::given(method("POST"))
