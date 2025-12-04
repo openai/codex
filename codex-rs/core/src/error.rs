@@ -565,6 +565,7 @@ mod tests {
                 resets_at: Some(secondary_reset_at),
             }),
             credits: None,
+            plan_type: None,
         }
     }
 
