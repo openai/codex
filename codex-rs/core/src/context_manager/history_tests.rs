@@ -357,7 +357,8 @@ fn process_response_items_truncates_and_preserves_original() {
         },
     };
 
-    let processed = process_response_items([&item], policy);
+    let mut history = ContextManager::new();
+    let processed = history.record_items([&item], policy);
 
     assert_eq!(processed.len(), 1);
     match &processed[0] {

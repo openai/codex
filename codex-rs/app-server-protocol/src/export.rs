@@ -743,7 +743,6 @@ mod tests {
     use std::path::PathBuf;
     use uuid::Uuid;
 
-    #[cfg_attr(windows, ignore = "flaky on windows-latest - x86_64-pc-windows-msvc")]
     #[test]
     fn generated_ts_has_no_optional_nullable_fields() -> Result<()> {
         // Assert that there are no types of the form "?: T | null" in the generated TS files.

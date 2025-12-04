@@ -47,17 +47,43 @@ impl ContextManager {
     }
 
     /// `items` is ordered from oldest to newest.
-    pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
+    pub(crate) fn record_items<I>(
+        &mut self,
+        items: I,
+        policy: TruncationPolicy,
+    ) -> Vec<ResponseItem>
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
-        let processed = process_response_items(items, policy);
-        self.items.extend(processed);
+        let mut processed = Vec::new();
+        for item in items {
+            let item_ref = item.deref();
+            let is_ghost_snapshot = matches!(item_ref, ResponseItem::GhostSnapshot { .. });
+            if !is_api_message(item_ref) && !is_ghost_snapshot {
+                continue;
+            }
+            if let Some(result) = process_item(item_ref, policy) {
+                self.items.push(result.clone());
+                processed.push(result);
+            }
+        }
+        processed
     }
 
-    pub(crate) fn append_processed(&mut self, items: Vec<ResponseItem>) {
-        self.items.extend(items);
+    pub(crate) fn record_preprocessed<I>(&mut self, items: I)
+    where
+        I: IntoIterator,
+        I::Item: std::ops::Deref<Target = ResponseItem>,
+    {
+        for item in items {
+            let item_ref = item.deref();
+            let is_ghost_snapshot = matches!(item_ref, ResponseItem::GhostSnapshot { .. });
+            if !is_api_message(item_ref) && !is_ghost_snapshot {
+                continue;
+            }
+            self.items.push(item_ref.clone());
+        }
     }
 
     pub(crate) fn get_history(&mut self) -> Vec<ResponseItem> {
@@ -236,25 +262,6 @@ fn is_api_message(message: &ResponseItem) -> bool {
         ResponseItem::GhostSnapshot { .. } => false,
         ResponseItem::Other => false,
     }
-}
-
-pub(crate) fn process_response_items<I>(items: I, policy: TruncationPolicy) -> Vec<ResponseItem>
-where
-    I: IntoIterator,
-    I::Item: std::ops::Deref<Target = ResponseItem>,
-{
-    let mut processed = Vec::new();
-    for item in items {
-        let item_ref = item.deref();
-        let is_ghost_snapshot = matches!(item_ref, ResponseItem::GhostSnapshot { .. });
-        if !is_api_message(item_ref) && !is_ghost_snapshot {
-            continue;
-        }
-        if let Some(result) = process_item(item_ref, policy) {
-            processed.push(result);
-        }
-    }
-    processed
 }
 
 fn process_item(item: &ResponseItem, policy: TruncationPolicy) -> Option<ResponseItem> {

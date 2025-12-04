@@ -1047,10 +1047,7 @@ impl Session {
         for item in rollout_items {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
-                    history.record_items(
-                        std::iter::once(response_item),
-                        turn_context.truncation_policy,
-                    );
+                    history.record_preprocessed(std::iter::once(response_item));
                 }
                 RolloutItem::Compacted(compacted) => {
                     let snapshot = history.get_history();
@@ -1079,13 +1076,10 @@ impl Session {
         items: &[ResponseItem],
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
-        let processed = crate::context_manager::process_response_items(
-            items.iter(),
-            turn_context.truncation_policy,
-        );
         let mut state = self.state.lock().await;
-        state.history.append_processed(processed.clone());
-        processed
+        state
+            .history
+            .record_items(items.iter(), turn_context.truncation_policy)
     }
 
     pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
@@ -2536,7 +2530,6 @@ mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
-    use crate::context_manager::process_response_items;
     use crate::exec::ExecToolCallOutput;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
@@ -2721,7 +2714,8 @@ mod tests {
                 success: Some(true),
             },
         };
-        let expected = process_response_items([&call, &raw_item], truncation_policy);
+        let mut context_manager = ContextManager::new();
+        let expected = context_manager.record_items([&call, &raw_item], truncation_policy);
 
         tokio_test::block_on(
             session.record_initial_history(InitialHistory::Resumed(ResumedHistory {
