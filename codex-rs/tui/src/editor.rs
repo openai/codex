@@ -81,6 +81,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use serial_test::serial;
+    #[cfg(unix)]
     use tempfile::tempdir;
 
     struct EnvGuard {
