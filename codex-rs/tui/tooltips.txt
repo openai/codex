@@ -8,4 +8,4 @@ Type / to open the command popup; Tab autocompletes slash commands and saved pro
 Use /prompts:<name> key=value to expand a saved prompt with placeholders before sending.
 With the composer empty, press Esc to step back and edit your last message; Enter confirms.
 Paste an image with Ctrl+V to attach it to your next message.
-You can resume a previous conversation by doing `codex resume`
+You can resume a previous conversation by running `codex resume`

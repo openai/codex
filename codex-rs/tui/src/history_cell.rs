@@ -573,18 +573,19 @@ impl TooltipHistoryCell {
 
 impl HistoryCell for TooltipHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let indent: Line<'static> = "  ".into();
-        let mut lines = Vec::new();
-        let tooltip_line: Line<'static> = vec!["Tip: ".cyan(), self.tip.into()].into();
-        let wrap_opts = RtOptions::new(usize::from(width.max(1)))
-            .initial_indent(indent.clone())
-            .subsequent_indent(indent.clone());
-        lines.extend(
-            word_wrap_line(&tooltip_line, wrap_opts.clone())
-                .into_iter()
-                .map(|line| line_to_static(&line)),
+        let indent = "  ";
+        let indent_width = UnicodeWidthStr::width(indent);
+        let wrap_width = usize::from(width.max(1))
+            .saturating_sub(indent_width)
+            .max(1);
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        append_markdown(
+            &format!("**Tip:** {}", self.tip),
+            Some(wrap_width),
+            &mut lines,
         );
-        lines
+
+        prefix_lines(lines, indent.into(), indent.into())
     }
 }
 
