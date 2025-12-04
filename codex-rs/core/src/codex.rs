@@ -1940,6 +1940,7 @@ async fn spawn_review_thread(
             review_model_family.slug.as_str(),
         );
 
+    let review_sandbox_policy = SandboxPolicy::ReadOnly;
     let per_turn_config = Arc::new(per_turn_config);
     let client = ModelClient::new(
         per_turn_config.clone(),
@@ -1962,7 +1963,7 @@ async fn spawn_review_thread(
         base_instructions: Some(base_instructions.clone()),
         compact_prompt: parent_turn_context.compact_prompt.clone(),
         approval_policy: parent_turn_context.approval_policy,
-        sandbox_policy: parent_turn_context.sandbox_policy.clone(),
+        sandbox_policy: review_sandbox_policy,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
