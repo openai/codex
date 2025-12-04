@@ -154,10 +154,6 @@ impl UnifiedExecSession {
     }
 
     pub(super) async fn check_for_sandbox_denial(&self) -> Result<(), UnifiedExecError> {
-        if self.sandbox_type() == SandboxType::None || !self.has_exited() {
-            return Ok(());
-        }
-
         let _ =
             tokio::time::timeout(Duration::from_millis(20), self.output_notify.notified()).await;
 
@@ -167,28 +163,40 @@ impl UnifiedExecSession {
             aggregated.extend_from_slice(&chunk);
         }
         let aggregated_text = String::from_utf8_lossy(&aggregated).to_string();
-        let exit_code = self.exit_code().unwrap_or(-1);
+        self.check_for_sandbox_denial_with_text(&aggregated_text)
+            .await?;
 
+        Ok(())
+    }
+
+    pub(super) async fn check_for_sandbox_denial_with_text(
+        &self,
+        text: &str,
+    ) -> Result<(), UnifiedExecError> {
+        let sandbox_type = self.sandbox_type();
+        if sandbox_type == SandboxType::None || !self.has_exited() {
+            return Ok(());
+        }
+
+        let exit_code = self.exit_code().unwrap_or(-1);
         let exec_output = ExecToolCallOutput {
             exit_code,
-            stdout: StreamOutput::new(aggregated_text.clone()),
-            aggregated_output: StreamOutput::new(aggregated_text.clone()),
+            stderr: StreamOutput::new(text.to_string()),
+            aggregated_output: StreamOutput::new(text.to_string()),
             ..Default::default()
         };
-
-        if is_likely_sandbox_denied(self.sandbox_type(), &exec_output) {
+        if is_likely_sandbox_denied(sandbox_type, &exec_output) {
             let snippet = formatted_truncate_text(
-                &aggregated_text,
+                text,
                 TruncationPolicy::Tokens(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
             );
             let message = if snippet.is_empty() {
-                format!("Session creation failed with exit code {exit_code}")
+                format!("Session exited with code {exit_code}")
             } else {
                 snippet
             };
             return Err(UnifiedExecError::sandbox_denied(message, exec_output));
         }
-
         Ok(())
     }
 
