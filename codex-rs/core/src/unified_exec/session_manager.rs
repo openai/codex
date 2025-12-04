@@ -153,6 +153,7 @@ impl UnifiedExecSessionManager {
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let has_exited = session.has_exited();
         let exit_code = session.exit_code();
+        let sandbox_type = session.sandbox_type();
         let chunk_id = generate_chunk_id();
         let process_id = if has_exited {
             None
@@ -201,6 +202,9 @@ impl UnifiedExecSessionManager {
                 Some(request.process_id),
             )
             .await;
+
+            // Exit code should always be Some
+            sandboxing::check_sandboxing(sandbox_type, &text, exit_code.unwrap_or_default())?;
         }
 
         Ok(response)
@@ -700,6 +704,39 @@ impl UnifiedExecSessionManager {
     pub(crate) async fn terminate_all_sessions(&self) {
         let mut sessions = self.session_store.lock().await;
         sessions.clear();
+    }
+}
+
+mod sandboxing {
+    use super::*;
+    use crate::exec::SandboxType;
+    use crate::exec::is_likely_sandbox_denied;
+    use crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_TOKENS;
+
+    pub(crate) fn check_sandboxing(
+        sandbox_type: SandboxType,
+        text: &str,
+        exit_code: i32,
+    ) -> Result<(), UnifiedExecError> {
+        let exec_output = ExecToolCallOutput {
+            exit_code,
+            stderr: StreamOutput::new(text.to_string()),
+            aggregated_output: StreamOutput::new(text.to_string()),
+            ..Default::default()
+        };
+        if is_likely_sandbox_denied(sandbox_type, &exec_output) {
+            let snippet = formatted_truncate_text(
+                text,
+                TruncationPolicy::Tokens(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
+            );
+            let message = if snippet.is_empty() {
+                format!("Session exited with code {exit_code}")
+            } else {
+                snippet
+            };
+            return Err(UnifiedExecError::sandbox_denied(message, exec_output));
+        }
+        Ok(())
     }
 }
 

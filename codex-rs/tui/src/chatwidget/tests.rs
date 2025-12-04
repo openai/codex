@@ -5,8 +5,6 @@ use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_common::approval_presets::builtin_approval_presets;
-use codex_common::model_presets::ModelPreset;
-use codex_common::model_presets::ReasoningEffortPreset;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
@@ -48,6 +46,8 @@ use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::ConversationId;
+use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -355,6 +355,7 @@ async fn helpers_are_available_and_do_not_panic() {
         enhanced_keys_supported: false,
         auth_manager,
         feedback: codex_feedback::CodexFeedback::new(),
+        skills: None,
         is_first_run: true,
     };
     let mut w = ChatWidget::new(init, conversation_manager);
@@ -380,6 +381,7 @@ fn make_chatwidget_manual() -> (
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
         animations_enabled: cfg.animations,
+        skills: None,
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let widget = ChatWidget {
@@ -1186,6 +1188,15 @@ fn slash_exit_requests_exit() {
 }
 
 #[test]
+fn slash_resume_opens_picker() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.dispatch_command(SlashCommand::Resume);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
+}
+
+#[test]
 fn slash_undo_sends_op() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
@@ -1796,17 +1807,17 @@ fn reasoning_popup_shows_extra_high_with_space() {
 fn single_reasoning_option_skips_selection() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
-    static SINGLE_EFFORT: [ReasoningEffortPreset; 1] = [ReasoningEffortPreset {
+    let single_effort = vec![ReasoningEffortPreset {
         effort: ReasoningEffortConfig::High,
-        description: "Maximizes reasoning depth for complex or ambiguous problems",
+        description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
     }];
     let preset = ModelPreset {
-        id: "model-with-single-reasoning",
-        model: "model-with-single-reasoning",
-        display_name: "model-with-single-reasoning",
-        description: "",
+        id: "model-with-single-reasoning".to_string(),
+        model: "model-with-single-reasoning".to_string(),
+        display_name: "model-with-single-reasoning".to_string(),
+        description: "".to_string(),
         default_reasoning_effort: ReasoningEffortConfig::High,
-        supported_reasoning_efforts: &SINGLE_EFFORT,
+        supported_reasoning_efforts: single_effort,
         is_default: false,
         upgrade: None,
         show_in_picker: true,

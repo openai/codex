@@ -485,6 +485,19 @@ pub struct ExecToolCallOutput {
     pub timed_out: bool,
 }
 
+impl Default for ExecToolCallOutput {
+    fn default() -> Self {
+        Self {
+            exit_code: 0,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(String::new()),
+            duration: Duration::ZERO,
+            timed_out: false,
+        }
+    }
+}
+
 #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
 async fn exec(
     params: ExecParams,

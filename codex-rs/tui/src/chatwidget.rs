@@ -55,6 +55,7 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::skills::model::SkillMetadata;
 use codex_protocol::ConversationId;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::parse_command::ParsedCommand;
@@ -122,15 +123,15 @@ use std::path::Path;
 use chrono::Local;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
-use codex_common::model_presets::ModelPreset;
-use codex_common::model_presets::builtin_model_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
+use codex_core::openai_models::model_presets::builtin_model_presets;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
+use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
@@ -256,6 +257,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
+    pub(crate) skills: Option<Vec<SkillMetadata>>,
     pub(crate) is_first_run: bool,
 }
 
@@ -1231,6 +1233,7 @@ impl ChatWidget {
             enhanced_keys_supported,
             auth_manager,
             feedback,
+            skills,
             is_first_run,
         } = common;
         let mut rng = rand::rng();
@@ -1249,6 +1252,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
+                skills,
             }),
             active_cell: None,
             config: config.clone(),
@@ -1307,6 +1311,7 @@ impl ChatWidget {
             enhanced_keys_supported,
             auth_manager,
             feedback,
+            skills,
             ..
         } = common;
         let mut rng = rand::rng();
@@ -1327,6 +1332,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
+                skills,
             }),
             active_cell: None,
             config: config.clone(),
@@ -1482,6 +1488,9 @@ impl ChatWidget {
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
+            SlashCommand::Resume => {
+                self.app_event_tx.send(AppEvent::OpenResumePicker);
+            }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
                 if init_target.exists() {
@@ -1541,6 +1550,9 @@ impl ChatWidget {
             }
             SlashCommand::Mention => {
                 self.insert_str("@");
+            }
+            SlashCommand::Skills => {
+                self.insert_str("$");
             }
             SlashCommand::Status => {
                 self.add_status_output();
@@ -1830,6 +1842,7 @@ impl ChatWidget {
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
+            | EventMsg::ListModelsResponse(_)
             | EventMsg::ReasoningRawContentDelta(_) => {}
         }
     }
@@ -2071,7 +2084,7 @@ impl ChatWidget {
         let description = if preset.description.is_empty() {
             Some("Uses fewer credits for upcoming turns.".to_string())
         } else {
-            Some(preset.description.to_string())
+            Some(preset.description)
         };
 
         let items = vec![
@@ -2207,9 +2220,9 @@ impl ChatWidget {
 
         if choices.len() == 1 {
             if let Some(effort) = choices.first().and_then(|c| c.stored) {
-                self.apply_model_and_effort(preset.model.to_string(), Some(effort));
+                self.apply_model_and_effort(preset.model, Some(effort));
             } else {
-                self.apply_model_and_effort(preset.model.to_string(), None);
+                self.apply_model_and_effort(preset.model, None);
             }
             return;
         }
