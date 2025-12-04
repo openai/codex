@@ -73,14 +73,18 @@ pub enum ExecPolicyUpdateError {
     FeatureDisabled,
 }
 
-pub(crate) async fn exec_policy_for(
+pub(crate) async fn load_exec_policy_for_features(
     features: &Features,
     codex_home: &Path,
-) -> Result<Arc<RwLock<Policy>>, ExecPolicyError> {
+) -> Result<Policy, ExecPolicyError> {
     if !features.enabled(Feature::ExecPolicy) {
-        return Ok(Arc::new(RwLock::new(Policy::empty())));
+        Ok(Policy::empty())
+    } else {
+        load_exec_policy(codex_home).await
     }
+}
 
+pub async fn load_exec_policy(codex_home: &Path) -> Result<Policy, ExecPolicyError> {
     let policy_dir = codex_home.join(POLICY_DIR_NAME);
     let policy_paths = collect_policy_files(&policy_dir).await?;
 
@@ -102,7 +106,7 @@ pub(crate) async fn exec_policy_for(
             })?;
     }
 
-    let policy = Arc::new(RwLock::new(parser.build()));
+    let policy = parser.build();
     tracing::debug!(
         "loaded execpolicy from {} files in {}",
         policy_paths.len(),
@@ -306,7 +310,7 @@ mod tests {
         features.disable(Feature::ExecPolicy);
         let temp_dir = tempdir().expect("create temp dir");
 
-        let policy = exec_policy_for(&features, temp_dir.path())
+        let policy = load_exec_policy_for_features(&features, temp_dir.path())
             .await
             .expect("policy result");
 
@@ -319,10 +323,7 @@ mod tests {
                     decision: Decision::Allow
                 }],
             },
-            policy
-                .read()
-                .await
-                .check_multiple(commands.iter(), &|_| Decision::Allow)
+            policy.check_multiple(commands.iter(), &|_| Decision::Allow)
         );
         assert!(!temp_dir.path().join(POLICY_DIR_NAME).exists());
     }
@@ -350,7 +351,7 @@ mod tests {
         )
         .expect("write policy file");
 
-        let policy = exec_policy_for(&Features::with_defaults(), temp_dir.path())
+        let policy = load_exec_policy(temp_dir.path())
             .await
             .expect("policy result");
         let command = [vec!["rm".to_string()]];
@@ -362,10 +363,7 @@ mod tests {
                     decision: Decision::Forbidden
                 }],
             },
-            policy
-                .read()
-                .await
-                .check_multiple(command.iter(), &|_| Decision::Allow)
+            policy.check_multiple(command.iter(), &|_| Decision::Allow)
         );
     }
 
@@ -378,7 +376,7 @@ mod tests {
         )
         .expect("write policy file");
 
-        let policy = exec_policy_for(&Features::with_defaults(), temp_dir.path())
+        let policy = load_exec_policy(temp_dir.path())
             .await
             .expect("policy result");
         let command = [vec!["ls".to_string()]];
@@ -390,10 +388,7 @@ mod tests {
                     decision: Decision::Allow
                 }],
             },
-            policy
-                .read()
-                .await
-                .check_multiple(command.iter(), &|_| Decision::Allow)
+            policy.check_multiple(command.iter(), &|_| Decision::Allow)
         );
     }
 
