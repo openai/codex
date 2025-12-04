@@ -63,7 +63,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use crate::history_cell::UpdateAvailableHistoryCell;
 
 const GPT_5_1_MIGRATION_AUTH_MODES: [AuthMode; 2] = [AuthMode::ChatGPT, AuthMode::ApiKey];
-const GPT_5_1_CODEX_MIGRATION_AUTH_MODES: [AuthMode; 1] = [AuthMode::ChatGPT];
+const GPT_5_1_CODEX_MIGRATION_AUTH_MODES: [AuthMode; 2] = [AuthMode::ChatGPT, AuthMode::ApiKey];
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
