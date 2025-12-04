@@ -111,6 +111,11 @@ impl UnifiedExecSessionManager {
         }
     }
 
+    pub(crate) async fn release_process_id(&self, process_id: &str) {
+        let mut store = self.session_store.lock().await;
+        store.remove(process_id);
+    }
+
     pub(crate) async fn exec_command(
         &self,
         request: ExecCommandRequest,
@@ -129,7 +134,15 @@ impl UnifiedExecSessionManager {
                 request.justification,
                 context,
             )
-            .await?;
+            .await;
+
+        let session = match session {
+            Ok(session) => session,
+            Err(err) => {
+                self.release_process_id(&request.process_id).await;
+                return Err(err);
+            }
+        };
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
@@ -157,6 +170,7 @@ impl UnifiedExecSessionManager {
         let chunk_id = generate_chunk_id();
         let process_id = request.process_id.clone();
         if has_exited {
+            self.release_process_id(&request.process_id).await;
             let exit = exit_code.unwrap_or(-1);
             Self::emit_exec_end_from_context(
                 context,
