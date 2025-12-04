@@ -1663,6 +1663,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "portable-pty",
+ "pretty_assertions",
+ "tempfile",
  "tokio",
 ]
 

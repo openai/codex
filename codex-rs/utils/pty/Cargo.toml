@@ -10,4 +10,8 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 portable-pty = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
