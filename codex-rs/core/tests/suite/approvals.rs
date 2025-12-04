@@ -6,6 +6,7 @@ use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
+use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
@@ -1581,7 +1582,8 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     .await?;
     let expected_command =
         expected_command.expect("execpolicy amendment scenario should produce a shell command");
-    let expected_execpolicy_amendment = vec!["touch".to_string(), "allow-prefix.txt".to_string()];
+    let expected_execpolicy_amendment =
+        ExecPolicyAmendment::new(vec!["touch".to_string(), "allow-prefix.txt".to_string()]);
 
     let _ = mount_sse_once(
         &server,

@@ -25,6 +25,7 @@ use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_protocol::ConversationId;
+use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
@@ -875,7 +876,7 @@ impl Session {
     /// commands can use the newly approved prefix.
     pub(crate) async fn persist_execpolicy_amendment(
         &self,
-        amendment: &[String],
+        amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
         let features = self.features.clone();
         let (codex_home, current_policy) = {
@@ -898,7 +899,7 @@ impl Session {
         crate::exec_policy::append_execpolicy_amendment_and_update(
             &codex_home,
             &current_policy,
-            amendment,
+            &amendment.command,
         )
         .await?;
 
@@ -919,7 +920,7 @@ impl Session {
         cwd: PathBuf,
         reason: Option<String>,
         risk: Option<SandboxCommandAssessment>,
-        proposed_execpolicy_amendment: Option<Vec<String>>,
+        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     ) -> ReviewDecision {
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.

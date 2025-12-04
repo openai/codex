@@ -17,6 +17,7 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use codex_core::protocol::ElicitationAction;
+use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
@@ -43,7 +44,7 @@ pub(crate) enum ApprovalRequest {
         command: Vec<String>,
         reason: Option<String>,
         risk: Option<SandboxCommandAssessment>,
-        proposed_execpolicy_amendment: Option<Vec<String>>,
+        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     },
     ApplyPatch {
         id: String,
@@ -440,7 +441,7 @@ enum ApprovalVariant {
     Exec {
         id: String,
         command: Vec<String>,
-        proposed_execpolicy_amendment: Option<Vec<String>>,
+        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     },
     ApplyPatch {
         id: String,
@@ -473,7 +474,7 @@ impl ApprovalOption {
     }
 }
 
-fn exec_options(proposed_execpolicy_amendment: Option<Vec<String>>) -> Vec<ApprovalOption> {
+fn exec_options(proposed_execpolicy_amendment: Option<ExecPolicyAmendment>) -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
             label: "Yes, proceed".to_string(),
@@ -602,7 +603,9 @@ mod tests {
                 command: vec!["echo".to_string()],
                 reason: None,
                 risk: None,
-                proposed_execpolicy_amendment: Some(vec!["echo".to_string()]),
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                    "echo".to_string(),
+                ])),
             },
             tx,
         );
@@ -613,7 +616,9 @@ mod tests {
                 assert_eq!(
                     decision,
                     ReviewDecision::ApprovedExecpolicyAmendment {
-                        proposed_execpolicy_amendment: vec!["echo".to_string()]
+                        proposed_execpolicy_amendment: ExecPolicyAmendment::new(vec![
+                            "echo".to_string()
+                        ])
                     }
                 );
                 saw_op = true;
@@ -622,7 +627,7 @@ mod tests {
         }
         assert!(
             saw_op,
-            "expected approval decision to emit an op with allow prefix"
+            "expected approval decision to emit an op with command prefix"
         );
     }
 

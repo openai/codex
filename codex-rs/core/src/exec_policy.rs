@@ -12,6 +12,7 @@ use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
 use codex_execpolicy::blocking_append_allow_prefix_rule;
+use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
@@ -156,11 +157,8 @@ pub(crate) async fn append_execpolicy_amendment_and_update(
 ///   on `prog1`, we return `Some(vec!["prog1", "--option1", "arg1"])`.
 /// - execpolicy: contains a `prompt for prefix ["prog2"]` rule. For the same command as above,
 ///   we return `None` because an execpolicy prompt still applies even if we amend execpolicy to allow ["prog1", "--option1", "arg1"].
-fn proposed_execpolicy_amendment(
-    evaluation: &Evaluation,
-    features: &Features,
-) -> Option<Vec<String>> {
-    if !features.enabled(Feature::ExecPolicy) || evaluation.decision != Decision::Prompt {
+fn proposed_execpolicy_amendment(evaluation: &Evaluation) -> Option<ExecPolicyAmendment> {
+    if evaluation.decision != Decision::Prompt {
         return None;
     }
 
@@ -179,7 +177,7 @@ fn proposed_execpolicy_amendment(
         }
     }
 
-    first_prompt_from_heuristics
+    first_prompt_from_heuristics.map(ExecPolicyAmendment::from)
 }
 
 /// Only return PROMPT_REASON when an execpolicy rule drove the prompt decision.
@@ -230,10 +228,11 @@ pub(crate) async fn create_exec_approval_requirement_for_command(
             } else {
                 ExecApprovalRequirement::NeedsApproval {
                     reason: derive_prompt_reason(&evaluation),
-                    proposed_execpolicy_amendment: proposed_execpolicy_amendment(
-                        &evaluation,
-                        features,
-                    ),
+                    proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
+                        proposed_execpolicy_amendment(&evaluation)
+                    } else {
+                        None
+                    },
                 }
             }
         }
@@ -509,7 +508,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             requirement,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
-                proposed_execpolicy_amendment: Some(command)
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command))
             }
         );
     }
@@ -540,7 +539,9 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             .await,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
-                proposed_execpolicy_amendment: Some(vec!["orange".to_string()])
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                    "orange".to_string()
+                ]))
             }
         );
     }
@@ -612,7 +613,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             requirement,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
-                proposed_execpolicy_amendment: Some(command)
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command))
             }
         );
     }
@@ -693,7 +694,10 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             requirement,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
-                proposed_execpolicy_amendment: Some(vec!["cargo".to_string(), "build".to_string()]),
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                    "cargo".to_string(),
+                    "build".to_string()
+                ])),
             }
         );
     }
@@ -725,7 +729,9 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             .await,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
-                proposed_execpolicy_amendment: Some(vec!["apple".to_string()]),
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                    "apple".to_string()
+                ])),
             }
         );
     }

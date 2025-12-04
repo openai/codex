@@ -13,6 +13,7 @@ use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxTransformError;
 use crate::state::SessionServices;
+use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use std::collections::HashMap;
@@ -100,14 +101,14 @@ pub(crate) enum ExecApprovalRequirement {
         reason: Option<String>,
         /// Proposed execpolicy amendment to skip future approvals for similar commands
         /// See core/src/exec_policy.rs for more details on how proposed_execpolicy_amendment is determined.
-        proposed_execpolicy_amendment: Option<Vec<String>>,
+        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     },
     /// Execution forbidden for this tool call.
     Forbidden { reason: String },
 }
 
 impl ExecApprovalRequirement {
-    pub fn proposed_execpolicy_amendment(&self) -> Option<&Vec<String>> {
+    pub fn proposed_execpolicy_amendment(&self) -> Option<&ExecPolicyAmendment> {
         match self {
             Self::NeedsApproval {
                 proposed_execpolicy_amendment: Some(prefix),

@@ -39,6 +39,7 @@ use ts_rs::TS;
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
+pub use crate::approvals::ExecPolicyAmendment;
 pub use crate::approvals::SandboxCommandAssessment;
 pub use crate::approvals::SandboxRiskLevel;
 
@@ -1658,7 +1659,7 @@ pub enum ReviewDecision {
     /// User has approved this command and wants to apply the proposed execpolicy
     /// amendment so future matching commands are permitted.
     ApprovedExecpolicyAmendment {
-        proposed_execpolicy_amendment: Vec<String>,
+        proposed_execpolicy_amendment: ExecPolicyAmendment,
     },
 
     /// User has approved this command and wants to automatically approve any

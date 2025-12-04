@@ -23,6 +23,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
+use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
@@ -1993,7 +1994,11 @@ fn approval_modal_exec_snapshot() {
             "this is a test reason such as one that would be produced by the model".into(),
         ),
         risk: None,
-        proposed_execpolicy_amendment: Some(vec!["echo".into(), "hello".into(), "world".into()]),
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+            "echo".into(),
+            "hello".into(),
+            "world".into(),
+        ])),
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -2040,7 +2045,11 @@ fn approval_modal_exec_without_reason_snapshot() {
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
         risk: None,
-        proposed_execpolicy_amendment: Some(vec!["echo".into(), "hello".into(), "world".into()]),
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+            "echo".into(),
+            "hello".into(),
+            "world".into(),
+        ])),
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -2254,7 +2263,10 @@ fn status_widget_and_approval_modal_snapshot() {
             "this is a test reason such as one that would be produced by the model".into(),
         ),
         risk: None,
-        proposed_execpolicy_amendment: Some(vec!["echo".into(), "hello world".into()]),
+        proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+            "echo".into(),
+            "hello world".into(),
+        ])),
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
