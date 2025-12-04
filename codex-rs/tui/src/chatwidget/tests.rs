@@ -354,6 +354,7 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_images: Vec::new(),
         enhanced_keys_supported: false,
         auth_manager,
+        models_manager: conversation_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         skills: None,
         is_first_run: true,
@@ -390,7 +391,8 @@ fn make_chatwidget_manual() -> (
         bottom_pane: bottom,
         active_cell: None,
         config: cfg.clone(),
-        auth_manager,
+        auth_manager: auth_manager.clone(),
+        models_manager: Arc::new(ModelsManager::new(auth_manager.get_auth_mode())),
         session_header: SessionHeader::new(cfg.model),
         initial_user_message: None,
         token_info: None,
@@ -423,6 +425,12 @@ fn make_chatwidget_manual() -> (
         current_rollout_path: None,
     };
     (widget, rx, op_rx)
+}
+
+fn set_chatgpt_auth(chat: &mut ChatWidget) {
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.models_manager = Arc::new(ModelsManager::new(chat.auth_manager.get_auth_mode()));
 }
 
 pub(crate) fn make_chatwidget_manual_with_sender() -> (
@@ -879,6 +887,16 @@ fn active_blob(chat: &ChatWidget) -> String {
         .expect("active cell present")
         .display_lines(80);
     lines_to_single_string(&lines)
+}
+
+fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
+    chat.models_manager
+        .available_models
+        .blocking_read()
+        .iter()
+        .find(|&preset| preset.model == model)
+        .cloned()
+        .unwrap_or_else(|| panic!("{model} preset not found"))
 }
 
 #[test]
@@ -1750,13 +1768,11 @@ fn startup_prompts_for_windows_sandbox_when_agent_requested() {
 fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
+    set_chatgpt_auth(&mut chat);
     chat.config.model = "gpt-5.1-codex-max".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
-    let preset = builtin_model_presets(None)
-        .into_iter()
-        .find(|preset| preset.model == "gpt-5.1-codex-max")
-        .expect("gpt-5.1-codex-max preset");
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1767,13 +1783,11 @@ fn model_reasoning_selection_popup_snapshot() {
 fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
+    set_chatgpt_auth(&mut chat);
     chat.config.model = "gpt-5.1-codex-max".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::XHigh);
 
-    let preset = builtin_model_presets(None)
-        .into_iter()
-        .find(|preset| preset.model == "gpt-5.1-codex-max")
-        .expect("gpt-5.1-codex-max preset");
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1784,12 +1798,10 @@ fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
 fn reasoning_popup_shows_extra_high_with_space() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
+    set_chatgpt_auth(&mut chat);
     chat.config.model = "gpt-5.1-codex-max".to_string();
 
-    let preset = builtin_model_presets(None)
-        .into_iter()
-        .find(|preset| preset.model == "gpt-5.1-codex-max")
-        .expect("gpt-5.1-codex-max preset");
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 120);
@@ -1872,11 +1884,8 @@ fn reasoning_popup_escape_returns_to_model_popup() {
     chat.config.model = "gpt-5.1".to_string();
     chat.open_model_popup();
 
-    let presets = builtin_model_presets(None)
-        .into_iter()
-        .find(|preset| preset.model == "gpt-5.1-codex")
-        .expect("gpt-5.1-codex preset");
-    chat.open_reasoning_popup(presets);
+    let preset = get_available_model(&chat, "gpt-5.1-codex");
+    chat.open_reasoning_popup(preset);
 
     let before_escape = render_bottom_popup(&chat, 80);
     assert!(before_escape.contains("Select Reasoning Level"));

@@ -11,6 +11,7 @@ use codex_core::config::Config;
 use codex_core::config::types::Notifications;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
+use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -126,7 +127,6 @@ use codex_common::approval_presets::builtin_approval_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
-use codex_core::openai_models::model_presets::builtin_model_presets;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
@@ -256,6 +256,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_images: Vec<PathBuf>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) skills: Option<Vec<SkillMetadata>>,
     pub(crate) is_first_run: bool,
@@ -276,6 +277,7 @@ pub(crate) struct ChatWidget {
     active_cell: Option<Box<dyn HistoryCell>>,
     config: Config,
     auth_manager: Arc<AuthManager>,
+    models_manager: Arc<ModelsManager>,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
@@ -1232,6 +1234,7 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            models_manager,
             feedback,
             skills,
             is_first_run,
@@ -1257,6 +1260,7 @@ impl ChatWidget {
             active_cell: None,
             config: config.clone(),
             auth_manager,
+            models_manager,
             session_header: SessionHeader::new(config.model),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
@@ -1310,6 +1314,7 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            models_manager,
             feedback,
             skills,
             ..
@@ -1337,6 +1342,7 @@ impl ChatWidget {
             active_cell: None,
             config: config.clone(),
             auth_manager,
+            models_manager,
             session_header: SessionHeader::new(config.model),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
@@ -1842,7 +1848,6 @@ impl ChatWidget {
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ListModelsResponse(_)
             | EventMsg::ReasoningRawContentDelta(_) => {}
         }
     }
@@ -2026,10 +2031,11 @@ impl ChatWidget {
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
-        builtin_model_presets(auth_mode)
-            .into_iter()
+        let models = self.models_manager.available_models.blocking_read();
+        models
+            .iter()
             .find(|preset| preset.model == NUDGE_MODEL_SLUG)
+            .cloned()
     }
 
     fn rate_limit_switch_prompt_hidden(&self) -> bool {
@@ -2132,8 +2138,13 @@ impl ChatWidget {
     /// a second popup is shown to choose the reasoning effort.
     pub(crate) fn open_model_popup(&mut self) {
         let current_model = self.config.model.clone();
-        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
-        let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
+        let presets: Vec<ModelPreset> = self
+            .models_manager
+            .available_models
+            .blocking_read()
+            .iter()
+            .cloned()
+            .collect();
 
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {
