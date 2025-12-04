@@ -1652,6 +1652,15 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn composer_text(&self) -> String {
+        self.bottom_pane.composer_text()
+    }
+
+    pub(crate) fn apply_external_edit(&mut self, text: String) {
+        self.bottom_pane.apply_external_edit(text);
+        self.request_redraw();
+    }
+
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -1853,7 +1862,7 @@ impl ChatWidget {
             .send(AppEvent::InsertHistoryCell(Box::new(cell)));
     }
 
-    fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
+    pub(crate) fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
         self.add_boxed_history(Box::new(cell));
     }
 

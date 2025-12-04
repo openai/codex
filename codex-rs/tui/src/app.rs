@@ -4,8 +4,10 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
 use crate::diff_render::DiffSummary;
+use crate::editor;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
+use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
@@ -1138,6 +1140,48 @@ impl App {
         self.config.model_reasoning_effort = effort;
     }
 
+    async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
+        let editor_cmd = match editor::resolve_editor_command() {
+            Ok(cmd) => cmd,
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to open editor: {err}",
+                    )));
+                return;
+            }
+        };
+
+        let seed = self.chat_widget.composer_text();
+
+        let restore_modes = tui::restore();
+        if let Err(err) = restore_modes {
+            tracing::warn!("failed to restore terminal modes before editor: {err}");
+        }
+
+        let editor_result = editor::run_editor(&seed, &editor_cmd).await;
+
+        if let Err(err) = tui::set_modes() {
+            tracing::warn!("failed to re-enable terminal modes after editor: {err}");
+        }
+
+        match editor_result {
+            Ok(Some(new_text)) => {
+                self.chat_widget.apply_external_edit(new_text);
+                tui.frame_requester().schedule_frame();
+            }
+            Ok(None) => {
+                // Empty file means no change; do nothing.
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to open editor: {err}",
+                    )));
+            }
+        }
+    }
+
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
@@ -1150,6 +1194,16 @@ impl App {
                 let _ = tui.enter_alt_screen();
                 self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
                 tui.frame_requester().schedule_frame();
+            }
+            KeyEvent {
+                code: KeyCode::Char('g'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if self.overlay.is_none() {
+                    self.launch_external_editor(tui).await;
+                }
             }
             // Esc primes/advances backtracking only in normal (not working) mode
             // with the composer focused and empty. In any other state, forward

@@ -282,6 +282,76 @@ impl ChatComposer {
         }
     }
 
+    /// Replace the composer content with text from an external editor.
+    /// Clears pending paste placeholders and keeps only attachments whose
+    /// placeholder labels still appear in the new text. Cursor is placed at
+    /// the end after rebuilding elements.
+    pub(crate) fn apply_external_edit(&mut self, text: String) {
+        self.pending_pastes.clear();
+
+        // Count placeholder occurrences in the new text.
+        let mut placeholder_counts: HashMap<String, usize> = HashMap::new();
+        for placeholder in self.attached_images.iter().map(|img| &img.placeholder) {
+            if placeholder_counts.contains_key(placeholder) {
+                continue;
+            }
+            let count = text.match_indices(placeholder).count();
+            if count > 0 {
+                placeholder_counts.insert(placeholder.clone(), count);
+            }
+        }
+
+        // Keep attachments only while we have matching occurrences left.
+        let mut kept_images = Vec::new();
+        for img in self.attached_images.drain(..) {
+            if let Some(count) = placeholder_counts.get_mut(&img.placeholder) {
+                if *count > 0 {
+                    *count -= 1;
+                    kept_images.push(img);
+                }
+            }
+        }
+        self.attached_images = kept_images;
+
+        // Rebuild textarea so placeholders become elements again.
+        self.textarea.set_text("");
+        let mut remaining: HashMap<&str, usize> = HashMap::new();
+        for img in &self.attached_images {
+            *remaining.entry(img.placeholder.as_str()).or_insert(0) += 1;
+        }
+
+        let mut occurrences: Vec<(usize, &str)> = Vec::new();
+        for (placeholder, _) in &remaining {
+            for (pos, _) in text.match_indices(placeholder) {
+                occurrences.push((pos, *placeholder));
+            }
+        }
+        occurrences.sort_unstable_by_key(|(pos, _)| *pos);
+
+        let mut idx = 0usize;
+        for (pos, ph) in occurrences {
+            let Some(count) = remaining.get_mut(ph) else {
+                continue;
+            };
+            if *count == 0 {
+                continue;
+            }
+            if pos > idx {
+                self.textarea.insert_str(&text[idx..pos]);
+            }
+            self.textarea.insert_element(ph);
+            *count -= 1;
+            idx = pos + ph.len();
+        }
+        if idx < text.len() {
+            self.textarea.insert_str(&text[idx..]);
+        }
+
+        self.textarea.set_cursor(self.textarea.text().len());
+        self.sync_command_popup();
+        self.sync_file_search_popup();
+    }
+
     /// Override the footer hint items displayed beneath the composer. Passing
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
@@ -4028,5 +4098,121 @@ mod tests {
             matches!(composer.active_popup, ActivePopup::None),
             "'/zzz' should not activate slash popup because it is not a prefix of any built-in command"
         );
+    }
+
+    #[test]
+    fn apply_external_edit_rebuilds_text_and_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let placeholder = "[image 10x10]".to_string();
+        composer.textarea.insert_element(&placeholder);
+        composer.attached_images.push(AttachedImage {
+            placeholder: placeholder.clone(),
+            path: PathBuf::from("img.png"),
+        });
+        composer
+            .pending_pastes
+            .push(("[Pasted]".to_string(), "data".to_string()));
+
+        composer.apply_external_edit(format!("Edited {placeholder} text"));
+
+        assert_eq!(
+            composer.current_text(),
+            format!("Edited {placeholder} text")
+        );
+        assert!(composer.pending_pastes.is_empty());
+        assert_eq!(composer.attached_images.len(), 1);
+        assert_eq!(composer.attached_images[0].placeholder, placeholder);
+        assert_eq!(composer.textarea.cursor(), composer.current_text().len());
+    }
+
+    #[test]
+    fn apply_external_edit_drops_missing_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let placeholder = "[image 10x10]".to_string();
+        composer.textarea.insert_element(&placeholder);
+        composer.attached_images.push(AttachedImage {
+            placeholder: placeholder.clone(),
+            path: PathBuf::from("img.png"),
+        });
+
+        composer.apply_external_edit("No images here".to_string());
+
+        assert_eq!(composer.current_text(), "No images here".to_string());
+        assert!(composer.attached_images.is_empty());
+    }
+
+    #[test]
+    fn apply_external_edit_limits_duplicates_to_occurrences() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let placeholder = "[image 10x10]".to_string();
+        composer.textarea.insert_element(&placeholder);
+        composer.attached_images.push(AttachedImage {
+            placeholder: placeholder.clone(),
+            path: PathBuf::from("img.png"),
+        });
+
+        composer.apply_external_edit(format!("{placeholder} extra {placeholder}"));
+
+        assert_eq!(
+            composer.current_text(),
+            format!("{placeholder} extra {placeholder}")
+        );
+        assert_eq!(composer.attached_images.len(), 1);
+    }
+
+    #[test]
+    fn apply_external_edit_drops_extra_attachments_with_same_placeholder() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let placeholder = "[image 10x10]".to_string();
+        composer.textarea.insert_element(&placeholder);
+        composer.attached_images.push(AttachedImage {
+            placeholder: placeholder.clone(),
+            path: PathBuf::from("img1.png"),
+        });
+        composer.attached_images.push(AttachedImage {
+            placeholder: placeholder.clone(),
+            path: PathBuf::from("img2.png"),
+        });
+
+        composer.apply_external_edit(placeholder.clone());
+
+        assert_eq!(composer.current_text(), placeholder);
+        assert_eq!(composer.attached_images.len(), 1);
     }
 }
