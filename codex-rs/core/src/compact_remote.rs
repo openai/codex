@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::Prompt;
+use crate::PromptBuilder;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::Result as CodexResult;
@@ -41,17 +41,14 @@ async fn run_remote_compact_task_inner_impl(
     turn_context: &Arc<TurnContext>,
 ) -> CodexResult<()> {
     let mut history = sess.clone_history().await;
-    let prompt = Prompt {
-        input: history.get_history_for_prompt(),
-        tools: vec![],
-        parallel_tool_calls: false,
-        base_instructions_override: turn_context.base_instructions.clone(),
-        output_schema: None,
-    };
+    let prompt = PromptBuilder::new()
+        .with_input(history.get_history_for_prompt())
+        .with_base_instructions_override_opt(turn_context.base_instructions.clone())
+        .build(&turn_context.client.get_model_family())?;
 
     let mut new_history = turn_context
         .client
-        .compact_conversation_history(&prompt)
+        .compact_conversation_history(&prompt.input, &prompt.instructions)
         .await?;
     // Required to keep `/undo` available after compaction
     let ghost_snapshots: Vec<ResponseItem> = history
