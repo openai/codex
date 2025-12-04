@@ -9,13 +9,13 @@ import kotlin.test.assertTrue
 class TurnContextTest {
 
     private fun createTestContext(cwd: String = "/test/path"): TurnContext {
+        // Note: model/modelFamily are now computed properties that delegate to client.
+        // Without a client, they return defaults ("unknown" / ModelFamily.default())
         return TurnContext(
             subId = "test_turn_1",
             cwd = cwd,
             approvalPolicy = AskForApproval.OnFailure,
-            sandboxPolicy = SandboxPolicy.ReadOnly,
-            model = "gpt-4",
-            modelFamily = "gpt-4"
+            sandboxPolicy = SandboxPolicy.ReadOnly
         )
     }
 
@@ -59,9 +59,7 @@ class TurnContextTest {
             cwd = "/test",
             compactPrompt = customPrompt,
             approvalPolicy = AskForApproval.OnFailure,
-            sandboxPolicy = SandboxPolicy.ReadOnly,
-            model = "gpt-4",
-            modelFamily = "gpt-4"
+            sandboxPolicy = SandboxPolicy.ReadOnly
         )
         assertEquals(customPrompt, ctx.getCompactPrompt())
     }

@@ -1230,13 +1230,18 @@ class Session private constructor(
 
         /**
          * Create a turn context.
+         *
+         * Note: In Rust, this is done in make_turn_context() which also creates the ModelClient.
+         * The client parameter should be passed in once ModelClient creation is integrated.
+         * Model info (model, modelFamily, modelContextWindow, etc.) is accessed via client.
          */
         private fun makeTurnContext(
             authManager: AuthManager?,
             sessionConfiguration: SessionConfiguration,
             conversationId: ConversationId,
             subId: String,
-            finalOutputJsonSchema: JsonElement? = null
+            finalOutputJsonSchema: JsonElement? = null,
+            client: ai.solace.coder.core.client.ModelClient? = null
         ): TurnContext {
             val modelFamily = findFamilyForModel(sessionConfiguration.model)
                 ?: sessionConfiguration.modelFamily
@@ -1248,6 +1253,7 @@ class Session private constructor(
 
             return TurnContext(
                 subId = subId,
+                client = client,  // Model info accessed via client
                 cwd = sessionConfiguration.cwd,
                 developerInstructions = sessionConfiguration.developerInstructions,
                 baseInstructions = sessionConfiguration.baseInstructions,
@@ -1261,10 +1267,7 @@ class Session private constructor(
                 codexLinuxSandboxExe = sessionConfiguration.codexLinuxSandboxExe,
                 toolCallGate = ReadinessFlag(),
                 execPolicy = sessionConfiguration.execPolicy,
-                truncationPolicy = TruncationPolicy.Tokens(8000),
-                model = sessionConfiguration.model,
-                modelFamily = modelFamily.slug,
-                modelContextWindow = modelFamily.contextWindow.toLong()
+                truncationPolicy = TruncationPolicy.Tokens(8000)
             )
         }
 
@@ -1291,10 +1294,27 @@ class Session private constructor(
 /**
  * Context needed for a single turn of the conversation.
  *
- * Ported from Rust codex-rs/core/src/codex.rs TurnContext struct (lines 271-306)
+ * Ported from Rust codex-rs/core/src/codex.rs TurnContext struct (lines 272-292)
+ *
+ * Note: Model configuration (model, modelFamily, modelContextWindow, reasoningEffort,
+ * reasoningSummary) and stream configuration (streamMaxRetries, autoCompactTokenLimit)
+ * are accessed via the [client] field, not stored directly here. This matches the
+ * Rust architecture where TurnContext.client provides access to ModelClient which
+ * holds the Config.
  */
 data class TurnContext(
     val subId: String,
+    /**
+     * The model client for this turn - provides access to OTEL, config, and API calls.
+     * Access model info via client.getModel(), client.getModelContextWindow(), etc.
+     * TODO: Make this non-nullable once ModelClient creation is properly integrated
+     * into the turn lifecycle (see Rust codex-rs/core/src/codex.rs make_turn_context).
+     */
+    val client: ai.solace.coder.core.client.ModelClient? = null,
+    /**
+     * The session's current working directory. All relative paths provided by
+     * the model as well as sandbox policies are resolved against this path.
+     */
     val cwd: String,
     val developerInstructions: String? = null,
     val baseInstructions: String? = null,
@@ -1308,26 +1328,40 @@ data class TurnContext(
     val codexLinuxSandboxExe: String? = null,
     val toolCallGate: ReadinessFlag? = null,
     val execPolicy: ExecPolicy = ExecPolicy(),
-    val truncationPolicy: TruncationPolicy = TruncationPolicy.Tokens(8000),
-
-    // Model configuration
-    val model: String,
-    val modelFamily: String = "gpt-4",
-    val modelContextWindow: Long? = null,
-
-    // Reasoning configuration
-    val reasoningEffort: ReasoningEffortConfig? = null,
-    val reasoningSummary: ReasoningSummaryConfig = ReasoningSummary.Auto,
-
-    // Stream configuration
-    val streamMaxRetries: Int = 3,
-    val autoCompactTokenLimit: Long? = null
+    val truncationPolicy: TruncationPolicy = TruncationPolicy.Tokens(8000)
 ) {
+    // =========================================================================
+    // Convenience accessors - delegate to client for model/config info
+    // These match the Rust pattern of accessing via turn_context.client.*
+    // =========================================================================
+
+    /** Get the model name. Delegates to client.getModel(). */
+    val model: String get() = client?.getModel() ?: "unknown"
+
+    /** Get the model family. Delegates to client.getModelFamily(). */
+    val modelFamily: ModelFamily get() = client?.getModelFamily() ?: ModelFamily.default()
+
+    /** Get the model context window. Delegates to client.getModelContextWindow(). */
+    val modelContextWindow: Long? get() = client?.getModelContextWindow()
+
+    /** Get the reasoning effort config. Delegates to client.getReasoningEffort(). */
+    val reasoningEffort: ReasoningEffortConfig? get() = client?.getReasoningEffort()
+
+    /** Get the reasoning summary config. Delegates to client.getReasoningSummary(). */
+    val reasoningSummary: ReasoningSummaryConfig get() = client?.getReasoningSummary() ?: ReasoningSummary.Auto
+
+    /** Get the auto-compact token limit. Delegates to client.getAutoCompactTokenLimit(). */
+    val autoCompactTokenLimit: Long? get() = client?.getAutoCompactTokenLimit()
+
+    /** Stream max retries - from client config. */
+    val streamMaxRetries: Int get() = client?.config()?.streamMaxRetries ?: 3
+
     /**
      * Whether the model family supports parallel tool calls.
      */
     val modelFamilySupportsParallelToolCalls: Boolean
         get() = toolsConfig.modelFamily.supportsParallelToolCalls
+
     /**
      * Get the compact prompt, falling back to SUMMARIZATION_PROMPT if not set.
      * Ported from Rust codex-rs/core/src/codex.rs TurnContext::compact_prompt()
@@ -1336,6 +1370,7 @@ data class TurnContext(
 
     /**
      * Resolves a relative path against the turn's CWD.
+     * Ported from Rust codex-rs/core/src/codex.rs TurnContext::resolve_path()
      */
     fun resolvePath(path: String?): String {
         if (path == null) return cwd
@@ -2549,10 +2584,68 @@ data class Prompt(
 
 /**
  * Tool specification.
+ *
+ * When serialized as JSON, this produces a valid "Tool" in the OpenAI Responses API.
+ * Matches Rust's ToolSpec enum from core/src/client_common.rs.
  */
-data class ToolSpec(
+sealed class ToolSpec {
+    /**
+     * A function tool with schema-defined parameters.
+     */
+    data class Function(
+        val name: String,
+        val description: String,
+        val strict: Boolean = false,
+        val parameters: JsonElement?
+    ) : ToolSpec()
+
+    /**
+     * A local shell tool (no parameters needed).
+     */
+    data object LocalShell : ToolSpec()
+
+    /**
+     * A web search tool (no parameters needed).
+     */
+    data object WebSearch : ToolSpec()
+
+    /**
+     * A freeform/custom tool with format specification.
+     */
+    data class Freeform(
+        val name: String,
+        val description: String,
+        val format: FreeformToolFormat
+    ) : ToolSpec()
+
+    /**
+     * Get the name of this tool.
+     */
+    fun name(): String = when (this) {
+        is Function -> name
+        is LocalShell -> "local_shell"
+        is WebSearch -> "web_search"
+        is Freeform -> name
+    }
+}
+
+/**
+ * Format specification for freeform tools.
+ */
+data class FreeformToolFormat(
+    val type: String,
+    val syntax: String,
+    val definition: String
+)
+
+/**
+ * A tool for the OpenAI Responses API.
+ * Helper class for serializing Function tools.
+ */
+data class ResponsesApiTool(
     val name: String,
     val description: String,
+    val strict: Boolean = false,
     val parameters: JsonElement?
 )
 
