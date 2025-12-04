@@ -71,21 +71,6 @@ impl ContextManager {
         processed
     }
 
-    pub(crate) fn record_preprocessed<I>(&mut self, items: I)
-    where
-        I: IntoIterator,
-        I::Item: std::ops::Deref<Target = ResponseItem>,
-    {
-        for item in items {
-            let item_ref = item.deref();
-            let is_ghost_snapshot = matches!(item_ref, ResponseItem::GhostSnapshot { .. });
-            if !is_api_message(item_ref) && !is_ghost_snapshot {
-                continue;
-            }
-            self.items.push(item_ref.clone());
-        }
-    }
-
     pub(crate) fn get_history(&mut self) -> Vec<ResponseItem> {
         self.normalize_history();
         self.contents()

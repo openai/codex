@@ -1047,7 +1047,11 @@ impl Session {
         for item in rollout_items {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
-                    history.record_preprocessed(std::iter::once(response_item));
+                    // For consistency, and also to load pre-patch histories properly.
+                    let _ = history.record_items(
+                        std::iter::once(response_item),
+                        turn_context.truncation_policy,
+                    );
                 }
                 RolloutItem::Compacted(compacted) => {
                     let snapshot = history.get_history();
