@@ -1112,14 +1112,7 @@ impl Config {
             .or(cfg.model)
             .unwrap_or_else(default_model);
 
-        let mut model_family = find_family_for_model(&model);
-
-        if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
-            model_family.supports_reasoning_summaries = supports_reasoning_summaries;
-        }
-        if let Some(ref model_reasoning_summary_format) = cfg.model_reasoning_summary_format {
-            model_family.reasoning_summary_format = model_reasoning_summary_format.clone();
-        }
+        let model_family = find_family_for_model(&model);
 
         let openai_model_info = get_model_info(&model_family);
         let model_context_window = cfg
