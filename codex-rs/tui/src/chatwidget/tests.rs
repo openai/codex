@@ -889,6 +889,16 @@ fn active_blob(chat: &ChatWidget) -> String {
     lines_to_single_string(&lines)
 }
 
+fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
+    chat.models_manager
+        .available_models
+        .blocking_read()
+        .iter()
+        .find(|&preset| preset.model == model)
+        .cloned()
+        .unwrap_or_else(|| panic!("{model} preset not found"))
+}
+
 #[test]
 fn empty_enter_during_task_does_not_queue() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
@@ -1762,14 +1772,7 @@ fn model_reasoning_selection_popup_snapshot() {
     chat.config.model = "gpt-5.1-codex-max".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
-    let preset = chat
-        .models_manager
-        .available_models
-        .blocking_read()
-        .iter()
-        .find(|&preset| preset.model == "gpt-5.1-codex-max")
-        .cloned()
-        .expect("gpt-5.1-codex-max preset");
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1784,15 +1787,7 @@ fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
     chat.config.model = "gpt-5.1-codex-max".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::XHigh);
 
-    let preset = chat
-        .models_manager
-        .available_models
-        .blocking_read()
-        .iter()
-        .cloned()
-        .into_iter()
-        .find(|preset| preset.model == "gpt-5.1-codex-max")
-        .expect("gpt-5.1-codex-max preset");
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1806,15 +1801,7 @@ fn reasoning_popup_shows_extra_high_with_space() {
     set_chatgpt_auth(&mut chat);
     chat.config.model = "gpt-5.1-codex-max".to_string();
 
-    let preset = chat
-        .models_manager
-        .available_models
-        .blocking_read()
-        .iter()
-        .cloned()
-        .into_iter()
-        .find(|preset| preset.model == "gpt-5.1-codex-max")
-        .expect("gpt-5.1-codex-max preset");
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, 120);
@@ -1897,14 +1884,7 @@ fn reasoning_popup_escape_returns_to_model_popup() {
     chat.config.model = "gpt-5.1".to_string();
     chat.open_model_popup();
 
-    let preset = chat
-        .models_manager
-        .available_models
-        .blocking_read()
-        .iter()
-        .find(|&preset| preset.model == "gpt-5.1-codex")
-        .cloned()
-        .expect("gpt-5.1-codex preset");
+    let preset = get_available_model(&chat, "gpt-5.1-codex");
     chat.open_reasoning_popup(preset);
 
     let before_escape = render_bottom_popup(&chat, 80);
