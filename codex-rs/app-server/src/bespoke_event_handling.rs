@@ -136,6 +136,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                         id: item_id.clone(),
                         changes: patch_changes.clone(),
                         status: PatchApplyStatus::InProgress,
+                        stdout: None,
+                        stderr: None,
                     };
                     let notification = ItemStartedNotification {
                         thread_id: conversation_id.to_string(),
@@ -462,6 +464,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                     id: item_id.clone(),
                     changes: convert_patch_changes(&patch_begin_event.changes),
                     status: PatchApplyStatus::InProgress,
+                    stdout: None,
+                    stderr: None,
                 };
                 let notification = ItemStartedNotification {
                     thread_id: conversation_id.to_string(),
@@ -489,6 +493,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 item_id,
                 changes,
                 status,
+                Some(patch_end_event.stdout),
+                Some(patch_end_event.stderr),
                 event_turn_id.clone(),
                 outgoing.as_ref(),
                 &turn_summary_store,
@@ -738,11 +744,14 @@ async fn emit_turn_completed_with_status(
         .await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn complete_file_change_item(
     conversation_id: ConversationId,
     item_id: String,
     changes: Vec<FileUpdateChange>,
     status: PatchApplyStatus,
+    stdout: Option<String>,
+    stderr: Option<String>,
     turn_id: String,
     outgoing: &OutgoingMessageSender,
     turn_summary_store: &TurnSummaryStore,
@@ -758,6 +767,8 @@ async fn complete_file_change_item(
         id: item_id,
         changes,
         status,
+        stdout,
+        stderr,
     };
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -1068,6 +1079,8 @@ async fn on_file_change_request_approval_response(
             item_id,
             changes,
             status,
+            None,
+            None,
             event_turn_id.clone(),
             outgoing.as_ref(),
             &turn_summary_store,

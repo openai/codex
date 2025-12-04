@@ -1126,6 +1126,10 @@ pub enum ThreadItem {
         id: String,
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
+        /// Captured stdout (summary printed by the underlying `apply_patch` tool call).
+        stdout: Option<String>,
+        /// Captured stderr (parser errors, IO failures, etc.).
+        stderr: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
