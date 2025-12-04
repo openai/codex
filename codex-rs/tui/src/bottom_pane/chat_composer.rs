@@ -52,8 +52,9 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
-use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::clipboard_paste::pasted_image_format;
+#[cfg(target_os = "linux")]
+use crate::clipboard_paste::convert_windows_path_to_wsl;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_core::skills::model::SkillMetadata;
@@ -328,7 +329,8 @@ impl ChatComposer {
             }
             Err(err) => {
                 // Attempt simple Windows drive → /mnt mapping (only if it looks like a Windows path).
-                if let Some(mapped) = try_map_windows_drive_to_wsl_path(&path_buf.to_string_lossy())
+                #[cfg(target_os = "linux")]
+                if let Some(mapped) = convert_windows_path_to_wsl(&path_buf.to_string_lossy())
                     && let Ok((w, h)) = image::image_dimensions(&mapped)
                 {
                     tracing::info!("OK (WSL mapped): {}", mapped.display());
@@ -1081,37 +1083,6 @@ impl ChatComposer {
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
-        }
-        // Support an explicit keyboard shortcut to paste image from clipboard
-        // using the native clipboard reader (arboard) or Windows PowerShell
-        // fallback when running under WSL. This avoids relying on the terminal
-        // to forward Ctrl+V as text. Shortcut: Ctrl+Alt+V.
-        if let KeyEvent {
-            code: KeyCode::Char('v'),
-            modifiers,
-            ..
-        } = key_event
-            && modifiers.contains(KeyModifiers::CONTROL)
-            && modifiers.contains(KeyModifiers::ALT)
-            && get_operating_system_info()
-                .and_then(|info| info.is_likely_windows_subsystem_for_linux)
-                .unwrap_or(false)
-        {
-            match paste_image_to_temp_png() {
-                Ok((path, info)) => {
-                    let format_label = pasted_image_format(&path).label();
-                    self.attach_image(path, info.width, info.height, format_label);
-                    return (InputResult::None, true);
-                }
-                Err(e) => {
-                    tracing::warn!("paste_image_to_temp_png failed: {}", e.to_string());
-                    let msg = format!("Failed to paste image from clipboard: {e}");
-                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(msg, None),
-                    )));
-                    return (InputResult::None, true);
-                }
-            }
         }
         if key_event.code == KeyCode::Esc {
             if self.is_empty() {

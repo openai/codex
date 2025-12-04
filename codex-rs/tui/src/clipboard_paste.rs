@@ -1,10 +1,8 @@
-use codex_core::environment_context::get_operating_system_info;
-use codex_core::environment_context::try_map_windows_drive_to_wsl_path;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::Builder;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PasteImageError {
     ClipboardUnavailable(String),
     NoImage(String),
@@ -139,41 +137,59 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
             Ok((path, info))
         }
         Err(e) => {
-            // If clipboard is unavailable (common under WSL because arboard cannot access
-            // the Windows clipboard), attempt a WSL fallback that calls PowerShell on the
-            // Windows side to write the clipboard image to a temporary file, then return
-            // the corresponding WSL path.
-            use PasteImageError::ClipboardUnavailable;
-            use PasteImageError::NoImage;
-
-            let is_wsl = get_operating_system_info()
-                .and_then(|info| info.is_likely_windows_subsystem_for_linux)
-                .unwrap_or(false);
-
-            if is_wsl && matches!(&e, ClipboardUnavailable(_) | NoImage(_)) {
-                tracing::debug!("attempting Windows PowerShell clipboard fallback");
-                if let Some(win_path) = try_dump_windows_clipboard_image() {
-                    tracing::debug!("powershell produced path: {}", win_path);
-                    if let Some(mapped_path) = try_map_windows_drive_to_wsl_path(&win_path)
-                        && let Ok((w, h)) = image::image_dimensions(&mapped_path)
-                    {
-                        // Return the mapped path directly without copying.
-                        // The file will be read and base64-encoded during serialization.
-                        return Ok((
-                            mapped_path,
-                            PastedImageInfo {
-                                width: w,
-                                height: h,
-                                encoded_format: EncodedImageFormat::Png,
-                            },
-                        ));
-                    }
-                }
+            #[cfg(target_os = "linux")]
+            {
+                try_wsl_clipboard_fallback(&e).or(Err(e))
             }
-            // If we reach here, fall through to returning the original error.
-            Err(e)
+            #[cfg(not(target_os = "linux"))]
+            {
+                Err(e)
+            }
         }
     }
+}
+
+/// Attempt WSL fallback for clipboard image paste.
+///
+/// If clipboard is unavailable (common under WSL because arboard cannot access
+/// the Windows clipboard), attempt a WSL fallback that calls PowerShell on the
+/// Windows side to write the clipboard image to a temporary file, then return
+/// the corresponding WSL path.
+#[cfg(target_os = "linux")]
+fn try_wsl_clipboard_fallback(
+    error: &PasteImageError,
+) -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
+    use PasteImageError::ClipboardUnavailable;
+    use PasteImageError::NoImage;
+
+    if !is_probably_wsl() || !matches!(error, ClipboardUnavailable(_) | NoImage(_)) {
+        return Err(error.clone());
+    }
+
+    tracing::debug!("attempting Windows PowerShell clipboard fallback");
+    let Some(win_path) = try_dump_windows_clipboard_image() else {
+        return Err(error.clone());
+    };
+
+    tracing::debug!("powershell produced path: {}", win_path);
+    let Some(mapped_path) = convert_windows_path_to_wsl(&win_path) else {
+        return Err(error.clone());
+    };
+
+    let Ok((w, h)) = image::image_dimensions(&mapped_path) else {
+        return Err(error.clone());
+    };
+
+    // Return the mapped path directly without copying.
+    // The file will be read and base64-encoded during serialization.
+    Ok((
+        mapped_path,
+        PastedImageInfo {
+            width: w,
+            height: h,
+            encoded_format: EncodedImageFormat::Png,
+        },
+    ))
 }
 
 /// Try to call a Windows PowerShell command (several common names) to save the
@@ -279,14 +295,14 @@ pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "linux")]
-fn is_probably_wsl() -> bool {
+pub(crate) fn is_probably_wsl() -> bool {
     std::env::var_os("WSL_DISTRO_NAME").is_some()
         || std::env::var_os("WSL_INTEROP").is_some()
         || std::env::var_os("WSLENV").is_some()
 }
 
 #[cfg(target_os = "linux")]
-fn convert_windows_path_to_wsl(input: &str) -> Option<PathBuf> {
+pub(crate) fn convert_windows_path_to_wsl(input: &str) -> Option<PathBuf> {
     if input.starts_with("\\\\") {
         return None;
     }
