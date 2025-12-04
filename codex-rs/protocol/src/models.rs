@@ -85,6 +85,11 @@ pub enum ResponseItem {
         // Chat Completions + Responses API behavior.
         arguments: String,
         call_id: String,
+        /// Provider-specific metadata (e.g., Gemini's `thought_signature`).
+        /// This field is captured from SSE responses and must be echoed back
+        /// in subsequent requests for multi-turn tool calling to work correctly.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extra_content: Option<serde_json::Value>,
     },
     // NOTE: The input schema for `function_call_output` objects that clients send to the
     // OpenAI /v1/responses endpoint is NOT the same shape as the objects the server returns on the

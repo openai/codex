@@ -43,6 +43,7 @@ pub async fn process_chat_sse<S>(
     struct ToolCallState {
         name: Option<String>,
         arguments: String,
+        extra_content: Option<serde_json::Value>,
     }
 
     let mut tool_calls: HashMap<String, ToolCallState> = HashMap::new();
@@ -169,6 +170,11 @@ pub async fn process_chat_sse<S>(
                                 call_state.arguments.push_str(arguments);
                             }
                         }
+
+                        // Capture extra_content (e.g., Gemini's thought_signature)
+                        if let Some(extra) = tool_call.get("extra_content") {
+                            call_state.extra_content = Some(extra.clone());
+                        }
                     }
                 }
             }
@@ -229,6 +235,7 @@ pub async fn process_chat_sse<S>(
                         name: state.name.unwrap_or_default(),
                         arguments: state.arguments,
                         call_id: call_id.clone(),
+                        extra_content: state.extra_content,
                     };
                     let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                 }
