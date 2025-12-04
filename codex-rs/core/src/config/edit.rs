@@ -2,9 +2,8 @@ use crate::config::CONFIG_TOML_FILE;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use anyhow::Context;
-use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::TrustLevel;
-use codex_utils_tokenizer::warm_model_cache;
+use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -231,9 +230,6 @@ impl ConfigDocument {
     fn apply(&mut self, edit: &ConfigEdit) -> anyhow::Result<bool> {
         match edit {
             ConfigEdit::SetModel { model, effort } => Ok({
-                if let Some(model) = &model {
-                    warm_model_cache(model)
-                }
                 let mut mutated = false;
                 mutated |= self.write_profile_value(
                     &["model"],
@@ -578,7 +574,7 @@ impl ConfigEditsBuilder {
 mod tests {
     use super::*;
     use crate::config::types::McpServerTransportConfig;
-    use codex_protocol::config_types::ReasoningEffort;
+    use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
     use tokio::runtime::Builder;

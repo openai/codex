@@ -18,6 +18,9 @@ use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
+use codex_exec::Command as ExecCommand;
+use codex_exec::ReviewArgs;
+use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
@@ -71,6 +74,9 @@ enum Subcommand {
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
 
+    /// Run a code review non-interactively.
+    Review(ReviewArgs),
+
     /// Manage login.
     Login(LoginCommand),
 
@@ -92,6 +98,10 @@ enum Subcommand {
     /// Run commands within a Codex-provided sandbox.
     #[clap(visible_alias = "debug")]
     Sandbox(SandboxArgs),
+
+    /// Execpolicy tooling.
+    #[clap(hide = true)]
+    Execpolicy(ExecpolicyCommand),
 
     /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
     #[clap(visible_alias = "a")]
@@ -160,6 +170,19 @@ enum SandboxCommand {
 
     /// Run a command under Windows restricted token (Windows only).
     Windows(WindowsCommand),
+}
+
+#[derive(Debug, Parser)]
+struct ExecpolicyCommand {
+    #[command(subcommand)]
+    sub: ExecpolicySubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum ExecpolicySubcommand {
+    /// Check execpolicy files against a command.
+    #[clap(name = "check")]
+    Check(ExecPolicyCheckCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -327,6 +350,10 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
+    cmd.run()
+}
+
 #[derive(Debug, Default, Parser, Clone)]
 struct FeatureToggles {
     /// Enable a feature (repeatable). Equivalent to `-c features.<name>=true`.
@@ -421,6 +448,15 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
+            prepend_config_flags(
+                &mut exec_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
+        }
+        Some(Subcommand::Review(review_args)) => {
+            let mut exec_cli = ExecCli::try_parse_from(["codex", "exec"])?;
+            exec_cli.command = Some(ExecCommand::Review(review_args));
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
@@ -548,6 +584,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 )
                 .await?;
             }
+        },
+        Some(Subcommand::Execpolicy(ExecpolicyCommand { sub })) => match sub {
+            ExecpolicySubcommand::Check(cmd) => run_execpolicycheck(cmd)?,
         },
         Some(Subcommand::Apply(mut apply_cli)) => {
             prepend_config_flags(

@@ -62,7 +62,10 @@ impl SessionState {
     }
 
     pub(crate) fn set_rate_limits(&mut self, snapshot: RateLimitSnapshot) {
-        self.latest_rate_limits = Some(snapshot);
+        self.latest_rate_limits = Some(merge_rate_limit_credits(
+            self.latest_rate_limits.as_ref(),
+            snapshot,
+        ));
     }
 
     pub(crate) fn token_info_and_rate_limits(
@@ -74,4 +77,19 @@ impl SessionState {
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
         self.history.set_token_usage_full(context_window);
     }
+
+    pub(crate) fn get_total_token_usage(&self) -> i64 {
+        self.history.get_total_token_usage()
+    }
+}
+
+// Sometimes new snapshots don't include credits
+fn merge_rate_limit_credits(
+    previous: Option<&RateLimitSnapshot>,
+    mut snapshot: RateLimitSnapshot,
+) -> RateLimitSnapshot {
+    if snapshot.credits.is_none() {
+        snapshot.credits = previous.and_then(|prior| prior.credits.clone());
+    }
+    snapshot
 }

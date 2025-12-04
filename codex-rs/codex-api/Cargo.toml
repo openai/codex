@@ -1,0 +1,30 @@
+[package]
+name = "codex-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+bytes = { workspace = true }
+codex-client = { workspace = true }
+codex-protocol = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tracing = { workspace = true }
+eventsource-stream = { workspace = true }
+regex-lite = { workspace = true }
+tokio-util = { workspace = true, features = ["codec"] }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+assert_matches = { workspace = true }
+pretty_assertions = { workspace = true }
+tokio-test = { workspace = true }
+
+[lints]
+workspace = true

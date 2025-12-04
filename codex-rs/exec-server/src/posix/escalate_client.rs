@@ -98,5 +98,12 @@ pub(crate) async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> 
 
             Err(err.into())
         }
+        EscalateAction::Deny { reason } => {
+            match reason {
+                Some(reason) => eprintln!("Execution denied: {reason}"),
+                None => eprintln!("Execution denied"),
+            }
+            Ok(1)
+        }
     }
 }

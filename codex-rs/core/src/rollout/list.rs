@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicBool;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
+use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use uuid::Uuid;
 
@@ -39,18 +40,15 @@ pub struct ConversationItem {
     pub path: PathBuf,
     /// First up to `HEAD_RECORD_LIMIT` JSONL records parsed as JSON (includes meta line).
     pub head: Vec<serde_json::Value>,
-    /// Last up to `TAIL_RECORD_LIMIT` JSONL response records parsed as JSON.
-    pub tail: Vec<serde_json::Value>,
     /// RFC3339 timestamp string for when the session was created, if available.
     pub created_at: Option<String>,
-    /// RFC3339 timestamp string for the most recent response in the tail, if available.
+    /// RFC3339 timestamp string for the most recent update (from file mtime).
     pub updated_at: Option<String>,
 }
 
 #[derive(Default)]
 struct HeadTailSummary {
     head: Vec<serde_json::Value>,
-    tail: Vec<serde_json::Value>,
     saw_session_meta: bool,
     saw_user_event: bool,
     source: Option<SessionSource>,
@@ -62,7 +60,6 @@ struct HeadTailSummary {
 /// Hard cap to bound worst‑case work per request.
 const MAX_SCAN_FILES: usize = 10000;
 const HEAD_RECORD_LIMIT: usize = 10;
-const TAIL_RECORD_LIMIT: usize = 10;
 
 /// Pagination cursor identifying a file by timestamp and UUID.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,13 +138,6 @@ pub(crate) async fn get_conversations(
     Ok(result)
 }
 
-/// Load the full contents of a single conversation session file at `path`.
-/// Returns the entire file contents as a String.
-#[allow(dead_code)]
-pub(crate) async fn get_conversation(path: &Path) -> io::Result<String> {
-    tokio::fs::read_to_string(path).await
-}
-
 /// Load conversation file paths from disk using directory traversal.
 ///
 /// Directory layout: `~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl`
@@ -212,9 +202,8 @@ async fn traverse_directories_for_paths(
                         more_matches_available = true;
                         break 'outer;
                     }
-                    // Read head and simultaneously detect message events within the same
-                    // first N JSONL records to avoid a second file read.
-                    let summary = read_head_and_tail(&path, HEAD_RECORD_LIMIT, TAIL_RECORD_LIMIT)
+                    // Read head and detect message events; stop once meta + user are found.
+                    let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
                         .await
                         .unwrap_or_default();
                     if !allowed_sources.is_empty()
@@ -233,16 +222,19 @@ async fn traverse_directories_for_paths(
                     if summary.saw_session_meta && summary.saw_user_event {
                         let HeadTailSummary {
                             head,
-                            tail,
                             created_at,
                             mut updated_at,
                             ..
                         } = summary;
-                        updated_at = updated_at.or_else(|| created_at.clone());
+                        if updated_at.is_none() {
+                            updated_at = file_modified_rfc3339(&path)
+                                .await
+                                .unwrap_or(None)
+                                .or_else(|| created_at.clone());
+                        }
                         items.push(ConversationItem {
                             path,
                             head,
-                            tail,
                             created_at,
                             updated_at,
                         });
@@ -384,11 +376,7 @@ impl<'a> ProviderMatcher<'a> {
     }
 }
 
-async fn read_head_and_tail(
-    path: &Path,
-    head_limit: usize,
-    tail_limit: usize,
-) -> io::Result<HeadTailSummary> {
+async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTailSummary> {
     use tokio::io::AsyncBufReadExt;
 
     let file = tokio::fs::File::open(path).await?;
@@ -441,107 +429,30 @@ async fn read_head_and_tail(
                 }
             }
         }
+
+        if summary.saw_session_meta && summary.saw_user_event {
+            break;
+        }
     }
 
-    if tail_limit != 0 {
-        let (tail, updated_at) = read_tail_records(path, tail_limit).await?;
-        summary.tail = tail;
-        summary.updated_at = updated_at;
-    }
     Ok(summary)
 }
 
 /// Read up to `HEAD_RECORD_LIMIT` records from the start of the rollout file at `path`.
 /// This should be enough to produce a summary including the session meta line.
 pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Value>> {
-    let summary = read_head_and_tail(path, HEAD_RECORD_LIMIT, 0).await?;
+    let summary = read_head_summary(path, HEAD_RECORD_LIMIT).await?;
     Ok(summary.head)
 }
 
-async fn read_tail_records(
-    path: &Path,
-    max_records: usize,
-) -> io::Result<(Vec<serde_json::Value>, Option<String>)> {
-    use std::io::SeekFrom;
-    use tokio::io::AsyncReadExt;
-    use tokio::io::AsyncSeekExt;
-
-    if max_records == 0 {
-        return Ok((Vec::new(), None));
-    }
-
-    const CHUNK_SIZE: usize = 8192;
-
-    let mut file = tokio::fs::File::open(path).await?;
-    let mut pos = file.seek(SeekFrom::End(0)).await?;
-    if pos == 0 {
-        return Ok((Vec::new(), None));
-    }
-
-    let mut buffer: Vec<u8> = Vec::new();
-    let mut latest_timestamp: Option<String> = None;
-
-    loop {
-        let slice_start = match (pos > 0, buffer.iter().position(|&b| b == b'\n')) {
-            (true, Some(idx)) => idx + 1,
-            _ => 0,
-        };
-        let (tail, newest_ts) = collect_last_response_values(&buffer[slice_start..], max_records);
-        if latest_timestamp.is_none() {
-            latest_timestamp = newest_ts.clone();
-        }
-        if tail.len() >= max_records || pos == 0 {
-            return Ok((tail, latest_timestamp.or(newest_ts)));
-        }
-
-        let read_size = CHUNK_SIZE.min(pos as usize);
-        if read_size == 0 {
-            return Ok((tail, latest_timestamp.or(newest_ts)));
-        }
-        pos -= read_size as u64;
-        file.seek(SeekFrom::Start(pos)).await?;
-        let mut chunk = vec![0; read_size];
-        file.read_exact(&mut chunk).await?;
-        chunk.extend_from_slice(&buffer);
-        buffer = chunk;
-    }
-}
-
-fn collect_last_response_values(
-    buffer: &[u8],
-    max_records: usize,
-) -> (Vec<serde_json::Value>, Option<String>) {
-    use std::borrow::Cow;
-
-    if buffer.is_empty() || max_records == 0 {
-        return (Vec::new(), None);
-    }
-
-    let text: Cow<'_, str> = String::from_utf8_lossy(buffer);
-    let mut collected_rev: Vec<serde_json::Value> = Vec::new();
-    let mut latest_timestamp: Option<String> = None;
-    for line in text.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let parsed: serde_json::Result<RolloutLine> = serde_json::from_str(trimmed);
-        let Ok(rollout_line) = parsed else { continue };
-        let RolloutLine { timestamp, item } = rollout_line;
-        if let RolloutItem::ResponseItem(item) = item
-            && let Ok(val) = serde_json::to_value(&item)
-        {
-            if latest_timestamp.is_none() {
-                latest_timestamp = Some(timestamp.clone());
-            }
-            collected_rev.push(val);
-            if collected_rev.len() == max_records {
-                break;
-            }
-        }
-    }
-    collected_rev.reverse();
-    (collected_rev, latest_timestamp)
+async fn file_modified_rfc3339(path: &Path) -> io::Result<Option<String>> {
+    let meta = tokio::fs::metadata(path).await?;
+    let modified = meta.modified().ok();
+    let Some(modified) = modified else {
+        return Ok(None);
+    };
+    let dt = OffsetDateTime::from(modified);
+    Ok(dt.format(&Rfc3339).ok())
 }
 
 /// Locate a recorded conversation rollout file by its UUID string using the existing

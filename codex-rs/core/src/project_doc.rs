@@ -14,6 +14,9 @@
 //! 3.  We do **not** walk past the Git root.
 
 use crate::config::Config;
+use crate::features::Feature;
+use crate::skills::load_skills;
+use crate::skills::render_skills_section;
 use dunce::canonicalize as normalize_path;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
@@ -31,18 +34,47 @@ const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
 pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
-    match read_project_docs(config).await {
-        Ok(Some(project_doc)) => match &config.user_instructions {
-            Some(original_instructions) => Some(format!(
-                "{original_instructions}{PROJECT_DOC_SEPARATOR}{project_doc}"
-            )),
-            None => Some(project_doc),
-        },
-        Ok(None) => config.user_instructions.clone(),
+    let skills_section = if config.features.enabled(Feature::Skills) {
+        let skills_outcome = load_skills(config);
+        for err in &skills_outcome.errors {
+            error!(
+                "failed to load skill {}: {}",
+                err.path.display(),
+                err.message
+            );
+        }
+        render_skills_section(&skills_outcome.skills)
+    } else {
+        None
+    };
+
+    let project_docs = match read_project_docs(config).await {
+        Ok(docs) => docs,
         Err(e) => {
             error!("error trying to find project doc: {e:#}");
-            config.user_instructions.clone()
+            return config.user_instructions.clone();
         }
+    };
+
+    let combined_project_docs = merge_project_docs_with_skills(project_docs, skills_section);
+
+    let mut parts: Vec<String> = Vec::new();
+
+    if let Some(instructions) = config.user_instructions.clone() {
+        parts.push(instructions);
+    }
+
+    if let Some(project_doc) = combined_project_docs {
+        if !parts.is_empty() {
+            parts.push(PROJECT_DOC_SEPARATOR.to_string());
+        }
+        parts.push(project_doc);
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.concat())
     }
 }
 
@@ -195,12 +227,25 @@ fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {
     names
 }
 
+fn merge_project_docs_with_skills(
+    project_doc: Option<String>,
+    skills_section: Option<String>,
+) -> Option<String> {
+    match (project_doc, skills_section) {
+        (Some(doc), Some(skills)) => Some(format!("{doc}\n\n{skills}")),
+        (Some(doc), None) => Some(doc),
+        (None, Some(skills)) => Some(skills),
+        (None, None) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     /// Helper that returns a `Config` pointing at `root` and using `limit` as
@@ -219,6 +264,7 @@ mod tests {
 
         config.cwd = root.path().to_path_buf();
         config.project_doc_max_bytes = limit;
+        config.features.enable(Feature::Skills);
 
         config.user_instructions = instructions.map(ToOwned::to_owned);
         config
@@ -446,5 +492,61 @@ mod tests {
                 .to_string_lossy()
                 .eq(DEFAULT_PROJECT_DOC_FILENAME)
         );
+    }
+
+    #[tokio::test]
+    async fn skills_are_appended_to_project_doc() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "base doc").unwrap();
+
+        let cfg = make_config(&tmp, 4096, None);
+        create_skill(
+            cfg.codex_home.clone(),
+            "pdf-processing",
+            "extract from pdfs",
+        );
+
+        let res = get_user_instructions(&cfg)
+            .await
+            .expect("instructions expected");
+        let expected_path = dunce::canonicalize(
+            cfg.codex_home
+                .join("skills/pdf-processing/SKILL.md")
+                .as_path(),
+        )
+        .unwrap_or_else(|_| cfg.codex_home.join("skills/pdf-processing/SKILL.md"));
+        let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
+        let usage_rules = "- Discovery: Available skills are listed in project docs and may also appear in a runtime \"## Skills\" section (name + description + file path). These are the sources of truth; skill bodies live on disk at the listed paths.\n- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.\n- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.\n- How to use a skill (progressive disclosure):\n  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.\n  2) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.\n  3) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.\n  4) If `assets/` or templates exist, reuse them instead of recreating from scratch.\n- Description as trigger: The YAML `description` in `SKILL.md` is the primary trigger signal; rely on it to decide applicability. If unsure, ask a brief clarification before proceeding.\n- Coordination and sequencing:\n  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.\n  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.\n- Context hygiene:\n  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.\n  - Avoid deeply nested references; prefer one-hop files explicitly linked from `SKILL.md`.\n  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.\n- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.";
+        let expected = format!(
+            "base doc\n\n## Skills\nThese skills are discovered at startup from ~/.codex/skills; each entry shows name, description, and file path so you can open the source for full instructions. Content is not inlined to keep context lean.\n- pdf-processing: extract from pdfs (file: {expected_path_str})\n{usage_rules}"
+        );
+        assert_eq!(res, expected);
+    }
+
+    #[tokio::test]
+    async fn skills_render_without_project_doc() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cfg = make_config(&tmp, 4096, None);
+        create_skill(cfg.codex_home.clone(), "linting", "run clippy");
+
+        let res = get_user_instructions(&cfg)
+            .await
+            .expect("instructions expected");
+        let expected_path =
+            dunce::canonicalize(cfg.codex_home.join("skills/linting/SKILL.md").as_path())
+                .unwrap_or_else(|_| cfg.codex_home.join("skills/linting/SKILL.md"));
+        let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
+        let usage_rules = "- Discovery: Available skills are listed in project docs and may also appear in a runtime \"## Skills\" section (name + description + file path). These are the sources of truth; skill bodies live on disk at the listed paths.\n- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.\n- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.\n- How to use a skill (progressive disclosure):\n  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.\n  2) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.\n  3) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.\n  4) If `assets/` or templates exist, reuse them instead of recreating from scratch.\n- Description as trigger: The YAML `description` in `SKILL.md` is the primary trigger signal; rely on it to decide applicability. If unsure, ask a brief clarification before proceeding.\n- Coordination and sequencing:\n  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.\n  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.\n- Context hygiene:\n  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.\n  - Avoid deeply nested references; prefer one-hop files explicitly linked from `SKILL.md`.\n  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.\n- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.";
+        let expected = format!(
+            "## Skills\nThese skills are discovered at startup from ~/.codex/skills; each entry shows name, description, and file path so you can open the source for full instructions. Content is not inlined to keep context lean.\n- linting: run clippy (file: {expected_path_str})\n{usage_rules}"
+        );
+        assert_eq!(res, expected);
+    }
+
+    fn create_skill(codex_home: PathBuf, name: &str, description: &str) {
+        let skill_dir = codex_home.join(format!("skills/{name}"));
+        fs::create_dir_all(&skill_dir).unwrap();
+        let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
+        fs::write(skill_dir.join("SKILL.md"), content).unwrap();
     }
 }

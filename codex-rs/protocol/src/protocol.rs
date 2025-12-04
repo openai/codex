@@ -11,7 +11,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use crate::ConversationId;
-use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
 use crate::items::TurnItem;
@@ -19,10 +19,12 @@ use crate::message_history::HistoryEntry;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::num_format::format_with_separators;
+use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::user_input::UserInput;
 use mcp_types::CallToolResult;
+use mcp_types::RequestId;
 use mcp_types::Resource as McpResource;
 use mcp_types::ResourceTemplate as McpResourceTemplate;
 use mcp_types::Tool as McpTool;
@@ -35,6 +37,7 @@ use strum_macros::Display;
 use ts_rs::TS;
 
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
+pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::SandboxCommandAssessment;
 pub use crate::approvals::SandboxRiskLevel;
@@ -153,6 +156,16 @@ pub enum Op {
         decision: ReviewDecision,
     },
 
+    /// Resolve an MCP elicitation request.
+    ResolveElicitation {
+        /// Name of the MCP server that issued the request.
+        server_name: String,
+        /// Request identifier from the MCP server.
+        request_id: RequestId,
+        /// User's decision for the request.
+        decision: ElicitationAction,
+    },
+
     /// Append an entry to the persistent cross-session message history.
     ///
     /// Note the entry is not guaranteed to be logged if the user has
@@ -195,6 +208,9 @@ pub enum Op {
         /// The raw command string after '!'
         command: String,
     },
+
+    /// Request the list of available models.
+    ListModels,
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -442,6 +458,9 @@ pub enum EventMsg {
     /// indicates the task continued but the user should still be notified.
     Warning(WarningEvent),
 
+    /// Conversation history was compacted (either automatically or manually).
+    ContextCompacted(ContextCompactedEvent),
+
     /// Agent has started a task
     TaskStarted(TaskStartedEvent),
 
@@ -505,6 +524,8 @@ pub enum EventMsg {
 
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
+    ElicitationRequest(ElicitationRequestEvent),
+
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 
     /// Notification advising the user that something they are using has been
@@ -560,6 +581,35 @@ pub enum EventMsg {
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
+}
+
+/// Codex errors that we expose to clients.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum CodexErrorInfo {
+    ContextWindowExceeded,
+    UsageLimitExceeded,
+    HttpConnectionFailed {
+        http_status_code: Option<u16>,
+    },
+    /// Failed to connect to the response SSE stream.
+    ResponseStreamConnectionFailed {
+        http_status_code: Option<u16>,
+    },
+    InternalServerError,
+    Unauthorized,
+    BadRequest,
+    SandboxError,
+    /// The response SSE stream disconnected in the middle of a turnbefore completion.
+    ResponseStreamDisconnected {
+        http_status_code: Option<u16>,
+    },
+    /// Reached the retry limit for responses.
+    ResponseTooManyFailedAttempts {
+        http_status_code: Option<u16>,
+    },
+    Other,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -686,12 +736,17 @@ pub struct ExitedReviewModeEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ErrorEvent {
     pub message: String,
+    #[serde(default)]
+    pub codex_error_info: Option<CodexErrorInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct WarningEvent {
     pub message: String,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ContextCompactedEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TaskCompleteEvent {
@@ -790,6 +845,7 @@ pub struct TokenCountEvent {
 pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
+    pub credits: Option<CreditsSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
@@ -802,6 +858,13 @@ pub struct RateLimitWindow {
     /// Unix timestamp (seconds since epoch) when the window resets.
     #[ts(type = "number | null")]
     pub resets_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct CreditsSnapshot {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    pub balance: Option<String>,
 }
 
 // Includes prompts, tools and space to call compact.
@@ -1077,6 +1140,29 @@ pub enum SubAgentSource {
     Other(String),
 }
 
+impl fmt::Display for SessionSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SessionSource::Cli => f.write_str("cli"),
+            SessionSource::VSCode => f.write_str("vscode"),
+            SessionSource::Exec => f.write_str("exec"),
+            SessionSource::Mcp => f.write_str("mcp"),
+            SessionSource::SubAgent(sub_source) => write!(f, "subagent_{sub_source}"),
+            SessionSource::Unknown => f.write_str("unknown"),
+        }
+    }
+}
+
+impl fmt::Display for SubAgentSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SubAgentSource::Review => f.write_str("review"),
+            SubAgentSource::Compact => f.write_str("compact"),
+            SubAgentSource::Other(other) => f.write_str(other),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
     pub id: ConversationId,
@@ -1173,13 +1259,47 @@ pub struct GitInfo {
     pub repository_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDelivery {
+    Inline,
+    Detached,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+pub enum ReviewTarget {
+    /// Review the working tree: staged, unstaged, and untracked files.
+    UncommittedChanges,
+
+    /// Review changes between the current branch and the given base branch.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    BaseBranch { branch: String },
+
+    /// Review the changes introduced by a specific commit.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Commit {
+        sha: String,
+        /// Optional human-readable label (e.g., commit subject) for UIs.
+        title: Option<String>,
+    },
+
+    /// Arbitrary instructions provided by the user.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Custom { instructions: String },
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 /// Review request sent to the review session.
 pub struct ReviewRequest {
-    pub prompt: String,
-    pub user_facing_hint: String,
-    #[serde(default)]
-    pub append_to_original_thread: bool,
+    pub target: ReviewTarget,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_facing_hint: Option<String>,
 }
 
 /// Structured review result produced by a child review session.
@@ -1245,6 +1365,10 @@ impl Default for ExecCommandSource {
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
     pub call_id: String,
+    /// Identifier for the underlying PTY process (when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub process_id: Option<String>,
     /// Turn ID that this command belongs to.
     pub turn_id: String,
     /// The command to be executed.
@@ -1265,6 +1389,10 @@ pub struct ExecCommandBeginEvent {
 pub struct ExecCommandEndEvent {
     /// Identifier for the ExecCommandBegin that finished.
     pub call_id: String,
+    /// Identifier for the underlying PTY process (when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub process_id: Option<String>,
     /// Turn ID that this command belongs to.
     pub turn_id: String,
     /// The command that was executed.
@@ -1355,6 +1483,8 @@ pub struct UndoCompletedEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct StreamErrorEvent {
     pub message: String,
+    #[serde(default)]
+    pub codex_error_info: Option<CodexErrorInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1366,6 +1496,10 @@ pub struct StreamInfoEvent {
 pub struct PatchApplyBeginEvent {
     /// Identifier so this can be paired with the PatchApplyEnd event.
     pub call_id: String,
+    /// Turn ID that this patch belongs to.
+    /// Uses `#[serde(default)]` for backwards compatibility.
+    #[serde(default)]
+    pub turn_id: String,
     /// If true, there was no ApplyPatchApprovalRequest for this patch.
     pub auto_approved: bool,
     /// The changes to be applied.
@@ -1376,12 +1510,19 @@ pub struct PatchApplyBeginEvent {
 pub struct PatchApplyEndEvent {
     /// Identifier for the PatchApplyBegin that finished.
     pub call_id: String,
+    /// Turn ID that this patch belongs to.
+    /// Uses `#[serde(default)]` for backwards compatibility.
+    #[serde(default)]
+    pub turn_id: String,
     /// Captured stdout (summary printed by apply_patch).
     pub stdout: String,
     /// Captured stderr (parser errors, IO failures, etc.).
     pub stderr: String,
     /// Whether the patch was applied successfully.
     pub success: bool,
+    /// The changes that were applied (mirrors PatchApplyBeginEvent::changes).
+    #[serde(default)]
+    pub changes: HashMap<PathBuf, FileChange>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

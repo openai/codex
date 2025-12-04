@@ -30,6 +30,7 @@ pub(crate) struct StatusIndicatorWidget {
     is_paused: bool,
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
+    animations_enabled: bool,
 }
 
 // Format elapsed seconds into a compact human-friendly form used by the status line.
@@ -50,7 +51,11 @@ pub fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
 }
 
 impl StatusIndicatorWidget {
-    pub(crate) fn new(app_event_tx: AppEventSender, frame_requester: FrameRequester) -> Self {
+    pub(crate) fn new(
+        app_event_tx: AppEventSender,
+        frame_requester: FrameRequester,
+        animations_enabled: bool,
+    ) -> Self {
         Self {
             header: String::from("Working"),
             show_interrupt_hint: true,
@@ -60,6 +65,7 @@ impl StatusIndicatorWidget {
 
             app_event_tx,
             frame_requester,
+            animations_enabled,
         }
     }
 
@@ -146,9 +152,13 @@ impl Renderable for StatusIndicatorWidget {
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
 
         let mut spans = Vec::with_capacity(5);
-        spans.push(spinner(Some(self.last_resume_at)));
+        spans.push(spinner(Some(self.last_resume_at), self.animations_enabled));
         spans.push(" ".into());
-        spans.extend(shimmer_spans(&self.header));
+        if self.animations_enabled {
+            spans.extend(shimmer_spans(&self.header));
+        } else if !self.header.is_empty() {
+            spans.push(self.header.clone().into());
+        }
         spans.push(" ".into());
         if self.show_interrupt_hint {
             spans.extend(vec![
@@ -195,7 +205,7 @@ mod tests {
     fn renders_with_working_header() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
+        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
 
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(80, 2)).expect("terminal");
@@ -209,7 +219,7 @@ mod tests {
     fn renders_truncated() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
+        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
 
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
@@ -223,7 +233,8 @@ mod tests {
     fn timer_pauses_when_requested() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut widget = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
+        let mut widget =
+            StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
 
         let baseline = Instant::now();
         widget.last_resume_at = baseline;
