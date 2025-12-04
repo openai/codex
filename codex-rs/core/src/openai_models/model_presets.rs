@@ -220,6 +220,7 @@ pub(crate) fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPre
         .collect()
 }
 
+// todo(aibrahim): remove this once we migrate tests
 pub fn all_model_presets() -> &'static Vec<ModelPreset> {
     &PRESETS
 }
