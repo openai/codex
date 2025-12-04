@@ -2,7 +2,6 @@
 #![allow(clippy::expect_used)]
 
 use anyhow::Result;
-use codex_core::features::Feature;
 use codex_core::protocol::SandboxPolicy;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
@@ -16,6 +15,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::ApplyPatchModelOutput;
 use core_test_support::test_codex::ShellModelOutput;
+use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
@@ -98,6 +98,22 @@ fn shell_responses(
     }
 }
 
+fn configure_shell_model(
+    builder: TestCodexBuilder,
+    output_type: ShellModelOutput,
+    include_apply_patch_tool: bool,
+) -> TestCodexBuilder {
+    let builder = match output_type {
+        ShellModelOutput::ShellCommand => builder.with_model("test-gpt-5-codex"),
+        ShellModelOutput::LocalShell => builder.with_model("codex-mini-latest"),
+        ShellModelOutput::Shell => builder.with_model("gpt-4.1"),
+    };
+
+    builder.with_config(move |config| {
+        config.include_apply_patch_tool = include_apply_patch_tool;
+    })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ShellModelOutput::Shell)]
 #[test_case(ShellModelOutput::LocalShell)]
@@ -107,11 +123,7 @@ async fn shell_output_stays_json_without_freeform_apply_patch(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("test-gpt-5-codex")
-        .with_config(move |config| {
-            config.features.disable(Feature::ApplyPatchFreeform);
-        });
+    let mut builder = configure_shell_model(test_codex(), output_type, false);
     let test = builder.build(&server).await?;
 
     let call_id = "shell-json";
@@ -163,11 +175,7 @@ async fn shell_output_is_structured_with_freeform_apply_patch(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("test-gpt-5-codex")
-        .with_config(move |config| {
-            config.features.enable(Feature::ApplyPatchFreeform);
-        });
+    let mut builder = configure_shell_model(test_codex(), output_type, true);
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
@@ -212,11 +220,7 @@ async fn shell_output_preserves_fixture_json_without_serialization(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("test-gpt-5-codex")
-        .with_config(move |config| {
-            config.features.disable(Feature::ApplyPatchFreeform);
-        });
+    let mut builder = configure_shell_model(test_codex(), output_type, false);
     let test = builder.build(&server).await?;
 
     let fixture_path = test.cwd.path().join("fixture.json");
@@ -280,11 +284,7 @@ async fn shell_output_structures_fixture_with_serialization(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("test-gpt-5-codex")
-        .with_config(move |config| {
-            config.features.enable(Feature::ApplyPatchFreeform);
-        });
+    let mut builder = configure_shell_model(test_codex(), output_type, true);
     let test = builder.build(&server).await?;
 
     let fixture_path = test.cwd.path().join("fixture.json");
@@ -343,11 +343,7 @@ async fn shell_output_for_freeform_tool_records_duration(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("test-gpt-5-codex")
-        .with_config(move |config| {
-            config.include_apply_patch_tool = true;
-        });
+    let mut builder = configure_shell_model(test_codex(), output_type, true);
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
@@ -397,9 +393,8 @@ async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutp
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("test-gpt-5-codex")
-        .with_config(move |config| {
+    let mut builder =
+        configure_shell_model(test_codex(), output_type, true).with_config(move |config| {
             config.tool_output_token_limit = Some(200);
         });
     let test = builder.build(&server).await?;
