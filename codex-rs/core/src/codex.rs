@@ -2252,7 +2252,7 @@ async fn drain_in_flight(
                     .await;
             }
             Err(err) => {
-                tracing::error!(error = ?err, "in-flight tool future failed during drain");
+                error_or_panic(format!("in-flight tool future failed during drain: {err}"));
             }
         }
     }
