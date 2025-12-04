@@ -50,8 +50,6 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
-#[cfg(target_os = "linux")]
-use crate::clipboard_paste::convert_windows_path_to_wsl;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
@@ -259,10 +257,8 @@ impl ChatComposer {
             return false;
         };
 
-        // Try to read image dimensions for the normalized path. If that fails,
-        // attempt a WSL-style mapping for pasted Windows drive-letter paths
-        // (e.g. C:\Users\...) → /mnt/c/... which occurs when pasting from
-        // Windows into a WSL terminal.
+        // normalize_pasted_path already handles Windows → WSL path conversion,
+        // so we can directly try to read the image dimensions.
         match image::image_dimensions(&path_buf) {
             Ok((w, h)) => {
                 tracing::info!("OK: {pasted}");
@@ -271,17 +267,6 @@ impl ChatComposer {
                 true
             }
             Err(err) => {
-                // Attempt simple Windows drive → /mnt mapping (only if it looks like a Windows path).
-                #[cfg(target_os = "linux")]
-                if let Some(mapped) = convert_windows_path_to_wsl(&path_buf.to_string_lossy())
-                    && let Ok((w, h)) = image::image_dimensions(&mapped)
-                {
-                    tracing::info!("OK (WSL mapped): {}", mapped.display());
-                    let format_label = pasted_image_format(&mapped).label();
-                    self.attach_image(mapped, w, h, format_label);
-                    return true;
-                }
-
                 tracing::trace!("ERR: {err}");
                 false
             }

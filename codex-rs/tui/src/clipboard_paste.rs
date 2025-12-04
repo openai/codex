@@ -297,18 +297,22 @@ pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn is_probably_wsl() -> bool {
-    // The most reliable way to detect WSL is to check /proc/version for "microsoft" or "WSL".
-    // This works for both WSL1 and WSL2.
-    std::fs::read_to_string("/proc/version")
-        .map(|version| {
-            let version_lower = version.to_lowercase();
-            version_lower.contains("microsoft") || version_lower.contains("wsl")
-        })
-        .unwrap_or(false)
+    // Primary: Check /proc/version for "microsoft" or "WSL" (most reliable for standard WSL).
+    if let Ok(version) = std::fs::read_to_string("/proc/version") {
+        let version_lower = version.to_lowercase();
+        if version_lower.contains("microsoft") || version_lower.contains("wsl") {
+            return true;
+        }
+    }
+
+    // Fallback: Check WSL environment variables. This handles edge cases like
+    // custom Linux kernels installed in WSL where /proc/version may not contain
+    // "microsoft" or "WSL".
+    std::env::var_os("WSL_DISTRO_NAME").is_some() || std::env::var_os("WSL_INTEROP").is_some()
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn convert_windows_path_to_wsl(input: &str) -> Option<PathBuf> {
+fn convert_windows_path_to_wsl(input: &str) -> Option<PathBuf> {
     if input.starts_with("\\\\") {
         return None;
     }
