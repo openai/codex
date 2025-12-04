@@ -212,7 +212,7 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
-            supports_parallel_tool_calls: true,
+            supports_parallel_tool_calls: false,
             support_verbosity: false,
             truncation_policy: TruncationPolicy::Tokens(10_000),
         )
