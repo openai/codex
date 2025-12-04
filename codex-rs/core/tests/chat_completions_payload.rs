@@ -153,6 +153,7 @@ fn function_call() -> ResponseItem {
         name: "f".to_string(),
         arguments: "{}".to_string(),
         call_id: "c1".to_string(),
+        extra_content: None,
     }
 }
 

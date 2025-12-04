@@ -1070,6 +1070,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         name: "do_thing".into(),
         arguments: "{}".into(),
         call_id: "function-call-id".into(),
+        extra_content: None,
     });
     prompt.input.push(ResponseItem::LocalShellCall {
         id: Some("local-shell-id".into()),
