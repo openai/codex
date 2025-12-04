@@ -28,6 +28,10 @@ pub struct ExecCommand {
     #[arg(long = "env", value_name = "ENV_ID")]
     pub environment: String,
 
+    /// Git branch to run in Codex Cloud.
+    #[arg(long = "branch", value_name = "BRANCH", default_value = "main")]
+    pub branch: String,
+
     /// Number of assistant attempts (best-of-N).
     #[arg(
         long = "attempts",
