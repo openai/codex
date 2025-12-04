@@ -2755,6 +2755,7 @@ mod tests {
             false,
             config.cli_auth_credentials_store_mode,
         );
+        let models_manager = Arc::new(ModelsManager::new(auth_manager.get_auth_mode()));
 
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -2785,12 +2786,13 @@ mod tests {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
-            models_manager: Arc::new(ModelsManager::new(auth_manager.get_auth_mode())),
+            models_manager: models_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 
         let turn_context = Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
+            &models_manager,
             &otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
@@ -2834,6 +2836,7 @@ mod tests {
             false,
             config.cli_auth_credentials_store_mode,
         );
+        let models_manager = Arc::new(ModelsManager::new(auth_manager.get_auth_mode()));
 
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -2864,12 +2867,13 @@ mod tests {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
-            models_manager: Arc::new(ModelsManager::new(auth_manager.get_auth_mode())),
+            models_manager: models_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
+            &models_manager,
             &otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,

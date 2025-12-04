@@ -74,7 +74,6 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
             config.features.disable(Feature::ApplyPatchFreeform);
             config.model = "codex-mini-latest".to_string();
             config.model_family = find_family_for_model("codex-mini-latest")
-                .expect("model family for codex-mini-latest");
         })
         .build(&server)
         .await?;

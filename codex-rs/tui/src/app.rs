@@ -162,9 +162,7 @@ async fn handle_model_migration_prompt_if_needed(
                     migration_config: migration_config_key.to_string(),
                 });
                 config.model = target_model.to_string();
-                if let Some(family) = find_family_for_model(&target_model) {
-                    config.model_family = family;
-                }
+                config.model_family = find_family_for_model(&target_model);
 
                 let mapped_effort = if let Some(reasoning_effort_mapping) = reasoning_effort_mapping
                     && let Some(reasoning_effort) = config.model_reasoning_effort
@@ -683,9 +681,8 @@ impl App {
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
                 self.config.model = model.clone();
-                if let Some(family) = find_family_for_model(&model) {
-                    self.config.model_family = family;
-                }
+                let family = find_family_for_model(&model);
+                self.config.model_family = family;
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);

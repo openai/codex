@@ -46,13 +46,12 @@ fn configure_shell_command_model(output_type: ShellModelOutput, config: &mut Con
         return;
     }
 
-    if let Some(shell_command_family) = find_family_for_model("test-gpt-5-codex") {
-        if config.model_family.shell_type == shell_command_family.shell_type {
-            return;
-        }
-        config.model = shell_command_family.slug.clone();
-        config.model_family = shell_command_family;
+    let shell_command_family = find_family_for_model("test-gpt-5-codex");
+    if config.model_family.shell_type == shell_command_family.shell_type {
+        return;
     }
+    config.model = shell_command_family.slug.clone();
+    config.model_family = shell_command_family;
 }
 
 fn shell_responses(
