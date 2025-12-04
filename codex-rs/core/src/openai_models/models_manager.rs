@@ -19,6 +19,7 @@ use crate::openai_models::model_presets::builtin_model_presets;
 
 #[derive(Debug)]
 pub struct ModelsManager {
+    // todo(aibrahim) merge available_models and model family creation into one struct
     pub available_models: RwLock<Vec<ModelPreset>>,
     pub remote_models: RwLock<Vec<ModelInfo>>,
     pub etag: String,
@@ -35,6 +36,7 @@ impl ModelsManager {
         }
     }
 
+    // do not use this function yet. It's work in progress.
     pub async fn refresh_available_models(
         &self,
         provider: &ModelProviderInfo,
