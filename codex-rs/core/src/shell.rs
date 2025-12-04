@@ -7,8 +7,8 @@ use std::path::PathBuf;
 /// Plain commands (no redirects/subshell/etc.) that are safe to run without
 /// login-shell initialization.
 const NON_LOGIN_SHELL_ALLOWLIST: &[&str] = &[
-    "cat", "cd", "echo", "false", "find", "grep", "head", "ls", "nl", "pwd", "rm",
-    "rmdir", "sed", "tail", "true", "wc",
+    "cat", "cd", "echo", "false", "find", "grep", "head", "ls", "nl", "pwd", "rm", "rmdir", "sed",
+    "tail", "true", "wc",
 ];
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
