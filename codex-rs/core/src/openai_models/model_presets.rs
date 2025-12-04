@@ -210,7 +210,11 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
 });
 
 pub(crate) fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
-    vec![]
+    PRESETS
+        .iter()
+        .filter(|preset| preset.show_in_picker)
+        .cloned()
+        .collect()
 }
 
 // todo(aibrahim): remove this once we migrate tests
