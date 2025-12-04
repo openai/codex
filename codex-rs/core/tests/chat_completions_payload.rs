@@ -72,14 +72,11 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
 
     let conversation_id = ConversationId::new();
     let models_manager = Arc::new(ModelsManager::new(Some(AuthMode::ApiKey)));
-
+    let model_family = models_manager.construct_model_family(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
-        models_manager
-            .construct_model_family(&config.model, &config)
-            .slug
-            .as_str(),
+        model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
         Some(AuthMode::ApiKey),
@@ -90,7 +87,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
-        models_manager.clone(),
+        model_family,
         otel_event_manager,
         provider,
         effort,

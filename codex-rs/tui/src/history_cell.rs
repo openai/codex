@@ -27,7 +27,7 @@ use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config::types::ReasoningSummaryFormat;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::openai_models::model_family::ModelFamily;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
@@ -1407,10 +1407,8 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
 
 pub(crate) fn new_reasoning_summary_block(
     full_reasoning_buffer: String,
-    config: &Config,
-    models_manager: &ModelsManager,
+    model_family: &ModelFamily,
 ) -> Box<dyn HistoryCell> {
-    let model_family = models_manager.construct_model_family(&config.model, config);
     if model_family.reasoning_summary_format == ReasoningSummaryFormat::Experimental {
         // Experimental format is following:
         // ** header **
@@ -1506,6 +1504,7 @@ mod tests {
     use codex_core::config::ConfigToml;
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
+    use codex_core::openai_models::models_manager::ModelsManager;
     use codex_core::protocol::McpAuthStatus;
     use codex_login::AuthMode;
     use codex_protocol::parse_command::ParsedCommand;
@@ -2313,11 +2312,10 @@ mod tests {
     fn reasoning_summary_block() {
         let config = test_config();
         let models_manager = Arc::new(ModelsManager::new(Some(AuthMode::ApiKey)));
-
+        let model_family = models_manager.construct_model_family(&config.model, &config);
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-            &config,
-            &models_manager,
+            &model_family,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -2331,12 +2329,9 @@ mod tests {
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
         let config = test_config();
         let models_manager = Arc::new(ModelsManager::new(Some(AuthMode::ApiKey)));
-
-        let cell = new_reasoning_summary_block(
-            "Detailed reasoning goes here.".to_string(),
-            &config,
-            &models_manager,
-        );
+        let model_family = models_manager.construct_model_family(&config.model, &config);
+        let cell =
+            new_reasoning_summary_block("Detailed reasoning goes here.".to_string(), &model_family);
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• Detailed reasoning goes here."]);
@@ -2358,8 +2353,7 @@ mod tests {
 
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-            &config,
-            &models_manager,
+            &model_family,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -2370,11 +2364,10 @@ mod tests {
     fn reasoning_summary_block_falls_back_when_header_is_missing() {
         let config = test_config();
         let models_manager = Arc::new(ModelsManager::new(Some(AuthMode::ApiKey)));
-
+        let model_family = models_manager.construct_model_family(&config.model, &config);
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing".to_string(),
-            &config,
-            &models_manager,
+            &model_family,
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -2385,11 +2378,10 @@ mod tests {
     fn reasoning_summary_block_falls_back_when_summary_is_missing() {
         let config = test_config();
         let models_manager = Arc::new(ModelsManager::new(Some(AuthMode::ApiKey)));
-
+        let model_family = models_manager.construct_model_family(&config.model, &config);
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**".to_string(),
-            &config,
-            &models_manager,
+            &model_family,
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -2397,8 +2389,7 @@ mod tests {
 
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**\n\n  ".to_string(),
-            &config,
-            &models_manager,
+            &model_family,
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -2409,11 +2400,10 @@ mod tests {
     fn reasoning_summary_block_splits_header_and_summary_when_present() {
         let config = test_config();
         let models_manager = Arc::new(ModelsManager::new(Some(AuthMode::ApiKey)));
-
+        let model_family = models_manager.construct_model_family(&config.model, &config);
         let cell = new_reasoning_summary_block(
             "**High level plan**\n\nWe should fix the bug next.".to_string(),
-            &config,
-            &models_manager,
+            &model_family,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));

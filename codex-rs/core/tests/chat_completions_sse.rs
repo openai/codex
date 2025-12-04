@@ -73,13 +73,11 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
     let conversation_id = ConversationId::new();
     let auth_mode = AuthMode::ApiKey;
     let models_manager = Arc::new(ModelsManager::new(Some(auth_mode)));
+    let model_family = models_manager.construct_model_family(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
-        models_manager
-            .construct_model_family(&config.model, &config)
-            .slug
-            .as_str(),
+        model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
         Some(auth_mode),
@@ -90,7 +88,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
-        models_manager.clone(),
+        model_family,
         otel_event_manager,
         provider,
         effort,

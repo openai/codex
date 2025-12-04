@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
-use crate::openai_models::models_manager::ModelsManager;
 use codex_api::AggregateStreamExt;
 use codex_api::ChatClient as ApiChatClient;
 use codex_api::CompactClient as ApiCompactClient;
@@ -58,7 +57,7 @@ use crate::tools::spec::create_tools_json_for_responses_api;
 pub struct ModelClient {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
-    models_manager: Arc<ModelsManager>,
+    model_family: ModelFamily,
     otel_event_manager: OtelEventManager,
     provider: ModelProviderInfo,
     conversation_id: ConversationId,
@@ -72,7 +71,7 @@ impl ModelClient {
     pub fn new(
         config: Arc<Config>,
         auth_manager: Option<Arc<AuthManager>>,
-        models_manager: Arc<ModelsManager>,
+        model_family: ModelFamily,
         otel_event_manager: OtelEventManager,
         provider: ModelProviderInfo,
         effort: Option<ReasoningEffortConfig>,
@@ -83,7 +82,7 @@ impl ModelClient {
         Self {
             config,
             auth_manager,
-            models_manager,
+            model_family,
             otel_event_manager,
             provider,
             conversation_id,
@@ -307,8 +306,7 @@ impl ModelClient {
 
     /// Returns the currently configured model family.
     pub fn get_model_family(&self) -> ModelFamily {
-        self.models_manager
-            .construct_model_family(&self.config.model, &self.config)
+        self.model_family.clone()
     }
 
     /// Returns the current reasoning effort setting.

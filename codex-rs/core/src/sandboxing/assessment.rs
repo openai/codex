@@ -126,18 +126,14 @@ pub(crate) async fn assess_command(
         output_schema: Some(sandbox_assessment_schema()),
     };
 
-    let child_otel = parent_otel.with_model(
-        config.model.as_str(),
-        models_manager
-            .construct_model_family(&config.model, &config)
-            .slug
-            .as_str(),
-    );
+    let model_family = models_manager.construct_model_family(&config.model, &config);
+
+    let child_otel = parent_otel.with_model(config.model.as_str(), model_family.slug.as_str());
 
     let client = ModelClient::new(
         Arc::clone(&config),
         Some(auth_manager),
-        models_manager.clone(),
+        model_family,
         child_otel,
         provider,
         Some(SANDBOX_ASSESSMENT_REASONING_EFFORT),

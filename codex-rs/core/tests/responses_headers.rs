@@ -64,14 +64,11 @@ async fn responses_stream_includes_subagent_header_on_review() {
     let conversation_id = ConversationId::new();
     let auth_mode = AuthMode::ChatGPT;
     let models_manager = Arc::new(ModelsManager::new(Some(auth_mode)));
-
+    let model_family = models_manager.construct_model_family(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
-        models_manager
-            .construct_model_family(&config.model, &config)
-            .slug
-            .as_str(),
+        model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
         Some(auth_mode),
@@ -82,7 +79,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
-        models_manager.clone(),
+        model_family,
         otel_event_manager,
         provider,
         effort,
@@ -158,14 +155,12 @@ async fn responses_stream_includes_subagent_header_on_other() {
     let conversation_id = ConversationId::new();
     let auth_mode = AuthMode::ChatGPT;
     let models_manager = Arc::new(ModelsManager::new(Some(auth_mode)));
+    let model_family = models_manager.construct_model_family(&config.model, &config);
 
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
-        models_manager
-            .construct_model_family(&config.model, &config)
-            .slug
-            .as_str(),
+        model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
         Some(auth_mode),
@@ -176,7 +171,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
-        models_manager.clone(),
+        model_family,
         otel_event_manager,
         provider,
         effort,
@@ -253,14 +248,11 @@ async fn responses_respects_model_family_overrides_from_config() {
     let conversation_id = ConversationId::new();
     let auth_mode = AuthMode::ChatGPT;
     let models_manager = Arc::new(ModelsManager::new(Some(auth_mode)));
-
+    let model_family = models_manager.construct_model_family(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
-        models_manager
-            .construct_model_family(&config.model, &config)
-            .slug
-            .as_str(),
+        model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
         Some(auth_mode),
@@ -271,7 +263,7 @@ async fn responses_respects_model_family_overrides_from_config() {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
-        models_manager.clone(),
+        model_family,
         otel_event_manager,
         provider,
         effort,

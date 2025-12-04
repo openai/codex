@@ -424,7 +424,7 @@ impl Session {
         let client = ModelClient::new(
             Arc::new(per_turn_config.clone()),
             auth_manager,
-            models_manager,
+            model_family.clone(),
             otel_event_manager,
             provider,
             session_configuration.model_reasoning_effort,
@@ -541,14 +541,12 @@ impl Session {
             });
         }
 
+        let model_family = models_manager.construct_model_family(&config.model, &config);
         // todo(aibrahim): why are we passing model here while it can change?
         let otel_event_manager = OtelEventManager::new(
             conversation_id,
             config.model.as_str(),
-            models_manager
-                .construct_model_family(&config.model, &config)
-                .slug
-                .as_str(),
+            model_family.slug.as_str(),
             auth_manager.auth().and_then(|a| a.get_account_id()),
             auth_manager.auth().and_then(|a| a.get_account_email()),
             auth_manager.auth().map(|a| a.mode),
@@ -1884,7 +1882,7 @@ async fn spawn_review_thread(
     let client = ModelClient::new(
         per_turn_config.clone(),
         auth_manager,
-        sess.services.models_manager.clone(),
+        model_family.clone(),
         otel_event_manager,
         provider,
         per_turn_config.model_reasoning_effort,
