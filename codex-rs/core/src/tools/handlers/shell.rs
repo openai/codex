@@ -49,7 +49,7 @@ impl ShellCommandHandler {
         turn_context: &TurnContext,
     ) -> ExecParams {
         let shell = session.user_shell();
-        let command = shell.derive_exec_args(&params.command, params.login);
+        let command = shell.derive_exec_args(&params.command, params.login.unwrap_or(true));
 
         ExecParams {
             command,
