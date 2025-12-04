@@ -487,7 +487,7 @@ mod pasted_paths_tests {
     fn normalize_windows_path_in_wsl() {
         // This test only runs on actual WSL systems
         if !is_probably_wsl() {
-            eprintln!("Skipping test: not running on WSL");
+            // Skip test if not on WSL
             return;
         }
         let input = r"C:\\Users\\Alice\\Pictures\\example image.png";
