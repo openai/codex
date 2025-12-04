@@ -14,6 +14,7 @@ use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
+use codex_core::bash::extract_bash_command;
 use codex_core::protocol::ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 use itertools::Itertools;
@@ -58,7 +59,11 @@ pub(crate) fn new_active_exec_command(
 }
 
 fn format_unified_exec_interaction(command: &[String], input: Option<&str>) -> String {
-    let command_display = command.join(" ");
+    let command_display = if let Some((_, script)) = extract_bash_command(command) {
+        script.to_string()
+    } else {
+        command.join(" ")
+    };
     match input {
         Some(data) if !data.is_empty() => {
             let preview = summarize_interaction_input(data);
