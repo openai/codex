@@ -43,7 +43,6 @@ use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
-use base64::Engine;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
@@ -256,62 +255,6 @@ impl ChatComposer {
     }
 
     pub fn handle_paste_image_path(&mut self, pasted: String) -> bool {
-        // Support data: URLs (base64) pasted from some terminals/clients.
-        // If the pasted text is a data URL, decode it into a project-local
-        // ./.codex/tmp file and attach that file as an image.
-        let pasted_trim = pasted.trim();
-        if pasted_trim.starts_with("data:") {
-            if let Some(comma) = pasted_trim.find(',') {
-                let header = &pasted_trim[5..comma]; // after "data:"
-                let b64 = &pasted_trim[comma + 1..];
-                if header.contains("base64")
-                    && let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(b64)
-                {
-                    // Try to determine extension from mime type
-                    let ext = if header.contains("image/png") {
-                        "png"
-                    } else if header.contains("image/jpeg") || header.contains("image/jpg") {
-                        "jpg"
-                    } else {
-                        "png"
-                    };
-
-                    if let Ok(cwd) = std::env::current_dir() {
-                        let tmp_dir = cwd.join(".codex").join("tmp");
-                        if std::fs::create_dir_all(&tmp_dir).is_ok() {
-                            let uniq = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .ok()
-                                .map(|d| d.as_millis().to_string())
-                                .unwrap_or_else(|| "0".to_string());
-                            let dest = tmp_dir.join(format!("pasted-{uniq}.{ext}"));
-                            if std::fs::write(&dest, &decoded).is_ok()
-                                && let Ok((w, h)) = image::image_dimensions(&dest)
-                            {
-                                tracing::info!("OK (data URL pasted): {}", dest.display());
-                                let format_label = pasted_image_format(&dest).label();
-                                self.attach_image(dest, w, h, format_label);
-                                return true;
-                            }
-                        }
-                    }
-                    // Fallthrough: if project-local write failed, try a system tempfile
-                    if let Ok(tmp) = tempfile::Builder::new()
-                        .suffix(&format!(".{ext}"))
-                        .tempfile()
-                        && std::fs::write(tmp.path(), &decoded).is_ok()
-                        && let Ok((w, h)) = image::image_dimensions(tmp.path())
-                        && let Ok((_f, pathbuf)) = tmp.keep()
-                    {
-                        let format_label = pasted_image_format(&pathbuf).label();
-                        self.attach_image(pathbuf, w, h, format_label);
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-
         let Some(path_buf) = normalize_pasted_path(&pasted) else {
             return false;
         };
