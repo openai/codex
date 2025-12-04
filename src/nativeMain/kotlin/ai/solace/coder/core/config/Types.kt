@@ -1,5 +1,6 @@
 package ai.solace.coder.core.config
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlin.time.Duration
 
@@ -9,54 +10,55 @@ const val DEFAULT_OTEL_ENVIRONMENT: String = "dev"
 sealed class McpServerTransportConfig {
     @Serializable
     data class Stdio(
-        val command: String,
-        val args: List<String> = emptyList(),
-        val env: Map<String, String>? = null,
-        val envVars: List<String>? = null,
-        val cwd: String? = null,
-        val httpHeaders: Map<String, String>? = null,
-        val envHttpHeaders: Map<String, String>? = null,
+        @SerialName("command") val command: String,
+        @SerialName("args") val args: List<String> = emptyList(),
+        @SerialName("env") val env: Map<String, String>? = null,
+        @SerialName("env_vars") val envVars: List<String>? = null,
+        @SerialName("cwd") val cwd: String? = null,
+        @SerialName("http_headers") val httpHeaders: Map<String, String>? = null,
+        @SerialName("env_http_headers") val envHttpHeaders: Map<String, String>? = null,
     ) : McpServerTransportConfig()
 
     @Serializable
     data class StreamableHttp(
-        val url: String,
-        val bearerToken: String? = null,
-        val bearerTokenEnvVar: String? = null,
+        @SerialName("url") val url: String,
+        @SerialName("bearer_token") val bearerToken: String? = null,
+        @SerialName("bearer_token_env_var") val bearerTokenEnvVar: String? = null,
     ) : McpServerTransportConfig()
 }
 
 @Serializable
 data class McpServerConfig(
-    val transport: McpServerTransportConfig,
-    val enabled: Boolean = true,
-    val startupTimeout: Duration? = null,
-    val toolTimeout: Duration? = null,
-    val enabledTools: List<String>? = null,
-    val disabledTools: List<String>? = null,
+    @SerialName("transport") val transport: McpServerTransportConfig,
+    @SerialName("enabled") val enabled: Boolean = true,
+    // Note: these are normalized fields; serialization names retained for parity in raw
+    @SerialName("startup_timeout_sec") val startupTimeout: Duration? = null,
+    @SerialName("tool_timeout_sec") val toolTimeout: Duration? = null,
+    @SerialName("enabled_tools") val enabledTools: List<String>? = null,
+    @SerialName("disabled_tools") val disabledTools: List<String>? = null,
 )
 
 @Serializable
 data class RawMcpServerConfig(
     // stdio
-    val command: String? = null,
-    val args: List<String>? = null,
-    val env: Map<String, String>? = null,
-    val envVars: List<String>? = null,
-    val cwd: String? = null,
-    val httpHeaders: Map<String, String>? = null,
-    val envHttpHeaders: Map<String, String>? = null,
+    @SerialName("command") val command: String? = null,
+    @SerialName("args") val args: List<String>? = null,
+    @SerialName("env") val env: Map<String, String>? = null,
+    @SerialName("env_vars") val envVars: List<String>? = null,
+    @SerialName("cwd") val cwd: String? = null,
+    @SerialName("http_headers") val httpHeaders: Map<String, String>? = null,
+    @SerialName("env_http_headers") val envHttpHeaders: Map<String, String>? = null,
     // streamable_http
-    val url: String? = null,
-    val bearerToken: String? = null,
-    val bearerTokenEnvVar: String? = null,
+    @SerialName("url") val url: String? = null,
+    @SerialName("bearer_token") val bearerToken: String? = null,
+    @SerialName("bearer_token_env_var") val bearerTokenEnvVar: String? = null,
     // shared
-    val startupTimeoutSec: Double? = null,
-    val startupTimeoutMs: Long? = null,
-    val toolTimeoutSec: Double? = null,
-    val enabled: Boolean? = null,
-    val enabledTools: List<String>? = null,
-    val disabledTools: List<String>? = null,
+    @SerialName("startup_timeout_sec") val startupTimeoutSec: Double? = null,
+    @SerialName("startup_timeout_ms") val startupTimeoutMs: Long? = null,
+    @SerialName("tool_timeout_sec") val toolTimeoutSec: Double? = null,
+    @SerialName("enabled") val enabled: Boolean? = null,
+    @SerialName("enabled_tools") val enabledTools: List<String>? = null,
+    @SerialName("disabled_tools") val disabledTools: List<String>? = null,
 ) {
     fun normalize(): McpServerConfig {
         val startup = secondsToDuration(startupTimeoutSec) ?: millisToDuration(startupTimeoutMs)
@@ -66,14 +68,14 @@ data class RawMcpServerConfig(
         val isHttp = url != null || bearerToken != null || bearerTokenEnvVar != null
 
         val transport = when {
-            isStdio && isHttp -> error("Invalid MCP server config: mix of stdio and streamable_http fields")
+            isStdio && isHttp -> error("invalid MCP server config: mix of stdio and streamable_http fields")
             isHttp -> McpServerTransportConfig.StreamableHttp(
-                url = url ?: error("Invalid MCP server config: missing 'url' for streamable_http"),
+                url = url ?: error("invalid MCP server config: missing 'url' for streamable_http"),
                 bearerToken = bearerToken,
                 bearerTokenEnvVar = bearerTokenEnvVar,
             )
             isStdio -> McpServerTransportConfig.Stdio(
-                command = command ?: error("Invalid MCP server config: missing 'command' for stdio"),
+                command = command ?: error("invalid MCP server config: missing 'command' for stdio"),
                 args = args ?: emptyList(),
                 env = env,
                 envVars = envVars,
@@ -81,7 +83,7 @@ data class RawMcpServerConfig(
                 httpHeaders = httpHeaders,
                 envHttpHeaders = envHttpHeaders,
             )
-            else -> error("Invalid MCP server config: missing transport fields (need either 'url' or 'command')")
+            else -> error("invalid MCP server config: missing transport fields (need either 'url' or 'command')")
         }
 
         return McpServerConfig(
