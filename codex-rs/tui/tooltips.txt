@@ -5,7 +5,7 @@ Use /feedback to send logs to the maintainers when something looks off.
 Switch models or reasoning effort quickly with /model.
 You can run any shell commands from codex using `!` (e.g. `!ls`)
 Type / to open the command popup; Tab autocompletes slash commands and saved prompts.
-Use /prompts:<name> key=value to expand a saved prompt with placeholders before sending.
+You can define your own `/` commands with custom prompts. More info here: https://developers.openai.com/codex/guides/slash-commands#create-your-own-slash-commands-with-custom-prompts
 With the composer empty, press Esc to step back and edit your last message; Enter confirms.
 Paste an image with Ctrl+V to attach it to your next message.
 You can resume a previous conversation by running `codex resume`
