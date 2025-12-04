@@ -1,11 +1,12 @@
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
 
 use crate::config::Config;
 use crate::config::types::ReasoningSummaryFormat;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;
-use crate::tools::spec::ConfigShellToolType;
 use crate::truncate::TruncationPolicy;
+use codex_protocol::openai_models::ConfigShellToolType;
 
 /// The `instructions` field in the payload sent to a model should always start
 /// with this content.
@@ -80,6 +81,15 @@ impl ModelFamily {
         }
         if let Some(reasoning_summary_format) = config.model_reasoning_summary_format.as_ref() {
             self.reasoning_summary_format = reasoning_summary_format.clone();
+        }
+        self
+    }
+    pub fn with_remote_overrides(mut self, remote_models: Vec<ModelInfo>) -> Self {
+        for model in remote_models {
+            if model.slug == self.slug {
+                self.default_reasoning_effort = Some(model.default_reasoning_level);
+                self.shell_type = model.shell_type;
+            }
         }
         self
     }

@@ -88,11 +88,22 @@ pub enum ModelVisibility {
 
 /// Shell execution capability for a model.
 #[derive(
-    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema, EnumIter, Display,
+    Debug,
+    Serialize,
+    Deserialize,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    TS,
+    JsonSchema,
+    EnumIter,
+    Display,
+    Hash,
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-pub enum ShellType {
+pub enum ConfigShellToolType {
     Default,
     Local,
     UnifiedExec,
@@ -113,7 +124,7 @@ pub struct ModelInfo {
     pub description: Option<String>,
     pub default_reasoning_level: ReasoningEffort,
     pub supported_reasoning_levels: Vec<ReasoningEffort>,
-    pub shell_type: ShellType,
+    pub shell_type: ConfigShellToolType,
     #[serde(default = "default_visibility")]
     pub visibility: ModelVisibility,
     pub minimal_client_version: ClientVersion,
