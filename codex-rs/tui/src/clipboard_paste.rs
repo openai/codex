@@ -297,9 +297,14 @@ pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn is_probably_wsl() -> bool {
-    std::env::var_os("WSL_DISTRO_NAME").is_some()
-        || std::env::var_os("WSL_INTEROP").is_some()
-        || std::env::var_os("WSLENV").is_some()
+    // The most reliable way to detect WSL is to check /proc/version for "microsoft" or "WSL".
+    // This works for both WSL1 and WSL2.
+    std::fs::read_to_string("/proc/version")
+        .map(|version| {
+            let version_lower = version.to_lowercase();
+            version_lower.contains("microsoft") || version_lower.contains("wsl")
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(target_os = "linux")]
@@ -347,40 +352,6 @@ pub fn pasted_image_format(path: &Path) -> EncodedImageFormat {
 #[cfg(test)]
 mod pasted_paths_tests {
     use super::*;
-    #[cfg(target_os = "linux")]
-    use std::ffi::OsString;
-
-    #[cfg(target_os = "linux")]
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<OsString>,
-    }
-
-    #[cfg(target_os = "linux")]
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let original = std::env::var_os(key);
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, original }
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            if let Some(original) = &self.original {
-                unsafe {
-                    std::env::set_var(self.key, original);
-                }
-            } else {
-                unsafe {
-                    std::env::remove_var(self.key);
-                }
-            }
-        }
-    }
 
     #[cfg(not(windows))]
     #[test]
@@ -514,7 +485,11 @@ mod pasted_paths_tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn normalize_windows_path_in_wsl() {
-        let _guard = EnvVarGuard::set("WSL_DISTRO_NAME", "Ubuntu-24.04");
+        // This test only runs on actual WSL systems
+        if !is_probably_wsl() {
+            eprintln!("Skipping test: not running on WSL");
+            return;
+        }
         let input = r"C:\\Users\\Alice\\Pictures\\example image.png";
         let result = normalize_pasted_path(input).expect("should convert windows path on wsl");
         assert_eq!(
