@@ -269,7 +269,6 @@ mod tests {
         let wrapped = shell.wrap_command_with_snapshot(&original_command);
 
         let mut expected = shell.derive_exec_args(". \"$1\" && shift && exec \"$@\"", false);
-        expected.push("codex-shell-snapshot".to_string());
         expected.push(snapshot_path.to_string_lossy().to_string());
         expected.extend_from_slice(&original_command);
 
@@ -283,7 +282,7 @@ mod tests {
             shell_type: ShellType::Cmd,
             shell_path: PathBuf::from("cmd"),
             shell_snapshot: Some(Arc::new(ShellSnapshot {
-                path: snapshot_path.clone(),
+                path: snapshot_path,
             })),
         };
         let original_command = vec![

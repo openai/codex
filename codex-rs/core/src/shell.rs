@@ -76,7 +76,6 @@ impl Shell {
         match self.shell_type {
             ShellType::Zsh | ShellType::Bash | ShellType::Sh => {
                 let mut args = self.derive_exec_args(". \"$1\" && shift && exec \"$@\"", false);
-                args.push("codex-shell-snapshot".to_string());
                 args.push(snapshot.path.to_string_lossy().to_string());
                 args.extend_from_slice(command);
                 args
