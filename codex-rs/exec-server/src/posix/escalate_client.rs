@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd as _;
@@ -34,21 +35,15 @@ pub(crate) async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> 
         .send_with_fds(&HANDSHAKE_MESSAGE, &[server.into_inner().into()])
         .await
         .context("failed to send handshake datagram")?;
-    let env = std::env::vars()
-        .filter(|(k, _)| {
-            !matches!(
-                k.as_str(),
-                ESCALATE_SOCKET_ENV_VAR | BASH_EXEC_WRAPPER_ENV_VAR
-            )
-        })
-        .collect();
+    let env = filter_env(std::env::vars());
+    let request = EscalateRequest {
+        file: file.clone().into(),
+        argv: argv.clone(),
+        workdir: std::env::current_dir()?,
+        env,
+    };
     client
-        .send(EscalateRequest {
-            file: file.clone().into(),
-            argv: argv.clone(),
-            workdir: std::env::current_dir()?,
-            env,
-        })
+        .send(request)
         .await
         .context("failed to send EscalateRequest")?;
     let message = client.receive::<EscalateResponse>().await?;
@@ -105,5 +100,66 @@ pub(crate) async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> 
             }
             Ok(1)
         }
+    }
+}
+
+fn filter_env<I>(env_iter: I) -> HashMap<String, String>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    const MAX_ENV_ENTRY_LEN: i64 = 8_192;
+    let mut env = HashMap::new();
+    for (key, value) in env_iter {
+        if matches!(
+            key.as_str(),
+            ESCALATE_SOCKET_ENV_VAR | BASH_EXEC_WRAPPER_ENV_VAR
+        ) {
+            continue;
+        }
+        let entry_len = (key.len() + value.len()) as i64;
+        if entry_len > MAX_ENV_ENTRY_LEN {
+            tracing::debug!(key, entry_len, "skipping oversized environment variable");
+            continue;
+        }
+        env.insert(key, value);
+    }
+    env
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn filter_env_drops_oversized_and_reserved_entries() {
+        let oversized_value = "A".repeat(8_193);
+        let env = vec![
+            ("KEEP".to_string(), "ok".to_string()),
+            ("DROP".to_string(), oversized_value),
+            (
+                ESCALATE_SOCKET_ENV_VAR.to_string(),
+                "should_skip".to_string(),
+            ),
+            (
+                BASH_EXEC_WRAPPER_ENV_VAR.to_string(),
+                "should_skip".to_string(),
+            ),
+        ];
+        let filtered = filter_env(env);
+        assert_eq!(Some(&"ok".to_string()), filtered.get("KEEP"));
+        assert!(!filtered.contains_key("DROP"));
+        assert!(!filtered.contains_key(ESCALATE_SOCKET_ENV_VAR));
+        assert!(!filtered.contains_key(BASH_EXEC_WRAPPER_ENV_VAR));
+    }
+
+    #[test]
+    fn filter_env_keeps_entries_at_limit() {
+        const KEY: &str = "KEEP";
+        let value_len = 8_192 - KEY.len();
+        let env = vec![(KEY.to_string(), "A".repeat(value_len))];
+        let filtered = filter_env(env);
+        assert_eq!(1, filtered.len());
+        assert_eq!(value_len, filtered[KEY].len());
     }
 }
