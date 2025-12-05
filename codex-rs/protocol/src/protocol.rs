@@ -495,8 +495,6 @@ pub enum EventMsg {
     /// Signaled when the model begins a new reasoning summary section (e.g., a new titled block).
     AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent),
 
-    AppReady,
-
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
 

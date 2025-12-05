@@ -5,7 +5,6 @@ use codex_protocol::openai_models::ModelPreset;
 use http::HeaderMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio::sync::oneshot;
 
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
@@ -37,29 +36,13 @@ impl ModelsManager {
         }
     }
 
-    // do not use this function yet. It's work in progress.
     pub async fn refresh_available_models(
         &self,
         provider: &ModelProviderInfo,
-        tx: oneshot::Sender<bool>,
     ) -> CoreResult<Vec<ModelInfo>> {
         let auth = self.auth_manager.auth();
-        let api_provider = provider.to_api_provider(auth.as_ref().map(|auth| auth.mode));
-        let api_provider = match api_provider {
-            Ok(api_provider) => api_provider,
-            Err(e) => {
-                let _ = tx.send(false);
-                return Err(e);
-            }
-        };
-        let api_auth = auth_provider_from_auth(auth.clone(), provider).await;
-        let api_auth = match api_auth {
-            Ok(api_auth) => api_auth,
-            Err(e) => {
-                let _ = tx.send(false);
-                return Err(e);
-            }
-        };
+        let api_provider = provider.to_api_provider(auth.as_ref().map(|auth| auth.mode))?;
+        let api_auth = auth_provider_from_auth(auth.clone(), provider).await?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
@@ -75,8 +58,6 @@ impl ModelsManager {
             let mut available_models_guard = self.available_models.write().await;
             *available_models_guard = available_models;
         }
-
-        let _ = tx.send(true);
         Ok(models)
     }
 
@@ -179,13 +160,10 @@ mod tests {
         let manager = ModelsManager::new(auth_manager);
         let provider = provider_for(server.uri());
 
-        let (tx, rx) = oneshot::channel::<bool>();
         let returned = manager
-            .refresh_available_models(&provider, tx)
+            .refresh_available_models(&provider)
             .await
             .expect("refresh succeeds");
-        let is_ready = rx.await.expect("ready channel received");
-        assert!(is_ready);
         assert_eq!(returned, remote_models);
         let cached_remote = manager.remote_models.read().await.clone();
         assert_eq!(cached_remote, remote_models);

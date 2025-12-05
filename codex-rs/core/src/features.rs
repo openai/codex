@@ -56,8 +56,6 @@ pub enum Feature {
     RemoteCompaction,
     /// Refresh remote models and emit AppReady once the list is available.
     RemoteModels,
-    /// Refresh remote models and emit AppReady once the list is available.
-    RemoteModels,
     /// Allow model to call multiple tools in parallel (only for models supporting it).
     ParallelToolCalls,
     /// Experimental skills injection (CLI flag-driven).

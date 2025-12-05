@@ -30,7 +30,6 @@ use async_channel::Sender;
 use codex_protocol::ConversationId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::items::TurnItem;
-use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
@@ -220,16 +219,12 @@ impl Codex {
         let conversation_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(session.clone(), config.clone(), rx_sub));
+        tokio::spawn(submission_loop(session, config.clone(), rx_sub));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event,
         };
-
-        if config.features.enabled(Feature::RemoteModels) {
-            spawn_model_ready_task(session.clone(), config.clone(), models_manager.clone());
-        }
 
         Ok(CodexSpawnOk {
             codex,
@@ -266,37 +261,6 @@ impl Codex {
             .map_err(|_| CodexErr::InternalAgentDied)?;
         Ok(event)
     }
-}
-
-fn spawn_model_ready_task(
-    session: Arc<Session>,
-    config: Arc<Config>,
-    models_manager: Arc<ModelsManager>,
-) {
-    tokio::spawn(async move {
-        let (tx, rx) = oneshot::channel::<bool>();
-        if let Err(err) = models_manager
-            .refresh_available_models(&config.model_provider, tx)
-            .await
-        {
-            warn!("failed to refresh available models: {err:#}");
-        }
-
-        if let Ok(is_ready) = rx.await {
-            let event = if is_ready {
-                EventMsg::AppReady
-            } else {
-                EventMsg::Error(ErrorEvent {
-                    message: "Failed to fetch available models".to_string(),
-                    codex_error_info: None,
-                })
-            };
-
-            session
-                .send_event(&session.next_internal_sub_id(), event)
-                .await;
-        }
-    });
 }
 
 /// Context for an initialized model agent
@@ -1505,6 +1469,16 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
     // Seed with context in case there is an OverrideTurnContext first.
     let mut previous_context: Option<Arc<TurnContext>> =
         Some(sess.new_turn(SessionSettingsUpdate::default()).await);
+
+    if config.features.enabled(Feature::RemoteModels)
+        && let Err(err) = sess
+            .services
+            .models_manager
+            .refresh_available_models(&config.model_provider)
+            .await
+    {
+        error!("failed to refresh available models: {err}");
+    }
 
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
