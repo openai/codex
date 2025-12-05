@@ -160,6 +160,15 @@ impl CodexLogSnapshot {
         &self.bytes
     }
 
+    fn logs_attachment(&self) -> sentry::protocol::Attachment {
+        sentry::protocol::Attachment {
+            buffer: self.bytes.clone(),
+            filename: String::from("codex-logs.jsonl"),
+            content_type: Some("text/plain".to_string()),
+            ty: None,
+        }
+    }
+
     pub fn save_to_temp_file(&self) -> io::Result<PathBuf> {
         let dir = std::env::temp_dir();
         let filename = format!("codex-feedback-{}.jsonl", self.thread_id);
@@ -243,12 +252,7 @@ impl CodexLogSnapshot {
         envelope.add_item(EnvelopeItem::Event(event));
 
         if include_logs {
-            envelope.add_item(EnvelopeItem::Attachment(Attachment {
-                buffer: self.bytes.clone(),
-                filename: String::from("codex-logs.jsonl"),
-                content_type: Some("text/plain".to_string()),
-                ty: None,
-            }));
+            envelope.add_item(EnvelopeItem::Attachment(self.logs_attachment()));
         }
 
         if let Some((path, data)) = rollout_path.and_then(|p| fs::read(p).ok().map(|d| (p, d))) {
@@ -295,5 +299,17 @@ mod tests {
         let snap = fb.snapshot(None);
         // Capacity 8: after writing 10 bytes, we should keep the last 8.
         pretty_assertions::assert_eq!(std::str::from_utf8(snap.as_bytes()).unwrap(), "cdefghij");
+    }
+
+    #[test]
+    fn logs_attachment_preserves_filename_and_mime() {
+        let snapshot = CodexLogSnapshot {
+            bytes: br#"{"event":"test"}"#.to_vec(),
+            thread_id: "thread-123".to_string(),
+        };
+        let attachment = snapshot.logs_attachment();
+        pretty_assertions::assert_eq!(attachment.filename, "codex-logs.jsonl");
+        pretty_assertions::assert_eq!(attachment.content_type.as_deref(), Some("text/plain"));
+        pretty_assertions::assert_eq!(attachment.buffer, snapshot.bytes);
     }
 }
