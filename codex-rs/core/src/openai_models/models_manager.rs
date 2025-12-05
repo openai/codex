@@ -47,6 +47,7 @@ impl ModelsManager {
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
+        // todo(aibrahim) use the correct value and override the dev 0.0.0
         let response = client
             .list_models("99.99.99", HeaderMap::new())
             .await
