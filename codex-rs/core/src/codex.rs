@@ -5,8 +5,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
-#[cfg(test)]
-use crate::CodexAuth;
 use crate::SandboxState;
 use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
@@ -2475,6 +2473,7 @@ pub(crate) use tests::make_session_and_context_with_rx;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CodexAuth;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
     use crate::exec::ExecToolCallOutput;
