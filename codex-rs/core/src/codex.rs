@@ -2489,7 +2489,7 @@ mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
-    use crate::construct_model_family_offline;
+    use crate::construct_model_family_sync;
     use crate::exec::ExecToolCallOutput;
     use crate::function_tool::FunctionCallError;
     use crate::shell::default_user_shell;
@@ -2798,7 +2798,7 @@ mod tests {
             session_source: SessionSource::Exec,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
-        let model_family = construct_model_family_offline(&per_turn_config.model, &per_turn_config);
+        let model_family = construct_model_family_sync(&per_turn_config.model, &per_turn_config);
         let otel_event_manager =
             otel_event_manager(conversation_id, config.as_ref(), &model_family);
 
@@ -2814,7 +2814,7 @@ mod tests {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: auth_manager.clone(),
             otel_event_manager: otel_event_manager.clone(),
-            models_manager: models_manager.clone(),
+            models_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 
@@ -2882,7 +2882,7 @@ mod tests {
             session_source: SessionSource::Exec,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
-        let model_family = construct_model_family_offline(&per_turn_config.model, &per_turn_config);
+        let model_family = construct_model_family_sync(&per_turn_config.model, &per_turn_config);
         let otel_event_manager =
             otel_event_manager(conversation_id, config.as_ref(), &model_family);
 
@@ -2898,7 +2898,7 @@ mod tests {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             auth_manager: Arc::clone(&auth_manager),
             otel_event_manager: otel_event_manager.clone(),
-            models_manager: models_manager.clone(),
+            models_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
         };
 

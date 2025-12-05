@@ -27,7 +27,7 @@ pub const REVIEW_EXIT_INTERRUPTED_TMPL: &str =
 
 /// Helper for synchronous contexts (tests, CLI) that need to construct a model
 /// family using the async [`ModelsManager`] API.
-pub fn construct_model_family_offline(model: &str, config: &Config) -> ModelFamily {
+pub fn construct_model_family_sync(model: &str, config: &Config) -> ModelFamily {
     find_family_for_model(model).with_config_overrides(config)
 }
 

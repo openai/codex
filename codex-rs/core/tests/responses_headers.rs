@@ -10,7 +10,7 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::config::types::ReasoningSummaryFormat;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::construct_model_family_sync;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningSummary;
@@ -69,10 +69,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         false,
         config.cli_auth_credentials_store_mode,
     );
-    let models_manager = Arc::new(ModelsManager::new(auth_manager));
-    let model_family = models_manager
-        .construct_model_family(&config.model, &config)
-        .await;
+    let model_family = construct_model_family_sync(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
@@ -167,10 +164,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         false,
         config.cli_auth_credentials_store_mode,
     );
-    let models_manager = Arc::new(ModelsManager::new(auth_manager));
-    let model_family = models_manager
-        .construct_model_family(&config.model, &config)
-        .await;
+    let model_family = construct_model_family_sync(&config.model, &config);
 
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
@@ -266,10 +260,7 @@ async fn responses_respects_model_family_overrides_from_config() {
         false,
         config.cli_auth_credentials_store_mode,
     );
-    let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
-    let model_family = models_manager
-        .construct_model_family(&config.model, &config)
-        .await;
+    let model_family = construct_model_family_sync(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),

@@ -11,7 +11,7 @@ use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::construct_model_family_sync;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ReasoningItemContent;
@@ -77,10 +77,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         false,
         config.cli_auth_credentials_store_mode,
     );
-    let models_manager = Arc::new(ModelsManager::new(auth_manager));
-    let model_family = models_manager
-        .construct_model_family(&config.model, &config)
-        .await;
+    let model_family = construct_model_family_sync(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),

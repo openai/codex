@@ -1378,13 +1378,10 @@ mod tests {
             rollout_path: PathBuf::new(),
         };
 
-        app.chat_widget.handle_codex_event(
-            Event {
-                id: String::new(),
-                msg: EventMsg::SessionConfigured(event),
-            },
-            model_family,
-        );
+        app.chat_widget.handle_codex_event_for_test(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(event),
+        });
 
         while app_event_rx.try_recv().is_ok() {}
         while op_rx.try_recv().is_ok() {}

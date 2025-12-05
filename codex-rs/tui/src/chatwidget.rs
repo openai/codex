@@ -10,6 +10,8 @@ use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::types::Notifications;
 use codex_core::config::types::ReasoningSummaryFormat;
+#[cfg(test)]
+use codex_core::construct_model_family_sync;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::openai_models::model_family::ModelFamily;
@@ -3330,6 +3332,19 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Type to search commits".to_string()),
         ..Default::default()
     });
+}
+
+#[cfg(test)]
+impl ChatWidget {
+    pub(crate) fn handle_codex_event_for_test(&mut self, event: Event) {
+        let model_family = model_family_for_config(&self.config);
+        self.handle_codex_event(event, model_family);
+    }
+}
+
+#[cfg(test)]
+fn model_family_for_config(config: &Config) -> ModelFamily {
+    construct_model_family_sync(&config.model, config)
 }
 
 #[cfg(test)]
