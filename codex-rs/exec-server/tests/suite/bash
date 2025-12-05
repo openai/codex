@@ -1,0 +1,25 @@
+#!/usr/bin/env dotslash
+
+{
+  "name": "codex-bash",
+  "platforms": {
+    "macos-aarch64": {
+      "size": 37003612,
+      "hash": "blake3",
+      "digest": "d9cd5928c993b65c340507931c61c02bd6e9179933f8bf26a548482bb5fa53bb",
+      "format": "tar.gz",
+      "path": "package/vendor/aarch64-apple-darwin/bash/macos-15/bash",
+      "providers": [
+        {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.65.0/codex-shell-tool-mcp-npm-0.65.0.tgz"
+        },
+        {
+          "type": "github-release",
+          "repo": "openai/codex",
+          "tag": "rust-v0.65.0",
+          "name": "codex-shell-tool-mcp-npm-0.65.0.tgz"
+        }
+      ]
+    }
+  }
+}
