@@ -157,7 +157,7 @@ pub async fn process_chat_sse<S>(
                     for tool_call in tool_call_values {
                         let mut index = tool_call
                             .get("index")
-                            .and_then(|i| i.as_u64())
+                            .and_then(serde_json::Value::as_u64)
                             .map(|i| i as usize);
 
                         let mut call_id_for_lookup = None;
