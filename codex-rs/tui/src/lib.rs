@@ -277,6 +277,9 @@ pub async fn run_main(
     let targets = Targets::new().with_default(tracing::Level::TRACE);
 
     let feedback_layer = tracing_subscriber::fmt::layer()
+        .json()
+        .flatten_event(true)
+        .with_current_span(false)
         .with_writer(feedback.make_writer())
         .with_ansi(false)
         .with_target(false)
