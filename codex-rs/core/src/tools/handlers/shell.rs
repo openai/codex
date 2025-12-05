@@ -275,6 +275,7 @@ impl ShellHandler {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::process::Command;
 
     use crate::is_safe_command::is_known_safe_command;
     use crate::shell::Shell;
@@ -297,11 +298,13 @@ mod tests {
         };
         assert_safe(&zsh_shell, "ls -la");
 
-        let powershell = Shell {
-            shell_type: ShellType::PowerShell,
-            shell_path: PathBuf::from("pwsh.exe"),
-        };
-        assert_safe(&powershell, "ls -Name");
+        if let Some(path) = powershell_path() {
+            let powershell = Shell {
+                shell_type: ShellType::PowerShell,
+                shell_path: path,
+            };
+            assert_safe(&powershell, "ls -Name");
+        }
     }
 
     fn assert_safe(shell: &Shell, command: &str) {
@@ -311,5 +314,39 @@ mod tests {
         assert!(is_known_safe_command(
             &shell.derive_exec_args(command, /* use_login_shell */ false)
         ));
+    }
+
+    fn powershell_path() -> Option<PathBuf> {
+        if cfg!(windows)
+            && let Some(home) = Command::new("cmd")
+                .args(["/C", "pwsh", "-NoProfile", "-Command", "$PSHOME"])
+                .output()
+                .ok()
+                .and_then(|out| {
+                    if !out.status.success() {
+                        return None;
+                    }
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let trimmed = stdout.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(PathBuf::from(trimmed).join("pwsh.exe"))
+                    }
+                })
+        {
+            return Some(home);
+        }
+
+        const CANDIDATES: &[&str] = &["pwsh", "pwsh.exe", "powershell", "powershell.exe"];
+
+        CANDIDATES.iter().find_map(|candidate| {
+            Command::new(candidate)
+                .args(["-NoLogo", "-NoProfile", "-Command", "Write-Output ok"])
+                .output()
+                .map(|out| out.status.success())
+                .unwrap_or(false)
+                .then(|| PathBuf::from(candidate))
+        })
     }
 }
