@@ -255,7 +255,7 @@ fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String>
     if let Some(shell_str) = &args.shell {
         let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
         shell.shell_snapshot = None;
-        return shell.derive_exec_args(&args.cmd, args.login.unwrap_or(true))
+        return shell.derive_exec_args(&args.cmd, args.login.unwrap_or(true));
     }
 
     let use_login_shell = args.login.unwrap_or(session_shell.shell_snapshot.is_none());
