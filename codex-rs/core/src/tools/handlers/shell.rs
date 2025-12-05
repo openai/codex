@@ -77,7 +77,7 @@ impl ToolHandler for ShellHandler {
         )
     }
 
-    fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
         match &invocation.payload {
             ToolPayload::Function { arguments } => {
                 serde_json::from_str::<ShellToolCallParams>(arguments)

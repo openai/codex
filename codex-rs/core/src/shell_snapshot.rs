@@ -55,11 +55,22 @@ impl Drop for ShellSnapshot {
     }
 }
 
+/// Wraps an existing shell command so that it is executed after applying a
+/// previously captured shell snapshot.
+///
+/// The snapshot script at `snapshot_path` replays functions, aliases, and
+/// environment variables from an earlier shell session. This helper builds a
+/// new command line that:
+///   1. Starts the user's shell in non-login mode,
+///   2. Sources or runs the snapshot script, and then
+///   3. Executes the original `command` with its arguments.
+///
+/// The wrapper shell always runs in non-login mode; callers control login
+/// behavior for the final command itself when they construct `command`.
 pub fn wrap_command_with_snapshot(
     shell: &Shell,
     snapshot_path: &Path,
     command: &[String],
-    use_login_shell: bool,
 ) -> Vec<String> {
     if command.is_empty() {
         return command.to_vec();
@@ -67,16 +78,18 @@ pub fn wrap_command_with_snapshot(
 
     match shell.shell_type {
         ShellType::Zsh | ShellType::Bash | ShellType::Sh => {
-            let mut args =
-                shell.derive_exec_args(". \"$1\" && shift && exec \"$@\"", use_login_shell);
+            // `. "$1" && shift && exec "$@"`:
+            //   1. source the snapshot script passed as the first argument,
+            //   2. drop that argument so "$@" becomes the original command and args,
+            //   3. exec the original command, replacing the wrapper shell.
+            let mut args = shell.derive_exec_args(". \"$1\" && shift && exec \"$@\"", false);
             args.push("codex-shell-snapshot".to_string());
             args.push(snapshot_path.to_string_lossy().to_string());
             args.extend_from_slice(command);
             args
         }
         ShellType::PowerShell => {
-            let mut args =
-                shell.derive_exec_args("param($snapshot) . $snapshot; & @args", use_login_shell);
+            let mut args = shell.derive_exec_args("param($snapshot) . $snapshot; & @args", false);
             args.push(snapshot_path.to_string_lossy().to_string());
             args.extend_from_slice(command);
             args
@@ -280,7 +293,7 @@ mod tests {
             "echo hello".to_string(),
         ];
 
-        let wrapped = wrap_command_with_snapshot(&shell, &snapshot_path, &original_command, false);
+        let wrapped = wrap_command_with_snapshot(&shell, &snapshot_path, &original_command);
 
         let mut expected = shell.derive_exec_args(". \"$1\" && shift && exec \"$@\"", false);
         expected.push("codex-shell-snapshot".to_string());
@@ -303,7 +316,7 @@ mod tests {
             "echo hello".to_string(),
         ];
 
-        let wrapped = wrap_command_with_snapshot(&shell, &snapshot_path, &original_command, false);
+        let wrapped = wrap_command_with_snapshot(&shell, &snapshot_path, &original_command);
 
         assert_eq!(wrapped, original_command);
     }

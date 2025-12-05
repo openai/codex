@@ -1445,27 +1445,22 @@ impl Session {
         &self.services.user_shell
     }
 
-    pub(crate) async fn command_with_shell_snapshot(
-        &self,
-        command: &[String],
-        use_login_shell: bool,
-    ) -> Vec<String> {
-        if use_login_shell {
-            return command.to_vec();
+    /// Add the shell snapshot the command if the snapshot is available.
+    ///
+    /// Returns the new command and `true` if a shell snapshot has been
+    /// applied, `false` otherwise.
+    pub(crate) async fn shell_snapshot(&self) -> Option<ShellSnapshot> {
+        if !self.enabled(Feature::ShellSnapshot) {
+            return None;
         }
 
-        let snapshot_path = {
-            let state = self.state.lock().await;
-            state
-                .shell_snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.path.clone())
-        };
-
-        snapshot_path.map_or_else(
-            || command.to_vec(),
-            |path| wrap_command_with_snapshot(self.user_shell(), &path, command, use_login_shell),
-        )
+        let state = self.state.lock().await;
+        state.shell_snapshot.clone()
+        // if let Some(path) = snapshot_path {
+        //     (wrap_command_with_snapshot(self.user_shell(), &path, command), true)
+        // } else {
+        //     (command.to_vec(), false)
+        // }
     }
 
     fn show_raw_agent_reasoning(&self) -> bool {

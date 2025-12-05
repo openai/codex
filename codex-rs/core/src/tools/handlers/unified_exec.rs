@@ -8,6 +8,8 @@ use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecOutputStream;
 use crate::shell::default_user_shell;
 use crate::shell::get_shell_by_model_provided_path;
+use crate::shell_snapshot::ShellSnapshot;
+use crate::shell_snapshot::wrap_command_with_snapshot;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -34,8 +36,8 @@ struct ExecCommandArgs {
     workdir: Option<String>,
     #[serde(default)]
     shell: Option<String>,
-    #[serde(default = "default_login")]
-    login: bool,
+    #[serde(default)]
+    login: Option<bool>,
     #[serde(default = "default_exec_yield_time_ms")]
     yield_time_ms: u64,
     #[serde(default)]
@@ -66,10 +68,6 @@ fn default_write_stdin_yield_time_ms() -> u64 {
     250
 }
 
-fn default_login() -> bool {
-    false
-}
-
 #[async_trait]
 impl ToolHandler for UnifiedExecHandler {
     fn kind(&self) -> ToolKind {
@@ -83,7 +81,7 @@ impl ToolHandler for UnifiedExecHandler {
         )
     }
 
-    fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
         let (ToolPayload::Function { arguments } | ToolPayload::UnifiedExec { arguments }) =
             &invocation.payload
         else {
@@ -93,7 +91,7 @@ impl ToolHandler for UnifiedExecHandler {
         let Ok(params) = serde_json::from_str::<ExecCommandArgs>(arguments) else {
             return true;
         };
-        let command = get_command(&params);
+        let command = get_command(&params, invocation.session.shell_snapshot().await);
         !is_known_safe_command(&command)
     }
 
@@ -123,16 +121,16 @@ impl ToolHandler for UnifiedExecHandler {
 
         let response = match tool_name.as_str() {
             "exec_command" => {
-                let args: ExecCommandArgs = serde_json::from_str(&arguments).map_err(|err| {
-                    FunctionCallError::RespondToModel(format!(
-                        "failed to parse exec_command arguments: {err:?}"
-                    ))
-                })?;
+                let mut args: ExecCommandArgs =
+                    serde_json::from_str(&arguments).map_err(|err| {
+                        FunctionCallError::RespondToModel(format!(
+                            "failed to parse exec_command arguments: {err:?}"
+                        ))
+                    })?;
                 let process_id = manager.allocate_process_id().await;
 
-                let base_command = get_command(&args);
+                let command = get_command(&args, session.shell_snapshot().await);
                 let ExecCommandArgs {
-                    login,
                     workdir,
                     yield_time_ms,
                     max_output_tokens,
@@ -140,9 +138,6 @@ impl ToolHandler for UnifiedExecHandler {
                     justification,
                     ..
                 } = args;
-                let command = session
-                    .command_with_shell_snapshot(&base_command, login)
-                    .await;
 
                 if with_escalated_permissions.unwrap_or(false)
                     && !matches!(
@@ -259,14 +254,18 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
-fn get_command(args: &ExecCommandArgs) -> Vec<String> {
+fn get_command(args: &ExecCommandArgs, shell_snapshot: Option<ShellSnapshot>) -> Vec<String> {
     let shell = if let Some(shell_str) = &args.shell {
         get_shell_by_model_provided_path(&PathBuf::from(shell_str))
     } else {
         default_user_shell()
     };
 
-    shell.derive_exec_args(&args.cmd, args.login)
+    let command = shell.derive_exec_args(&args.cmd, args.login.unwrap_or(shell_snapshot.is_none()));
+    if let Some(snapshot) = shell_snapshot {
+        return wrap_command_with_snapshot(&shell, &snapshot.path, &command);
+    }
+    command
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {
@@ -311,7 +310,7 @@ mod tests {
 
         assert!(args.shell.is_none());
 
-        let command = get_command(&args);
+        let command = get_command(&args, None);
 
         assert_eq!(command.len(), 3);
         assert_eq!(command[2], "echo hello");
@@ -326,7 +325,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
 
-        let command = get_command(&args);
+        let command = get_command(&args, None);
 
         assert_eq!(command[2], "echo hello");
     }
@@ -340,7 +339,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("powershell"));
 
-        let command = get_command(&args);
+        let command = get_command(&args, None);
 
         assert_eq!(command[2], "echo hello");
     }
@@ -354,7 +353,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("cmd"));
 
-        let command = get_command(&args);
+        let command = get_command(&args, None);
 
         assert_eq!(command[2], "echo hello");
     }
