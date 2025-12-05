@@ -24,7 +24,7 @@ const ECHO_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
 
 const ECHO_FIRST_EXTRA_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
     powershell: "Write-Output \"first line`nsecond line\"",
-    bash: "printf $'first line\nsecond line\n'",
+    bash: "printf 'first line\nsecond line\n'",
 };
 
 const ECHO_SECOND_EXTRA_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
