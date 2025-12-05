@@ -264,6 +264,9 @@ impl ListSelectionView {
 impl BottomPaneView for ListSelectionView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
+            // Some terminals (or configurations) send Control key chords as
+            // C0 control characters without reporting the CONTROL modifier.
+            // Handle fallbacks for Ctrl-P/N here so navigation works everywhere.
             KeyEvent {
                 code: KeyCode::Up, ..
             }
@@ -271,7 +274,12 @@ impl BottomPaneView for ListSelectionView {
                 code: KeyCode::Char('p'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
-            } => self.move_up(),
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\u{0010}'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } /* ^P */ => self.move_up(),
             KeyEvent {
                 code: KeyCode::Down,
                 ..
@@ -280,7 +288,12 @@ impl BottomPaneView for ListSelectionView {
                 code: KeyCode::Char('n'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
-            } => self.move_down(),
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\u{000e}'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } /* ^N */ => self.move_down(),
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..
@@ -797,6 +810,34 @@ mod tests {
         assert!(
             wrapped_back.contains("› 2. Full Access"),
             "expected selection to wrap to last item"
+        );
+    }
+
+    #[test]
+    fn c0_control_chars_navigate_selection() {
+        let mut view = make_selection_view(None);
+        // Initial selection is on first item
+        let initial = render_lines(&view);
+        assert!(
+            initial.contains("› 1. Read Only"),
+            "expected first item selected initially"
+        );
+
+        // Simulate terminals that send C0 control chars without CONTROL modifier.
+        // ^N (U+000E) should move down
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('\u{000e}'), KeyModifiers::NONE));
+        let after_c0_n = render_lines(&view);
+        assert!(
+            after_c0_n.contains("› 2. Full Access"),
+            "expected second item selected after ^N (C0)"
+        );
+
+        // ^P (U+0010) should move up
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE));
+        let after_c0_p = render_lines(&view);
+        assert!(
+            after_c0_p.contains("› 1. Read Only"),
+            "expected first item selected after ^P (C0)"
         );
     }
 }
