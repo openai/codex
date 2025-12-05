@@ -7,6 +7,31 @@ use strum_macros::Display;
 use strum_macros::EnumIter;
 use ts_rs::TS;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ModelName {
+    Gpt51CodexMax,
+    Gpt51Codex,
+    Gpt51CodexMini,
+    Gpt51,
+    Gpt5Codex,
+    Gpt5CodexMini,
+    Gpt5,
+}
+
+impl ModelName {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Gpt51CodexMax => "gpt-5.1-codex-max",
+            Self::Gpt51Codex => "gpt-5.1-codex",
+            Self::Gpt51CodexMini => "gpt-5.1-codex-mini",
+            Self::Gpt51 => "gpt-5.1",
+            Self::Gpt5Codex => "gpt-5-codex",
+            Self::Gpt5CodexMini => "gpt-5-codex-mini",
+            Self::Gpt5 => "gpt-5",
+        }
+    }
+}
+
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
 #[derive(
     Debug,
