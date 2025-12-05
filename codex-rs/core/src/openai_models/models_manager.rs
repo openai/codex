@@ -36,7 +36,6 @@ impl ModelsManager {
         }
     }
 
-    // do not use this function yet. It's work in progress.
     pub async fn refresh_available_models(
         &self,
         provider: &ModelProviderInfo,
@@ -47,9 +46,12 @@ impl ModelsManager {
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
-        // todo(aibrahim) use the correct value and override the dev 0.0.0
+        let mut client_version = env!("CARGO_PKG_VERSION");
+        if client_version == "0.0.0" {
+            client_version = "99.99.99";
+        }
         let response = client
-            .list_models("99.99.99", HeaderMap::new())
+            .list_models(client_version, HeaderMap::new())
             .await
             .map_err(map_api_error)?;
 
