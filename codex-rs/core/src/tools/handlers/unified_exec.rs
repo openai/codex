@@ -121,7 +121,7 @@ impl ToolHandler for UnifiedExecHandler {
 
         let response = match tool_name.as_str() {
             "exec_command" => {
-                let mut args: ExecCommandArgs =
+                let args: ExecCommandArgs =
                     serde_json::from_str(&arguments).map_err(|err| {
                         FunctionCallError::RespondToModel(format!(
                             "failed to parse exec_command arguments: {err:?}"

@@ -110,7 +110,6 @@ use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
-use crate::shell_snapshot::wrap_command_with_snapshot;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
