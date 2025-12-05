@@ -9,8 +9,10 @@ use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::types::Notifications;
+use codex_core::config::types::ReasoningSummaryFormat;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
+use codex_core::openai_models::model_family::ModelFamily;
 use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
@@ -373,7 +375,11 @@ impl ChatWidget {
     }
 
     // --- Small event handlers ---
-    fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
+    fn on_session_configured(
+        &mut self,
+        event: codex_core::protocol::SessionConfiguredEvent,
+        model_family: ModelFamily,
+    ) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.conversation_id = Some(event.session_id);
@@ -387,7 +393,7 @@ impl ChatWidget {
             self.show_welcome_banner,
         ));
         if let Some(messages) = initial_messages {
-            self.replay_initial_messages(messages);
+            self.replay_initial_messages(messages, model_family);
         }
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
@@ -462,16 +468,13 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_agent_reasoning_final(&mut self) {
+    fn on_agent_reasoning_final(&mut self, reasoning_summary_format: ReasoningSummaryFormat) {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        let model_family = self
-            .models_manager
-            .construct_model_family(&self.config.model, &self.config);
         if !self.full_reasoning_buffer.is_empty() {
             let cell = history_cell::new_reasoning_summary_block(
                 self.full_reasoning_buffer.clone(),
-                &model_family,
+                reasoning_summary_format,
             );
             self.add_boxed_history(cell);
         }
@@ -1736,19 +1739,19 @@ impl ChatWidget {
     /// is intentionally conservative: only safe-to-replay items are rendered to
     /// avoid triggering side effects. Event ids are passed as `None` to
     /// distinguish replayed events from live ones.
-    fn replay_initial_messages(&mut self, events: Vec<EventMsg>) {
+    fn replay_initial_messages(&mut self, events: Vec<EventMsg>, model_family: ModelFamily) {
         for msg in events {
             if matches!(msg, EventMsg::SessionConfigured(_)) {
                 continue;
             }
             // `id: None` indicates a synthetic/fake id coming from replay.
-            self.dispatch_event_msg(None, msg, true);
+            self.dispatch_event_msg(None, msg, true, model_family.clone());
         }
     }
 
-    pub(crate) fn handle_codex_event(&mut self, event: Event) {
+    pub(crate) fn handle_codex_event(&mut self, event: Event, model_family: ModelFamily) {
         let Event { id, msg } = event;
-        self.dispatch_event_msg(Some(id), msg, false);
+        self.dispatch_event_msg(Some(id), msg, false, model_family);
     }
 
     /// Dispatch a protocol `EventMsg` to the appropriate handler.
@@ -1756,7 +1759,13 @@ impl ChatWidget {
     /// `id` is `Some` for live events and `None` for replayed events from
     /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
     /// that must not be used to correlate follow-up actions.
-    fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, from_replay: bool) {
+    fn dispatch_event_msg(
+        &mut self,
+        id: Option<String>,
+        msg: EventMsg,
+        from_replay: bool,
+        model_family: ModelFamily,
+    ) {
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
@@ -1767,7 +1776,7 @@ impl ChatWidget {
         }
 
         match msg {
-            EventMsg::SessionConfigured(e) => self.on_session_configured(e),
+            EventMsg::SessionConfigured(e) => self.on_session_configured(e, model_family),
             EventMsg::AgentMessage(AgentMessageEvent { message }) => self.on_agent_message(message),
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
@@ -1776,10 +1785,12 @@ impl ChatWidget {
             | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
             }) => self.on_agent_reasoning_delta(delta),
-            EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => self.on_agent_reasoning_final(),
+            EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => {
+                self.on_agent_reasoning_final(model_family.reasoning_summary_format)
+            }
             EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
                 self.on_agent_reasoning_delta(text);
-                self.on_agent_reasoning_final()
+                self.on_agent_reasoning_final(model_family.reasoning_summary_format)
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TaskStarted(_) => self.on_task_started(),

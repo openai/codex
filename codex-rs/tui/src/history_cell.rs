@@ -1421,9 +1421,9 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
 
 pub(crate) fn new_reasoning_summary_block(
     full_reasoning_buffer: String,
-    model_family: &ModelFamily,
+    reasoning_summary_format: ReasoningSummaryFormat,
 ) -> Box<dyn HistoryCell> {
-    if model_family.reasoning_summary_format == ReasoningSummaryFormat::Experimental {
+    if reasoning_summary_format == ReasoningSummaryFormat::Experimental {
         // Experimental format is following:
         // ** header **
         //

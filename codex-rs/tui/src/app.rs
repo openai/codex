@@ -481,6 +481,11 @@ impl App {
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
+        let model_family = self
+            .server
+            .get_models_manager()
+            .construct_model_family(&self.config.model, &self.config)
+            .await;
         match event {
             AppEvent::NewSession => {
                 let summary = session_summary(
@@ -637,7 +642,8 @@ impl App {
                     self.suppress_shutdown_complete = false;
                     return Ok(true);
                 }
-                self.chat_widget.handle_codex_event(event);
+                self.chat_widget
+                    .handle_codex_event(event, model_family.clone());
             }
             AppEvent::ConversationHistory(ev) => {
                 self.on_conversation_history_for_backtrack(tui, ev).await?;
@@ -1372,10 +1378,13 @@ mod tests {
             rollout_path: PathBuf::new(),
         };
 
-        app.chat_widget.handle_codex_event(Event {
-            id: String::new(),
-            msg: EventMsg::SessionConfigured(event),
-        });
+        app.chat_widget.handle_codex_event(
+            Event {
+                id: String::new(),
+                msg: EventMsg::SessionConfigured(event),
+            },
+            model_family,
+        );
 
         while app_event_rx.try_recv().is_ok() {}
         while op_rx.try_recv().is_ok() {}
