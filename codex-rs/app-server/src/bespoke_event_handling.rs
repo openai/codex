@@ -333,6 +333,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
                     error: turn_error,
+                    will_retry: false,
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
                 }))
@@ -348,6 +349,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
                     error: turn_error,
+                    will_retry: true,
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
                 }))
@@ -1178,6 +1180,7 @@ async fn construct_mcp_tool_call_notification(
         arguments: begin_event.invocation.arguments.unwrap_or(JsonValue::Null),
         result: None,
         error: None,
+        duration_ms: None,
     };
     ItemStartedNotification {
         thread_id,
@@ -1197,6 +1200,7 @@ async fn construct_mcp_tool_call_end_notification(
     } else {
         McpToolCallStatus::Failed
     };
+    let duration_ms = i64::try_from(end_event.duration.as_millis()).ok();
 
     let (result, error) = match &end_event.result {
         Ok(value) => (
@@ -1222,6 +1226,7 @@ async fn construct_mcp_tool_call_end_notification(
         arguments: end_event.invocation.arguments.unwrap_or(JsonValue::Null),
         result,
         error,
+        duration_ms,
     };
     ItemCompletedNotification {
         thread_id,
@@ -1598,6 +1603,7 @@ mod tests {
                 arguments: serde_json::json!({"server": ""}),
                 result: None,
                 error: None,
+                duration_ms: None,
             },
         };
 
@@ -1751,6 +1757,7 @@ mod tests {
                 arguments: JsonValue::Null,
                 result: None,
                 error: None,
+                duration_ms: None,
             },
         };
 
@@ -1804,6 +1811,7 @@ mod tests {
                     structured_content: None,
                 }),
                 error: None,
+                duration_ms: Some(0),
             },
         };
 
@@ -1845,6 +1853,7 @@ mod tests {
                 error: Some(McpToolCallError {
                     message: "boom".to_string(),
                 }),
+                duration_ms: Some(1),
             },
         };
 

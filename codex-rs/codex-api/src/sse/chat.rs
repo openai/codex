@@ -161,8 +161,10 @@ pub async fn process_chat_sse<S>(
                         }
 
                         if let Some(func) = tool_call.get("function") {
-                            if let Some(fname) = func.get("name").and_then(|n| n.as_str()) {
-                                call_state.name = Some(fname.to_string());
+                            if let Some(fname) = func.get("name").and_then(|n| n.as_str())
+                                && !fname.is_empty()
+                            {
+                                call_state.name.get_or_insert_with(|| fname.to_string());
                             }
                             if let Some(arguments) = func.get("arguments").and_then(|a| a.as_str())
                             {
@@ -429,6 +431,47 @@ mod tests {
                 ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { call_id, name, arguments, .. }),
                 ResponseEvent::Completed { .. }
             ] if call_id == "call_a" && name == "do_a" && arguments == "{ \"foo\":1}"
+        );
+    }
+
+    #[tokio::test]
+    async fn preserves_tool_call_name_when_empty_deltas_arrive() {
+        let delta_with_name = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_a",
+                        "function": { "name": "do_a" }
+                    }]
+                }
+            }]
+        });
+
+        let delta_with_empty_name = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_a",
+                        "function": { "name": "", "arguments": "{}" }
+                    }]
+                }
+            }]
+        });
+
+        let finish = json!({
+            "choices": [{
+                "finish_reason": "tool_calls"
+            }]
+        });
+
+        let body = build_body(&[delta_with_name, delta_with_empty_name, finish]);
+        let events = collect_events(&body).await;
+        assert_matches!(
+            &events[..],
+            [
+                ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { name, arguments, .. }),
+                ResponseEvent::Completed { .. }
+            ] if name == "do_a" && arguments == "{}"
         );
     }
 
