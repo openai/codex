@@ -464,10 +464,11 @@ http_headers = { "HEADER_NAME" = "HEADER_VALUE" }
 env_http_headers = { "HEADER_NAME" = "ENV_VAR" }
 ```
 
-Streamable HTTP connections always use the experimental Rust MCP client under the hood, so expect occasional rough edges. OAuth login flows are gated on the `experimental_use_rmcp_client = true` flag:
+Streamable HTTP connections always use the experimental Rust MCP client under the hood, so expect occasional rough edges. OAuth login flows are gated on the `rmcp_client` feature flag:
 
 ```toml
-experimental_use_rmcp_client = true
+[features]
+rmcp_client = true
 ```
 
 After enabling it, run `codex mcp login <server-name>` when the server supports OAuth.
@@ -491,10 +492,11 @@ When both `enabled_tools` and `disabled_tools` are specified, Codex first restri
 
 #### Experimental RMCP client
 
-This flag enables OAuth support for streamable HTTP servers.
+This feature enables OAuth support for streamable HTTP servers.
 
 ```toml
-experimental_use_rmcp_client = true
+[features]
+rmcp_client = true
 
 [mcp_servers.server_name]
 …
