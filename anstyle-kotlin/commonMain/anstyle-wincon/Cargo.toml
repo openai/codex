@@ -1,0 +1,38 @@
+[package]
+name = "anstyle-wincon"
+version = "3.0.11"
+description = "Styling legacy Windows terminals"
+categories = ["command-line-interface"]
+keywords = ["ansi", "terminal", "color", "windows"]
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+include.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
+targets = ["x86_64-pc-windows-msvc"]
+
+[package.metadata.release]
+pre-release-replacements = [
+  {file="CHANGELOG.md", search="Unreleased", replace="{{version}}", min=1},
+  {file="CHANGELOG.md", search="\\.\\.\\.HEAD", replace="...{{tag_name}}", exactly=1},
+  {file="CHANGELOG.md", search="ReleaseDate", replace="{{date}}", min=1},
+  {file="CHANGELOG.md", search="<!-- next-header -->", replace="<!-- next-header -->\n## [Unreleased] - ReleaseDate\n", exactly=1},
+  {file="CHANGELOG.md", search="<!-- next-url -->", replace="<!-- next-url -->\n[Unreleased]: https://github.com/rust-cli/anstyle/compare/{{tag_name}}...HEAD", exactly=1},
+]
+
+[dependencies]
+anstyle = { version = "1.0.0", path = "../anstyle" }
+
+[dev-dependencies]
+lexopt = "0.3.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = ">=0.60.2, <0.62", features = ["Win32_System_Console", "Win32_Foundation"] }
+once_cell_polyfill = "1.56.1"
+
+[lints]
+workspace = true

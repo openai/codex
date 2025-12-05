@@ -85,8 +85,8 @@ CHANGELOG.ignore.md
 # nix related
 .direnv
 .envrc
-/.kotlin/metadata/
-/.gradle/9.2.1/
-/.gradle/buildOutputCleanup/
-/.gradle/file-system.probe
-/.gradle/noVersion/buildLogic.lock
+
+# Gradle and Kotlin build artifacts (all subprojects)
+**/.gradle/
+**/.kotlin/
+**/build/

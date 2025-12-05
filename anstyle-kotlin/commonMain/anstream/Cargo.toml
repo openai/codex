@@ -1,0 +1,72 @@
+[package]
+name = "anstream"
+version = "0.6.21"
+description = "IO stream adapters for writing colored text that will gracefully degrade according to your terminal's capabilities."
+categories = ["command-line-interface"]
+keywords = ["ansi", "terminal", "color", "strip", "wincon"]
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+include.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
+
+[package.metadata.release]
+pre-release-replacements = [
+  {file="CHANGELOG.md", search="Unreleased", replace="{{version}}", min=1},
+  {file="CHANGELOG.md", search="\\.\\.\\.HEAD", replace="...{{tag_name}}", exactly=1},
+  {file="CHANGELOG.md", search="ReleaseDate", replace="{{date}}", min=1},
+  {file="CHANGELOG.md", search="<!-- next-header -->", replace="<!-- next-header -->\n## [Unreleased] - ReleaseDate\n", exactly=1},
+  {file="CHANGELOG.md", search="<!-- next-url -->", replace="<!-- next-url -->\n[Unreleased]: https://github.com/rust-cli/anstyle/compare/{{tag_name}}...HEAD", exactly=1},
+]
+
+[features]
+default = ["auto", "wincon"]
+auto = ["dep:anstyle-query"]
+wincon = ["dep:anstyle-wincon"]
+# Enable in `dev-dependencies` to make sure output is captured for tests
+test = []
+
+[dependencies]
+anstyle = { version = "1.0.0", path = "../anstyle" }
+anstyle-parse = { version = "0.2.0", path = "../anstyle-parse" }
+colorchoice = { version = "1.0.0", path = "../colorchoice" }
+anstyle-query = { version = "1.0.0", path = "../anstyle-query", optional = true }
+utf8parse = "0.2.2"
+is_terminal_polyfill = "1.48"
+
+[target.'cfg(windows)'.dependencies]
+anstyle-wincon = { version = "3.0.5", path = "../anstyle-wincon", optional = true }
+
+[dev-dependencies]
+divan = "0.1.16"
+lexopt = "0.3.1"
+owo-colors = "4.0.0"
+proptest = "1.7.0"
+strip-ansi-escapes = "0.2.1"
+
+[[example]]
+name = "dump-stream"
+required-features = ["auto"]
+
+[[example]]
+name = "query-stream"
+required-features = ["auto"]
+
+[[bench]]
+name = "strip"
+harness = false
+
+[[bench]]
+name = "wincon"
+harness = false
+
+[[bench]]
+name = "stream"
+harness = false
+
+[lints]
+workspace = true

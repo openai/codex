@@ -1,0 +1,153 @@
+<svg width="835px" height="1136px" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .fg { fill: #AAAAAA }
+    .bg { fill: #181818 }
+    .fg-green { fill: #00AA00 }
+    .fg-rgb-66D9EF { fill: #66D9EF }
+    .fg-rgb-839496 { fill: #839496 }
+    .fg-rgb-A6E22E { fill: #A6E22E }
+    .fg-rgb-BE84FF { fill: #BE84FF }
+    .fg-rgb-E6DB74 { fill: #E6DB74 }
+    .fg-rgb-F8F8F2 { fill: #F8F8F2 }
+    .fg-rgb-F92672 { fill: #F92672 }
+    .container {
+      padding: 0 10px;
+      line-height: 18px;
+    }
+    tspan {
+      font: 14px SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace;
+      white-space: pre;
+      line-height: 18px;
+    }
+  </style>
+
+  <rect width="100%" height="100%" y="0" rx="4.5" class="bg" />
+
+  <text xml:space="preserve" class="container fg">
+    <tspan x="10px" y="28px"><tspan class="fg-rgb-839496">   1</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F92672">use</tspan><tspan class="fg-rgb-F8F8F2"> anstyle::RgbColor;</tspan>
+</tspan>
+    <tspan x="10px" y="46px"><tspan class="fg-rgb-839496">   2</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan>
+</tspan>
+    <tspan x="10px" y="64px"><tspan class="fg-rgb-839496">   3</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">#[test]</tspan>
+</tspan>
+    <tspan x="10px" y="82px"><tspan class="fg-rgb-839496">   4</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-66D9EF">fn</tspan><tspan class="fg-rgb-F8F8F2"> </tspan><tspan class="fg-rgb-A6E22E">rainbow</tspan><tspan class="fg-rgb-F8F8F2">() {</tspan>
+</tspan>
+    <tspan x="10px" y="100px"><tspan class="fg-rgb-839496">   5</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> input </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> std::fs::read_to_string(</tspan><tspan class="fg-rgb-E6DB74">"tests/rainbow.vte"</tspan><tspan class="fg-rgb-F8F8F2">).</tspan><tspan class="fg-rgb-66D9EF">unwrap</tspan><tspan class="fg-rgb-F8F8F2">();</tspan>
+</tspan>
+    <tspan x="10px" y="118px"><tspan class="fg-rgb-839496">   6</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> actual </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> anstyle_svg::Term::new().</tspan><tspan class="fg-rgb-66D9EF">render_svg</tspan><tspan class="fg-rgb-F8F8F2">(</tspan><tspan class="fg-rgb-F92672">&amp;</tspan><tspan class="fg-rgb-F8F8F2">input);</tspan>
+</tspan>
+    <tspan x="10px" y="136px"><tspan class="fg-rgb-839496">   7</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    snapbox::assert_data_eq</tspan><tspan class="fg-rgb-F92672">!</tspan><tspan class="fg-rgb-F8F8F2">(actual, snapbox::file</tspan><tspan class="fg-rgb-F92672">!</tspan><tspan class="fg-rgb-F8F8F2">[</tspan><tspan class="fg-rgb-E6DB74">"rainbow.svg"</tspan><tspan class="fg-rgb-F8F8F2">: Text].</tspan><tspan class="fg-rgb-66D9EF">raw</tspan><tspan class="fg-rgb-F8F8F2">());</tspan>
+</tspan>
+    <tspan x="10px" y="154px"><tspan class="fg-rgb-839496">   8</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">}</tspan>
+</tspan>
+    <tspan x="10px" y="172px"><tspan class="fg-rgb-839496">   9</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan>
+</tspan>
+    <tspan x="10px" y="190px"><tspan class="fg-rgb-839496">  10</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">#[test]</tspan>
+</tspan>
+    <tspan x="10px" y="208px"><tspan class="fg-rgb-839496">  11</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-66D9EF">fn</tspan><tspan class="fg-rgb-F8F8F2"> </tspan><tspan class="fg-rgb-A6E22E">rg_linus</tspan><tspan class="fg-rgb-F8F8F2">() {</tspan>
+</tspan>
+    <tspan x="10px" y="226px"><tspan class="fg-rgb-839496">  12</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> input </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> std::fs::read_to_string(</tspan><tspan class="fg-rgb-E6DB74">"tests/rg_linus.vte"</tspan><tspan class="fg-rgb-F8F8F2">).</tspan><tspan class="fg-rgb-66D9EF">unwrap</tspan><tspan class="fg-rgb-F8F8F2">();</tspan>
+</tspan>
+    <tspan x="10px" y="244px"><tspan class="fg-rgb-839496">  13</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> actual </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> anstyle_svg::Term::new().</tspan><tspan class="fg-rgb-66D9EF">render_svg</tspan><tspan class="fg-rgb-F8F8F2">(</tspan><tspan class="fg-rgb-F92672">&amp;</tspan><tspan class="fg-rgb-F8F8F2">input);</tspan>
+</tspan>
+    <tspan x="10px" y="262px"><tspan class="fg-rgb-839496">  14</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    snapbox::assert_data_eq</tspan><tspan class="fg-rgb-F92672">!</tspan><tspan class="fg-rgb-F8F8F2">(actual, snapbox::file</tspan><tspan class="fg-rgb-F92672">!</tspan><tspan class="fg-rgb-F8F8F2">[</tspan><tspan class="fg-rgb-E6DB74">"rg_linus.svg"</tspan><tspan class="fg-rgb-F8F8F2">: Text].</tspan><tspan class="fg-rgb-66D9EF">raw</tspan><tspan class="fg-rgb-F8F8F2">());</tspan>
+</tspan>
+    <tspan x="10px" y="280px"><tspan class="fg-rgb-839496">  15</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">}</tspan>
+</tspan>
+    <tspan x="10px" y="298px"><tspan class="fg-rgb-839496">  16</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan>
+</tspan>
+    <tspan x="10px" y="316px"><tspan class="fg-rgb-839496">  17</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">#[test]</tspan>
+</tspan>
+    <tspan x="10px" y="334px"><tspan class="fg-rgb-839496">  18</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-66D9EF">fn</tspan><tspan class="fg-rgb-F8F8F2"> </tspan><tspan class="fg-rgb-A6E22E">hyperlink_demo</tspan><tspan class="fg-rgb-F8F8F2">() {</tspan>
+</tspan>
+    <tspan x="10px" y="352px"><tspan class="fg-rgb-839496">  19</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> bytes </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> std::fs::read(</tspan><tspan class="fg-rgb-E6DB74">"tests/hyperlink-demo.vte"</tspan><tspan class="fg-rgb-F8F8F2">).</tspan><tspan class="fg-rgb-66D9EF">unwrap</tspan><tspan class="fg-rgb-F8F8F2">();</tspan>
+</tspan>
+    <tspan x="10px" y="370px"><tspan class="fg-rgb-839496">  20</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-A6E22E">String</tspan><tspan class="fg-rgb-F8F8F2">::from_utf8(bytes).</tspan><tspan class="fg-rgb-66D9EF">unwrap</tspan><tspan class="fg-rgb-F8F8F2">();</tspan>
+</tspan>
+    <tspan x="10px" y="388px"><tspan class="fg-rgb-839496">  21</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> input </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> std::fs::read_to_string(</tspan><tspan class="fg-rgb-E6DB74">"tests/hyperlink-demo.vte"</tspan><tspan class="fg-rgb-F8F8F2">).</tspan><tspan class="fg-rgb-66D9EF">unwrap</tspan><tspan class="fg-rgb-F8F8F2">();</tspan>
+</tspan>
+    <tspan x="10px" y="406px"><tspan class="fg-rgb-839496">  22</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> actual </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> anstyle_svg::Term::new().</tspan><tspan class="fg-rgb-66D9EF">render_svg</tspan><tspan class="fg-rgb-F8F8F2">(</tspan><tspan class="fg-rgb-F92672">&amp;</tspan><tspan class="fg-rgb-F8F8F2">input);</tspan>
+</tspan>
+    <tspan x="10px" y="424px"><tspan class="fg-rgb-839496">  23</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    snapbox::assert_data_eq</tspan><tspan class="fg-rgb-F92672">!</tspan><tspan class="fg-rgb-F8F8F2">(actual, snapbox::file</tspan><tspan class="fg-rgb-F92672">!</tspan><tspan class="fg-rgb-F8F8F2">[</tspan><tspan class="fg-rgb-E6DB74">"hyperlink-demo.svg"</tspan><tspan class="fg-rgb-F8F8F2">: Text].</tspan><tspan class="fg-rgb-66D9EF">raw</tspan><tspan class="fg-rgb-F8F8F2">());</tspan>
+</tspan>
+    <tspan x="10px" y="442px"><tspan class="fg-rgb-839496">  24</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">}</tspan>
+</tspan>
+    <tspan x="10px" y="460px"><tspan class="fg-rgb-839496">  25</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan>
+</tspan>
+    <tspan x="10px" y="478px"><tspan class="fg-rgb-839496">  26</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">#[test]</tspan>
+</tspan>
+    <tspan x="10px" y="496px"><tspan class="fg-rgb-839496">  27</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-66D9EF">fn</tspan><tspan class="fg-rgb-F8F8F2"> </tspan><tspan class="fg-rgb-A6E22E">custom_background_color</tspan><tspan class="fg-rgb-F8F8F2">() {</tspan>
+</tspan>
+    <tspan x="10px" y="514px"><tspan class="fg-rgb-839496">  28</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> bytes </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> std::fs::read(</tspan><tspan class="fg-rgb-E6DB74">"tests/custom_background_color.vte"</tspan><tspan class="fg-rgb-F8F8F2">).</tspan><tspan class="fg-rgb-66D9EF">unwrap</tspan><tspan class="fg-rgb-F8F8F2">();</tspan>
+</tspan>
+    <tspan x="10px" y="532px"><tspan class="fg-rgb-839496">  29</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-A6E22E">String</tspan><tspan class="fg-rgb-F8F8F2">::from_utf8(bytes).</tspan><tspan class="fg-rgb-66D9EF">unwrap</tspan><tspan class="fg-rgb-F8F8F2">();</tspan>
+</tspan>
+    <tspan x="10px" y="550px"><tspan class="fg-rgb-839496">  30</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> input </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> std::fs::read_to_string(</tspan><tspan class="fg-rgb-E6DB74">"tests/custom_background_color.vte"</tspan><tspan class="fg-rgb-F8F8F2">).</tspan><tspan class="fg-rgb-66D9EF">unwrap</tspan><tspan class="fg-rgb-F8F8F2">();</tspan>
+</tspan>
+    <tspan x="10px" y="568px"><tspan class="fg-rgb-839496">  31</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> actual </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> anstyle_svg::Term::new()</tspan>
+</tspan>
+    <tspan x="10px" y="586px"><tspan class="fg-rgb-839496">  32</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">        .</tspan><tspan class="fg-rgb-66D9EF">bg_color</tspan><tspan class="fg-rgb-F8F8F2">(anstyle::Color::Rgb(RgbColor(</tspan><tspan class="fg-rgb-BE84FF">0x18</tspan><tspan class="fg-rgb-F8F8F2">, </tspan><tspan class="fg-rgb-BE84FF">0x18</tspan><tspan class="fg-rgb-F8F8F2">, </tspan><tspan class="fg-rgb-BE84FF">0x18</tspan><tspan class="fg-rgb-F8F8F2">)))</tspan>
+</tspan>
+    <tspan x="10px" y="604px"><tspan class="fg-rgb-839496">  33</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">        .</tspan><tspan class="fg-rgb-66D9EF">render_svg</tspan><tspan class="fg-rgb-F8F8F2">(</tspan><tspan class="fg-rgb-F92672">&amp;</tspan><tspan class="fg-rgb-F8F8F2">input);</tspan>
+</tspan>
+    <tspan x="10px" y="622px"><tspan class="fg-rgb-839496">  34</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    snapbox::assert_data_eq</tspan><tspan class="fg-rgb-F92672">!</tspan><tspan class="fg-rgb-F8F8F2">(</tspan>
+</tspan>
+    <tspan x="10px" y="640px"><tspan class="fg-rgb-839496">  35</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">        actual,</tspan>
+</tspan>
+    <tspan x="10px" y="658px"><tspan class="fg-rgb-839496">  36</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">        snapbox::file</tspan><tspan class="fg-rgb-F92672">!</tspan><tspan class="fg-rgb-F8F8F2">[</tspan><tspan class="fg-rgb-E6DB74">"custom_background_color.svg"</tspan><tspan class="fg-rgb-F8F8F2">: Text].</tspan><tspan class="fg-rgb-66D9EF">raw</tspan><tspan class="fg-rgb-F8F8F2">()</tspan>
+</tspan>
+    <tspan x="10px" y="676px"><tspan class="fg-rgb-839496">  37</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    );</tspan>
+</tspan>
+    <tspan x="10px" y="694px"><tspan class="fg-rgb-839496">  38</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">}</tspan>
+</tspan>
+    <tspan x="10px" y="712px"><tspan class="fg-rgb-839496">  39</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan>
+</tspan>
+    <tspan x="10px" y="730px"><tspan class="fg-rgb-839496">  40</tspan><tspan> </tspan><tspan class="fg-green">+</tspan><tspan> </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">#[test]</tspan>
+</tspan>
+    <tspan x="10px" y="748px"><tspan class="fg-rgb-839496">  41</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-66D9EF">fn</tspan><tspan class="fg-rgb-F8F8F2"> </tspan><tspan class="fg-rgb-A6E22E">rainbow_html</tspan><tspan class="fg-rgb-F8F8F2">() {</tspan>
+</tspan>
+    <tspan x="10px" y="766px"><tspan class="fg-rgb-839496">  42</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> input </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> std::fs::read_to_string(</tspan><tspan class="fg-rgb-E6DB74">"tests/rainbow.vte"</tspan><tspan class="fg-rgb-F8F8F2">).</tspan><tspan class="fg-rgb-66D9EF">unwrap</tspan><tspan class="fg-rgb-F8F8F2">();</tspan>
+</tspan>
+    <tspan x="10px" y="784px"><tspan class="fg-rgb-839496">  43</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> actual </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> anstyle_svg::Term::new().</tspan><tspan class="fg-rgb-66D9EF">render_html</tspan><tspan class="fg-rgb-F8F8F2">(</tspan><tspan class="fg-rgb-F92672">&amp;</tspan><tspan class="fg-rgb-F8F8F2">input);</tspan>
+</tspan>
+    <tspan x="10px" y="802px"><tspan class="fg-rgb-839496">  44</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    snapbox::assert_data_eq</tspan><tspan class="fg-rgb-F92672">!</tspan><tspan class="fg-rgb-F8F8F2">(actual, snapbox::file</tspan><tspan class="fg-rgb-F92672">!</tspan><tspan class="fg-rgb-F8F8F2">[</tspan><tspan class="fg-rgb-E6DB74">"rainbow.html"</tspan><tspan class="fg-rgb-F8F8F2">: Text].</tspan><tspan class="fg-rgb-66D9EF">raw</tspan><tspan class="fg-rgb-F8F8F2">());</tspan>
+</tspan>
+    <tspan x="10px" y="820px"><tspan class="fg-rgb-839496">  45</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">}</tspan>
+</tspan>
+    <tspan x="10px" y="838px"><tspan class="fg-rgb-839496">  46</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan>
+</tspan>
+    <tspan x="10px" y="856px"><tspan class="fg-rgb-839496">  47</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">#[test]</tspan>
+</tspan>
+    <tspan x="10px" y="874px"><tspan class="fg-rgb-839496">  48</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-66D9EF">fn</tspan><tspan class="fg-rgb-F8F8F2"> </tspan><tspan class="fg-rgb-A6E22E">rg_linus_html</tspan><tspan class="fg-rgb-F8F8F2">() {</tspan>
+</tspan>
+    <tspan x="10px" y="892px"><tspan class="fg-rgb-839496">  49</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> input </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> std::fs::read_to_string(</tspan><tspan class="fg-rgb-E6DB74">"tests/rg_linus.vte"</tspan><tspan class="fg-rgb-F8F8F2">).</tspan><tspan class="fg-rgb-66D9EF">unwrap</tspan><tspan class="fg-rgb-F8F8F2">();</tspan>
+</tspan>
+    <tspan x="10px" y="910px"><tspan class="fg-rgb-839496">  50</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> actual </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> anstyle_svg::Term::new().</tspan><tspan class="fg-rgb-66D9EF">render_html</tspan><tspan class="fg-rgb-F8F8F2">(</tspan><tspan class="fg-rgb-F92672">&amp;</tspan><tspan class="fg-rgb-F8F8F2">input);</tspan>
+</tspan>
+    <tspan x="10px" y="928px"><tspan class="fg-rgb-839496">  51</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    snapbox::assert_data_eq</tspan><tspan class="fg-rgb-F92672">!</tspan><tspan class="fg-rgb-F8F8F2">(actual, snapbox::file</tspan><tspan class="fg-rgb-F92672">!</tspan><tspan class="fg-rgb-F8F8F2">[</tspan><tspan class="fg-rgb-E6DB74">"rg_linus.html"</tspan><tspan class="fg-rgb-F8F8F2">: Text].</tspan><tspan class="fg-rgb-66D9EF">raw</tspan><tspan class="fg-rgb-F8F8F2">());</tspan>
+</tspan>
+    <tspan x="10px" y="946px"><tspan class="fg-rgb-839496">  52</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">}</tspan>
+</tspan>
+    <tspan x="10px" y="964px"><tspan class="fg-rgb-839496">  53</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan>
+</tspan>
+    <tspan x="10px" y="982px"><tspan class="fg-rgb-839496">  54</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">#[test]</tspan>
+</tspan>
+    <tspan x="10px" y="1000px"><tspan class="fg-rgb-839496">  55</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-66D9EF">fn</tspan><tspan class="fg-rgb-F8F8F2"> </tspan><tspan class="fg-rgb-A6E22E">hyperlink_demo_html</tspan><tspan class="fg-rgb-F8F8F2">() {</tspan>
+</tspan>
+    <tspan x="10px" y="1018px"><tspan class="fg-rgb-839496">  56</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> bytes </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> std::fs::read(</tspan><tspan class="fg-rgb-E6DB74">"tests/hyperlink-demo.vte"</tspan><tspan class="fg-rgb-F8F8F2">).</tspan><tspan class="fg-rgb-66D9EF">unwrap</tspan><tspan class="fg-rgb-F8F8F2">();</tspan>
+</tspan>
+    <tspan x="10px" y="1036px"><tspan class="fg-rgb-839496">  57</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-A6E22E">String</tspan><tspan class="fg-rgb-F8F8F2">::from_utf8(bytes).</tspan><tspan class="fg-rgb-66D9EF">unwrap</tspan><tspan class="fg-rgb-F8F8F2">();</tspan>
+</tspan>
+    <tspan x="10px" y="1054px"><tspan class="fg-rgb-839496">  58</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> input </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> std::fs::read_to_string(</tspan><tspan class="fg-rgb-E6DB74">"tests/hyperlink-demo.vte"</tspan><tspan class="fg-rgb-F8F8F2">).</tspan><tspan class="fg-rgb-66D9EF">unwrap</tspan><tspan class="fg-rgb-F8F8F2">();</tspan>
+</tspan>
+    <tspan x="10px" y="1072px"><tspan class="fg-rgb-839496">  59</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    </tspan><tspan class="fg-rgb-66D9EF">let</tspan><tspan class="fg-rgb-F8F8F2"> actual </tspan><tspan class="fg-rgb-F92672">=</tspan><tspan class="fg-rgb-F8F8F2"> anstyle_svg::Term::new().</tspan><tspan class="fg-rgb-66D9EF">render_html</tspan><tspan class="fg-rgb-F8F8F2">(</tspan><tspan class="fg-rgb-F92672">&amp;</tspan><tspan class="fg-rgb-F8F8F2">input);</tspan>
+</tspan>
+    <tspan x="10px" y="1090px"><tspan class="fg-rgb-839496">  60</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">    snapbox::assert_data_eq</tspan><tspan class="fg-rgb-F92672">!</tspan><tspan class="fg-rgb-F8F8F2">(actual, snapbox::file</tspan><tspan class="fg-rgb-F92672">!</tspan><tspan class="fg-rgb-F8F8F2">[</tspan><tspan class="fg-rgb-E6DB74">"hyperlink-demo.html"</tspan><tspan class="fg-rgb-F8F8F2">: Text].</tspan><tspan class="fg-rgb-66D9EF">raw</tspan><tspan class="fg-rgb-F8F8F2">());</tspan>
+</tspan>
+    <tspan x="10px" y="1108px"><tspan class="fg-rgb-839496">  61</tspan><tspan>   </tspan><tspan class="fg-rgb-839496">│</tspan><tspan> </tspan><tspan class="fg-rgb-F8F8F2">}</tspan>
+</tspan>
+    <tspan x="10px" y="1126px">
+</tspan>
+  </text>
+
+</svg>

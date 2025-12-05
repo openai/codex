@@ -1,0 +1,1159 @@
+[0m[35mkernel/sys.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mkernel/fork.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mkernel/exit.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mkernel/time/timer.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mkernel/time/time.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mkernel/user.c[0m: * (C) Copyright 1991-2000 [0m[1m[31mLinus[0m Torvalds
+[0m[35mkernel/ptrace.c[0m: * (C) Copyright 1999 [0m[1m[31mLinus[0m Torvalds
+[0m[35mkernel/irq/irqdesc.c[0m: * Copyright (C) 1992, 1998-2006 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35mkernel/irq/spurious.c[0m: * Copyright (C) 1992, 1998-2004 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35mkernel/irq/autoprobe.c[0m: * Copyright (C) 1992, 1998-2004 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35mkernel/irq/chip.c[0m: * Copyright (C) 1992, 1998-2006 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35mkernel/irq/proc.c[0m: * Copyright (C) 1992, 1998-2004 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35mkernel/irq/dummychip.c[0m: * Copyright (C) 1992, 1998-2006 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35mkernel/irq/handle.c[0m: * Copyright (C) 1992, 1998-2006 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35mkernel/irq/resend.c[0m: * Copyright (C) 1992, 1998-2006 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35mkernel/irq/manage.c[0m: * Copyright (C) 1992, 1998-2006 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35mkernel/signal.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mkernel/futex/core.c[0m: *  enough at me, [0m[1m[31mLinus[0m for the original (flawed) idea, Matthew
+[0m[35mkernel/resource.c[0m: * Copyright (C) 1999	[0m[1m[31mLinus[0m Torvalds
+[0m[35mkernel/softirq.c[0m: *	Copyright (C) 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35mkernel/printk/printk.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mkernel/sched/core.c[0m: *  Copyright (C) 1991-2002  [0m[1m[31mLinus[0m Torvalds
+[0m[35mkernel/panic.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mkernel/locking/spinlock.c[0m: * Copyright (2004) [0m[1m[31mLinus[0m Torvalds
+[0m[35mkernel/reboot.c[0m: *  Copyright (C) 2013  [0m[1m[31mLinus[0m Torvalds
+[0m[35mLICENSES/exceptions/Linux-syscall-note[0m:			[0m[1m[31mLinus[0m Torvalds
+[0m[35mtools/build/Build.include[0m:#  Copyright (C) [0m[1m[31mLinus[0m Torvalds <torvalds@linux-foundation.org>, 2015
+[0m[35mtools/build/Makefile.build[0m:#  Copyright (C) [0m[1m[31mLinus[0m Torvalds <torvalds@linux-foundation.org>, 2015
+[0m[35mtools/perf/CREDITS[0m: [0m[1m[31mLinus[0m Torvalds
+[0m[35mtools/perf/util/config.c[0m: * Copyright (C) [0m[1m[31mLinus[0m Torvalds, 2005
+[0m[35mtools/testing/selftests/vm/charge_reserved_hugetlb.sh[0m:  # On [0m[1m[31mlinus[0m/master, the above process gets SIGBUS'd on oomkill, with
+[0m[35mtools/perf/util/usage.c[0m: * Copyright (C) [0m[1m[31mLinus[0m Torvalds, 2005
+[0m[35mtools/testing/selftests/powerpc/stringloops/string.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mtools/lib/string.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mtools/lib/ctype.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mtools/scripts/Makefile.include[0m:# that takes into account [0m[1m[31mLinus[0m's comments (search for Wshadow) for the reasoning about
+[0m[35mtools/gpio/gpio-utils.h[0m: * Copyright (C) 2015 [0m[1m[31mLinus[0m Walleij
+[0m[35mtools/gpio/gpio-utils.c[0m: * Copyright (C) 2015 [0m[1m[31mLinus[0m Walleij
+[0m[35mtools/gpio/gpio-event-mon.c[0m: * Copyright (C) 2016 [0m[1m[31mLinus[0m Walleij
+[0m[35mtools/gpio/gpio-hammer.c[0m: * Copyright (C) 2016 [0m[1m[31mLinus[0m Walleij
+[0m[35mtools/gpio/lsgpio.c[0m: * Copyright (C) 2015 [0m[1m[31mLinus[0m Walleij
+[0m[35mtools/power/cpupower/utils/idle_monitor/mperf_monitor.c[0m:		 * Compare with [0m[1m[31mLinus[0m kernel git commit: acf01734b1747b1ec4
+[0m[35mtools/power/cpupower/utils/cpupower.c[0m: *  Ideas taken over from the perf userspace tool (included in the [0m[1m[31mLinus[0m
+[0m[35minit/calibrate.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35msecurity/Kconfig.hardening[0m:		  https://git.kernel.org/[0m[1m[31mlinus[0m/b9e146d8eb3b9eca
+[0m[35msecurity/Kconfig.hardening[0m:		  https://git.kernel.org/[0m[1m[31mlinus[0m/06e7e776ca4d3654
+[0m[35mblock/partitions/efi.c[0m: * - Ported to 2.5.2-pre11 + library crc32 patch [0m[1m[31mLinus[0m applied
+[0m[35mblock/bdev.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mblock/fops.c[0m: * Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mblock/blk-core.c[0m: * Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35mblock/partitions/osf.c[0m: *  Copyright (C) 1991-1998  [0m[1m[31mLinus[0m Torvalds
+[0m[35mblock/partitions/amiga.c[0m: *  Copyright (C) 1991-1998  [0m[1m[31mLinus[0m Torvalds
+[0m[35mblock/partitions/sun.c[0m: *  Copyright (C) 1991-1998  [0m[1m[31mLinus[0m Torvalds
+[0m[35mblock/partitions/msdos.c[0m: *  Copyright (C) 1991-1998  [0m[1m[31mLinus[0m Torvalds
+[0m[35mblock/partitions/mac.c[0m: *  Copyright (C) 1991-1998  [0m[1m[31mLinus[0m Torvalds
+[0m[35mblock/partitions/atari.c[0m: *  Copyright (C) 1991-1998  [0m[1m[31mLinus[0m Torvalds
+[0m[35mblock/partitions/core.c[0m: * Copyright (C) 1991-1998  [0m[1m[31mLinus[0m Torvalds
+[0m[35minit/main.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mMAINTAINERS[0m:	job the maintainers (and especially [0m[1m[31mLinus[0m) do is to keep things
+[0m[35mMAINTAINERS[0m:	your changes in a branch derived from [0m[1m[31mLinus[0m' latest git tree.
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0mw@kernel.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:T:	git git://git.kernel.org/pub/scm/linux/kernel/git/[0m[1m[31mlinus[0mw/linux-nomadik.git
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:T:	git git://git.kernel.org/pub/scm/linux/kernel/git/[0m[1m[31mlinus[0mw/linux-gpio.git
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:T:	git git://git.kernel.org/pub/scm/linux/kernel/git/[0m[1m[31mlinus[0mw/linux-pinctrl.git
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mMAINTAINERS[0m:M:	[0m[1m[31mLinus[0m Torvalds <torvalds@linux-foundation.org>
+[0m[35mCREDITS[0m:			[0m[1m[31mLinus[0m
+[0m[35mCREDITS[0m:N: [0m[1m[31mLinus[0m Torvalds
+[0m[35mscripts/Makefile.build[0m:# [0m[1m[31mLinus[0m' kernel sanity checking tool
+[0m[35mDocumentation/networking/netdev-FAQ.rst[0m:mainline tree from [0m[1m[31mLinus[0m, and ``net-next`` is where the new code goes
+[0m[35mDocumentation/networking/netdev-FAQ.rst[0m:How often do changes from these trees make it to the mainline [0m[1m[31mLinus[0m tree?
+[0m[35mDocumentation/networking/netdev-FAQ.rst[0m:to [0m[1m[31mLinus[0m for merging into the mainline tree.  After the two weeks, the
+[0m[35mDocumentation/networking/netdev-FAQ.rst[0m:mainline/[0m[1m[31mLinus[0m via a pull request for vX.Y -- at the same time, the
+[0m[35mDocumentation/networking/netdev-FAQ.rst[0m:fed back to [0m[1m[31mLinus[0m at regular (~weekly) intervals.  Meaning that the
+[0m[35mDocumentation/networking/netdev-FAQ.rst[0m:Load the mainline ([0m[1m[31mLinus[0m) page here:
+[0m[35mlib/vsprintf.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mlib/vsprintf.c[0m:/* vsprintf.c -- Lars Wirzenius & [0m[1m[31mLinus[0m Torvalds. */
+[0m[35mdrivers/dma/s3c24xx-dma.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@stericsson.com>
+[0m[35mlib/string.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mlib/kasprintf.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mlib/iomap.c[0m: * (C) Copyright 2004 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/dma/amba-pl08x.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/thermal/db8500_thermal.c[0m: * Authors: Hongbo Zhang, [0m[1m[31mLinus[0m Walleij
+[0m[35mdrivers/auxdisplay/arm-charlcd.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <triad@df.lth.se>
+[0m[35mdrivers/gpu/drm/tve200/tve200_drm.h[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/gpu/drm/tve200/tve200_display.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/gpu/drm/tve200/tve200_drv.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/gpu/drm/tve200/tve200_drv.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/gpu/drm/mcde/mcde_display.c[0m: * Copyright (C) 2018 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/gpu/drm/mcde/mcde_drm.h[0m: * Copyright (C) 2018 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/gpu/drm/mcde/mcde_drv.c[0m: * Copyright (C) 2018 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/gpu/drm/mcde/mcde_drv.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/gpu/drm/panel/panel-sony-acx424akp.c[0m: * Author: [0m[1m[31mLinus[0m Walleij
+[0m[35mdrivers/gpu/drm/panel/panel-sony-acx424akp.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Wallei <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/gpu/drm/panel/panel-ilitek-ili9341.c[0m: * the reuse of DBI abstraction part referred from [0m[1m[31mLinus[0m's patch
+[0m[35mdrivers/gpu/drm/panel/panel-ilitek-ili9322.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/gpu/drm/panel/panel-ilitek-ili9322.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/gpu/drm/panel/panel-arm-versatile.c[0m: * [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.wallei@linaro.org>
+[0m[35mdrivers/gpu/drm/panel/panel-arm-versatile.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/gpu/drm/panel/panel-novatek-nt35510.c[0m: * Copyright (C) 2020 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/gpu/drm/panel/panel-novatek-nt35510.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/gpu/drm/panel/panel-samsung-db7430.c[0m: * [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/gpu/drm/panel/panel-samsung-db7430.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/gpu/drm/panel/panel-samsung-s6d16d0.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Wallei <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/bus/arm-integrator-lm.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/bus/arm-integrator-lm.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/gpu/drm/panel/panel-widechips-ws2401.c[0m: * [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/gpu/drm/panel/panel-widechips-ws2401.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/gpu/drm/panel/panel-samsung-s6e63m0-dsi.c[0m: * (C) 2019 [0m[1m[31mLinus[0m Walleij
+[0m[35mdrivers/gpu/drm/panel/panel-samsung-s6e63m0-dsi.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0mw@kernel.org>");
+[0m[35mdrivers/bus/qcom-ebi2.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/bus/qcom-ebi2.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/gpu/drm/panel/panel-tpo-tpg110.c[0m: * [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/gpu/drm/panel/panel-tpo-tpg110.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/spi/spi-pl022.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@stericsson.com>
+[0m[35mdrivers/spi/spi-pl022.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@stericsson.com>");
+[0m[35mdrivers/spi/spi-gpio.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij
+[0m[35mdrivers/bus/intel-ixp4xx-eb.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/bus/intel-ixp4xx-eb.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/char/mem.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/char/lp.c[0m: * Copyright (C) 1992 by Jim Weigand and [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/char/misc.c[0m: * Based on code from [0m[1m[31mLinus[0m
+[0m[35mdrivers/char/misc.c[0m: * of the misc drivers, as they are now completely independent. [0m[1m[31mLinus[0m.
+[0m[35mdrivers/char/agp/efficeon-agp.c[0m: * Based upon a diff by [0m[1m[31mLinus[0m around November '02.
+[0m[35mdrivers/mfd/ipaq-micro.c[0m: * Author : [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/mfd/stw481x.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/mfd/stw481x.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij");
+[0m[35mdrivers/irqchip/irq-xtensa-pic.c[0m: * Copyright (C) 1992, 1998 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35mdrivers/pinctrl/pinconf.h[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/irqchip/irq-i8259.c[0m: * Copyright (C) 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/pinctrl/pinmux.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/pinctrl/pinctrl-gemini.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/pinctrl/core.h[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/pinctrl/pinconf.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/pinctrl/nomadik/pinctrl-nomadik.c[0m: * Copyright (C) 2011-2013 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/pinctrl/pinconf-generic.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/pinctrl/pinmux.h[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/irqchip/irq-ftintc010.c[0m: * irqchip for the Faraday Technology FTINTC010 Copyright (C) 2017 [0m[1m[31mLinus[0m
+[0m[35mdrivers/irqchip/irq-ftintc010.c[0m: * Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/irqchip/irq-gic-realview.c[0m: * Copyright (C) 2015 [0m[1m[31mLinus[0m Walleij
+[0m[35mdrivers/mfd/tps6105x.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/mfd/tps6105x.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij");
+[0m[35mdrivers/pinctrl/core.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/irqchip/irq-ixp4xx.c[0m: * Copyright (C) 2019 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/networking/device_drivers/hamradio/z8530drv.rst[0m:Many thanks to [0m[1m[31mLinus[0m Torvalds and Alan Cox for including the driver
+[0m[35mdrivers/pcmcia/cardbus.c[0m: *		[0m[1m[31mLinus[0m, Jan 2000
+[0m[35mdrivers/mtd/maps/physmap-gemini.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/mtd/maps/physmap-versatile.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/pcmcia/yenta_socket.c[0m: * (C) Copyright 1999, 2000 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/mtd/parsers/afs.c[0m:    Copyright (C) 2019 [0m[1m[31mLinus[0m Walleij
+[0m[35mdrivers/mtd/maps/physmap-ixp4xx.c[0m: * Copyright (C) 2019 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mlib/ctype.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mlib/pci_iomap.c[0m: * (C) Copyright 2004 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/block/floppy.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/block/floppy.c[0m: * by entropy@wintermute.wpi.edu (Lawrence Foard). [0m[1m[31mLinus[0m.
+[0m[35mdrivers/block/floppy.c[0m: * 1993/4/29 -- [0m[1m[31mLinus[0m -- cleaned up the timer handling in the kernel, and
+[0m[35mdrivers/usb/core/hub.h[0m: * Copyright (C) 1999 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/usb/core/generic.c[0m: *	(C) Copyright [0m[1m[31mLinus[0m Torvalds 1999
+[0m[35mdrivers/usb/core/hcd.c[0m: * (C) Copyright [0m[1m[31mLinus[0m Torvalds 1999
+[0m[35mdrivers/usb/misc/sisusbvga/sisusb_con.c[0m: *      based on code Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/usb/core/usb.c[0m: * (C) Copyright [0m[1m[31mLinus[0m Torvalds 1999
+[0m[35mdrivers/usb/core/driver.c[0m: *	(C) Copyright [0m[1m[31mLinus[0m Torvalds 1999
+[0m[35mdrivers/usb/core/hub.c[0m: * (C) Copyright 1999 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/usb/core/file.c[0m: * (C) Copyright [0m[1m[31mLinus[0m Torvalds 1999
+[0m[35mDocumentation/arm/tcm.rst[0m:Written by [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@stericsson.com>
+[0m[35mdrivers/usb/mon/mon_bin.c[0m:/* #2 used to be MON_IOCX_URB, removed before it got into [0m[1m[31mLinus[0m tree */
+[0m[35mDocumentation/locking/spinlocks.rst[0m:		[0m[1m[31mLinus[0m
+[0m[35mDocumentation/spi/spi-summary.rst[0m:- [0m[1m[31mLinus[0m Walleij
+[0m[35mdrivers/usb/host/bcma-hcd.c[0m: * Copyright 1999 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/usb/host/ehci-platform.c[0m: * Copyright 1999 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/usb/host/uhci-grlib.c[0m: * (C) Copyright 1999 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/usb/host/ohci-hcd.c[0m: * [ Initialisation is based on [0m[1m[31mLinus[0m'  ]
+[0m[35mdrivers/usb/host/ohci-hcd.c[0m: * [ (C) Copyright 1999 [0m[1m[31mLinus[0m Torvalds  ]
+[0m[35mdrivers/usb/host/ssb-hcd.c[0m: * Copyright 1999 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/usb/host/uhci-hub.c[0m: * (C) Copyright 1999 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/usb/host/uhci-pci.c[0m: * (C) Copyright 1999 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/usb/host/ohci.h[0m: * a subset of what the full implementation needs. ([0m[1m[31mLinus[0m)
+[0m[35mdrivers/usb/host/uhci-debug.c[0m: * (C) Copyright 1999 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/usb/host/ohci-pci.c[0m: * [ Initialisation is based on [0m[1m[31mLinus[0m'  ]
+[0m[35mdrivers/usb/host/ohci-pci.c[0m: * [ (C) Copyright 1999 [0m[1m[31mLinus[0m Torvalds  ]
+[0m[35mdrivers/usb/host/ohci-platform.c[0m: * Copyright 1999 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/usb/host/uhci-hcd.c[0m: * (C) Copyright 1999 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/usb/host/uhci-hcd.c[0m:	"[0m[1m[31mLinus[0m 'Frodo Rabbit' Torvalds, Johannes Erdfelt, "		\
+[0m[35mdrivers/usb/host/uhci-q.c[0m: * (C) Copyright 1999 [0m[1m[31mLinus[0m Torvalds
+[0m[35mscripts/patch-kernel[0m:#      directory above to the latest [0m[1m[31mLinus[0m kernel
+[0m[35mscripts/patch-kernel[0m:#   Note: It uses the patches relative to the [0m[1m[31mLinus[0m kernels, not the
+[0m[35mscripts/get_maintainer.pl[0m:push(@penguin_chief, "[0m[1m[31mLinus[0m Torvalds:torvalds\@linux-foundation.org");
+[0m[35mscripts/get_maintainer.pl[0m:	warn("Try [0m[1m[31mLinus[0m Torvalds' latest git repository using:\n");
+[0m[35mDocumentation/RCU/rcu_dereference.rst[0m:	rcu_dereference() against non-NULL values.  As [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/RCU/RTFP.txt[0m:[[0m[1m[31mLinus[0mTorvalds2011Linux2:6:38:rc1:NPigginVFS], an RCU-protected red-black
+[0m[35mDocumentation/RCU/RTFP.txt[0m:@unpublished{[0m[1m[31mLinus[0mTorvalds2001a
+[0m[35mDocumentation/RCU/RTFP.txt[0m:,Author="[0m[1m[31mLinus[0m Torvalds"
+[0m[35mDocumentation/RCU/RTFP.txt[0m:@unpublished{[0m[1m[31mLinus[0mTorvalds2003a
+[0m[35mDocumentation/RCU/RTFP.txt[0m:,Author="[0m[1m[31mLinus[0m Torvalds"
+[0m[35mDocumentation/RCU/RTFP.txt[0m:	[0m[1m[31mLinus[0m suggests replacing brlock with RCU and/or seqlocks:
+[0m[35mDocumentation/RCU/RTFP.txt[0m:@unpublished{[0m[1m[31mLinus[0mTorvalds2011Linux2:6:38:rc1:NPigginVFS
+[0m[35mDocumentation/RCU/RTFP.txt[0m:,Author="[0m[1m[31mLinus[0m Torvalds"
+[0m[35mDocumentation/cdrom/cdrom-standard.rst[0m:of course, I want to thank [0m[1m[31mLinus[0m Torvalds for making this possible in
+[0m[35mDocumentation/RCU/Design/Requirements/Requirements.rst[0m:This all should be quite obvious, but the fact remains that [0m[1m[31mLinus[0m
+[0m[35mDocumentation/RCU/Design/Memory-Ordering/Tree-RCU-Memory-Ordering.rst[0m:Linux is a registered trademark of [0m[1m[31mLinus[0m Torvalds.
+[0m[35mDocumentation/RCU/Design/Data-Structures/Data-Structures.rst[0m:Linux is a registered trademark of [0m[1m[31mLinus[0m Torvalds.
+[0m[35mDocumentation/security/lsm.rst[0m:In response to the NSA presentation, [0m[1m[31mLinus[0m Torvalds made a set of
+[0m[35mDocumentation/security/lsm.rst[0m:desired model of security. [0m[1m[31mLinus[0m also suggested the possibility of
+[0m[35mscripts/package/mkdebian[0m:Copyright: 1991 - 2018 [0m[1m[31mLinus[0m Torvalds and others.
+[0m[35mdrivers/hwmon/drivetemp.c[0m: *    (C) 2018 [0m[1m[31mLinus[0m Walleij
+[0m[35mdrivers/hwmon/drivetemp.c[0m:MODULE_AUTHOR("Guenter Roeck <[0m[1m[31mlinus[0m@roeck-us.net>");
+[0m[35mscripts/checkstack.pl[0m:#	Inspired by [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/vm/active_mm.rst[0m: From:       [0m[1m[31mLinus[0m Torvalds <torvalds () transmeta ! com>
+[0m[35mDocumentation/block/biodoc.rst[0m:Larry McVoy (and subsequent discussions on lkml, and [0m[1m[31mLinus[0m' comments - Jan 2001
+[0m[35mDocumentation/block/biodoc.rst[0m:On lkml between sct, [0m[1m[31mlinus[0m, alan et al - Feb-March 2001 (many of the
+[0m[35mDocumentation/usb/CREDITS[0m:  [0m[1m[31mLinus[0m Torvalds <torvalds@linux-foundation.org>
+[0m[35mDocumentation/usb/CREDITS[0m:        - [0m[1m[31mLinus[0m Torvalds, for starting, developing and managing Linux.
+[0m[35mDocumentation/ABI/obsolete/sysfs-gpio[0m:Contact:	[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0mw@kernel.org>
+[0m[35mDocumentation/userspace-api/ioctl/ioctl-number.rst[0m:patch to [0m[1m[31mLinus[0m Torvalds.  Or you can e-mail me at <mec@shout.net> and
+[0m[35mDocumentation/sound/hd-audio/notes.rst[0m:and next kernels are found in for-[0m[1m[31mlinus[0m and for-next branches,
+[0m[35mDocumentation/process/maintainer-pgp-guide.rst[0m:auto-retrieve the keys for [0m[1m[31mLinus[0m Torvalds and Greg Kroah-Hartman (if you
+[0m[35mDocumentation/process/maintainer-pgp-guide.rst[0m:``C94035C21B4F2AEB``. Now display the key of [0m[1m[31mLinus[0m Torvalds that you
+[0m[35mDocumentation/process/maintainer-pgp-guide.rst[0m:    uid           [ unknown] [0m[1m[31mLinus[0m Torvalds <torvalds@kernel.org>
+[0m[35mDocumentation/process/maintainer-pgp-guide.rst[0m:Next, find a trust path from [0m[1m[31mLinus[0m Torvalds to the key-id you found via ``gpg
+[0m[35mDocumentation/process/deprecated.rst[0m:<https://git.kernel.org/[0m[1m[31mlinus[0m/771c035372a036f83353eef46dbb829780330234>`_
+[0m[35mDocumentation/process/deprecated.rst[0m:to debug or even get viable crash reports. [0m[1m[31mLinus[0m has `very strong
+[0m[35mDocumentation/process/deprecated.rst[0m:<https://git.kernel.org/[0m[1m[31mlinus[0m/d4689846881d160a4d12a514e991a740bcb5d65a>`_.)
+[0m[35mDocumentation/process/deprecated.rst[0m:Paraphrasing [0m[1m[31mLinus[0m's current `guidance <https://lore.kernel.org/lkml/CA+55aFwQEd_d40g4mUCSsVRZzrFPUJt74vc6PPpb675hYNXcKw@mail.gmail.com/>`_:
+[0m[35mDocumentation/process/deprecated.rst[0m:  up to [0m[1m[31mLinus[0m's scrutiny, maybe you can use "%px", along with making sure
+[0m[35mDocumentation/process/deprecated.rst[0m:<https://git.kernel.org/[0m[1m[31mlinus[0m/5ead723a20e0447bc7db33dc3070b420e5f80aa6>`_".
+[0m[35mDocumentation/process/deprecated.rst[0m:<https://git.kernel.org/[0m[1m[31mlinus[0m/02361bc77888>`_ are reason enough to
+[0m[35mDocumentation/process/deprecated.rst[0m:<https://git.kernel.org/[0m[1m[31mlinus[0m/76497732932f15e7323dc805e8ea8dc11bb587cf>`_
+[0m[35mDocumentation/process/deprecated.rst[0m:<https://git.kernel.org/[0m[1m[31mlinus[0m/f2cd32a443da694ac4e28fbf4ac6f9d5cc63a539>`_,
+[0m[35mDocumentation/process/deprecated.rst[0m:<https://git.kernel.org/[0m[1m[31mlinus[0m/ab91c2a89f86be2898cee208d492816ec238b2cf>`_.
+[0m[35mDocumentation/process/2.Process.rst[0m:time, [0m[1m[31mLinus[0m Torvalds will declare that the window is closed and release the
+[0m[35mDocumentation/process/2.Process.rst[0m:time.  [0m[1m[31mLinus[0m releases new -rc kernels about once a week; a normal series
+[0m[35mDocumentation/process/2.Process.rst[0m:   merged into the mainline repository managed by [0m[1m[31mLinus[0m Torvalds.  More
+[0m[35mDocumentation/process/2.Process.rst[0m:repository: [0m[1m[31mLinus[0m Torvalds. But, for example, of the over 9,500 patches
+[0m[35mDocumentation/process/2.Process.rst[0m:chosen by [0m[1m[31mLinus[0m himself. The kernel project has long since grown to a size
+[0m[35mDocumentation/process/2.Process.rst[0m:When the merge window opens, top-level maintainers will ask [0m[1m[31mLinus[0m to "pull"
+[0m[35mDocumentation/process/2.Process.rst[0m:[0m[1m[31mLinus[0m agrees, the stream of patches will flow up into his repository,
+[0m[35mDocumentation/process/2.Process.rst[0m:becoming part of the mainline kernel.  The amount of attention that [0m[1m[31mLinus[0m
+[0m[35mDocumentation/process/2.Process.rst[0m:that, sometimes, he looks quite closely.  But, as a general rule, [0m[1m[31mLinus[0m
+[0m[35mDocumentation/process/2.Process.rst[0m:finding the right maintainer.  Sending patches directly to [0m[1m[31mLinus[0m is not
+[0m[35mDocumentation/process/2.Process.rst[0m:an appropriate subsystem tree or be sent directly to [0m[1m[31mLinus[0m.  In a typical
+[0m[35mDocumentation/process/4.Coding.rst[0m:breaks?  The best answer to this question was expressed by [0m[1m[31mLinus[0m in July,
+[0m[35mDocumentation/process/kernel-enforcement-statement.rst[0m:  - [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/process/kernel-enforcement-statement.rst[0m:  - [0m[1m[31mLinus[0m Walleij
+[0m[35mDocumentation/process/7.AdvancedTopics.rst[0m:when [0m[1m[31mLinus[0m first started playing with the proprietary BitKeeper
+[0m[35mDocumentation/process/7.AdvancedTopics.rst[0m:can affect your ability to get trees pulled in the future.  Quoting [0m[1m[31mLinus[0m:
+[0m[35mDocumentation/process/adding-syscalls.rst[0m: - Collated emails from [0m[1m[31mLinus[0m Torvalds discussing the problems with ``ioctl()``:
+[0m[35mDocumentation/process/adding-syscalls.rst[0m: - Recommendation from [0m[1m[31mLinus[0m Torvalds that x32 system calls should prefer
+[0m[35mDocumentation/process/embargoed-hardware-issues.rst[0m:  - [0m[1m[31mLinus[0m Torvalds (Linux Foundation Fellow)
+[0m[35mDocumentation/process/howto.rst[0m:  - [0m[1m[31mLinus[0m's mainline tree
+[0m[35mDocumentation/process/howto.rst[0m:The mainline tree is maintained by [0m[1m[31mLinus[0m Torvalds, and can be found at
+[0m[35mDocumentation/process/howto.rst[0m:    [0m[1m[31mLinus[0m, usually the patches that have already been included in the
+[0m[35mDocumentation/process/howto.rst[0m:    patches to [0m[1m[31mLinus[0m after -rc1 is released, but the patches need to also be
+[0m[35mDocumentation/process/howto.rst[0m:  - A new -rc is released whenever [0m[1m[31mLinus[0m deems the current git tree to
+[0m[35mDocumentation/process/stable-kernel-rules.rst[0m: - It or an equivalent fix must already exist in [0m[1m[31mLinus[0m' tree (upstream).
+[0m[35mDocumentation/process/stable-kernel-rules.rst[0m:After the patch has been merged to [0m[1m[31mLinus[0m' tree, send an email to
+[0m[35mDocumentation/process/1.Intro.rst[0m:mainline kernel (the "mainline" being the kernel maintained by [0m[1m[31mLinus[0m
+[0m[35mDocumentation/process/applying-patches.rst[0m:These are the base stable releases released by [0m[1m[31mLinus[0m. The highest numbered
+[0m[35mDocumentation/process/applying-patches.rst[0m:by [0m[1m[31mLinus[0m whenever he deems the current git (the kernel's source management
+[0m[35mDocumentation/process/applying-patches.rst[0m:and, during the merge window, sends them directly to [0m[1m[31mLinus[0m.
+[0m[35mDocumentation/process/applying-patches.rst[0m:it on to [0m[1m[31mLinus[0m for inclusion in mainline.
+[0m[35mDocumentation/process/applying-patches.rst[0m:the more stable mainline [0m[1m[31mLinus[0m tree.
+[0m[35mDocumentation/process/applying-patches.rst[0m:Thank you's to Randy Dunlap, Rolf Eike Beer, [0m[1m[31mLinus[0m Torvalds, Bodo Eggert,
+[0m[35mDocumentation/process/5.Posting.rst[0m:[0m[1m[31mLinus[0m's git tree.  When basing on mainline, start with a well-known release
+[0m[35mDocumentation/process/5.Posting.rst[0m:is possible to send patches directly to [0m[1m[31mLinus[0m Torvalds and have him merge
+[0m[35mDocumentation/process/5.Posting.rst[0m:them, things are not normally done that way.  [0m[1m[31mLinus[0m is busy, and there are
+[0m[35mDocumentation/process/6.Followthrough.rst[0m:kernel, nobody has absolute veto power over any code.  Except maybe [0m[1m[31mLinus[0m.
+[0m[35mDocumentation/process/submitting-patches.rst[0m:[0m[1m[31mLinus[0m Torvalds is the final arbiter of all changes accepted into the
+[0m[35mDocumentation/process/submitting-patches.rst[0m:[0m[1m[31mLinus[0m directly, so typically you should do your best to -avoid-
+[0m[35mDocumentation/process/submitting-patches.rst[0m:[0m[1m[31mLinus[0m and other kernel developers need to be able to read and comment
+[0m[35mDocumentation/process/submitting-patches.rst[0m:code.  A MIME attachment also takes [0m[1m[31mLinus[0m a bit more time to process,
+[0m[35mDocumentation/process/submitting-patches.rst[0m:Due to high e-mail traffic to [0m[1m[31mLinus[0m, and to linux-kernel, it is common
+[0m[35mDocumentation/process/submitting-patches.rst[0m:convention to prefix your subject line with [PATCH].  This lets [0m[1m[31mLinus[0m
+[0m[35mDocumentation/process/submitting-patches.rst[0m:as it was propagated to the maintainers and ultimately to [0m[1m[31mLinus[0m, with
+[0m[35mDocumentation/process/submitting-patches.rst[0m:[0m[1m[31mLinus[0m Torvalds's mail on the canonical patch format:
+[0m[35mDocumentation/process/volatile-considered-harmful.rst[0m:    to be a "stupid legacy" issue ([0m[1m[31mLinus[0m's words) in this regard; fixing it
+[0m[35mDocumentation/core-api/bus-virt-phys-mapping.rst[0m::Author: [0m[1m[31mLinus[0m
+[0m[35mDocumentation/driver-api/usb/dwc3.rst[0m:	1. You're running latest tag from `[0m[1m[31mLinus[0m' tree`_
+[0m[35mDocumentation/driver-api/usb/dwc3.rst[0m:.. _[0m[1m[31mLinus[0m' tree: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/
+[0m[35mdrivers/ata/sata_gemini.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/ata/sata_gemini.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/ata/pata_opti.c[0m: *  Copyright (C) 1996-1998  [0m[1m[31mLinus[0m Torvalds & authors (see below)
+[0m[35mdrivers/ata/pata_ftide010.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/ata/pata_ftide010.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/ata/pata_cmd640.c[0m: *  Copyright (C) 1995-1996  [0m[1m[31mLinus[0m Torvalds & authors (see driver)
+[0m[35mdrivers/ata/pata_rz1000.c[0m: *  Copyright (C) 1995-1998  [0m[1m[31mLinus[0m Torvalds & author (see below)
+[0m[35mdrivers/base/pinctrl.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/base/power/trace.c[0m: * Copyright (C) 2006 [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/scsi/scsi_mid_low_api.rst[0m:First, [0m[1m[31mLinus[0m Torvalds's thoughts on C coding style can be found in the
+[0m[35mdrivers/scsi/qla1280.c[0m:    Rev  3.23.19 Beta April 11, 2002, [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/video/fbdev/via/via-core.c[0m:	 * -- [0m[1m[31mLinus[0m Torvalds, Dec. 7, 2009
+[0m[35mdrivers/video/console/vgacon.c[0m: *	Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/video/console/sticon.c[0m: *	Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/video/backlight/ipaq_micro_bl.c[0m: * Author : [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/video/console/mdacon.c[0m: *	Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/video/backlight/ktd253-backlight.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/rtc/rtc-ab8500.c[0m: * [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@stericsson.com>
+[0m[35mdrivers/gpio/gpio-gw-pld.c[0m:// Copyright (C) 2019 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/gpio/gpio-gw-pld.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/gpio/gpio-max732x.c[0m: *  Copyright (C) 2015 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/gpio/gpio-ftgpio010.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/gpio/gpio-ixp4xx.c[0m:// Copyright (C) 2019 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/watchdog/ftwdt010_wdt.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/watchdog/ftwdt010_wdt.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij");
+[0m[35mdrivers/watchdog/ixp4xx_wdt.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/mmc/core/host.c[0m: *  Copyright (C) 2010 [0m[1m[31mLinus[0m Walleij
+[0m[35mdrivers/iio/light/cm3605.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/iio/light/cm3605.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/iio/light/bh1780.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/iio/light/bh1780.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/iio/light/gp2ap002.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/iio/light/gp2ap002.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/iio/gyro/mpu3050-i2c.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij");
+[0m[35mdrivers/iio/gyro/mpu3050-core.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/iio/gyro/mpu3050-core.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij");
+[0m[35mdrivers/iio/pressure/bmp280-core.c[0m: * Copyright (c) 2016 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/iio/adc/qcom-pm8xxx-xoadc.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/iio/adc/ab8500-gpadc.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/iio/magnetometer/ak8974.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/iio/magnetometer/ak8974.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij");
+[0m[35mdrivers/iio/magnetometer/yamaha-yas530.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/iio/magnetometer/yamaha-yas530.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij");
+[0m[35mdrivers/pwm/pwm-stmpe.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/firmware/efi/libstub/string.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/firmware/efi/libstub/vsprintf.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/power/supply/ipaq_micro_battery.c[0m: * Author : [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/power/reset/arm-versatile-reboot.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/power/reset/gemini-poweroff.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/leds/leds-syscon.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/leds/flash/leds-rt8515.c[0m: * [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/leds/flash/leds-rt8515.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/leds/leds-ipaq-micro.c[0m: * Author : [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/leds/trigger/ledtrig-cpu.c[0m: * Copyright 2011 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/regulator/stw481x-vmmc.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/regulator/tps6105x-regulator.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/regulator/tps6105x-regulator.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/of/irq.c[0m: *    Copyright (C) 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/kernel-hacking/locking.rst[0m:-  ``Documentation/locking/spinlocks.rst``: [0m[1m[31mLinus[0m Torvalds' spinlocking
+[0m[35mDocumentation/kernel-hacking/hacking.rst[0m:[0m[1m[31mLinus[0m.
+[0m[35mDocumentation/kernel-hacking/hacking.rst[0m:[0m[1m[31mLinus[0m and the other developers sometimes change function or structure
+[0m[35mDocumentation/kernel-hacking/hacking.rst[0m:    /* Uh, actually [0m[1m[31mLinus[0m it is I who cannot spell. Too much murky
+[0m[35mDocumentation/maintainer/pull-requests.rst[0m:and [0m[1m[31mLinus[0m Torvalds on LKML. Suggestions and fixes by Jonathan Corbet and
+[0m[35mDocumentation/maintainer/pull-requests.rst[0m:[0m[1m[31mLinus[0m will only accept pull requests based on a signed tag. Other
+[0m[35mDocumentation/maintainer/pull-requests.rst[0m:As said by [0m[1m[31mLinus[0m::
+[0m[35mDocumentation/maintainer/pull-requests.rst[0m:			[0m[1m[31mLinus[0m
+[0m[35mDocumentation/maintainer/pull-requests.rst[0m:	branch (which in my case points to the last location in [0m[1m[31mLinus[0m's
+[0m[35mDocumentation/maintainer/pull-requests.rst[0m:[0m[1m[31mLinus[0m responded that he tends to prefer the ``git://`` protocol. Other
+[0m[35mDocumentation/maintainer/pull-requests.rst[0m:lists if required. Pull requests to [0m[1m[31mLinus[0m typically have a subject line
+[0m[35mDocumentation/maintainer/rebasing-and-merging.rst[0m:A frequent cause of merge-window trouble is when [0m[1m[31mLinus[0m is presented with a
+[0m[35mDocumentation/maintainer/rebasing-and-merging.rst[0m:for the final pull request: [0m[1m[31mLinus[0m is adamant that he would much rather see
+[0m[35mDocumentation/maintainer/rebasing-and-merging.rst[0m:[0m[1m[31mLinus[0m in the pull request that the conflict will happen; if nothing else,
+[0m[35mdrivers/tty/n_tty.c[0m: * This file also contains code originally written by [0m[1m[31mLinus[0m Torvalds,
+[0m[35mdrivers/pci/controller/pci-v3-semi.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/pci/controller/pci-ftpci100.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/pci/controller/pci-ixp4xx.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/tty/tty_jobctrl.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/tty/tty_ioctl.c[0m: *  Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/tty/tty_baudrate.c[0m: *  Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/tty/amiserial.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/tty/pty.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/tty/mxser.c[0m: *	Linux serial driver, written by [0m[1m[31mLinus[0m Torvalds, Theodore T'so and
+[0m[35mdrivers/tty/serial/8250/8250.h[0m: *  Based on drivers/char/serial.c, by [0m[1m[31mLinus[0m Torvalds, Theodore Ts'o.
+[0m[35mdrivers/tty/serial/8250/8250_port.c[0m: *  Based on drivers/char/serial.c, by [0m[1m[31mLinus[0m Torvalds, Theodore Ts'o.
+[0m[35mdrivers/tty/serial/8250/8250_core.c[0m: *  Based on drivers/char/serial.c, by [0m[1m[31mLinus[0m Torvalds, Theodore Ts'o.
+[0m[35mdrivers/tty/serial/8250/8250_pnp.c[0m: *  Based on drivers/char/serial.c, by [0m[1m[31mLinus[0m Torvalds, Theodore Ts'o.
+[0m[35mdrivers/tty/serial/mux.c[0m: *  rmk has already submitted a patch to [0m[1m[31mlinus[0m, should be available for
+[0m[35mdrivers/tty/serial/8250/8250_pci.c[0m: *  Based on drivers/char/serial.c, by [0m[1m[31mLinus[0m Torvalds, Theodore Ts'o.
+[0m[35mdrivers/tty/serial/atmel_serial.c[0m: *  Based on drivers/char/serial.c, by [0m[1m[31mLinus[0m Torvalds, Theodore Ts'o.
+[0m[35mdrivers/tty/serial/sa1100.c[0m: *  Based on drivers/char/serial.c, by [0m[1m[31mLinus[0m Torvalds, Theodore Ts'o.
+[0m[35mdrivers/tty/serial/imx.c[0m: * Based on drivers/char/serial.c, by [0m[1m[31mLinus[0m Torvalds, Theodore Ts'o.
+[0m[35mdrivers/tty/serial/amba-pl011.c[0m: *  Based on drivers/char/serial.c, by [0m[1m[31mLinus[0m Torvalds, Theodore Ts'o.
+[0m[35mdrivers/tty/serial/ar933x_uart.c[0m: *  Based on drivers/char/serial.c, by [0m[1m[31mLinus[0m Torvalds, Theodore Ts'o.
+[0m[35mdrivers/tty/serial/amba-pl010.c[0m: *  Based on drivers/char/serial.c, by [0m[1m[31mLinus[0m Torvalds, Theodore Ts'o.
+[0m[35mdrivers/tty/serial/clps711x.c[0m: *  Based on drivers/char/serial.c, by [0m[1m[31mLinus[0m Torvalds, Theodore Ts'o.
+[0m[35mdrivers/tty/serial/lantiq.c[0m: *  Based on drivers/char/serial.c, by [0m[1m[31mLinus[0m Torvalds, Theodore Ts'o.
+[0m[35mdrivers/tty/serial/serial_core.c[0m: *  Based on drivers/char/serial.c, by [0m[1m[31mLinus[0m Torvalds, Theodore Ts'o.
+[0m[35mdrivers/tty/moxa.c[0m: *      [0m[1m[31mLinus[0m Torvalds, Theodore T'so and others.
+[0m[35mdrivers/tty/tty_io.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/tty/vt/keyboard.c[0m: * the assembly version by [0m[1m[31mLinus[0m (with diacriticals added)
+[0m[35mdrivers/tty/vt/vt.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/x86/exception-tables.rst[0m:To overcome this situation, [0m[1m[31mLinus[0m decided to let the virtual memory
+[0m[35mDocumentation/bpf/bpf_devel_QA.rst[0m:into the kernel mainline tree run by [0m[1m[31mLinus[0m Torvalds. To read up on the
+[0m[35mDocumentation/bpf/bpf_devel_QA.rst[0m:your patch series once bpf-next is open again. Once [0m[1m[31mLinus[0m released
+[0m[35mdrivers/input/mouse/amimouse.c[0m: *	Nathan Laredo		[0m[1m[31mLinus[0m Torvalds
+[0m[35mdrivers/input/mouse/gpio_mouse.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/input/mouse/logibm.c[0m: *	[0m[1m[31mLinus[0m Torvalds		Johan Myreen
+[0m[35mdrivers/input/keyboard/ipaq-micro-keys.c[0m: * Author : [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/input/keyboard/dlink-dir685-touchkeys.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/input/keyboard/dlink-dir685-touchkeys.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mDocumentation/admin-guide/README.rst[0m:  [0m[1m[31mLinus[0m Torvalds with assistance from a loosely-knit team of hackers across
+[0m[35mDocumentation/admin-guide/bug-hunting.rst[0m:In order to help [0m[1m[31mLinus[0m and the other kernel developers there has been
+[0m[35mDocumentation/admin-guide/reporting-issues.rst[0m:[0m[1m[31mLinus[0m Torvalds and the leading Linux kernel developers want to see some issues
+[0m[35mDocumentation/admin-guide/reporting-issues.rst[0m:Linux lead developer [0m[1m[31mLinus[0m Torvalds insists that the Linux kernel never
+[0m[35mDocumentation/admin-guide/reporting-issues.rst[0m:it's okay to get [0m[1m[31mLinus[0m Torvalds involved.
+[0m[35mDocumentation/admin-guide/reporting-issues.rst[0m:to get resolved. The maintainers or if all else fails [0m[1m[31mLinus[0m Torvalds himself
+[0m[35mdrivers/input/touchscreen/ipaq-micro-ts.c[0m: * Author : [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/input/touchscreen/cy8ctma140.c[0m: * (C) 2020 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/input/touchscreen/cy8ctma140.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mDocumentation/power/s2ram.rst[0m:2006 [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/power/s2ram.rst[0m:3) You can use [0m[1m[31mLinus[0m' TRACE_RESUME infrastructure, described below.
+[0m[35mDocumentation/power/freezing-of-tasks.rst[0m:Although [0m[1m[31mLinus[0m Torvalds doesn't like the freezing of tasks, he said this in one
+[0m[35mDocumentation/power/freezing-of-tasks.rst[0m:[0m[1m[31mLinus[0m: In many ways, 'at all'.
+[0m[35mDocumentation/dev-tools/sparse.rst[0m:.. Copyright 2004 [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/crypto/api-intro.rst[0m:  - [0m[1m[31mLinus[0m Torvalds (i586)
+[0m[35mDocumentation/devicetree/bindings/hwmon/ntc-thermistor.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/misc/intel,ixp4xx-ahb-queue-manager.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/mtd/partitions/redboot-fis.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/arm/arm,versatile.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/arm/intel-ixp4xx.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/bus/arm,integrator-ap-lm.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0mw@kernel.org>
+[0m[35mDocumentation/devicetree/bindings/bus/intel,ixp4xx-expansion-bus-controller.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/arm/arm,integrator.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/spi/spi-pl022.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/arm/arm,scu.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/arm/arm,vexpress-juno.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/arm/gemini.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/arm/arm,realview.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/arm/ux500.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/hwmon/winbond,w83781d.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/mfd/stericsson,db8500-prcmu.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/pinctrl/pincfg-node.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/pinctrl/pinmux-node.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/pci/intel,ixp4xx-pci.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/ata/pata-common.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/ata/intel,ixp4xx-compact-flash.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/ata/sata-common.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/ata/faraday,ftide010.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/timer/intel,ixp4xx-timer.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/pinctrl/pinctrl.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/rtc/faraday,ftrtc010.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/mmc/arm,pl18x.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/iio/light/sharp,gp2ap002.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/iio/light/capella,cm3605.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/iio/st,st-sensors.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/gpio/mrvl-gpio.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/interrupt-controller/intel,ixp4xx-interrupt.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/iio/accel/bosch,bma255.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/gpio/pl061-gpio.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/watchdog/maxim,max63xx.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/iio/gyroscope/invensense,mpu3050.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/iio/magnetometer/yamaha,yas530.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/iio/magnetometer/asahi-kasei,ak8974.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/extcon/fcs,fsa880.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/clock/stericsson,u8500-clks.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/iio/adc/qcom,pm8018-adc.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/filesystems/path-lookup.rst[0m:The second reason was `outlined recently`_ by [0m[1m[31mLinus[0m:
+[0m[35mDocumentation/filesystems/dlmfs.rst[0m:Some code taken from ramfs which is Copyright |copy| 2000 [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/devicetree/bindings/clock/arm,syscon-icst.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0mw@kernel.org>
+[0m[35mDocumentation/devicetree/bindings/pci/faraday,ftpci100.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/firmware/intel,ixp4xx-network-processing-engine.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/leds/richtek,rt8515.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/leds/register-bit-led.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/auxdisplay/arm,versatile-lcd.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/leds/backlight/kinetic,ktd253.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/power/supply/samsung,battery.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/rng/intel,ixp46x-rng.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/translations/it_IT/process/1.Intro.rst[0m:s'intende quello mantenuto da [0m[1m[31mLinus[0m Torvalds e usato come base dai
+[0m[35mDocumentation/translations/it_IT/process/maintainer-pgp-guide.rst[0m:potrete auto-recuperare le chiavi di [0m[1m[31mLinus[0m Torvalds e Greg Kroah-Hartman
+[0m[35mDocumentation/translations/it_IT/process/maintainer-pgp-guide.rst[0m:``C94035C21B4F2AEB``. Ora visualizzate le chiavi di [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/translations/it_IT/process/maintainer-pgp-guide.rst[0m:    uid           [ unknown] [0m[1m[31mLinus[0m Torvalds <torvalds@kernel.org>
+[0m[35mDocumentation/translations/it_IT/process/maintainer-pgp-guide.rst[0m:digitale della chiave di [0m[1m[31mLinus[0m Torvalds che si vede nell'output qui sopra.
+[0m[35mDocumentation/translations/it_IT/process/maintainer-pgp-guide.rst[0m:- `Finding paths to [0m[1m[31mLinus[0m`_
+[0m[35mDocumentation/translations/it_IT/process/maintainer-pgp-guide.rst[0m:.. _`Finding paths to [0m[1m[31mLinus[0m`: https://pgp.cs.uu.nl/paths/79BE3E4300411886/to/C94035C21B4F2AEB.html
+[0m[35mDocumentation/translations/it_IT/process/2.Process.rst[0m:Al termine di questo periodo, [0m[1m[31mLinus[0m Torvald dichiarerà che la finestra è
+[0m[35mDocumentation/translations/it_IT/process/2.Process.rst[0m:il ritmo delle modifiche rallenta col tempo.  [0m[1m[31mLinus[0m rilascia un nuovo
+[0m[35mDocumentation/translations/it_IT/process/2.Process.rst[0m:   [0m[1m[31mLinus[0m Torvalds.  In questa fase potrebbero emergere nuovi problemi e/o
+[0m[35mDocumentation/translations/it_IT/process/2.Process.rst[0m:del kernel: [0m[1m[31mLinus[0m Torvalds.  Ma, per esempio, di tutte le 9500 patch
+[0m[35mDocumentation/translations/it_IT/process/2.Process.rst[0m:l'1,3%) furono scelte direttamente da [0m[1m[31mLinus[0m in persona.  Il progetto
+[0m[35mDocumentation/translations/it_IT/process/2.Process.rst[0m:chiederanno a [0m[1m[31mLinus[0m di "prendere" dai loro repositori le modifiche che hanno
+[0m[35mDocumentation/translations/it_IT/process/2.Process.rst[0m:selezionato per l'inclusione.  Se [0m[1m[31mLinus[0m acconsente, il flusso di patch si
+[0m[35mDocumentation/translations/it_IT/process/2.Process.rst[0m:principale del kernel.  La quantità d'attenzione che [0m[1m[31mLinus[0m presta alle
+[0m[35mDocumentation/translations/it_IT/process/2.Process.rst[0m:generale, [0m[1m[31mLinus[0m confida nel fatto che i manutentori di sottosistema non
+[0m[35mDocumentation/translations/it_IT/process/2.Process.rst[0m:patch direttamente a [0m[1m[31mLinus[0m non è la via giusta.
+[0m[35mDocumentation/translations/it_IT/process/2.Process.rst[0m:direttamente a [0m[1m[31mLinus[0m.  In un tipico ciclo di sviluppo, circa il 5-10% delle
+[0m[35mDocumentation/translations/it_IT/process/volatile-considered-harmful.rst[0m:    (parole di [0m[1m[31mLinus[0m) in questo contesto; correggerla non ne varrebbe la pena e
+[0m[35mDocumentation/translations/it_IT/process/deprecated.rst[0m:<https://git.kernel.org/[0m[1m[31mlinus[0m/771c035372a036f83353eef46dbb829780330234>`_
+[0m[35mDocumentation/translations/it_IT/process/deprecated.rst[0m:circa l'errore.  [0m[1m[31mLinus[0m ha un'opinione molto critica al riguardo:
+[0m[35mDocumentation/translations/it_IT/process/deprecated.rst[0m:<https://git.kernel.org/[0m[1m[31mlinus[0m/d4689846881d160a4d12a514e991a740bcb5d65a>`_)
+[0m[35mDocumentation/translations/it_IT/process/deprecated.rst[0m:di [0m[1m[31mLinus[0m:
+[0m[35mDocumentation/translations/it_IT/process/deprecated.rst[0m:  affrontare il giudizio di [0m[1m[31mLinus[0m, allora forse potrai usare "%px",
+[0m[35mDocumentation/translations/it_IT/process/deprecated.rst[0m:<https://git.kernel.org/[0m[1m[31mlinus[0m/5ead723a20e0447bc7db33dc3070b420e5f80aa6>`_" alla
+[0m[35mDocumentation/translations/it_IT/process/deprecated.rst[0m:vettori a dimensione fissa. Questi `problemi di prestazioni <https://git.kernel.org/[0m[1m[31mlinus[0m/02361bc77888>`_,
+[0m[35mDocumentation/translations/it_IT/process/deprecated.rst[0m:<https://git.kernel.org/[0m[1m[31mlinus[0m/76497732932f15e7323dc805e8ea8dc11bb587cf>`_.
+[0m[35mDocumentation/translations/it_IT/process/deprecated.rst[0m:<https://git.kernel.org/[0m[1m[31mlinus[0m/f2cd32a443da694ac4e28fbf4ac6f9d5cc63a539>`_,
+[0m[35mDocumentation/translations/it_IT/process/deprecated.rst[0m:<https://git.kernel.org/[0m[1m[31mlinus[0m/ab91c2a89f86be2898cee208d492816ec238b2cf>`_.
+[0m[35mDocumentation/translations/it_IT/process/6.Followthrough.rst[0m:fatta per [0m[1m[31mLinus[0m, forse.
+[0m[35mDocumentation/devicetree/bindings/input/atmel,maxtouch.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/translations/it_IT/process/5.Posting.rst[0m:così come lo si trova nei sorgenti git di [0m[1m[31mLinus[0m.  Quando vi basate sul ramo
+[0m[35mDocumentation/translations/it_IT/process/5.Posting.rst[0m:[0m[1m[31mLinus[0m Torvalds, e lasciare che sia lui ad integrarle,solitamente non è la
+[0m[35mDocumentation/translations/it_IT/process/5.Posting.rst[0m:strada migliore da seguire.  [0m[1m[31mLinus[0m è occupato, e ci sono dei manutentori di
+[0m[35mDocumentation/devicetree/bindings/crypto/intel,ixp4xx-crypto.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/input/touchscreen/cypress,cy8ctma140.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/input/touchscreen/cypress,cy8ctma340.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/translations/it_IT/process/kernel-enforcement-statement.rst[0m:  - [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/translations/it_IT/process/kernel-enforcement-statement.rst[0m:  - [0m[1m[31mLinus[0m Walleij
+[0m[35mDocumentation/translations/it_IT/process/howto.rst[0m:I kernel 4.x sono amministrati da [0m[1m[31mLinus[0m Torvald, e possono essere trovati
+[0m[35mDocumentation/translations/it_IT/process/howto.rst[0m:    settimane. Durante questo periodo i manutentori possono proporre a [0m[1m[31mLinus[0m
+[0m[35mDocumentation/translations/it_IT/process/howto.rst[0m:    aggiunto. git può essere utilizzato per inviare le patch a [0m[1m[31mLinus[0m dopo che
+[0m[35mDocumentation/translations/it_IT/process/howto.rst[0m:  - Una nuova -rc viene rilasciata ogni volta che [0m[1m[31mLinus[0m reputa che gli attuali
+[0m[35mDocumentation/translations/it_IT/process/submitting-patches.rst[0m:[0m[1m[31mLinus[0m e gli altri sviluppatori del kernel devono poter commentare
+[0m[35mDocumentation/translations/it_IT/process/submitting-patches.rst[0m:Inoltre, un allegato MIME rende l'attività di [0m[1m[31mLinus[0m più laboriosa, diminuendo
+[0m[35mDocumentation/translations/it_IT/process/submitting-patches.rst[0m:Dato l'alto volume di e-mail per [0m[1m[31mLinus[0m, e la lista linux-kernel, è prassi
+[0m[35mDocumentation/translations/it_IT/process/submitting-patches.rst[0m:prefiggere il vostro oggetto con [PATCH].  Questo permette a [0m[1m[31mLinus[0m e agli
+[0m[35mDocumentation/translations/it_IT/process/submitting-patches.rst[0m:manutentore, per poi giungere a [0m[1m[31mLinus[0m.
+[0m[35mDocumentation/translations/it_IT/process/submitting-patches.rst[0m:E-mail di [0m[1m[31mLinus[0m Torvalds sul formato canonico di una patch:
+[0m[35mDocumentation/translations/it_IT/process/adding-syscalls.rst[0m: - Raccomandazioni da [0m[1m[31mLinus[0m Torvalds che le chiamate di sistema x32 dovrebbero
+[0m[35mDocumentation/devicetree/bindings/display/ste,mcde.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/display/faraday,tve200.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/translations/it_IT/process/7.AdvancedTopics.rst[0m:vostri rami.  Citando [0m[1m[31mLinus[0m
+[0m[35mDocumentation/devicetree/bindings/net/intel,ixp4xx-hss.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/net/broadcom-bluetooth.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/net/intel,ixp46x-ptp-timer.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/net/intel,ixp4xx-ethernet.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/display/panel/sony,acx424akp.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/input/touchscreen/melfas,mms114.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/display/panel/ti,nspire.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/translations/it_IT/process/4.Coding.rst[0m:domanda ci è stata fornita da [0m[1m[31mLinus[0m nel luglio 2007:
+[0m[35mDocumentation/devicetree/bindings/input/touchscreen/zinitix,bt400.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/display/panel/novatek,nt35510.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/display/panel/arm,versatile-tft-panel.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/display/panel/samsung,lms397kf04.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/display/dsi-controller.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/translations/it_IT/kernel-hacking/hacking.rst[0m:che questo venga accettato da [0m[1m[31mLinus[0m.
+[0m[35mDocumentation/translations/it_IT/kernel-hacking/hacking.rst[0m:[0m[1m[31mLinus[0m e gli altri sviluppatori a volte cambiano i nomi delle funzioni e
+[0m[35mDocumentation/translations/it_IT/kernel-hacking/hacking.rst[0m:    /* Uh, actually [0m[1m[31mLinus[0m it is I who cannot spell. Too much murky
+[0m[35mDocumentation/devicetree/bindings/display/panel/ilitek,ili9322.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/devicetree/bindings/display/panel/samsung,s6d16d0.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/translations/ja_JP/stable_kernel_rules.txt[0m: - パッチ自体か同等の修正が [0m[1m[31mLinus[0m のツリーに既に存在しなければならない。
+[0m[35mDocumentation/translations/ja_JP/stable_kernel_rules.txt[0m:　 [0m[1m[31mLinus[0m のツリーでのコミットID を -stable へのパッチ投稿の際に引用す
+[0m[35mDocumentation/translations/ja_JP/stable_kernel_rules.txt[0m:   が [0m[1m[31mLinus[0m のツリーに入る時に自動的に stable チームに email される。
+[0m[35mDocumentation/translations/ko_KR/howto.rst[0m:메인라인 트리는 [0m[1m[31mLinus[0m Torvalds가 관리하며 https://kernel.org  또는 소스
+[0m[35mDocumentation/translations/ko_KR/howto.rst[0m:    메인테이너들은 큰 diff들을 [0m[1m[31mLinus[0m에게 제출할 수 있다. 대개 이 패치들은
+[0m[35mDocumentation/translations/ko_KR/howto.rst[0m:    있지 않기 때문이다. -rc1이 배포된 이후에 git를 사용하여 패치들을 [0m[1m[31mLinus[0m에게
+[0m[35mDocumentation/translations/ko_KR/howto.rst[0m:  - 새로운 -rc는 [0m[1m[31mLinus[0m가 현재 git tree가 테스트 하기에 충분히 안정된 상태에
+[0m[35mDocumentation/translations/zh_TW/gpio.txt[0m:		[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/translations/zh_TW/gpio.txt[0m:		[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/translations/zh_TW/admin-guide/bug-hunting.rst[0m:爲了幫助[0m[1m[31mLinus[0m和其他內核開發人員， ``klogd`` 對保護故障的處理提供了大量支持。
+[0m[35mDocumentation/devicetree/bindings/display/panel/samsung,lms380kf01.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/translations/it_IT/kernel-hacking/locking.rst[0m:-  ``Documentation/locking/spinlocks.rst``: la guida di [0m[1m[31mLinus[0m Torvalds agli
+[0m[35mDocumentation/translations/zh_TW/process/4.Coding.rst[0m:[0m[1m[31mLinus[0m對這個問題給出了最佳答案:
+[0m[35mDocumentation/translations/zh_TW/process/volatile-considered-harmful.rst[0m:    （[0m[1m[31mLinus[0m的話）因爲解決這個問題比保持現狀要麻煩的多。
+[0m[35mDocumentation/devicetree/bindings/display/panel/tpo,tpg110.yaml[0m:  - [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/translations/zh_TW/process/7.AdvancedTopics.rst[0m:內核使用分布式版本控制始於2002年初，當時[0m[1m[31mLinus[0m首次開始使用專有的Bitkeeper應用
+[0m[35mDocumentation/translations/zh_TW/process/7.AdvancedTopics.rst[0m:主題外的補丁可能會影響您將來讓樹被拉取的能力。引用[0m[1m[31mLinus[0m的話:
+[0m[35mDocumentation/translations/zh_TW/process/kernel-enforcement-statement.rst[0m:  - [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/translations/zh_TW/process/kernel-enforcement-statement.rst[0m:  - [0m[1m[31mLinus[0m Walleij
+[0m[35mDocumentation/translations/zh_TW/process/howto.rst[0m:  - [0m[1m[31mLinus[0m 的內核源碼樹
+[0m[35mDocumentation/translations/zh_TW/process/howto.rst[0m:主線樹是由[0m[1m[31mLinus[0m Torvalds 維護的。你可以在https://kernel.org 網站或者代碼
+[0m[35mDocumentation/translations/zh_TW/process/howto.rst[0m:    維護者可以向[0m[1m[31mLinus[0m提交大段的修改，通常這些修改已經被放到-mm內核中幾個
+[0m[35mDocumentation/translations/zh_TW/process/howto.rst[0m:    沒有造成內核退步的風險。在-rc1以後也可以用git向[0m[1m[31mLinus[0m提交補丁，不過所
+[0m[35mDocumentation/translations/zh_TW/process/howto.rst[0m:  - 當[0m[1m[31mLinus[0m認爲當前的git源碼樹已經達到一個合理健全的狀態足以發布供人測試
+[0m[35mDocumentation/translations/zh_TW/sparse.txt[0m:Copyright 2004 [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/translations/zh_TW/process/embargoed-hardware-issues.rst[0m:  - [0m[1m[31mLinus[0m Torvalds（Linux基金會院士）
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:        かの [0m[1m[31mLinus[0m Torvalds の取り扱い説明書
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:[0m[1m[31mLinus[0m Torvalds は Linux カーネルに入る全ての変更に対する最終的な意思決定者
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:必要としないパッチは [0m[1m[31mLinus[0m へ電子メールを送るか CC しなければなりません。
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:[0m[1m[31mLinus[0m へ送るべきです。
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:[0m[1m[31mLinus[0m 以外のカーネル開発者は変更に気づく必要があり、その結果、彼らはそ
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:[0m[1m[31mLinus[0m や他のカーネル開発者はあなたが投稿した変更を読んで、コメントでき
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:MIME 形式の添付ファイルは [0m[1m[31mLinus[0m に手間を取らせることになり、その変更を
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:パッチを [0m[1m[31mLinus[0m へ送るときは常に #7 の手順に従ってください。
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:パッチが最新バージョンのカーネルに正しく適用できなければ、[0m[1m[31mLinus[0m は
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:パッチを投稿した後は、辛抱強く待っていてください。[0m[1m[31mLinus[0m があなたのパッ
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:チを気に入って採用すれば、[0m[1m[31mLinus[0m がリリースする次のバージョンのカーネル
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:[0m[1m[31mLinus[0m があなたのパッチに対して何のコメントもなく不採用にすることは極め
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:て普通のことです。それは自然な姿です。もし、[0m[1m[31mLinus[0m があなたのパッチを受
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:* [0m[1m[31mLinus[0m はたくさんの電子メールを受け取っているので、どさくさに紛れて見
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:[0m[1m[31mLinus[0m や LKML への大量の電子メールのために、サブジェクトのプレフィックスに
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:「 [PATCH] 」を付けることが慣習となっています。これによって [0m[1m[31mLinus[0m や他の
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:16) 「git pull」要求の送り方([0m[1m[31mLinus[0m の電子メールから)
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:		git://jdelvare.pck.nerim.net/jdelvare-2.6 i2c-for-[0m[1m[31mlinus[0m
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:セクションを [0m[1m[31mLinus[0m のコンピュータ・サイエンス101と呼ぶでしょう。
+[0m[35mDocumentation/translations/ja_JP/SubmittingPatches[0m:[0m[1m[31mLinus[0m Torvalds's mail on the canonical patch format:
+[0m[35mDocumentation/translations/zh_CN/process/1.Intro.rst[0m:放入主线内核（“主线”是由[0m[1m[31mLinus[0m Torvalds维护的内核，Linux发行商将其用作基础）。
+[0m[35mDocumentation/translations/zh_CN/process/2.Process.rst[0m:合并窗口持续大约两周。在这段时间结束时，[0m[1m[31mLinus[0m Torvalds将声明窗口已关闭，并
+[0m[35mDocumentation/translations/zh_CN/process/2.Process.rst[0m:随着修复程序进入主线，补丁速度将随着时间的推移而变慢。[0m[1m[31mLinus[0m大约每周发布一次
+[0m[35mDocumentation/translations/zh_CN/process/2.Process.rst[0m:- 合并到主线。最终，一个成功的补丁将被合并到由[0m[1m[31mLinus[0mTorvalds管理的主线存储库
+[0m[35mDocumentation/translations/zh_CN/process/2.Process.rst[0m:只有一个人可以将补丁合并到主线内核存储库中：[0m[1m[31mLinus[0m Torvalds。但是，在进入
+[0m[35mDocumentation/translations/zh_CN/process/2.Process.rst[0m:2.6.38内核的9500多个补丁中，只有112个（大约1.3%）是由[0m[1m[31mLinus[0m自己直接选择的。
+[0m[35mDocumentation/translations/zh_CN/process/2.Process.rst[0m:当合并窗口打开时，顶级维护人员将要求[0m[1m[31mLinus[0m从存储库中“拉出”他们为合并选择
+[0m[35mDocumentation/translations/zh_CN/process/2.Process.rst[0m:的补丁。如果[0m[1m[31mLinus[0m同意，补丁流将流向他的存储库，成为主线内核的一部分。
+[0m[35mDocumentation/translations/zh_CN/process/2.Process.rst[0m:[0m[1m[31mLinus[0m对拉取中接收到的特定补丁的关注程度各不相同。很明显，有时他看起来很
+[0m[35mDocumentation/translations/zh_CN/process/2.Process.rst[0m:关注。但是一般来说，[0m[1m[31mLinus[0m相信子系统维护人员不会向上游发送坏补丁。
+[0m[35mDocumentation/translations/zh_CN/process/2.Process.rst[0m:显然，在这样的系统中，获取内核补丁取决于找到正确的维护者。直接向[0m[1m[31mLinus[0m发送
+[0m[35mDocumentation/translations/zh_CN/process/2.Process.rst[0m:发送到[0m[1m[31mLinus[0m。在典型的开发周期中，大约5-10%的补丁通过-mm 进入主线。
+[0m[35mDocumentation/translations/zh_TW/process/submitting-patches.rst[0m:[0m[1m[31mLinus[0m Torvalds 是決定改動能否進入 Linux 內核的最終裁決者。他的 e-mail
+[0m[35mDocumentation/translations/zh_TW/process/submitting-patches.rst[0m:[0m[1m[31mLinus[0m 和其他的內核開發者需要閱讀和評論你提交的改動。對於內核開發者來說
+[0m[35mDocumentation/translations/zh_TW/process/submitting-patches.rst[0m:代碼中加評論。另外，MIME 編碼的附件會讓 [0m[1m[31mLinus[0m 多花一點時間來處理，這就
+[0m[35mDocumentation/translations/zh_TW/process/submitting-patches.rst[0m:由於到[0m[1m[31mlinus[0m和linux內核的電子郵件流量很高，通常會在主題行前面加上[PATCH]
+[0m[35mDocumentation/translations/zh_TW/process/submitting-patches.rst[0m:前綴. 這使[0m[1m[31mLinus[0m和其他內核開發人員更容易將補丁與其他電子郵件討論區分開。
+[0m[35mDocumentation/translations/zh_TW/process/submitting-patches.rst[0m:      git://jdelvare.pck.nerim.net/jdelvare-2.6 i2c-for-[0m[1m[31mlinus[0m
+[0m[35mDocumentation/translations/zh_TW/process/submitting-patches.rst[0m:一些維護人員（包括[0m[1m[31mLinus[0m）希望看到來自已簽名提交的請求；這增加了他們對你的
+[0m[35mDocumentation/translations/zh_TW/process/submitting-patches.rst[0m:請求信心。特別是，在沒有簽名標籤的情況下，[0m[1m[31mLinus[0m 不會從像 Github 這樣的公共
+[0m[35mDocumentation/translations/zh_TW/process/submitting-patches.rst[0m:[0m[1m[31mLinus[0m Torvalds's mail on the canonical patch format:
+[0m[35mDocumentation/translations/zh_CN/process/6.Followthrough.rst[0m:了[0m[1m[31mLinus[0m。
+[0m[35mDocumentation/translations/zh_CN/process/7.AdvancedTopics.rst[0m:内核使用分布式版本控制始于2002年初，当时[0m[1m[31mLinus[0m首次开始使用专有的Bitkeeper应用
+[0m[35mDocumentation/translations/zh_CN/process/7.AdvancedTopics.rst[0m:主题外的补丁可能会影响您将来让树被拉取的能力。引用[0m[1m[31mLinus[0m的话:
+[0m[35mDocumentation/translations/zh_CN/process/5.Posting.rst[0m:必须针对内核的特定版本准备补丁。一般来说，补丁应该基于[0m[1m[31mLinus[0m的Git树中的当前
+[0m[35mDocumentation/translations/zh_CN/process/5.Posting.rst[0m:可以将补丁直接发给[0m[1m[31mLinus[0m Torvalds并让他合并，但通常情况下不会这样做。[0m[1m[31mLinus[0m很
+[0m[35mDocumentation/translations/zh_TW/process/5.Posting.rst[0m:必須針對內核的特定版本準備補丁。一般來說，補丁應該基於[0m[1m[31mLinus[0m的Git樹中的當前
+[0m[35mDocumentation/translations/zh_TW/process/5.Posting.rst[0m:可以將補丁直接發給[0m[1m[31mLinus[0m Torvalds並讓他合併，但通常情況下不會這樣做。[0m[1m[31mLinus[0m很
+[0m[35mDocumentation/translations/zh_TW/process/stable-api-nonsense.rst[0m:你這個吸血鬼<把Andrew和[0m[1m[31mLinus[0m對吸血鬼的定義連結到這裡>）。當你的代碼加入
+[0m[35mDocumentation/translations/zh_TW/admin-guide/README.rst[0m:  Linux是Unix作業系統的克隆版本，由[0m[1m[31mLinus[0m Torvalds在一個鬆散的網絡黑客
+[0m[35mDocumentation/translations/zh_CN/process/volatile-considered-harmful.rst[0m:    （[0m[1m[31mLinus[0m的话）因为解决这个问题比保持现状要麻烦的多。
+[0m[35mDocumentation/translations/zh_CN/process/4.Coding.rst[0m:[0m[1m[31mLinus[0m对这个问题给出了最佳答案:
+[0m[35mDocumentation/translations/zh_TW/process/2.Process.rst[0m:合併窗口持續大約兩周。在這段時間結束時，[0m[1m[31mLinus[0mTorvalds將聲明窗口已關閉，並
+[0m[35mDocumentation/translations/zh_TW/process/2.Process.rst[0m:隨著修復程序進入主線，補丁速度將隨著時間的推移而變慢。[0m[1m[31mLinus[0m大約每周發布一次
+[0m[35mDocumentation/translations/zh_TW/process/2.Process.rst[0m:- 合併到主線。最終，一個成功的補丁將被合併到由[0m[1m[31mLinus[0mTorvalds管理的主線存儲庫
+[0m[35mDocumentation/translations/zh_TW/process/2.Process.rst[0m:只有一個人可以將補丁合併到主線內核存儲庫中：[0m[1m[31mLinus[0mTorvalds。但是，在進入
+[0m[35mDocumentation/translations/zh_TW/process/2.Process.rst[0m:2.6.38內核的9500多個補丁中，只有112個（大約1.3%）是由[0m[1m[31mLinus[0m自己直接選擇的。
+[0m[35mDocumentation/translations/zh_TW/process/2.Process.rst[0m:當合併窗口打開時，頂級維護人員將要求[0m[1m[31mLinus[0m從存儲庫中「拉出」他們爲合併選擇
+[0m[35mDocumentation/translations/zh_TW/process/2.Process.rst[0m:的補丁。如果[0m[1m[31mLinus[0m同意，補丁流將流向他的存儲庫，成爲主線內核的一部分。
+[0m[35mDocumentation/translations/zh_TW/process/2.Process.rst[0m:[0m[1m[31mLinus[0m對拉取中接收到的特定補丁的關注程度各不相同。很明顯，有時他看起來很
+[0m[35mDocumentation/translations/zh_TW/process/2.Process.rst[0m:關注。但是一般來說，[0m[1m[31mLinus[0m相信子系統維護人員不會向上游發送壞補丁。
+[0m[35mDocumentation/translations/zh_TW/process/2.Process.rst[0m:顯然，在這樣的系統中，獲取內核補丁取決於找到正確的維護者。直接向[0m[1m[31mLinus[0m發送
+[0m[35mDocumentation/translations/zh_TW/process/2.Process.rst[0m:發送到[0m[1m[31mLinus[0m。在典型的開發周期中，大約5-10%的補丁通過-mm 進入主線。
+[0m[35mDocumentation/translations/zh_CN/process/stable-api-nonsense.rst[0m:你这个吸血鬼<把Andrew和[0m[1m[31mLinus[0m对吸血鬼的定义链接到这里>）。当你的代码加入
+[0m[35mDocumentation/translations/zh_CN/process/kernel-enforcement-statement.rst[0m:  - [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/translations/zh_CN/process/kernel-enforcement-statement.rst[0m:  - [0m[1m[31mLinus[0m Walleij
+[0m[35mDocumentation/translations/zh_CN/process/submitting-patches.rst[0m:[0m[1m[31mLinus[0m Torvalds 是决定改动能否进入 Linux 内核的最终裁决者。他的 e-mail
+[0m[35mDocumentation/translations/zh_CN/process/submitting-patches.rst[0m:[0m[1m[31mLinus[0m 和其他的内核开发者需要阅读和评论你提交的改动。对于内核开发者来说
+[0m[35mDocumentation/translations/zh_CN/process/submitting-patches.rst[0m:代码中加评论。另外，MIME 编码的附件会让 [0m[1m[31mLinus[0m 多花一点时间来处理，这就
+[0m[35mDocumentation/translations/zh_CN/process/submitting-patches.rst[0m:由于到[0m[1m[31mlinus[0m和linux内核的电子邮件流量很高，通常会在主题行前面加上[PATCH]
+[0m[35mDocumentation/translations/zh_CN/process/submitting-patches.rst[0m:前缀. 这使[0m[1m[31mLinus[0m和其他内核开发人员更容易将补丁与其他电子邮件讨论区分开。
+[0m[35mDocumentation/translations/zh_CN/process/submitting-patches.rst[0m:      git://jdelvare.pck.nerim.net/jdelvare-2.6 i2c-for-[0m[1m[31mlinus[0m
+[0m[35mDocumentation/translations/zh_CN/process/submitting-patches.rst[0m:一些维护人员（包括[0m[1m[31mLinus[0m）希望看到来自已签名提交的请求；这增加了他们对你的
+[0m[35mDocumentation/translations/zh_CN/process/submitting-patches.rst[0m:请求信心。特别是，在没有签名标签的情况下，[0m[1m[31mLinus[0m 不会从像 Github 这样的公共
+[0m[35mDocumentation/translations/zh_CN/process/submitting-patches.rst[0m:[0m[1m[31mLinus[0m Torvalds's mail on the canonical patch format:
+[0m[35mDocumentation/translations/zh_CN/process/howto.rst[0m:  - [0m[1m[31mLinus[0m 的内核源码树
+[0m[35mDocumentation/translations/zh_CN/process/howto.rst[0m:主线树是由[0m[1m[31mLinus[0m Torvalds 维护的。你可以在https://kernel.org 网站或者代码
+[0m[35mDocumentation/translations/zh_CN/process/howto.rst[0m:    维护者可以向[0m[1m[31mLinus[0m提交大段的修改，通常这些修改已经被放到-mm内核中几个
+[0m[35mDocumentation/translations/zh_CN/process/howto.rst[0m:    没有造成内核退步的风险。在-rc1以后也可以用git向[0m[1m[31mLinus[0m提交补丁，不过所
+[0m[35mDocumentation/translations/zh_CN/process/howto.rst[0m:  - 当[0m[1m[31mLinus[0m认为当前的git源码树已经达到一个合理健全的状态足以发布供人测试
+[0m[35mDocumentation/translations/zh_TW/process/1.Intro.rst[0m:放入主線內核（「主線」是由[0m[1m[31mLinus[0m Torvalds維護的內核，Linux發行商將其用作基礎）。
+[0m[35mDocumentation/translations/zh_CN/process/embargoed-hardware-issues.rst[0m:  - [0m[1m[31mLinus[0m Torvalds（Linux基金会院士）
+[0m[35mDocumentation/translations/zh_CN/kernel-hacking/hacking.rst[0m:``include/asm/unistd.h`` 和 ``arch/kernel/entry.S`` 文件里，而且更容易被[0m[1m[31mLinus[0m
+[0m[35mDocumentation/translations/zh_CN/kernel-hacking/hacking.rst[0m:[0m[1m[31mLinus[0m和其他开发人员有时会更改开发内核中的函数或结构体名称；这样做不仅是为了
+[0m[35mDocumentation/translations/zh_CN/kernel-hacking/hacking.rst[0m:    /* Uh, actually [0m[1m[31mLinus[0m it is I who cannot spell. Too much murky
+[0m[35mDocumentation/translations/zh_TW/process/6.Followthrough.rst[0m:了[0m[1m[31mLinus[0m。
+[0m[35mDocumentation/translations/zh_CN/oops-tracing.txt[0m:注意：以下来自于[0m[1m[31mLinus[0m的邮件适用于2.4内核。 我因为历史原因保留了它，并且因为其中
+[0m[35mDocumentation/translations/zh_CN/oops-tracing.txt[0m:From: [0m[1m[31mLinus[0m Torvalds <torvalds@osdl.org>
+[0m[35mDocumentation/translations/zh_CN/oops-tracing.txt[0m:		[0m[1m[31mLinus[0m
+[0m[35mDocumentation/translations/zh_CN/oops-tracing.txt[0m:为了帮助[0m[1m[31mLinus[0m和其它内核开发者，klogd纳入了大量的支持来处理保护错误。为了拥有对
+[0m[35mDocumentation/translations/zh_TW/admin-guide/reporting-issues.rst[0m:[0m[1m[31mLinus[0m Torvalds和主要的Linux內核開發人員希望看到一些問題儘快得到解決，因此在
+[0m[35mDocumentation/translations/zh_TW/admin-guide/reporting-issues.rst[0m:Linux 首席開發者 [0m[1m[31mLinus[0m Torvalds 認爲 Linux 內核永遠不應惡化，這就是爲什麼他
+[0m[35mDocumentation/translations/zh_TW/admin-guide/reporting-issues.rst[0m:這可能是一種罕見的、可以讓 [0m[1m[31mLinus[0m Torvalds 參與進來的情況。
+[0m[35mDocumentation/translations/zh_TW/admin-guide/reporting-issues.rst[0m:重問題）才一定會得到解決。如果維護者或其他人都失敗了，[0m[1m[31mLinus[0m Torvalds 他自己
+[0m[35mDocumentation/translations/zh_CN/admin-guide/README.rst[0m:  Linux是Unix操作系统的克隆版本，由[0m[1m[31mLinus[0m Torvalds在一个松散的网络黑客
+[0m[35mDocumentation/translations/zh_CN/gpio.txt[0m:		[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/translations/zh_CN/gpio.txt[0m:		[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mDocumentation/translations/ja_JP/howto.rst[0m:4.x カーネルは [0m[1m[31mLinus[0m Torvalds によってメンテナンスされ、
+[0m[35mDocumentation/translations/ja_JP/howto.rst[0m:    この期間中に、メンテナ達は [0m[1m[31mLinus[0m に大きな差分を送ることができます。
+[0m[35mDocumentation/translations/ja_JP/howto.rst[0m:    [0m[1m[31mLinus[0m へパッチを送付するのに git を使うこともできますが、パッチは
+[0m[35mDocumentation/translations/ja_JP/howto.rst[0m:  - 新しい -rc は [0m[1m[31mLinus[0m が、最新の git ツリーがテスト目的であれば十分
+[0m[35mDocumentation/translations/zh_CN/maintainer/pull-requests.rst[0m:来自Greg Kroah Hartman和[0m[1m[31mLinus[0m Torvalds在LKML上的评论。Jonathan Corbet和Mauro
+[0m[35mDocumentation/translations/zh_CN/maintainer/pull-requests.rst[0m:[0m[1m[31mLinus[0m只接受基于签名过的标记的拉取请求。其他维护者可能会有所不同。
+[0m[35mDocumentation/translations/zh_CN/maintainer/pull-requests.rst[0m:正如[0m[1m[31mLinus[0m所说::
+[0m[35mDocumentation/translations/zh_CN/maintainer/pull-requests.rst[0m:			[0m[1m[31mLinus[0m
+[0m[35mDocumentation/translations/zh_CN/maintainer/pull-requests.rst[0m:	例子中指向了我从[0m[1m[31mLinus[0m的树分叉的地方，通常是-rc发布）的差异，并去使用
+[0m[35mDocumentation/translations/zh_CN/maintainer/pull-requests.rst[0m:[0m[1m[31mLinus[0m回复说他倾向于 ``git://`` 协议。其他维护者可能有不同的偏好。另外，请注意
+[0m[35mDocumentation/translations/zh_CN/maintainer/pull-requests.rst[0m:任何必要特定子系统的列表。对[0m[1m[31mLinus[0m的拉取请求通常有如下主题行::
+[0m[35mDocumentation/translations/zh_CN/maintainer/rebasing-and-merging.rst[0m:合并窗口麻烦的一个常见原因是，[0m[1m[31mLinus[0m收到了一个明显在拉取请求发送之前不久才变根
+[0m[35mDocumentation/translations/zh_CN/maintainer/rebasing-and-merging.rst[0m:尤其如此：[0m[1m[31mLinus[0m坚信他更愿意看到合并冲突，而不是不必要的反向合并。看到冲突
+[0m[35mDocumentation/translations/zh_CN/maintainer/rebasing-and-merging.rst[0m:的一步是在拉取请求中提示[0m[1m[31mLinus[0m会发生冲突；如果啥都没说则表明您的分支可以正常
+[0m[35mDocumentation/translations/zh_TW/oops-tracing.txt[0m:注意：以下來自於[0m[1m[31mLinus[0m的郵件適用於2.4內核。 我因爲歷史原因保留了它，並且因爲其中
+[0m[35mDocumentation/translations/zh_TW/oops-tracing.txt[0m:From: [0m[1m[31mLinus[0m Torvalds <torvalds@osdl.org>
+[0m[35mDocumentation/translations/zh_TW/oops-tracing.txt[0m:		[0m[1m[31mLinus[0m
+[0m[35mDocumentation/translations/zh_TW/oops-tracing.txt[0m:爲了幫助[0m[1m[31mLinus[0m和其它內核開發者，klogd納入了大量的支持來處理保護錯誤。爲了擁有對
+[0m[35mDocumentation/translations/zh_CN/dev-tools/sparse.rst[0m:Copyright 2004 [0m[1m[31mLinus[0m Torvalds
+[0m[35mDocumentation/translations/zh_CN/admin-guide/reporting-issues.rst[0m:[0m[1m[31mLinus[0m Torvalds和主要的Linux内核开发人员希望看到一些问题尽快得到解决，因此在
+[0m[35mDocumentation/translations/zh_CN/admin-guide/reporting-issues.rst[0m:Linux 首席开发者 [0m[1m[31mLinus[0m Torvalds 认为 Linux 内核永远不应恶化，这就是为什么他
+[0m[35mDocumentation/translations/zh_CN/admin-guide/reporting-issues.rst[0m:这可能是一种罕见的、可以让 [0m[1m[31mLinus[0m Torvalds 参与进来的情况。
+[0m[35mDocumentation/translations/zh_CN/admin-guide/reporting-issues.rst[0m:重问题）才一定会得到解决。如果维护者或其他人都失败了，[0m[1m[31mLinus[0m Torvalds 他自己
+[0m[35mDocumentation/translations/ja_JP/stable_api_nonsense.txt[0m:と [0m[1m[31mLinus[0m からのコメント＜Andrew と [0m[1m[31mLinus[0m のコメントへのリンクをこ
+[0m[35mDocumentation/translations/zh_CN/admin-guide/bug-hunting.rst[0m:为了帮助[0m[1m[31mLinus[0m和其他内核开发人员， ``klogd`` 对保护故障的处理提供了大量支持。
+[0m[35mdrivers/clk/clk-gemini.c[0m: * Copyright (c) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/clk/clk-nomadik.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/net/ethernet/cortina/gemini.h[0m: * Copytight (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/net/ethernet/cortina/gemini.c[0m: * [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/net/ethernet/cortina/gemini.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/net/dsa/vitesse-vsc73xx-spi.c[0m: * Copyright (C) 2018 [0m[1m[31mLinus[0m Wallej <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/net/dsa/vitesse-vsc73xx-spi.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/net/dsa/vitesse-vsc73xx-platform.c[0m: * Copyright (C) 2018 [0m[1m[31mLinus[0m Wallej <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/net/dsa/realtek-smi-core.h[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/net/dsa/realtek-smi-core.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/net/dsa/rtl8366.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/net/dsa/vitesse-vsc73xx-core.c[0m: * Copyright (C) 2018 [0m[1m[31mLinus[0m Wallej <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/net/dsa/vitesse-vsc73xx-core.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>");
+[0m[35mdrivers/clk/versatile/clk-impd1.c[0m: * Copyright (C) 2012-2013 [0m[1m[31mLinus[0m Walleij
+[0m[35mdrivers/clk/versatile/clk-impd1.c[0m:MODULE_AUTHOR("[0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0mw@kernel.org>");
+[0m[35mdrivers/clk/versatile/clk-versatile.c[0m: * Copyright (C) 2012 [0m[1m[31mLinus[0m Walleij
+[0m[35mdrivers/net/dsa/rtl8366rb.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/clk/versatile/clk-icst.c[0m: * Copyright (C) 2012-2015 [0m[1m[31mLinus[0m Walleij
+[0m[35mdrivers/net/hamradio/baycom_ser_fdx.c[0m: *   0.7  03.08.1999  adapt to [0m[1m[31mLinus[0m' new __setup/__initcall
+[0m[35mdrivers/net/hamradio/baycom_epp.c[0m: *   0.5  03.08.1999  adapt to [0m[1m[31mLinus[0m' new __setup/__initcall
+[0m[35mdrivers/net/hamradio/baycom_ser_hdx.c[0m: *   0.7  03.08.1999  adapt to [0m[1m[31mLinus[0m' new __setup/__initcall
+[0m[35mdrivers/net/hamradio/baycom_par.c[0m: *   0.6  03.08.1999  adapt to [0m[1m[31mLinus[0m' new __setup/__initcall
+[0m[35mdrivers/net/sb1000.c[0m:	[0m[1m[31mLinus[0m changed the timer interface.  Should work on all recent
+[0m[35mdrivers/clk/ux500/reset-prcc.c[0m: * Copyright (C) 2021 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/soc/versatile/soc-realview.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/soc/versatile/soc-integrator.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/soc/gemini/soc-gemini.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/clocksource/nomadik-mtu.c[0m: * Copyright (C) 2010 [0m[1m[31mLinus[0m Walleij for ST-Ericsson
+[0m[35minclude/asm-generic/tlb.h[0m: * Based on code from mm/memory.c Copyright [0m[1m[31mLinus[0m Torvalds and others.
+[0m[35mdrivers/clocksource/timer-fttmr010.c[0m: * Copyright (C) 2017 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/clocksource/timer-ixp4xx.c[0m: * Copyright (C) 2019 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mdrivers/clocksource/clksrc-dbx500-prcmu.c[0m: * plat-nomadik/timer.c [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@stericsson.com>
+[0m[35mfs/bfs/inode.c[0m: *	From fs/minix, Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds.
+[0m[35mfs/ext2/inode.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext2/inode.c[0m: * [0m[1m[31mLinus[0m?
+[0m[35mfs/hugetlbfs/inode.c[0m: * Copyright (C) 2002 [0m[1m[31mLinus[0m Torvalds.
+[0m[35march/x86/kernel/irq_64.c[0m: *	Copyright (C) 1992, 1998 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35march/x86/kernel/irq_32.c[0m: *	Copyright (C) 1992, 1998 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35march/x86/kernel/dumpstack_32.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/kernel/setup.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/kernel/process_64.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/kernel/dumpstack.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/kernel/dumpstack.c[0m: * There are a couple of reasons for the 2/3rd prologue, courtesy of [0m[1m[31mLinus[0m:
+[0m[35march/x86/kernel/process_32.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/kernel/head_32.S[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/kernel/time.c[0m: *  Copyright (c) 1991,1992,1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/kernel/vm86_32.c[0m: *  Copyright (C) 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/kernel/fpu/core.c[0m: *  Copyright (C) 1994 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/kernel/signal.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/kernel/cpu/bugs.c[0m: *  Copyright (C) 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/kernel/ioport.c[0m: * by [0m[1m[31mLinus[0m. 32/64 bits code unification by Miguel Botón.
+[0m[35march/x86/kernel/nmi.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/kernel/dumpstack_64.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/kernel/ldt.c[0m: * Copyright (C) 1992 Krishna Balasubramanian and [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/kernel/traps.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/math-emu/README[0m:the original Linux math emulator by [0m[1m[31mLinus[0m Torvalds.
+[0m[35march/x86/math-emu/README[0m: [ [0m[1m[31mLinus[0m' note: I changed look-ahead to be the default under linux, as
+[0m[35march/x86/math-emu/README[0m:[0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/math-emu/fpu_entry.c[0m:   Changes to support them provided by [0m[1m[31mLinus[0m Torvalds. */
+[0m[35mnet/batman-adv/bat_v.h[0m: * Marek Lindner, [0m[1m[31mLinus[0m Lüssing
+[0m[35mnet/batman-adv/bat_v.c[0m: * [0m[1m[31mLinus[0m Lüssing, Marek Lindner
+[0m[35mnet/batman-adv/multicast.h[0m: * [0m[1m[31mLinus[0m Lüssing
+[0m[35mnet/batman-adv/multicast.c[0m: * [0m[1m[31mLinus[0m Lüssing
+[0m[35mnet/batman-adv/bat_v_elp.h[0m: * [0m[1m[31mLinus[0m Lüssing, Marek Lindner
+[0m[35mnet/batman-adv/bat_v_elp.c[0m: * [0m[1m[31mLinus[0m Lüssing, Marek Lindner
+[0m[35mnet/batman-adv/bat_algo.h[0m: * Marek Lindner, [0m[1m[31mLinus[0m Lüssing
+[0m[35mfs/ext2/symlink.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext2/dir.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext2/file.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext2/namei.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext2/ext2.h[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext2/super.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/boot.h[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/tty.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/string.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/video-bios.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/main.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/Makefile[0m:# Copyright (C) 1994 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/a20.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/tools/build.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/install.sh[0m:# Copyright (C) 1995 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/video.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/header.S[0m: *	Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/video-vesa.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/video-mode.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/printf.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/bitops.h[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/pmjump.S[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/memory.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/video-vga.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/version.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/copy.S[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/cpu.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/video.h[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/pm.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/cpucheck.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/edd.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/apm.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/cmdline.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/compressed/head_32.S[0m: *  Copyright (C) 1991, 1992, 1993  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/boot/compressed/head_64.S[0m: *  Copyright (C) 1991, 1992, 1993  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/lib/usercopy_64.c[0m: * Copyright 1997 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/lib/delay.c[0m: *	Copyright (C) 1993 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/lib/getuser.S[0m: * (C) Copyright 1998 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/lib/usercopy_32.c[0m: * Copyright 1997 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/lib/putuser.S[0m: * (C) Copyright 2005 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/ia32/ia32_aout.c[0m: *  Copyright (C) 1991, 1992, 1996  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/ia32/ia32_signal.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/entry/entry_32.S[0m: *  Copyright (C) 1991,1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/entry/entry_64.S[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/include/asm/hw_irq.h[0m: * (C) 1992, 1993 [0m[1m[31mLinus[0m Torvalds, (C) 1997 Ingo Molnar
+[0m[35march/x86/include/asm/bitops.h[0m: * Copyright 1992, [0m[1m[31mLinus[0m Torvalds.
+[0m[35march/x86/include/asm/io.h[0m: *		[0m[1m[31mLinus[0m
+[0m[35march/x86/include/asm/sync_bitops.h[0m: * Copyright 1992, [0m[1m[31mLinus[0m Torvalds.
+[0m[35march/x86/include/asm/thread_info.h[0m: * - Incorporating suggestions made by [0m[1m[31mLinus[0m Torvalds and Dave Miller
+[0m[35march/x86/include/asm/irq.h[0m: *	(C) 1992, 1993 [0m[1m[31mLinus[0m Torvalds, (C) 1997 Ingo Molnar
+[0m[35march/x86/include/asm/stacktrace.h[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/include/asm/fpu/api.h[0m: * Copyright (C) 1994 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/include/uapi/asm/vm86.h[0m: * [0m[1m[31mLinus[0m
+[0m[35march/x86/realmode/rm/trampoline_64.S[0m: *	Trampoline.S	Derived from Setup.S by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/realmode/rm/trampoline_32.S[0m: *	Trampoline.S	Derived from Setup.S by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/entry/vdso/vdso32-setup.c[0m: * (C) Copyright 2002 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/mm/init_64.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/mm/tlb.c[0m: *		c/o [0m[1m[31mLinus[0m Torvalds.
+[0m[35march/x86/mm/init_32.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/mm/fault.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/x86/mm/ioremap.c[0m: * (C) Copyright 1995 1996 [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/hfs/inode.c[0m: * Based on the minix file system code, (C) 1991, 1992 by [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/hfs/catalog.c[0m: *     linux/fs/inode.c Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/hfs/catalog.c[0m: *     re-shamelessly stolen Copyright (C) 1997 [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/hfs/super.c[0m: * Based on the minix file system code, (C) 1991, 1992 by [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/hfs/dir.c[0m: * Based on the minix file system code, (C) 1991, 1992 by [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/buffer.c[0m: *  Copyright (C) 1991, 1992, 2002  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/open.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/nfs/dir.c[0m: *              Following [0m[1m[31mLinus[0m comments on my original hack, this version
+[0m[35mfs/nfs/read.c[0m: * Partial copy of [0m[1m[31mLinus[0m' read cache modifications to fs/nfs/file.c
+[0m[35mfs/nfs/file.c[0m: *  Total rewrite of read side for new NFS buffer cache.. [0m[1m[31mLinus[0m.
+[0m[35mfs/nfs/nfsroot.c[0m: *				[0m[1m[31mLinus[0m so that I don' always have to cleanup
+[0m[35mfs/char_dev.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/proc/inode.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/proc/kmsg.c[0m: *  Copyright (C) 1992  by [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/proc/generic.c[0m: * Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds.
+[0m[35mfs/proc/root.c[0m: *  Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/proc/base.c[0m: *  Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/jfs/acl.c[0m: *   Copyright (C) [0m[1m[31mLinus[0m Torvalds, 1991, 1992
+[0m[35mfs/proc/array.c[0m: *  Copyright (C) 1992  by [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/inode.c[0m: * (C) 1997 [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/splice.c[0m: * Named by Larry McVoy, original implementation from [0m[1m[31mLinus[0m, extended by
+[0m[35mfs/splice.c[0m: * Copyright (C) 2005-2006 [0m[1m[31mLinus[0m Torvalds <torvalds@osdl.org>
+[0m[35mfs/mpage.c[0m: * Copyright (C) 2002, [0m[1m[31mLinus[0m Torvalds.
+[0m[35mfs/readdir.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/vmscan.c[0m: *  Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/affs/inode.c[0m: *  (C) 1991  [0m[1m[31mLinus[0m Torvalds - minix filesystem
+[0m[35mfs/affs/symlink.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/minix/inode.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/affs/dir.c[0m: *  (C) 1991  [0m[1m[31mLinus[0m Torvalds - minix filesystem
+[0m[35mfs/affs/super.c[0m: *  (C) 1991  [0m[1m[31mLinus[0m Torvalds - minix filesystem
+[0m[35mfs/minix/dir.c[0m: *  Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/affs/namei.c[0m: *  (C) 1991  [0m[1m[31mLinus[0m Torvalds - minix filesystem
+[0m[35mfs/minix/file.c[0m: *  Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/minix/bitmap.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/minix/namei.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/affs/file.c[0m: *  (C) 1991  [0m[1m[31mLinus[0m Torvalds - minix filesystem
+[0m[35mmm/fadvise.c[0m: * Copyright (C) 2002, [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/attr.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/readahead.c[0m: * Copyright (C) 2002, [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ioctl.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/befs/ChangeLog[0m:* Anton Altaparmakov figured out (by asking [0m[1m[31mLinus[0m :) ) what was causing the 
+[0m[35mfs/exec.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext4/symlink.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext4/indirect.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext4/indirect.c[0m: * [0m[1m[31mLinus[0m?
+[0m[35mfs/ext4/fsync.c[0m: *  linux/fs/minix/truncate.c   Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext4/inode.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext4/ext4.h[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext4/dir.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext4/readpage.c[0m: * Copyright (C) 2002, [0m[1m[31mLinus[0m Torvalds.
+[0m[35mfs/ext4/file.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext4/super.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ext4/namei.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ocfs2/dlmfs/dlmfs.c[0m: * Copyright (C) 2000 [0m[1m[31mLinus[0m Torvalds.
+[0m[35mfs/ocfs2/dir.c[0m: *   Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/direct-io.c[0m: * Copyright (C) 2002, [0m[1m[31mLinus[0m Torvalds.
+[0m[35mfs/sysv/ialloc.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/sysv/inode.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/super.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/sysv/balloc.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/sysv/dir.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/swapfile.c[0m: *  Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/truncate.c[0m: * Copyright (C) 2002, [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/sysv/super.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/sysv/file.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/sysv/namei.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/vmalloc.c[0m: *  Copyright (C) 1993  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/read_write.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/romfs/super.c[0m: * Copyright © 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/isofs/inode.c[0m: *  (C) 1991  [0m[1m[31mLinus[0m Torvalds - minix filesystem
+[0m[35mfs/isofs/namei.c[0m: *  (C) 1991  [0m[1m[31mLinus[0m Torvalds - minix filesystem
+[0m[35mfs/isofs/dir.c[0m: *  (C) 1991  [0m[1m[31mLinus[0m Torvalds - minix filesystem
+[0m[35mfs/file_table.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/cramfs/uncompress.c[0m: * (C) Copyright 1999 [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/cramfs/inode.c[0m: * Copyright (C) 1999 [0m[1m[31mLinus[0m Torvalds.
+[0m[35mmm/msync.c[0m: * Copyright (C) 1994-1999  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/pipe.c[0m: *  Copyright (C) 1991, 1992, 1999  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/fs-writeback.c[0m: * Copyright (C) 2002, [0m[1m[31mLinus[0m Torvalds.
+[0m[35mmm/mlock.c[0m: *  (C) Copyright 1995 [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/namespace.c[0m: * Based on code from fs/super.c, copyright [0m[1m[31mLinus[0m Torvalds and others.
+[0m[35mmm/mremap.c[0m: *	(C) Copyright 1996 [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/signalfd.c[0m: *  Copyright (C) 2003  [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/highmem.c[0m: * based on [0m[1m[31mLinus[0m' idea.
+[0m[35mfs/select.c[0m: * patches by Peter MacDonald. Heavily edited by [0m[1m[31mLinus[0m.
+[0m[35mmm/vmstat.c[0m: *  Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/nilfs2/super.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/nilfs2/dir.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/nilfs2/namei.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/page_io.c[0m: *  Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/memory.c[0m: *  Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/memory.c[0m: * things wanted, and it should be easy to implement. - [0m[1m[31mLinus[0m
+[0m[35mmm/memory.c[0m: * pages started 02.12.91, seems to work. - [0m[1m[31mLinus[0m.
+[0m[35mmm/filemap.c[0m: * Copyright (C) 1994-1999  [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/page-writeback.c[0m: * Copyright (C) 2002, [0m[1m[31mLinus[0m Torvalds.
+[0m[35mnet/ipv6/mcast_snoop.c[0m: * Copyright (C) 2015: [0m[1m[31mLinus[0m Lüssing <[0m[1m[31mlinus[0m.luessing@c0d3.blue>
+[0m[35mmm/mincore.c[0m: * Copyright (C) 1994-2006  [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/shmem.c[0m: * Copyright (C) 2000 [0m[1m[31mLinus[0m Torvalds.
+[0m[35mnet/core/skbuff.c[0m: *		[0m[1m[31mLinus[0m Torvalds	:	Better skb_clone.
+[0m[35mnet/core/skbuff.c[0m: *		Alan Cox	:	Added all the changed routines [0m[1m[31mLinus[0m
+[0m[35mmm/pgtable-generic.c[0m: *  Copyright (C) 2010  [0m[1m[31mLinus[0m Torvalds
+[0m[35mnet/core/datagram.c[0m: *		[0m[1m[31mLinus[0m Torvalds	:	BSD semantic fixes.
+[0m[35mmm/ioremap.c[0m: * (C) Copyright 1995 1996 [0m[1m[31mLinus[0m Torvalds
+[0m[35mnet/dsa/tag_rtl4_a.c[0m: * Copyright (c) 2020 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35mmm/madvise.c[0m: * Copyright (C) 1999  [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/mprotect.c[0m: *  (C) Copyright 1994 [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/swap_state.c[0m: *  Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/swap.c[0m: *  Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35mmm/page_alloc.c[0m: *  Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35mnet/unix/af_unix.c[0m: *		[0m[1m[31mLinus[0m Torvalds	:	Assorted bug cures.
+[0m[35mmm/early_ioremap.c[0m: * (C) Copyright 1995 1996, 2014 [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/stat.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/adfs/file.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/dcache.c[0m: * with heavy changes by [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/namei.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/binfmt_aout.c[0m: *  Copyright (C) 1991, 1992, 1996  [0m[1m[31mLinus[0m Torvalds
+[0m[35mnet/ipv4/tcp_input.c[0m: *		[0m[1m[31mLinus[0m Torvalds, <torvalds@cs.helsinki.fi>
+[0m[35mnet/ipv4/arp.c[0m: *					Ack spit, [0m[1m[31mLinus[0m how did you allow that
+[0m[35mnet/ipv4/ip_input.c[0m: *		[0m[1m[31mLinus[0m Torvalds	:	More robustness checks
+[0m[35mnet/ipv4/ip_input.c[0m: *		[0m[1m[31mLinus[0m Torvalds/ :	Memory leakage on fragmentation
+[0m[35mnet/ipv4/tcp_minisocks.c[0m: *		[0m[1m[31mLinus[0m Torvalds, <torvalds@cs.helsinki.fi>
+[0m[35mnet/ipv4/tcp_output.c[0m: *		[0m[1m[31mLinus[0m Torvalds, <torvalds@cs.helsinki.fi>
+[0m[35mnet/ipv4/tcp_output.c[0m: *		[0m[1m[31mLinus[0m Torvalds	:	send_delayed_ack
+[0m[35mnet/ipv4/tcp.c[0m: *		[0m[1m[31mLinus[0m Torvalds, <torvalds@cs.helsinki.fi>
+[0m[35mnet/ipv4/tcp.c[0m: *		[0m[1m[31mLinus[0m		:	Rewrote tcp_read() and URG handling
+[0m[35mnet/ipv4/tcp.c[0m: *		[0m[1m[31mLinus[0m Torvalds	:	Fin/Shutdown & copied_seq changes.
+[0m[35mnet/ipv4/tcp.c[0m: *		[0m[1m[31mLinus[0m Torvalds	:	Fixed BSD port reuse to work first syn
+[0m[35mnet/ipv4/route.c[0m: *		[0m[1m[31mLinus[0m Torvalds, <[0m[1m[31mLinus[0m.Torvalds@helsinki.fi>
+[0m[35mnet/ipv4/route.c[0m: *		[0m[1m[31mLinus[0m Torvalds	:	Rewrote bits to be sensible
+[0m[35mnet/ipv4/tcp_timer.c[0m: *		[0m[1m[31mLinus[0m Torvalds, <torvalds@cs.helsinki.fi>
+[0m[35mfs/filesystems.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/Makefile[0m:# Copyright (C) 1994 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/boot/install.sh[0m:# Copyright (C) 1995 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/kernel/ptrace/ptrace32.c[0m: *  linux/kernel/ptrace.c is by Ross Biro 1/23/92, edited by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/kernel/ptrace/ptrace.c[0m: *  linux/kernel/ptrace.c is by Ross Biro 1/23/92, edited by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/kernel/irq.c[0m: *    Copyright (C) 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/kernel/iomap.c[0m: * (C) Copyright 2004 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/kernel/signal_32.c[0m: *    Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/kernel/process.c[0m: *    Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/kernel/signal_64.c[0m: *    Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ramfs/inode.c[0m: * Copyright (C) 2000 [0m[1m[31mLinus[0m Torvalds.
+[0m[35mfs/ufs/inode.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/platforms/cell/setup.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ramfs/file-mmu.c[0m: * Copyright (C) 2000 [0m[1m[31mLinus[0m Torvalds.
+[0m[35mfs/ufs/super.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ufs/file.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/platforms/pseries/setup.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/platforms/pseries/firmware.c[0m: *   Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/ufs/namei.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/platforms/8xx/m8xx_setup.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/platforms/powermac/setup.c[0m: *    Copyright (C) 1995 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/platforms/chrp/time.c[0m: *  Copyright (C) 1991, 1992, 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/platforms/chrp/setup.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/fcntl.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35mfs/binfmt_flat.c[0m: *      Copyright (C) 1991, 1992, 1996  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/lib/divide.S[0m: * (C) 1995 [0m[1m[31mLinus[0m Torvalds
+[0m[35mnet/socket.c[0m: *		[0m[1m[31mLinus[0m		:	Argh. removed all the socket allocation
+[0m[35march/mips/kernel/signal-common.h[0m: * Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/mips/kernel/irq.c[0m: * Copyright (C) 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/mips/kernel/ptrace32.c[0m: * Copyright (C) [0m[1m[31mLinus[0m Torvalds
+[0m[35march/mips/kernel/signal_o32.c[0m: * Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/mips/kernel/setup.c[0m: * Copyright (C) 1995 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/mips/kernel/signal32.c[0m: * Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/mips/kernel/ptrace.c[0m: * Copyright (C) [0m[1m[31mLinus[0m Torvalds
+[0m[35march/mips/kernel/signal.c[0m: * Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/lib/csum_partial_copy.c[0m: * (C) Copyright 1996 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/lib/udelay.c[0m: * Copyright (C) 1993, 2000 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/mips/boot/compressed/Makefile[0m:# Copyright (C) 1994 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/lib/memcpy.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/lib/memset.S[0m: *	(C) Copyright 1996 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/Makefile[0m:# Copyright (C) 1994 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/kernel/process.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/mips/jazz/irq.c[0m: * Copyright (C) 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/kernel/sys_jensen.c[0m: *	Copyright (C) 1995 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/kernel/rtc.c[0m: *  Copyright (C) 1991, 1992, 1995, 1999, 2000  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/kernel/irq.c[0m: *	Copyright (C) 1995 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/kernel/setup.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/kernel/time.c[0m: *  Copyright (C) 1991, 1992, 1995, 1999, 2000  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/kernel/osf_sys.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/mips/lib/iomap-pci.c[0m: * (C) Copyright 2004 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/kernel/irq_impl.h[0m: *	Copyright (C) 1995 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/kernel/ptrace.c[0m:/* edited by [0m[1m[31mLinus[0m Torvalds */
+[0m[35march/alpha/kernel/signal.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/kernel/traps.c[0m: * (C) Copyright 1994 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/lib/fpreg.c[0m: * (C) Copyright 1998 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/boot/Makefile[0m:# Copyright (C) 1994 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/boot/bootpz.c[0m: * based significantly on the arch/alpha/boot/main.c of [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/boot/main.c[0m: * Copyright (C) 1994, 1995 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/mips/dec/time.c[0m: *  Copyright (C) 1991, 1992, 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/boot/bootp.c[0m: * based significantly on the arch/alpha/boot/main.c of [0m[1m[31mLinus[0m Torvalds
+[0m[35march/mips/include/asm/mach-generic/ide.h[0m: * Copyright (C) 1994-1996  [0m[1m[31mLinus[0m Torvalds & authors
+[0m[35march/mips/include/asm/thread_info.h[0m: * - Incorporating suggestions made by [0m[1m[31mLinus[0m Torvalds and Dave Miller
+[0m[35march/mips/mm/ioremap.c[0m: * (C) Copyright 1995 1996 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/mips/sni/irq.c[0m: * Copyright (C) 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/include/asm/bitops.h[0m: * Copyright 1994, [0m[1m[31mLinus[0m Torvalds.
+[0m[35march/alpha/include/asm/mmu_context.h[0m: * Copyright (C) 1996, [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/include/asm/irq.h[0m: *	(C) 1994 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/include/asm/bugs.h[0m: *  Copyright (C) 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/include/asm/processor.h[0m: * Copyright (C) 1994 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/alpha/mm/fault.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm/kernel/tcm.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@stericsson.com>
+[0m[35march/arm/kernel/irq.c[0m: *  Copyright (C) 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm/kernel/time.c[0m: *  Copyright (C) 1991, 1992, 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm/kernel/ptrace.c[0m: * edited by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm/kernel/process.c[0m: *  Original Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm/kernel/reboot.c[0m: *  Original Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm/kernel/traps.c[0m: *  Fragments that appear the same as linux/arch/i386/kernel/traps.c (C) [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm/boot/install.sh[0m:# Copyright (C) 1995 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm/boot/dts/kirkwood-pogoplug-series-4.dts[0m: * Copyright (C) 2015 [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35march/arm/lib/getuser.S[0m: *  Idea from x86 version, (C) Copyright 1998 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm/lib/putuser.S[0m: *  Idea from x86 version, (C) Copyright 1998 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm/mach-realview/realview-dt.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35march/arm/mach-realview/platsmp-dt.c[0m: * Copyright (C) 2015 [0m[1m[31mLinus[0m Walleij
+[0m[35march/arm/mm/fault.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm/mm/fault-armv.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm/mm/kasan_init.c[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@linaro.org>
+[0m[35march/arm/mm/ioremap.c[0m: * (C) Copyright 1995 1996 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm/mm/tcm.h[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@stericsson.com>
+[0m[35march/arm/mm/alignment.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm/include/asm/tcm.h[0m: * Author: [0m[1m[31mLinus[0m Walleij <[0m[1m[31mlinus[0m.walleij@stericsson.com>
+[0m[35march/arm/include/asm/bitops.h[0m: *  [0m[1m[31mLinus[0m Torvalds (test_bit).
+[0m[35march/arm/include/asm/ide.h[0m: *  Copyright (C) 1994-1996  [0m[1m[31mLinus[0m Torvalds & authors
+[0m[35march/alpha/mm/init.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/ia64/install.sh[0m:# Copyright (C) 1995 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/ia64/kernel/irq.c[0m: *	Copyright (C) 1992, 1998 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35march/ia64/include/asm/elf.h[0m: * place to do this, but we should discuss this with [0m[1m[31mLinus[0m once we can
+[0m[35march/powerpc/include/asm/ide.h[0m: *  Copyright (C) 1994-1996 [0m[1m[31mLinus[0m Torvalds & authors
+[0m[35march/powerpc/include/asm/thread_info.h[0m: * - Incorporating suggestions made by [0m[1m[31mLinus[0m Torvalds and Dave Miller
+[0m[35march/powerpc/mm/pgtable_64.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/init_64.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/book3s32/mmu_context.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/book3s32/tlb.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/fault.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/um/kernel/irq.c[0m: *	Copyright (C) 1992, 1998 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35march/powerpc/mm/book3s32/mmu.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/mmu_decl.h[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/mem.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/init_32.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/init-common.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/book3s64/hash_tlb.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/pgtable_32.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/pgtable.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/nohash/fsl_book3e.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/nohash/40x.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/nohash/44x.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/powerpc/mm/nohash/tlb.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sh/kernel/process_32.c[0m: *  Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sh/kernel/dumpstack.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sh/kernel/irq.c[0m: *	Copyright (C) 1992, 1998 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35march/sh/kernel/signal_32.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/xtensa/kernel/setup.c[0m: * Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/xtensa/kernel/irq.c[0m: * Copyright (C) 1992, 1998 [0m[1m[31mLinus[0m Torvalds, Ingo Molnar
+[0m[35march/xtensa/kernel/signal.c[0m: * Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sh/mm/fault.c[0m: *   Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sh/mm/init.c[0m: *   Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sh/mm/ioremap.c[0m: * (C) Copyright 1995 1996 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sh/include/asm/thread_info.h[0m: *  - Incorporating suggestions made by [0m[1m[31mLinus[0m Torvalds and Dave Miller
+[0m[35march/microblaze/kernel/ptrace.c[0m: * Copyright (C) [0m[1m[31mLinus[0m Torvalds
+[0m[35march/microblaze/kernel/signal.c[0m: * Copyright (C) 1991,1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/microblaze/mm/fault.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/microblaze/mm/mmu_context.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/h8300/include/asm/bitops.h[0m: * Copyright 1992, [0m[1m[31mLinus[0m Torvalds.
+[0m[35march/h8300/include/asm/thread_info.h[0m: * - Incorporating suggestions made by [0m[1m[31mLinus[0m Torvalds and Dave Miller
+[0m[35march/microblaze/mm/pgtable.c[0m: *    Copyright (C) 1991, 1992, 1993, 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/microblaze/pci/iomap.c[0m: * (C) Copyright 2004 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/h8300/kernel/signal.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/nios2/kernel/signal.c[0m: * Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/nios2/boot/install.sh[0m:# Copyright (C) 1995 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm64/mm/fault.c[0m: * Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm64/mm/ioremap.c[0m: * (C) Copyright 1995 1996 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sparc/boot/install.sh[0m:# Copyright (C) 1995 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sparc/kernel/ptrace_64.c[0m: * Based upon code written by Ross Biro, [0m[1m[31mLinus[0m Torvalds, Bob Manson,
+[0m[35march/sparc/kernel/signal_32.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sparc/kernel/wof.S[0m:	 * to see what happens.  I can hear [0m[1m[31mLinus[0m now
+[0m[35march/sparc/kernel/ptrace_32.c[0m: * Based upon code written by Ross Biro, [0m[1m[31mLinus[0m Torvalds, Bob Manson,
+[0m[35march/sparc/kernel/signal32.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sparc/kernel/signal_64.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sparc/lib/memcpy.S[0m: * Copyright (C) 1995 [0m[1m[31mLinus[0m Torvalds ([0m[1m[31mLinus[0m.Torvalds@helsinki.fi)
+[0m[35march/sparc/lib/checksum_32.S[0m: *  Copyright(C) 1995 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sparc/lib/copy_user.S[0m: *  Copyright(C) 1995 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sparc/lib/checksum_64.S[0m: *  Copyright(C) 1995 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sparc/include/asm/uaccess_64.h[0m: * "For historical reasons, these macros are grossly misnamed." -[0m[1m[31mLinus[0m
+[0m[35march/sparc/include/asm/checksum_64.h[0m: *  Copyright(C) 1995 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sparc/include/asm/thread_info_32.h[0m: * - Incorporating suggestions made by [0m[1m[31mLinus[0m Torvalds and Dave Miller
+[0m[35march/sparc/include/asm/mmu_context_64.h[0m:/* Derived heavily from [0m[1m[31mLinus[0m's Alpha/AXP ASN code... */
+[0m[35march/sparc/include/asm/checksum_32.h[0m: *  Copyright(C) 1995 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/sparc/include/asm/uaccess_32.h[0m: * "For historical reasons, these macros are grossly misnamed." -[0m[1m[31mLinus[0m
+[0m[35march/openrisc/Makefile[0m:# Copyright (C) 1994 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm64/boot/install.sh[0m:# Copyright (C) 1995 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm64/kernel/irq.c[0m: * Copyright (C) 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm64/kernel/time.c[0m: * Copyright (C) 1991, 1992, 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm64/kernel/ptrace.c[0m: * edited by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/arm64/kernel/process.c[0m: * Original Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/parisc/install.sh[0m:# Copyright (C) 1995 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/Makefile[0m:# Copyright (C) 1994 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/boot/install.sh[0m:# Copyright (C) 1995 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/kernel/setup.c[0m: *    Copyright (C) 1995, [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/kernel/time.c[0m: *    Copyright (C) 1991, 1992, 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/kernel/signal.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/kernel/traps.c[0m: *    Copyright (C) 1991, 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/kernel/compat_signal.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/include/asm/pgalloc.h[0m: *    Copyright (C) 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/include/asm/timex.h[0m: *    Copyright (C) 1992, [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/include/asm/delay.h[0m: *    Copyright (C) 1993 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/include/asm/bugs.h[0m: *    Copyright (C) 1994  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/include/asm/cache.h[0m: *    Copyright (C) 1992, [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/include/asm/processor.h[0m: *    Copyright (C) 1994, [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/mm/init.c[0m: *    Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/s390/mm/fault.c[0m: *    Copyright (C) 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/riscv/boot/install.sh[0m:# Copyright (C) 1995 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/parisc/kernel/time.c[0m: *  Copyright (C) 1991, 1992, 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/parisc/kernel/irq.c[0m: * Copyright (C) 1992 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/parisc/kernel/setup.c[0m: *    Copyright (C) 1991, 1992, 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/parisc/kernel/processor.c[0m: *    Copyright (C) 1991, 1992, 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/parisc/kernel/traps.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/parisc/Makefile[0m:# Copyright (C) 1994 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/parisc/mm/init.c[0m: *  Copyright (C) 1995	[0m[1m[31mLinus[0m Torvalds
+[0m[35march/parisc/include/asm/ide.h[0m: *  Copyright (C) 1994-1996  [0m[1m[31mLinus[0m Torvalds & authors
+[0m[35march/parisc/include/asm/processor.h[0m: * Copyright (C) 1994 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/parisc/lib/delay.c[0m: *	Copyright (C) 1993 [0m[1m[31mLinus[0m Torvalds
+[0m[35march/parisc/mm/ioremap.c[0m: * (C) Copyright 1995 1996 [0m[1m[31mLinus[0m Torvalds
+[0m[35m.mailmap[0m:[0m[1m[31mLinus[0m Lüssing <[0m[1m[31mlinus[0m.luessing@c0d3.blue> <[0m[1m[31mlinus[0m.luessing@ascom.ch>
+[0m[35m.mailmap[0m:[0m[1m[31mLinus[0m Lüssing <[0m[1m[31mlinus[0m.luessing@c0d3.blue> <[0m[1m[31mlinus[0m.luessing@web.de>
+[0m[35march/m68k/install.sh[0m:# Copyright (C) 1995 by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/m68k/68000/entry.S[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/m68k/kernel/entry.S[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/m68k/kernel/time.c[0m: *  Copyright (C) 1991, 1992, 1995  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/m68k/kernel/ptrace.c[0m: *  linux/kernel/ptrace.c is by Ross Biro 1/23/92, edited by [0m[1m[31mLinus[0m Torvalds
+[0m[35march/m68k/kernel/signal.c[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/m68k/kernel/syscalltable.S[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/m68k/coldfire/entry.S[0m: *  Copyright (C) 1991, 1992  [0m[1m[31mLinus[0m Torvalds
+[0m[35march/m68k/include/asm/bitops.h[0m: * Copyright 1992, [0m[1m[31mLinus[0m Torvalds.
+[0m[35march/m68k/include/asm/ide.h[0m: *  Copyright (C) 1994-1996  [0m[1m[31mLinus[0m Torvalds & authors
+[0m[35march/m68k/include/asm/bugs.h[0m: *  Copyright (C) 1994  [0m[1m[31mLinus[0m Torvalds

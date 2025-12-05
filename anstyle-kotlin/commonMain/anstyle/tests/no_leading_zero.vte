@@ -1,0 +1,16 @@
+[38;5;0mStyle { fg: Some(Ansi256(Ansi256Color(0))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;1mStyle { fg: Some(Ansi256(Ansi256Color(1))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;2mStyle { fg: Some(Ansi256(Ansi256Color(2))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;3mStyle { fg: Some(Ansi256(Ansi256Color(3))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;4mStyle { fg: Some(Ansi256(Ansi256Color(4))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;5mStyle { fg: Some(Ansi256(Ansi256Color(5))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;6mStyle { fg: Some(Ansi256(Ansi256Color(6))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;7mStyle { fg: Some(Ansi256(Ansi256Color(7))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;8mStyle { fg: Some(Ansi256(Ansi256Color(8))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;9mStyle { fg: Some(Ansi256(Ansi256Color(9))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;10mStyle { fg: Some(Ansi256(Ansi256Color(10))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;11mStyle { fg: Some(Ansi256(Ansi256Color(11))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;12mStyle { fg: Some(Ansi256(Ansi256Color(12))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;13mStyle { fg: Some(Ansi256(Ansi256Color(13))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;14mStyle { fg: Some(Ansi256(Ansi256Color(14))), bg: None, underline: None, effects: Effects() }[0m
+[38;5;15mStyle { fg: Some(Ansi256(Ansi256Color(15))), bg: None, underline: None, effects: Effects() }[0m
