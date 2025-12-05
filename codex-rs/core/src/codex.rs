@@ -219,7 +219,7 @@ impl Codex {
         let conversation_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(session, config.clone(), rx_sub));
+        tokio::spawn(submission_loop(session, config, rx_sub));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -845,7 +845,7 @@ impl Session {
 
     pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
         self.send_event(
-            &turn_context,
+            turn_context,
             EventMsg::ItemStarted(ItemStartedEvent {
                 thread_id: self.conversation_id,
                 turn_id: turn_context.sub_id.clone(),
@@ -861,7 +861,7 @@ impl Session {
         item: TurnItem,
     ) {
         self.send_event(
-            &turn_context,
+            turn_context,
             EventMsg::ItemCompleted(ItemCompletedEvent {
                 thread_id: self.conversation_id,
                 turn_id: turn_context.sub_id.clone(),
@@ -1152,7 +1152,7 @@ impl Session {
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
         for item in items {
             self.send_event(
-                &turn_context,
+                turn_context,
                 EventMsg::RawResponseItem(RawResponseItemEvent { item: item.clone() }),
             )
             .await;

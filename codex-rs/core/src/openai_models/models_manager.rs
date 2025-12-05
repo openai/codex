@@ -36,6 +36,7 @@ impl ModelsManager {
         }
     }
 
+    // do not use this function yet. It's work in progress.
     pub async fn refresh_available_models(
         &self,
         provider: &ModelProviderInfo,
@@ -164,6 +165,7 @@ mod tests {
             .refresh_available_models(&provider)
             .await
             .expect("refresh succeeds");
+
         assert_eq!(returned, remote_models);
         let cached_remote = manager.remote_models.read().await.clone();
         assert_eq!(cached_remote, remote_models);
