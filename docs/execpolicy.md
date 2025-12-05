@@ -1,6 +1,6 @@
 # Execpolicy quickstart
 
-Codex can enforce your own rules-based execution policy before it runs shell commands. Policies live in `.codexpolicy` files under `~/.codex/policy`.
+Codex can enforce your own rules-based execution policy before it runs shell commands. Policies live in `.execpolicy` files under `~/.codex/policy`.
 
 ## How to create and edit rules
 
