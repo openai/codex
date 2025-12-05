@@ -241,7 +241,7 @@ impl ToolHandler for UnifiedExecHandler {
                 chunk: response.output.as_bytes().to_vec(),
             };
             session
-                .send_event(turn.as_ref(), EventMsg::ExecCommandOutputDelta(delta))
+                .send_event(&turn.sub_id, EventMsg::ExecCommandOutputDelta(delta))
                 .await;
         }
 

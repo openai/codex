@@ -105,7 +105,7 @@ pub(crate) async fn handle_update_plan(
 ) -> Result<String, FunctionCallError> {
     let args = parse_update_plan_arguments(&arguments)?;
     session
-        .send_event(turn_context, EventMsg::PlanUpdate(args))
+        .send_event(&turn_context.sub_id, EventMsg::PlanUpdate(args))
         .await;
     Ok("Plan updated".to_string())
 }

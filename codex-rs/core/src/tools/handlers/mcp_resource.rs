@@ -569,7 +569,7 @@ async fn emit_tool_call_begin(
 ) {
     session
         .send_event(
-            turn,
+            &turn.sub_id,
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: call_id.to_string(),
                 invocation,
@@ -588,7 +588,7 @@ async fn emit_tool_call_end(
 ) {
     session
         .send_event(
-            turn,
+            &turn.sub_id,
             EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id: call_id.to_string(),
                 invocation,

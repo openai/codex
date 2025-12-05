@@ -39,7 +39,7 @@ impl SessionTask for UndoTask {
     ) -> Option<String> {
         let sess = session.clone_session();
         sess.send_event(
-            ctx.as_ref(),
+            &ctx.sub_id,
             EventMsg::UndoStarted(UndoStartedEvent {
                 message: Some("Undo in progress...".to_string()),
             }),
@@ -48,7 +48,7 @@ impl SessionTask for UndoTask {
 
         if cancellation_token.is_cancelled() {
             sess.send_event(
-                ctx.as_ref(),
+                &ctx.sub_id,
                 EventMsg::UndoCompleted(UndoCompletedEvent {
                     success: false,
                     message: Some("Undo cancelled.".to_string()),
@@ -78,7 +78,7 @@ impl SessionTask for UndoTask {
                 })
         else {
             completed.message = Some("No ghost snapshot available to undo.".to_string());
-            sess.send_event(ctx.as_ref(), EventMsg::UndoCompleted(completed))
+            sess.send_event(&ctx.sub_id, EventMsg::UndoCompleted(completed))
                 .await;
             return None;
         };
@@ -110,7 +110,7 @@ impl SessionTask for UndoTask {
             }
         }
 
-        sess.send_event(ctx.as_ref(), EventMsg::UndoCompleted(completed))
+        sess.send_event(&ctx.sub_id, EventMsg::UndoCompleted(completed))
             .await;
         None
     }

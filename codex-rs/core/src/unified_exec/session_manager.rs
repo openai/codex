@@ -534,7 +534,7 @@ impl UnifiedExecSessionManager {
         let message = format!("Waiting for `{command_display}`");
         session
             .send_event(
-                turn.as_ref(),
+                &turn.sub_id,
                 EventMsg::BackgroundEvent(BackgroundEventEvent { message }),
             )
             .await;

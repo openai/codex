@@ -76,5 +76,5 @@ pub(crate) async fn handle_mcp_tool_call(
 }
 
 async fn notify_mcp_tool_call_event(sess: &Session, turn_context: &TurnContext, event: EventMsg) {
-    sess.send_event(turn_context, event).await;
+    sess.send_event(&turn_context.sub_id, event).await;
 }

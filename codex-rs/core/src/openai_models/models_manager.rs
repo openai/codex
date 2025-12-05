@@ -5,6 +5,7 @@ use codex_protocol::openai_models::ModelPreset;
 use http::HeaderMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio::sync::oneshot;
 
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
@@ -40,24 +41,42 @@ impl ModelsManager {
     pub async fn refresh_available_models(
         &self,
         provider: &ModelProviderInfo,
+        tx: oneshot::Sender<bool>,
     ) -> CoreResult<Vec<ModelInfo>> {
         let auth = self.auth_manager.auth();
-        let api_provider = provider.to_api_provider(auth.as_ref().map(|auth| auth.mode))?;
-        let api_auth = auth_provider_from_auth(auth.clone(), provider).await?;
+        let api_provider = provider.to_api_provider(auth.as_ref().map(|auth| auth.mode));
+        let api_provider = match api_provider {
+            Ok(api_provider) => api_provider,
+            Err(e) => {
+                let _ = tx.send(false);
+                return Err(e);
+            }
+        };
+        let api_auth = auth_provider_from_auth(auth.clone(), provider).await;
+        let api_auth = match api_auth {
+            Ok(api_auth) => api_auth,
+            Err(e) => {
+                let _ = tx.send(false);
+                return Err(e);
+            }
+        };
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
         let response = client
-            .list_models(env!("CARGO_PKG_VERSION"), HeaderMap::new())
+            .list_models("99.99.99", HeaderMap::new())
             .await
             .map_err(map_api_error)?;
 
         let models = response.models;
         *self.remote_models.write().await = models.clone();
+        let available_models = self.build_available_models().await;
         {
             let mut available_models_guard = self.available_models.write().await;
-            *available_models_guard = self.build_available_models().await;
+            *available_models_guard = available_models;
         }
+
+        let _ = tx.send(true);
         Ok(models)
     }
 
@@ -75,8 +94,11 @@ impl ModelsManager {
     async fn build_available_models(&self) -> Vec<ModelPreset> {
         let mut available_models = self.remote_models.read().await.clone();
         available_models.sort_by(|a, b| b.priority.cmp(&a.priority));
-        let mut model_presets: Vec<ModelPreset> =
-            available_models.into_iter().map(Into::into).collect();
+        let mut model_presets: Vec<ModelPreset> = available_models
+            .into_iter()
+            .map(Into::into)
+            .filter(|preset: &ModelPreset| preset.show_in_picker)
+            .collect();
         if let Some(default) = model_presets.first_mut() {
             default.is_default = true;
         }
@@ -157,11 +179,13 @@ mod tests {
         let manager = ModelsManager::new(auth_manager);
         let provider = provider_for(server.uri());
 
+        let (tx, rx) = oneshot::channel::<bool>();
         let returned = manager
-            .refresh_available_models(&provider)
+            .refresh_available_models(&provider, tx)
             .await
             .expect("refresh succeeds");
-
+        let is_ready = rx.await.expect("ready channel received");
+        assert!(is_ready);
         assert_eq!(returned, remote_models);
         let cached_remote = manager.remote_models.read().await.clone();
         assert_eq!(cached_remote, remote_models);

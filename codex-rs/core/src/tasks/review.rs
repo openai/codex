@@ -119,7 +119,7 @@ async fn process_review_events(
                 if let Some(prev) = prev_agent_message.take() {
                     session
                         .clone_session()
-                        .send_event(ctx.as_ref(), prev.msg)
+                        .send_event(&ctx.sub_id, prev.msg)
                         .await;
                 }
                 prev_agent_message = Some(event);
@@ -146,10 +146,7 @@ async fn process_review_events(
                 return None;
             }
             other => {
-                session
-                    .clone_session()
-                    .send_event(ctx.as_ref(), other)
-                    .await;
+                session.clone_session().send_event(&ctx.sub_id, other).await;
             }
         }
     }
@@ -222,7 +219,7 @@ pub(crate) async fn exit_review_mode(
         .await;
     session
         .send_event(
-            ctx.as_ref(),
+            &ctx.sub_id,
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
         )
         .await;

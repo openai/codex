@@ -174,7 +174,7 @@ impl Session {
         }
         drop(active);
         let event = EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message });
-        self.send_event(turn_context.as_ref(), event).await;
+        self.send_event(&turn_context.sub_id, event).await;
     }
 
     async fn register_new_active_task(&self, task: RunningTask) {
@@ -222,7 +222,7 @@ impl Session {
             .await;
 
         let event = EventMsg::TurnAborted(TurnAbortedEvent { reason });
-        self.send_event(task.turn_context.as_ref(), event).await;
+        self.send_event(&task.turn_context.sub_id, event).await;
     }
 }
 
