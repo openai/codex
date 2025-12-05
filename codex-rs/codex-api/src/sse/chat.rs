@@ -226,13 +226,31 @@ pub async fn process_chat_sse<S>(
 
                 for call_id in tool_call_order.drain(..) {
                     let state = tool_calls.remove(&call_id).unwrap_or_default();
-                    let item = ResponseItem::FunctionCall {
-                        id: None,
-                        name: state.name.unwrap_or_default(),
-                        arguments: state.arguments,
-                        call_id: call_id.clone(),
-                    };
-                    let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                    // Skip tool calls with empty names to avoid API errors
+                    match state.name {
+                        Some(name) if !name.is_empty() => {
+                            let item = ResponseItem::FunctionCall {
+                                id: None,
+                                name,
+                                arguments: state.arguments,
+                                call_id: call_id.clone(),
+                            };
+                            let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                        }
+                        Some(name) if name.is_empty() => {
+                            debug!(
+                                "Skipping tool call with empty name: call_id={}, arguments={}",
+                                call_id, state.arguments
+                            );
+                        }
+                        None => {
+                            debug!(
+                                "Skipping tool call with missing name: call_id={}, arguments={}",
+                                call_id, state.arguments
+                            );
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
@@ -543,5 +561,67 @@ mod tests {
             )
         }));
         assert_matches!(events.last(), Some(ResponseEvent::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn skips_tool_calls_with_empty_or_missing_names() {
+        // Test case for tool call with empty name
+        let delta_empty_name = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_empty",
+                        "function": { "name": "", "arguments": "{}" }
+                    }]
+                }
+            }]
+        });
+
+        // Test case for tool call with missing name
+        let delta_no_name = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_no_name",
+                        "function": { "arguments": "{}" }
+                    }]
+                }
+            }]
+        });
+
+        // Valid tool call for comparison
+        let delta_valid = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_valid",
+                        "function": { "name": "valid_tool", "arguments": "{}" }
+                    }]
+                }
+            }]
+        });
+
+        let finish = json!({
+            "choices": [{
+                "finish_reason": "tool_calls"
+            }]
+        });
+
+        let body = build_body(&[delta_empty_name, delta_no_name, delta_valid, finish]);
+        let events = collect_events(&body).await;
+
+        // Should only emit the valid tool call
+        let function_calls: Vec<_> = events
+            .iter()
+            .filter_map(|ev| match ev {
+                ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { name, .. }) => {
+                    Some(name.clone())
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(function_calls.len(), 1);
+        assert_eq!(function_calls[0], "valid_tool");
     }
 }
