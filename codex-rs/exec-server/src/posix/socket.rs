@@ -1,3 +1,4 @@
+use anyhow::Context;
 use libc::c_uint;
 use serde::Deserialize;
 use serde::Serialize;
@@ -182,21 +183,26 @@ fn send_message_bytes(socket: &Socket, data: &[u8], fds: &[OwnedFd]) -> std::io:
     frame.extend_from_slice(&encode_length(data.len())?);
     frame.extend_from_slice(data);
 
-    let mut control = vec![0u8; control_space_for_fds(fds.len())];
-    unsafe {
-        let cmsg = control.as_mut_ptr().cast::<libc::cmsghdr>();
-        (*cmsg).cmsg_len = libc::CMSG_LEN(size_of::<RawFd>() as c_uint * fds.len() as c_uint) as _;
-        (*cmsg).cmsg_level = libc::SOL_SOCKET;
-        (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-        let data_ptr = libc::CMSG_DATA(cmsg).cast::<RawFd>();
-        for (i, fd) in fds.iter().enumerate() {
-            data_ptr.add(i).write(fd.as_raw_fd());
-        }
-    }
-
+    let mut control;
     let payload = [IoSlice::new(&frame)];
-    let msg = MsgHdr::new().with_buffers(&payload).with_control(&control);
-    let mut sent = socket.sendmsg(&msg, 0)?;
+    let mut sent = if fds.is_empty() {
+        socket.send(&frame)?
+    } else {
+        control = vec![0u8; control_space_for_fds(fds.len())];
+        unsafe {
+            let cmsg = control.as_mut_ptr().cast::<libc::cmsghdr>();
+            (*cmsg).cmsg_len =
+                libc::CMSG_LEN(size_of::<RawFd>() as c_uint * fds.len() as c_uint) as _;
+            (*cmsg).cmsg_level = libc::SOL_SOCKET;
+            (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+            let data_ptr = libc::CMSG_DATA(cmsg).cast::<RawFd>();
+            for (i, fd) in fds.iter().enumerate() {
+                data_ptr.add(i).write(fd.as_raw_fd());
+            }
+        }
+        let msg = MsgHdr::new().with_buffers(&payload).with_control(&control);
+        socket.sendmsg(&msg, 0)?
+    };
     while sent < frame.len() {
         let bytes = socket.send(&frame[sent..])?;
         if bytes == 0 {
@@ -236,8 +242,9 @@ fn send_datagram_bytes(socket: &Socket, data: &[u8], fds: &[OwnedFd]) -> std::io
             format!("too many fds: {}", fds.len()),
         ));
     }
-    let mut control = vec![0u8; control_space_for_fds(fds.len())];
+    let mut control = Vec::new();
     if !fds.is_empty() {
+        control = vec![0u8; control_space_for_fds(fds.len())];
         unsafe {
             let cmsg = control.as_mut_ptr().cast::<libc::cmsghdr>();
             (*cmsg).cmsg_len =
@@ -317,9 +324,10 @@ impl AsyncSocket {
 
     pub async fn receive_with_fds<T: for<'de> Deserialize<'de>>(
         &self,
-    ) -> std::io::Result<(T, Vec<OwnedFd>)> {
+    ) -> anyhow::Result<(T, Vec<OwnedFd>)> {
         let (payload, fds) = read_frame(&self.inner).await?;
-        let message: T = serde_json::from_slice(&payload)?;
+        let message: T = serde_json::from_slice(&payload)
+            .with_context(|| format!("failed to deserialize message from {payload:?}"))?;
         Ok((message, fds))
     }
 
@@ -330,8 +338,11 @@ impl AsyncSocket {
         self.send_with_fds(&msg, &[]).await
     }
 
-    pub async fn receive<T: for<'de> Deserialize<'de>>(&self) -> std::io::Result<T> {
-        let (msg, fds) = self.receive_with_fds().await?;
+    pub async fn receive<T: for<'de> Deserialize<'de>>(&self) -> anyhow::Result<T> {
+        let (msg, fds) = self
+            .receive_with_fds()
+            .await
+            .context("failed to receive message with fds")?;
         if !fds.is_empty() {
             tracing::warn!("unexpected fds in receive: {}", fds.len());
         }
@@ -409,7 +420,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn async_socket_round_trips_payload_and_fds() -> std::io::Result<()> {
+    async fn async_socket_round_trips_payload_and_fds() -> anyhow::Result<()> {
         let (server, client) = AsyncSocket::pair()?;
         let payload = TestPayload {
             id: 7,
@@ -481,6 +492,9 @@ mod tests {
             .receive::<serde_json::Value>()
             .await
             .expect_err("expected read failure");
-        assert_eq!(std::io::ErrorKind::UnexpectedEof, err.kind());
+        let io_err = err
+            .downcast_ref::<std::io::Error>()
+            .expect("expected io error from receive");
+        assert_eq!(std::io::ErrorKind::UnexpectedEof, io_err.kind());
     }
 }
