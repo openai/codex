@@ -161,6 +161,9 @@ pub async fn process_chat_sse<S>(
                         }
 
                         if let Some(func) = tool_call.get("function") {
+                            // Only update name if non-empty to prevent subsequent deltas
+                            // from overwriting the initial name with empty strings.
+                            // See: https://github.com/openai/codex/issues/7579
                             if let Some(fname) = func.get("name").and_then(|n| n.as_str())
                                 && !fname.is_empty()
                             {
@@ -561,6 +564,51 @@ mod tests {
             )
         }));
         assert_matches!(events.last(), Some(ResponseEvent::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn preserves_name_when_subsequent_deltas_have_empty_names() {
+        // Regression test for https://github.com/openai/codex/issues/7579
+        // First delta has the name, subsequent deltas have empty names
+        let delta_with_name = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_a",
+                        "function": { "name": "my_tool", "arguments": "{\"arg\":" }
+                    }]
+                }
+            }]
+        });
+
+        let delta_with_empty_name = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "id": "call_a",
+                        "function": { "name": "", "arguments": "123}" }
+                    }]
+                }
+            }]
+        });
+
+        let finish = json!({
+            "choices": [{
+                "finish_reason": "tool_calls"
+            }]
+        });
+
+        let body = build_body(&[delta_with_name, delta_with_empty_name, finish]);
+        let events = collect_events(&body).await;
+
+        // Should preserve the original name "my_tool" despite empty name in second delta
+        assert_matches!(
+            &events[..],
+            [
+                ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { call_id, name, arguments, .. }),
+                ResponseEvent::Completed { .. }
+            ] if call_id == "call_a" && name == "my_tool" && arguments == "{\"arg\":123}"
+        );
     }
 
     #[tokio::test]
