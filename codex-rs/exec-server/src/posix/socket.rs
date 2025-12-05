@@ -236,7 +236,21 @@ pub(crate) fn send_json_message<T: Serialize>(
     fds: &[OwnedFd],
 ) -> std::io::Result<()> {
     let data = serde_json::to_vec(&msg)?;
-    send_message_bytes(socket, &data, fds)
+    tracing::error!(
+        "sending message with {} fds and a data payload of {} bytes",
+        fds.len(),
+        data.len()
+    );
+
+    send_message_bytes(socket, &data, fds)?;
+
+    tracing::error!(
+        "finished sending message with {} fds and a data payload of {} bytes",
+        fds.len(),
+        data.len()
+    );
+
+    Ok(())
 }
 
 fn send_datagram_bytes(socket: &Socket, data: &[u8], fds: &[OwnedFd]) -> std::io::Result<()> {
