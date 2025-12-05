@@ -104,10 +104,14 @@ fn should_show_model_migration_prompt(
         return false;
     }
 
-    available_models
-        .iter()
-        .filter(|preset| preset.upgrade.is_some())
-        .any(|preset| preset.model == current_model)
+    available_models.iter().any(|preset| {
+        preset.model == current_model
+            && preset.upgrade.as_ref().is_some_and(|upgrade| {
+                upgrade.id == target_model
+                    && upgrade.migration_config_key
+                        != HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG
+            })
+    })
 }
 
 fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> Option<bool> {
@@ -144,6 +148,33 @@ async fn handle_model_migration_prompt_if_needed(
         }
 
         let target_model = target_model.to_string();
+        if migration_config_key == HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG {
+            let mapped_effort = if let Some(reasoning_effort_mapping) = reasoning_effort_mapping
+                && let Some(reasoning_effort) = config.model_reasoning_effort
+            {
+                reasoning_effort_mapping
+                    .get(&reasoning_effort)
+                    .cloned()
+                    .or(config.model_reasoning_effort)
+            } else {
+                config.model_reasoning_effort
+            };
+
+            config.model = target_model.to_string();
+            config.model_reasoning_effort = mapped_effort;
+
+            app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
+                migration_config: migration_config_key.to_string(),
+            });
+            app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
+            app_event_tx.send(AppEvent::UpdateReasoningEffort(mapped_effort));
+            app_event_tx.send(AppEvent::PersistModelSelection {
+                model: target_model.clone(),
+                effort: mapped_effort,
+            });
+            return None;
+        }
+
         let hide_prompt_flag = migration_prompt_hidden(config, migration_config_key);
         if !should_show_model_migration_prompt(
             &config.model,
@@ -1220,15 +1251,15 @@ mod tests {
 
     #[test]
     fn model_migration_prompt_only_shows_for_deprecated_models() {
-        assert!(should_show_model_migration_prompt(
+        assert!(!should_show_model_migration_prompt(
             "gpt-5",
-            "gpt-5.1",
+            "gpt-5.1-codex-max",
             None,
             all_model_presets()
         ));
-        assert!(should_show_model_migration_prompt(
+        assert!(!should_show_model_migration_prompt(
             "gpt-5-codex",
-            "gpt-5.1-codex",
+            "gpt-5.1-codex-max",
             None,
             all_model_presets()
         ));
@@ -1238,7 +1269,7 @@ mod tests {
             None,
             all_model_presets()
         ));
-        assert!(should_show_model_migration_prompt(
+        assert!(!should_show_model_migration_prompt(
             "gpt-5.1-codex",
             "gpt-5.1-codex-max",
             None,
