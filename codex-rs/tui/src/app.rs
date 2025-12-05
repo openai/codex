@@ -26,7 +26,6 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::features::Feature;
-use codex_core::openai_models::model_family::find_family_for_model;
 use codex_core::openai_models::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::openai_models::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::openai_models::models_manager::ModelsManager;
@@ -162,7 +161,6 @@ async fn handle_model_migration_prompt_if_needed(
                     migration_config: migration_config_key.to_string(),
                 });
                 config.model = target_model.to_string();
-                config.model_family = find_family_for_model(&target_model);
 
                 let mapped_effort = if let Some(reasoning_effort_mapping) = reasoning_effort_mapping
                     && let Some(reasoning_effort) = config.model_reasoning_effort
@@ -304,7 +302,10 @@ impl App {
         };
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
-
+        let model_family = conversation_manager
+            .get_models_manager()
+            .construct_model_family(&config.model, &config)
+            .await;
         let mut chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -319,6 +320,7 @@ impl App {
                     feedback: feedback.clone(),
                     skills: skills.clone(),
                     is_first_run,
+                    model_family,
                 };
                 ChatWidget::new(init, conversation_manager.clone())
             }
@@ -345,6 +347,7 @@ impl App {
                     feedback: feedback.clone(),
                     skills: skills.clone(),
                     is_first_run,
+                    model_family,
                 };
                 ChatWidget::new_from_existing(
                     init,
@@ -483,6 +486,11 @@ impl App {
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
+        let model_family = self
+            .server
+            .get_models_manager()
+            .construct_model_family(&self.config.model, &self.config)
+            .await;
         match event {
             AppEvent::NewSession => {
                 let summary = session_summary(
@@ -502,6 +510,7 @@ impl App {
                     feedback: self.feedback.clone(),
                     skills: self.skills.clone(),
                     is_first_run: false,
+                    model_family,
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 if let Some(summary) = summary {
@@ -551,6 +560,7 @@ impl App {
                                     feedback: self.feedback.clone(),
                                     skills: self.skills.clone(),
                                     is_first_run: false,
+                                    model_family: model_family.clone(),
                                 };
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
@@ -679,10 +689,13 @@ impl App {
                 self.on_update_reasoning_effort(effort);
             }
             AppEvent::UpdateModel(model) => {
-                self.chat_widget.set_model(&model);
-                self.config.model = model.clone();
-                let family = find_family_for_model(&model);
-                self.config.model_family = family;
+                let model_family = self
+                    .server
+                    .get_models_manager()
+                    .construct_model_family(&model, &self.config)
+                    .await;
+                self.chat_widget.set_model(&model, model_family);
+                self.config.model = model;
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);

@@ -105,6 +105,7 @@ arboard = { workspace = true }
 
 
 [dev-dependencies]
+codex-core = { workspace = true, features = ["test-support"] }
 assert_matches = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }

@@ -1,0 +1,3 @@
+*** Begin Patch
+*** Frobnicate File: foo
+*** End Patch

@@ -858,6 +858,7 @@ dependencies = [
  "http",
  "pretty_assertions",
  "regex-lite",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
@@ -865,6 +866,7 @@ dependencies = [
  "tokio-test",
  "tokio-util",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]
@@ -1254,6 +1256,7 @@ dependencies = [
  "async-trait",
  "clap",
  "codex-core",
+ "codex-execpolicy",
  "libc",
  "path-absolutize",
  "pretty_assertions",
