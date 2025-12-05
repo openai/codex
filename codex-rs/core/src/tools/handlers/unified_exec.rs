@@ -121,12 +121,11 @@ impl ToolHandler for UnifiedExecHandler {
 
         let response = match tool_name.as_str() {
             "exec_command" => {
-                let args: ExecCommandArgs =
-                    serde_json::from_str(&arguments).map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
-                            "failed to parse exec_command arguments: {err:?}"
-                        ))
-                    })?;
+                let args: ExecCommandArgs = serde_json::from_str(&arguments).map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to parse exec_command arguments: {err:?}"
+                    ))
+                })?;
                 let process_id = manager.allocate_process_id().await;
 
                 let command = get_command(&args, session.shell_snapshot().await);
