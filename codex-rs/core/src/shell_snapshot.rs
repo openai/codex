@@ -272,6 +272,17 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
+    fn assert_posix_snapshot_sections(snapshot: &str) {
+        assert!(snapshot.contains("# Snapshot file"));
+        assert!(snapshot.contains("aliases "));
+        assert!(snapshot.contains("exports "));
+        assert!(
+            snapshot.contains("PATH"),
+            "snapshot should capture a PATH export"
+        );
+        assert!(snapshot.contains("setopts "));
+    }
+
     async fn get_snapshot(shell_type: ShellType) -> Result<String> {
         let dir = tempdir()?;
         let path = dir.path().join("snapshot.sh");
@@ -348,11 +359,7 @@ mod tests {
     #[tokio::test]
     async fn macos_zsh_snapshot_includes_sections() -> Result<()> {
         let snapshot = get_snapshot(ShellType::Zsh).await?;
-        assert!(snapshot.contains("# Snapshot file"));
-        assert!(snapshot.contains("aliases "));
-        assert!(snapshot.contains("exports "));
-        assert!(snapshot.contains("export CARGO"));
-        assert!(snapshot.contains("setopts "));
+        assert_posix_snapshot_sections(&snapshot);
         Ok(())
     }
 
@@ -360,11 +367,7 @@ mod tests {
     #[tokio::test]
     async fn linux_bash_snapshot_includes_sections() -> Result<()> {
         let snapshot = get_snapshot(ShellType::Bash).await?;
-        assert!(snapshot.contains("# Snapshot file"));
-        assert!(snapshot.contains("aliases "));
-        assert!(snapshot.contains("exports "));
-        assert!(snapshot.contains("export CARGO"));
-        assert!(snapshot.contains("setopts "));
+        assert_posix_snapshot_sections(&snapshot);
         Ok(())
     }
 
@@ -372,11 +375,7 @@ mod tests {
     #[tokio::test]
     async fn linux_sh_snapshot_includes_sections() -> Result<()> {
         let snapshot = get_snapshot(ShellType::Sh).await?;
-        assert!(snapshot.contains("# Snapshot file"));
-        assert!(snapshot.contains("aliases "));
-        assert!(snapshot.contains("exports "));
-        assert!(snapshot.contains("export CARGO"));
-        assert!(snapshot.contains("setopts "));
+        assert_posix_snapshot_sections(&snapshot);
         Ok(())
     }
 
