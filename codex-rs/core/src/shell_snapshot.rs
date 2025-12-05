@@ -9,10 +9,81 @@ use anyhow::bail;
 use tokio::fs;
 use tokio::process::Command;
 use tokio::time::timeout;
+use tracing::debug;
+use tracing::warn;
+use uuid::Uuid;
 
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell::get_shell;
+
+pub struct ShellSnapshot {
+    pub path: PathBuf,
+}
+
+impl ShellSnapshot {
+    pub async fn try_new(codex_home: &Path, shell: &Shell) -> Option<Self> {
+        let extension = match shell.shell_type {
+            ShellType::PowerShell => "ps1",
+            _ => "sh",
+        };
+        let path =
+            codex_home
+                .join("shell_snapshots")
+                .join(format!("{}.{}", Uuid::new_v4(), extension));
+        match write_shell_snapshot(shell.shell_type.clone(), &path).await {
+            Ok(path) => Some(Self { path }),
+            Err(err) => {
+                warn!(
+                    "Failed to create shell snapshot for {}: {err:?}",
+                    shell.name()
+                );
+                None
+            }
+        }
+    }
+}
+
+impl Drop for ShellSnapshot {
+    fn drop(&mut self) {
+        if let Err(err) = std::fs::remove_file(&self.path) {
+            debug!(
+                "Failed to delete shell snapshot at {:?}: {err:?}",
+                self.path
+            );
+        }
+    }
+}
+
+pub fn wrap_command_with_snapshot(
+    shell: &Shell,
+    snapshot_path: &Path,
+    command: &[String],
+    use_login_shell: bool,
+) -> Vec<String> {
+    if command.is_empty() {
+        return command.to_vec();
+    }
+
+    match shell.shell_type {
+        ShellType::Zsh | ShellType::Bash | ShellType::Sh => {
+            let mut args =
+                shell.derive_exec_args(". \"$1\" && shift && exec \"$@\"", use_login_shell);
+            args.push("codex-shell-snapshot".to_string());
+            args.push(snapshot_path.to_string_lossy().to_string());
+            args.extend_from_slice(command);
+            args
+        }
+        ShellType::PowerShell => {
+            let mut args =
+                shell.derive_exec_args("param($snapshot) . $snapshot; & @args", use_login_shell);
+            args.push(snapshot_path.to_string_lossy().to_string());
+            args.extend_from_slice(command);
+            args
+        }
+        ShellType::Cmd => command.to_vec(),
+    }
+}
 
 pub async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> Result<PathBuf> {
     let shell = get_shell(shell_type.clone(), None)
@@ -67,28 +138,28 @@ async fn run_shell_script(shell: &Shell, script: &str) -> Result<String> {
 }
 
 fn zsh_snapshot_script() -> &'static str {
-    r#"print '# Snapshot file'
+    r##"print '# Snapshot file'
 print '# Unset all aliases to avoid conflicts with functions'
 print 'unalias -a 2>/dev/null || true'
 print '# Functions'
 functions
 print ''
 setopt_count=$(setopt | wc -l | tr -d ' ')
-print "setopts $setopt_count"
+print "# setopts $setopt_count"
 setopt | sed 's/^/setopt /'
 print ''
 alias_count=$(alias -L | wc -l | tr -d ' ')
-print "aliases $alias_count"
+print "# aliases $alias_count"
 alias -L
 print ''
 export_count=$(export -p | wc -l | tr -d ' ')
-print "exports $export_count"
+print "# exports $export_count"
 export -p
-"#
+"##
 }
 
 fn bash_snapshot_script() -> &'static str {
-    r#"echo '# Snapshot file'
+    r##"echo '# Snapshot file'
 echo '# Unset all aliases to avoid conflicts with functions'
 unalias -a 2>/dev/null || true
 echo '# Functions'
@@ -96,23 +167,23 @@ declare -f
 echo ''
 bash_opts=$(set -o | awk '$2=="on"{print $1}')
 bash_opt_count=$(printf '%s\n' "$bash_opts" | sed '/^$/d' | wc -l | tr -d ' ')
-echo "setopts $bash_opt_count"
+echo "# setopts $bash_opt_count"
 if [ -n "$bash_opts" ]; then
   printf 'set -o %s\n' $bash_opts
 fi
 echo ''
 alias_count=$(alias -p | wc -l | tr -d ' ')
-echo "aliases $alias_count"
+echo "# aliases $alias_count"
 alias -p
 echo ''
 export_count=$(export -p | wc -l | tr -d ' ')
-echo "exports $export_count"
+echo "# exports $export_count"
 export -p
-"#
+"##
 }
 
 fn sh_snapshot_script() -> &'static str {
-    r#"echo '# Snapshot file'
+    r##"echo '# Snapshot file'
 echo '# Unset all aliases to avoid conflicts with functions'
 unalias -a 2>/dev/null || true
 echo '# Functions'
@@ -125,39 +196,39 @@ echo ''
 if set -o >/dev/null 2>&1; then
   sh_opts=$(set -o | awk '$2=="on"{print $1}')
   sh_opt_count=$(printf '%s\n' "$sh_opts" | sed '/^$/d' | wc -l | tr -d ' ')
-  echo "setopts $sh_opt_count"
+  echo "# setopts $sh_opt_count"
   if [ -n "$sh_opts" ]; then
     printf 'set -o %s\n' $sh_opts
   fi
 else
-  echo 'setopts 0'
+  echo '# setopts 0'
 fi
 echo ''
 if alias >/dev/null 2>&1; then
   alias_count=$(alias | wc -l | tr -d ' ')
-  echo "aliases $alias_count"
+  echo "# aliases $alias_count"
   alias
   echo ''
 else
-  echo 'aliases 0'
+  echo '# aliases 0'
 fi
 if export -p >/dev/null 2>&1; then
   export_count=$(export -p | wc -l | tr -d ' ')
-  echo "exports $export_count"
+  echo "# exports $export_count"
   export -p
 else
   export_count=$(env | wc -l | tr -d ' ')
-  echo "exports $export_count"
+  echo "# exports $export_count"
   env | sort | while IFS='=' read -r key value; do
     escaped=$(printf "%s" "$value" | sed "s/'/'\"'\"'/g")
     printf "export %s='%s'\n" "$key" "$escaped"
   done
 fi
-"#
+"##
 }
 
 fn powershell_snapshot_script() -> &'static str {
-    r#"$ErrorActionPreference = 'Stop'
+    r##"$ErrorActionPreference = 'Stop'
 Write-Output '# Snapshot file'
 Write-Output '# Unset all aliases to avoid conflicts with functions'
 Write-Output 'Remove-Item Alias:* -ErrorAction SilentlyContinue'
@@ -167,18 +238,18 @@ Get-ChildItem Function: | ForEach-Object {
 }
 Write-Output ''
 $aliases = Get-Alias
-Write-Output ("aliases " + $aliases.Count)
+Write-Output ("# aliases " + $aliases.Count)
 $aliases | ForEach-Object {
     "Set-Alias -Name {0} -Value {1}" -f $_.Name, $_.Definition
 }
 Write-Output ''
 $envVars = Get-ChildItem Env:
-Write-Output ("exports " + $envVars.Count)
+Write-Output ("# exports " + $envVars.Count)
 $envVars | ForEach-Object {
     $escaped = $_.Value -replace "'", "''"
     "`$env:{0}='{1}'" -f $_.Name, $escaped
 }
-"#
+"##
 }
 
 #[cfg(test)]

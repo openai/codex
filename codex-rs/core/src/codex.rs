@@ -109,6 +109,8 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
 use crate::shell;
+use crate::shell_snapshot::ShellSnapshot;
+use crate::shell_snapshot::wrap_command_with_snapshot;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -571,7 +573,8 @@ impl Session {
         );
 
         // Create the mutable state for the Session.
-        let state = SessionState::new(session_configuration.clone());
+        let shell_snapshot = ShellSnapshot::try_new(&config.codex_home, &default_shell).await;
+        let state = SessionState::new(session_configuration.clone(), shell_snapshot);
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -1440,6 +1443,29 @@ impl Session {
 
     pub(crate) fn user_shell(&self) -> &shell::Shell {
         &self.services.user_shell
+    }
+
+    pub(crate) async fn command_with_shell_snapshot(
+        &self,
+        command: &[String],
+        use_login_shell: bool,
+    ) -> Vec<String> {
+        if use_login_shell {
+            return command.to_vec();
+        }
+
+        let snapshot_path = {
+            let state = self.state.lock().await;
+            state
+                .shell_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.path.clone())
+        };
+
+        snapshot_path.map_or_else(
+            || command.to_vec(),
+            |path| wrap_command_with_snapshot(self.user_shell(), &path, command, use_login_shell),
+        )
     }
 
     fn show_raw_agent_reasoning(&self) -> bool {
@@ -2585,7 +2611,7 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let mut state = SessionState::new(session_configuration);
+        let mut state = SessionState::new(session_configuration, None);
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 10.0,
@@ -2656,7 +2682,7 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let mut state = SessionState::new(session_configuration);
+        let mut state = SessionState::new(session_configuration, None);
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 15.0,
@@ -2863,7 +2889,7 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(session_configuration.clone(), None);
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -2942,7 +2968,7 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(session_configuration.clone(), None);
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),

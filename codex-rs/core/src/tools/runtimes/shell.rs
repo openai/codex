@@ -151,8 +151,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx<'_>,
     ) -> Result<ExecToolCallOutput, ToolError> {
+        let command = ctx
+            .session
+            .command_with_shell_snapshot(&req.command, false)
+            .await;
         let spec = build_command_spec(
-            &req.command,
+            &command,
             &req.cwd,
             &req.env,
             req.timeout_ms.into(),

@@ -130,8 +130,9 @@ impl ToolHandler for UnifiedExecHandler {
                 })?;
                 let process_id = manager.allocate_process_id().await;
 
-                let command = get_command(&args);
+                let base_command = get_command(&args);
                 let ExecCommandArgs {
+                    login,
                     workdir,
                     yield_time_ms,
                     max_output_tokens,
@@ -139,6 +140,9 @@ impl ToolHandler for UnifiedExecHandler {
                     justification,
                     ..
                 } = args;
+                let command = session
+                    .command_with_shell_snapshot(&base_command, login)
+                    .await;
 
                 if with_escalated_permissions.unwrap_or(false)
                     && !matches!(
