@@ -22,6 +22,7 @@ rootProject.name = "codex-kotlin"
 include(":ratatui-kotlin")
 include(":ansi-to-tui-kotlin")
 include(":anstyle-kotlin")
+include(":kasuari-kotlin")
 
 // Tree-sitter Kotlin bindings (vendored from wip/k2 branch)
 includeBuild("ktreesitter-kotlin") {
