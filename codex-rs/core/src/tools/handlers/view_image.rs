@@ -75,7 +75,7 @@ impl ToolHandler for ViewImageHandler {
 
         session
             .send_event(
-                &turn.sub_id,
+                turn.as_ref(),
                 EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
                     call_id,
                     path: event_path,

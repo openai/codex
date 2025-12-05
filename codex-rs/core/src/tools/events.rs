@@ -69,7 +69,7 @@ pub(crate) async fn emit_exec_command_begin(
 ) {
     ctx.session
         .send_event(
-            &ctx.turn.sub_id,
+            ctx.turn,
             EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                 call_id: ctx.call_id.to_string(),
                 process_id: process_id.map(str::to_owned),
@@ -181,7 +181,7 @@ impl ToolEmitter {
                 }
                 ctx.session
                     .send_event(
-                        &ctx.turn.sub_id,
+                        ctx.turn,
                         EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                             call_id: ctx.call_id.to_string(),
                             turn_id: ctx.turn.sub_id.clone(),
@@ -410,7 +410,7 @@ async fn emit_exec_end(
 ) {
     ctx.session
         .send_event(
-            &ctx.turn.sub_id,
+            ctx.turn,
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: ctx.call_id.to_string(),
                 process_id: exec_input.process_id.map(str::to_owned),
@@ -440,7 +440,7 @@ async fn emit_patch_end(
 ) {
     ctx.session
         .send_event(
-            &ctx.turn.sub_id,
+            ctx.turn,
             EventMsg::PatchApplyEnd(PatchApplyEndEvent {
                 call_id: ctx.call_id.to_string(),
                 turn_id: ctx.turn.sub_id.clone(),
@@ -459,10 +459,7 @@ async fn emit_patch_end(
         };
         if let Ok(Some(unified_diff)) = unified_diff {
             ctx.session
-                .send_event(
-                    &ctx.turn.sub_id,
-                    EventMsg::TurnDiff(TurnDiffEvent { unified_diff }),
-                )
+                .send_event(ctx.turn, EventMsg::TurnDiff(TurnDiffEvent { unified_diff }))
                 .await;
         }
     }

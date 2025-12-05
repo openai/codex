@@ -680,7 +680,7 @@ impl Session {
         }
     }
 
-    pub(crate) fn next_internal_sub_id(&self) -> String {
+    fn next_internal_sub_id(&self) -> String {
         let id = self
             .next_internal_sub_id
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
