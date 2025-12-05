@@ -61,7 +61,7 @@ impl SessionTask for UserShellCommandTask {
             model_context_window: turn_context.client.get_model_context_window(),
         });
         let session = session.clone_session();
-        session.send_event(&turn_context.sub_id, event).await;
+        session.send_event(turn_context.as_ref(), event).await;
 
         // Execute the user's script under their default shell when known; this
         // allows commands that use shell features (pipes, &&, redirects, etc.).
@@ -78,7 +78,7 @@ impl SessionTask for UserShellCommandTask {
         let parsed_cmd = parse_command(&command);
         session
             .send_event(
-                &turn_context.sub_id,
+                turn_context.as_ref(),
                 EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
                     call_id: call_id.clone(),
                     process_id: None,
@@ -137,7 +137,7 @@ impl SessionTask for UserShellCommandTask {
                     .await;
                 session
                     .send_event(
-                        &turn_context.sub_id,
+                        turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
                             process_id: None,
@@ -160,7 +160,7 @@ impl SessionTask for UserShellCommandTask {
             Ok(Ok(output)) => {
                 session
                     .send_event(
-                        &turn_context.sub_id,
+                        turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id: call_id.clone(),
                             process_id: None,
@@ -205,7 +205,7 @@ impl SessionTask for UserShellCommandTask {
                 };
                 session
                     .send_event(
-                        &turn_context.sub_id,
+                        turn_context.as_ref(),
                         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                             call_id,
                             process_id: None,

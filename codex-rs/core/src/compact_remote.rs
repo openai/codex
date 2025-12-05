@@ -22,7 +22,7 @@ pub(crate) async fn run_remote_compact_task(sess: Arc<Session>, turn_context: Ar
     let start_event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
-    sess.send_event(&turn_context.sub_id, start_event).await;
+    sess.send_event(turn_context.as_ref(), start_event).await;
 
     run_remote_compact_task_inner(&sess, &turn_context).await;
 }
@@ -32,7 +32,7 @@ async fn run_remote_compact_task_inner(sess: &Arc<Session>, turn_context: &Arc<T
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
         );
-        sess.send_event(&turn_context.sub_id, event).await;
+        sess.send_event(turn_context.as_ref(), event).await;
     }
 }
 
@@ -75,7 +75,7 @@ async fn run_remote_compact_task_inner_impl(
         .await;
 
     let event = EventMsg::ContextCompacted(ContextCompactedEvent {});
-    sess.send_event(&turn_context.sub_id, event).await;
+    sess.send_event(turn_context.as_ref(), event).await;
 
     Ok(())
 }

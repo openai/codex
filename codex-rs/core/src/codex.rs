@@ -816,10 +816,10 @@ impl Session {
     }
 
     /// Persist the event to rollout and send it to clients.
-    pub(crate) async fn send_event(&self, sub_id: &str, msg: EventMsg) {
+    pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
         let event = Event {
-            id: sub_id.to_string(),
+            id: turn_context.sub_id.clone(),
             msg,
         };
         self.send_event_raw(event).await;
@@ -827,7 +827,7 @@ impl Session {
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
             let legacy_event = Event {
-                id: sub_id.to_string(),
+                id: turn_context.sub_id.clone(),
                 msg: legacy,
             };
             self.send_event_raw(legacy_event).await;
@@ -978,7 +978,7 @@ impl Session {
             proposed_execpolicy_amendment,
             parsed_cmd,
         });
-        self.send_event(&turn_context.sub_id, event).await;
+        self.send_event(turn_context, event).await;
         rx_approve.await.unwrap_or_default()
     }
 
@@ -1015,7 +1015,7 @@ impl Session {
             reason,
             grant_root,
         });
-        self.send_event(&turn_context.sub_id, event).await;
+        self.send_event(turn_context, event).await;
         rx_approve
     }
 
@@ -1267,7 +1267,7 @@ impl Session {
             state.token_info_and_rate_limits()
         };
         let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
-        self.send_event(&turn_context.sub_id, event).await;
+        self.send_event(turn_context, event).await;
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
@@ -1305,7 +1305,7 @@ impl Session {
         let event = EventMsg::BackgroundEvent(BackgroundEventEvent {
             message: message.into(),
         });
-        self.send_event(&turn_context.sub_id, event).await;
+        self.send_event(turn_context, event).await;
     }
 
     pub(crate) async fn notify_stream_error(
@@ -1321,7 +1321,7 @@ impl Session {
             message: message.into(),
             codex_error_info: Some(codex_error_info),
         });
-        self.send_event(&turn_context.sub_id, event).await;
+        self.send_event(turn_context, event).await;
     }
 
     async fn maybe_start_ghost_snapshot(
@@ -1913,7 +1913,7 @@ mod handlers {
                         codex_error_info: Some(CodexErrorInfo::Other),
                     }),
                 };
-                sess.send_event(&turn_context.sub_id, event.msg).await;
+                sess.send_event(turn_context.as_ref(), event.msg).await;
             }
         }
     }
@@ -2011,7 +2011,7 @@ async fn spawn_review_thread(
         target: resolved.target,
         user_facing_hint: Some(resolved.user_facing_hint),
     };
-    sess.send_event(&tc.sub_id, EventMsg::EnteredReviewMode(review_request))
+    sess.send_event(tc.as_ref(), EventMsg::EnteredReviewMode(review_request))
         .await;
 }
 
@@ -2041,7 +2041,7 @@ pub(crate) async fn run_task(
     let event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
-    sess.send_event(&turn_context.sub_id, event).await;
+    sess.send_event(turn_context.as_ref(), event).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
@@ -2141,7 +2141,7 @@ pub(crate) async fn run_task(
             Err(e) => {
                 info!("Turn error: {e:#}");
                 let event = EventMsg::Error(e.to_error_event(None));
-                sess.send_event(&turn_context.sub_id, event).await;
+                sess.send_event(turn_context.as_ref(), event).await;
                 // let the user continue the conversation
                 break;
             }
@@ -2391,7 +2391,7 @@ async fn try_run_turn(
                 };
                 if let Ok(Some(unified_diff)) = unified_diff {
                     let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
-                    sess.send_event(&turn_context.sub_id, msg).await;
+                    sess.send_event(turn_context.as_ref(), msg).await;
                 }
 
                 break Ok(TurnRunResult {
@@ -2410,7 +2410,7 @@ async fn try_run_turn(
                         delta: delta.clone(),
                     };
                     sess.send_event(
-                        &turn_context.sub_id,
+                        turn_context.as_ref(),
                         EventMsg::AgentMessageContentDelta(event),
                     )
                     .await;
@@ -2430,8 +2430,11 @@ async fn try_run_turn(
                         delta,
                         summary_index,
                     };
-                    sess.send_event(&turn_context.sub_id, EventMsg::ReasoningContentDelta(event))
-                        .await;
+                    sess.send_event(
+                        turn_context.as_ref(),
+                        EventMsg::ReasoningContentDelta(event),
+                    )
+                    .await;
                 } else {
                     error_or_panic("ReasoningSummaryDelta without active item".to_string());
                 }
@@ -2443,7 +2446,7 @@ async fn try_run_turn(
                             item_id: active.id(),
                             summary_index,
                         });
-                    sess.send_event(&turn_context.sub_id, event).await;
+                    sess.send_event(turn_context.as_ref(), event).await;
                 } else {
                     error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
                 }
@@ -2461,7 +2464,7 @@ async fn try_run_turn(
                         content_index,
                     };
                     sess.send_event(
-                        &turn_context.sub_id,
+                        turn_context.as_ref(),
                         EventMsg::ReasoningRawContentDelta(event),
                     )
                     .await;

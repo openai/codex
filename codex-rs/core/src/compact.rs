@@ -59,7 +59,7 @@ pub(crate) async fn run_compact_task(
     let start_event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
-    sess.send_event(&turn_context.sub_id, start_event).await;
+    sess.send_event(turn_context.as_ref(), start_event).await;
     run_compact_task_inner(sess.clone(), turn_context, input).await;
 }
 
@@ -128,7 +128,7 @@ async fn run_compact_task_inner(
                 }
                 sess.set_total_tokens_full(turn_context.as_ref()).await;
                 let event = EventMsg::Error(e.to_error_event(None));
-                sess.send_event(&turn_context.sub_id, event).await;
+                sess.send_event(turn_context.as_ref(), event).await;
                 return;
             }
             Err(e) => {
@@ -145,7 +145,7 @@ async fn run_compact_task_inner(
                     continue;
                 } else {
                     let event = EventMsg::Error(e.to_error_event(None));
-                    sess.send_event(&turn_context.sub_id, event).await;
+                    sess.send_event(turn_context.as_ref(), event).await;
                     return;
                 }
             }
@@ -176,12 +176,12 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     let event = EventMsg::ContextCompacted(ContextCompactedEvent {});
-    sess.send_event(&turn_context.sub_id, event).await;
+    sess.send_event(turn_context.as_ref(), event).await;
 
     let warning = EventMsg::Warning(WarningEvent {
         message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.".to_string(),
     });
-    sess.send_event(&turn_context.sub_id, warning).await;
+    sess.send_event(turn_context.as_ref(), warning).await;
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
