@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
 use codex_app_server_protocol::AuthMode;
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
 use codex_core::ContentItem;
 use codex_core::LocalShellAction;
 use codex_core::LocalShellExecAction;

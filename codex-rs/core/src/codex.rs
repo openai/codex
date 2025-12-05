@@ -409,6 +409,7 @@ impl Session {
         per_turn_config
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
         otel_event_manager: &OtelEventManager,
