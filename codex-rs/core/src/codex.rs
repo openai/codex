@@ -722,7 +722,7 @@ impl Session {
                             "resuming session with different model: previous={prev}, current={curr}"
                         );
                         self.send_event(
-                                &turn_context.sub_id.clone(),
+                                &turn_context,
                                 EventMsg::Warning(WarningEvent {
                                     message: format!(
                                         "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
@@ -845,7 +845,7 @@ impl Session {
 
     pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
         self.send_event(
-            &turn_context.sub_id,
+            &turn_context,
             EventMsg::ItemStarted(ItemStartedEvent {
                 thread_id: self.conversation_id,
                 turn_id: turn_context.sub_id.clone(),
@@ -861,7 +861,7 @@ impl Session {
         item: TurnItem,
     ) {
         self.send_event(
-            &turn_context.sub_id,
+            &turn_context,
             EventMsg::ItemCompleted(ItemCompletedEvent {
                 thread_id: self.conversation_id,
                 turn_id: turn_context.sub_id.clone(),
@@ -1152,7 +1152,7 @@ impl Session {
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
         for item in items {
             self.send_event(
-                &turn_context.sub_id,
+                &turn_context,
                 EventMsg::RawResponseItem(RawResponseItemEvent { item: item.clone() }),
             )
             .await;
@@ -1913,7 +1913,7 @@ mod handlers {
                         codex_error_info: Some(CodexErrorInfo::Other),
                     }),
                 };
-                sess.send_event(turn_context.as_ref(), event.msg).await;
+                sess.send_event(&turn_context, event.msg).await;
             }
         }
     }
@@ -2011,7 +2011,7 @@ async fn spawn_review_thread(
         target: resolved.target,
         user_facing_hint: Some(resolved.user_facing_hint),
     };
-    sess.send_event(tc.as_ref(), EventMsg::EnteredReviewMode(review_request))
+    sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
         .await;
 }
 
@@ -2041,7 +2041,7 @@ pub(crate) async fn run_task(
     let event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
-    sess.send_event(turn_context.as_ref(), event).await;
+    sess.send_event(&turn_context, event).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
@@ -2141,7 +2141,7 @@ pub(crate) async fn run_task(
             Err(e) => {
                 info!("Turn error: {e:#}");
                 let event = EventMsg::Error(e.to_error_event(None));
-                sess.send_event(turn_context.as_ref(), event).await;
+                sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
                 break;
             }
@@ -2391,7 +2391,7 @@ async fn try_run_turn(
                 };
                 if let Ok(Some(unified_diff)) = unified_diff {
                     let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
-                    sess.send_event(turn_context.as_ref(), msg).await;
+                    sess.send_event(&turn_context, msg).await;
                 }
 
                 break Ok(TurnRunResult {
@@ -2409,11 +2409,8 @@ async fn try_run_turn(
                         item_id: active.id(),
                         delta: delta.clone(),
                     };
-                    sess.send_event(
-                        turn_context.as_ref(),
-                        EventMsg::AgentMessageContentDelta(event),
-                    )
-                    .await;
+                    sess.send_event(&turn_context, EventMsg::AgentMessageContentDelta(event))
+                        .await;
                 } else {
                     error_or_panic("OutputTextDelta without active item".to_string());
                 }
@@ -2430,11 +2427,8 @@ async fn try_run_turn(
                         delta,
                         summary_index,
                     };
-                    sess.send_event(
-                        turn_context.as_ref(),
-                        EventMsg::ReasoningContentDelta(event),
-                    )
-                    .await;
+                    sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
+                        .await;
                 } else {
                     error_or_panic("ReasoningSummaryDelta without active item".to_string());
                 }
@@ -2446,7 +2440,7 @@ async fn try_run_turn(
                             item_id: active.id(),
                             summary_index,
                         });
-                    sess.send_event(turn_context.as_ref(), event).await;
+                    sess.send_event(&turn_context, event).await;
                 } else {
                     error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
                 }
@@ -2463,11 +2457,8 @@ async fn try_run_turn(
                         delta,
                         content_index,
                     };
-                    sess.send_event(
-                        turn_context.as_ref(),
-                        EventMsg::ReasoningRawContentDelta(event),
-                    )
-                    .await;
+                    sess.send_event(&turn_context, EventMsg::ReasoningRawContentDelta(event))
+                        .await;
                 } else {
                     error_or_panic("ReasoningRawContentDelta without active item".to_string());
                 }
