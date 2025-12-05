@@ -82,14 +82,29 @@ kotlin {
     mingwX64 { treesitter() }
     macosArm64 { treesitter() }
     macosX64 { treesitter() }
-    iosArm64 { treesitter() }
-    iosSimulatorArm64 { treesitter() }
+
+    // Gate iOS targets behind a property/env var to keep desktop/native builds green by default.
+    // Enable with: -PKTREESITTER_ENABLE_IOS=true (or env KTREESITTER_ENABLE_IOS=true)
+    val enableIos: Boolean = (findProperty("KTREESITTER_ENABLE_IOS") as String?)?.toBoolean()
+        ?: System.getenv("KTREESITTER_ENABLE_IOS")?.toBoolean()
+        ?: false
+    if (enableIos) {
+        iosArm64 { treesitter() }
+        iosSimulatorArm64 { treesitter() }
+    }
 
     applyDefaultHierarchyTemplate()
 
     jvmToolchain(17)
 
     sourceSets {
+        // Toggle to enable tests in the included build. By default, disable tests to
+        // keep desktop/native composite builds green when optional language modules
+        // (e.g., java) are not included. Enable with -PKTREESITTER_ENABLE_TESTS=true
+        // or env KTREESITTER_ENABLE_TESTS=true
+        val enableTests: Boolean = (findProperty("KTREESITTER_ENABLE_TESTS") as String?)?.toBoolean()
+            ?: System.getenv("KTREESITTER_ENABLE_TESTS")?.toBoolean()
+            ?: false
         commonMain {
             languageSettings {
                 @OptIn(ExperimentalKotlinGradlePluginApi::class)
@@ -104,23 +119,46 @@ kotlin {
         }
 
         commonTest {
+            if (!enableTests) {
+                kotlin.setSrcDirs(emptyList<File>())
+            }
             dependencies {
-                implementation(libs.bundles.kotest.core)
-                // Language subprojects are optional - only include in tests if present
-                rootProject.subprojects.find { it.name == "languages" }?.subprojects?.forEach {
-                    implementation(project(":languages:${it.name}"))
+                if (enableTests) {
+                    implementation(libs.bundles.kotest.core)
                 }
             }
         }
 
         jvmTest {
+            if (!enableTests) {
+                kotlin.setSrcDirs(emptyList<File>())
+            }
             dependencies {
-                implementation(libs.bundles.kotest.junit)
-                implementation(libs.kotest.symbolprocessor)
+                if (enableTests) {
+                    implementation(libs.bundles.kotest.junit)
+                    implementation(libs.kotest.symbolprocessor)
+                }
             }
         }
 
-        if (androidSdkAvailable) {
+        // Only native tests should depend on native-only language bindings
+        val languagesProject = rootProject.subprojects.find { it.name == "languages" }
+        if (languagesProject != null && enableTests) {
+            getByName("nativeTest") {
+                dependencies {
+                    languagesProject.subprojects.forEach {
+                        implementation(project(":languages:${it.name}"))
+                    }
+                }
+            }
+        } else {
+            // Ensure native test source set is empty when tests are disabled
+            getByName("nativeTest") {
+                if (!enableTests) kotlin.setSrcDirs(emptyList<File>())
+            }
+        }
+
+        if (androidSdkAvailable && enableTests) {
             getByName("androidInstrumentedTest") {
                 dependencies {
                     implementation(libs.bundles.kotest.core)
