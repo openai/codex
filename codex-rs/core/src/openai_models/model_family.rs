@@ -266,6 +266,26 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
     }
 }
 
+fn derive_default_model_family(model: &str) -> ModelFamily {
+    ModelFamily {
+        slug: model.to_string(),
+        family: model.to_string(),
+        needs_special_apply_patch_instructions: false,
+        supports_reasoning_summaries: false,
+        reasoning_summary_format: ReasoningSummaryFormat::None,
+        supports_parallel_tool_calls: false,
+        apply_patch_tool_type: None,
+        base_instructions: BASE_INSTRUCTIONS.to_string(),
+        experimental_supported_tools: Vec::new(),
+        effective_context_window_percent: 95,
+        support_verbosity: false,
+        shell_type: ConfigShellToolType::Default,
+        default_verbosity: None,
+        default_reasoning_effort: None,
+        truncation_policy: TruncationPolicy::Bytes(10_000),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,25 +351,5 @@ mod tests {
             family.default_reasoning_effort
         );
         assert_eq!(updated.shell_type, family.shell_type);
-    }
-}
-
-fn derive_default_model_family(model: &str) -> ModelFamily {
-    ModelFamily {
-        slug: model.to_string(),
-        family: model.to_string(),
-        needs_special_apply_patch_instructions: false,
-        supports_reasoning_summaries: false,
-        reasoning_summary_format: ReasoningSummaryFormat::None,
-        supports_parallel_tool_calls: false,
-        apply_patch_tool_type: None,
-        base_instructions: BASE_INSTRUCTIONS.to_string(),
-        experimental_supported_tools: Vec::new(),
-        effective_context_window_percent: 95,
-        support_verbosity: false,
-        shell_type: ConfigShellToolType::Default,
-        default_verbosity: None,
-        default_reasoning_effort: None,
-        truncation_policy: TruncationPolicy::Bytes(10_000),
     }
 }
