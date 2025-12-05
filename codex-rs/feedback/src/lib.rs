@@ -287,6 +287,7 @@ fn display_classification(classification: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn ring_buffer_drops_front_when_full() {
@@ -317,6 +318,9 @@ mod tests {
             .split(|b| *b == b'\n')
             .map(|line| serde_json::from_slice::<serde_json::Value>(line).unwrap())
             .collect();
-        pretty_assertions::assert_eq!(parsed.len(), 2);
+        pretty_assertions::assert_eq!(
+            parsed,
+            vec![json!({"event":"test"}), json!({"event":"test2"})]
+        );
     }
 }
