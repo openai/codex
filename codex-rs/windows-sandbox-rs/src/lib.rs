@@ -9,13 +9,19 @@ windows_modules!(
 );
 
 #[cfg(target_os = "windows")]
-pub use acl::{add_allow_ace, add_deny_write_ace, allow_null_device};
+pub use acl::add_allow_ace;
+#[cfg(target_os = "windows")]
+pub use acl::add_deny_write_ace;
+#[cfg(target_os = "windows")]
+pub use acl::allow_null_device;
 #[cfg(target_os = "windows")]
 pub use allow::compute_allow_paths;
 #[cfg(target_os = "windows")]
 pub use audit::apply_world_writable_scan_and_denies;
 #[cfg(target_os = "windows")]
-pub use cap::{cap_sid_file, load_or_create_cap_sids};
+pub use cap::cap_sid_file;
+#[cfg(target_os = "windows")]
+pub use cap::load_or_create_cap_sids;
 #[cfg(target_os = "windows")]
 pub use dpapi::protect as dpapi_protect;
 #[cfg(target_os = "windows")]
@@ -25,7 +31,11 @@ pub use identity::require_logon_sandbox_creds;
 #[cfg(target_os = "windows")]
 pub use logging::log_note;
 #[cfg(target_os = "windows")]
-pub use policy::{parse_policy, SandboxPolicy};
+pub use logging::LOG_FILE_NAME;
+#[cfg(target_os = "windows")]
+pub use policy::parse_policy;
+#[cfg(target_os = "windows")]
+pub use policy::SandboxPolicy;
 #[cfg(target_os = "windows")]
 pub use process::create_process_as_user;
 #[cfg(target_os = "windows")]
@@ -35,10 +45,13 @@ pub use setup::sandbox_dir;
 #[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]
-pub use token::{
-    convert_string_sid_to_sid, create_readonly_token_with_cap_from,
-    create_workspace_write_token_with_cap_from, get_current_token_for_restriction,
-};
+pub use token::convert_string_sid_to_sid;
+#[cfg(target_os = "windows")]
+pub use token::create_readonly_token_with_cap_from;
+#[cfg(target_os = "windows")]
+pub use token::create_workspace_write_token_with_cap_from;
+#[cfg(target_os = "windows")]
+pub use token::get_current_token_for_restriction;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_capture;
 #[cfg(target_os = "windows")]
@@ -67,8 +80,8 @@ mod windows_impl {
     use super::allow::AllowDenyPaths;
     use super::cap::cap_sid_file;
     use super::cap::load_or_create_cap_sids;
-    use super::env::apply_no_network_to_env;
     use super::env::ensure_non_interactive_pager;
+    use super::env::inherit_path_env;
     use super::env::normalize_null_device_env;
     use super::identity::require_logon_sandbox_creds;
     use super::logging::debug_log;
@@ -104,7 +117,8 @@ mod windows_impl {
     use windows_sys::Win32::Security::LogonUserW;
     use windows_sys::Win32::Security::LOGON32_LOGON_INTERACTIVE;
     use windows_sys::Win32::Security::LOGON32_PROVIDER_DEFAULT;
-    use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+    use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::System::Environment::CreateEnvironmentBlock;
     use windows_sys::Win32::System::Environment::DestroyEnvironmentBlock;
     use windows_sys::Win32::System::Pipes::PIPE_READMODE_BYTE;
@@ -183,10 +197,7 @@ mod windows_impl {
                 format!("GIT_CONFIG_KEY_{cfg_count}"),
                 "safe.directory".to_string(),
             );
-            env_map.insert(
-                format!("GIT_CONFIG_VALUE_{cfg_count}"),
-                git_path,
-            );
+            env_map.insert(format!("GIT_CONFIG_VALUE_{cfg_count}"), git_path);
             cfg_count += 1;
             env_map.insert("GIT_CONFIG_COUNT".to_string(), cfg_count.to_string());
             log_note(
@@ -344,20 +355,20 @@ mod windows_impl {
     }
 
     #[derive(serde::Serialize)]
-        struct RunnerPayload {
-            policy_json_or_preset: String,
-            sandbox_policy_cwd: PathBuf,
-            // Writable log dir for sandbox user (.codex in sandbox profile).
-            codex_home: PathBuf,
-            // Real user's CODEX_HOME for shared data (caps, config).
-            real_codex_home: PathBuf,
-            cap_sid: String,
-            request_file: Option<PathBuf>,
-            command: Vec<String>,
-            cwd: PathBuf,
-            env_map: HashMap<String, String>,
-            timeout_ms: Option<u64>,
-            stdin_pipe: String,
+    struct RunnerPayload {
+        policy_json_or_preset: String,
+        sandbox_policy_cwd: PathBuf,
+        // Writable log dir for sandbox user (.codex in sandbox profile).
+        codex_home: PathBuf,
+        // Real user's CODEX_HOME for shared data (caps, config).
+        real_codex_home: PathBuf,
+        cap_sid: String,
+        request_file: Option<PathBuf>,
+        command: Vec<String>,
+        cwd: PathBuf,
+        env_map: HashMap<String, String>,
+        timeout_ms: Option<u64>,
+        stdin_pipe: String,
         stdout_pipe: String,
         stderr_pipe: String,
     }
@@ -372,12 +383,9 @@ mod windows_impl {
         timeout_ms: Option<u64>,
     ) -> Result<CaptureResult> {
         let policy = parse_policy(policy_json_or_preset)?;
-        let apply_network_block = should_apply_network_block(&policy);
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
-        if apply_network_block {
-            apply_no_network_to_env(&mut env_map)?;
-        }
+        inherit_path_env(&mut env_map);
         inject_git_safe_directory(&mut env_map, cwd, None);
         let current_dir = cwd.to_path_buf();
         let sandbox_creds =
@@ -449,13 +457,6 @@ mod windows_impl {
         let stdin_name = pipe_name("stdin");
         let stdout_name = pipe_name("stdout");
         let stderr_name = pipe_name("stderr");
-        log_note(
-            &format!(
-                "preparing pipes stdin={} stdout={} stderr={}",
-                stdin_name, stdout_name, stderr_name
-            ),
-            logs_base_dir,
-        );
         let h_stdin_pipe = create_named_pipe(
             &stdin_name,
             PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
@@ -475,26 +476,11 @@ mod windows_impl {
             .to_str()
             .map(|s| s.to_string())
             .unwrap_or_else(|| "codex-command-runner.exe".to_string());
-        log_note(
-            &format!("runner exe resolved to {}", runner_exe.display()),
-            logs_base_dir,
-        );
-        log_note(
-            &format!(
-                "using sandbox base dir {} (requests subdir)",
-                sandbox_base.display()
-            ),
-            logs_base_dir,
-        );
         // Write request to a file under the sandbox base dir for the runner to read.
         let base_tmp = sandbox_base.join("requests");
         std::fs::create_dir_all(&base_tmp)?;
         let mut rng = SmallRng::from_entropy();
         let req_file = base_tmp.join(format!("request-{:x}.json", rng.gen::<u128>()));
-        log_note(
-            &format!("about to write request file {}", req_file.display()),
-            logs_base_dir,
-        );
         let payload = RunnerPayload {
             policy_json_or_preset: policy_json_or_preset.to_string(),
             sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
@@ -513,37 +499,15 @@ mod windows_impl {
         let payload_json = serde_json::to_string(&payload)?;
         if let Err(e) = fs::write(&req_file, &payload_json) {
             log_note(
-                &format!(
-                    "error writing request file {}: {}",
-                    req_file.display(),
-                    e
-                ),
+                &format!("error writing request file {}: {}", req_file.display(), e),
                 logs_base_dir,
             );
             return Err(e.into());
         }
-        log_note(
-            &format!(
-                "request file written at {} ({} bytes)",
-                req_file.display(),
-                payload_json.len()
-            ),
-            logs_base_dir,
-        );
         let runner_full_cmd = format!(
             "{} {}",
             quote_windows_arg(&runner_cmdline),
             quote_windows_arg(&format!("--request-file={}", req_file.display()))
-        );
-        log_note(
-            &format!(
-                "launching runner exe={} as user={} cwd={} cmdline={}",
-                runner_cmdline,
-                sandbox_creds.username,
-                cwd.display(),
-                runner_full_cmd
-            ),
-            logs_base_dir,
         );
         let mut cmdline_vec: Vec<u16> = to_wide(&runner_full_cmd);
         let exe_w: Vec<u16> = to_wide(&runner_cmdline);
@@ -648,19 +612,6 @@ mod windows_impl {
                 map.insert("TEMP".to_string(), temp.clone());
                 map.insert("TMP".to_string(), temp);
 
-                // Log env
-                let mut vars: Vec<String> =
-                    map.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
-                vars.sort();
-                log_note(
-                    &format!(
-                        "build_sandbox_env_block for {}:\n{}",
-                        username,
-                        vars.join("\n")
-                    ),
-                    logs_base_dir,
-                );
-
                 // Rebuild env block
                 let env_block = make_env_block(&map);
 
@@ -676,7 +627,6 @@ mod windows_impl {
 
         // Minimal CPWL launch: inherit env, no desktop override, no handle inheritance.
         let env_block: Option<Vec<u16>> = None;
-        log_note("runner env_block: inherit (minimal CPWL)", logs_base_dir);
         let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
         si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
         let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
@@ -721,7 +671,6 @@ mod windows_impl {
             log_note(&dbg, logs_base_dir);
             return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {}", err));
         }
-        log_note("runner process launched", logs_base_dir);
 
         // Pipes are no longer passed as std handles; no stdin payload is sent.
         connect_pipe(h_stdin_pipe)?;
@@ -790,13 +739,6 @@ mod windows_impl {
                 windows_sys::Win32::System::Threading::TerminateProcess(pi.hProcess, 1);
             }
         }
-        log_note(
-            &format!(
-                "runner exited timed_out={} code={}",
-                timed_out, exit_code_u32
-            ),
-            logs_base_dir,
-        );
 
         unsafe {
             if pi.hThread != 0 {
