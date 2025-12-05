@@ -1315,6 +1315,7 @@ dependencies = [
  "codex-protocol",
  "pretty_assertions",
  "sentry",
+ "serde_json",
  "tracing-subscriber",
 ]
 

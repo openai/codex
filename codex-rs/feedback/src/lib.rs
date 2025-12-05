@@ -303,13 +303,20 @@ mod tests {
 
     #[test]
     fn logs_attachment_preserves_filename_and_mime() {
+        let sample = b"{\"event\":\"test\"}\n{\"event\":\"test2\"}";
         let snapshot = CodexLogSnapshot {
-            bytes: br#"{"event":"test"}"#.to_vec(),
+            bytes: sample.to_vec(),
             thread_id: "thread-123".to_string(),
         };
         let attachment = snapshot.logs_attachment();
         pretty_assertions::assert_eq!(attachment.filename, "codex-logs.jsonl");
         pretty_assertions::assert_eq!(attachment.content_type.as_deref(), Some("text/plain"));
         pretty_assertions::assert_eq!(attachment.buffer, snapshot.bytes);
+        let parsed: Vec<_> = attachment
+            .buffer
+            .split(|b| *b == b'\n')
+            .map(|line| serde_json::from_slice::<serde_json::Value>(line).unwrap())
+            .collect();
+        pretty_assertions::assert_eq!(parsed.len(), 2);
     }
 }
