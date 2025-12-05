@@ -369,3 +369,13 @@ macro_rules! skip_if_no_network {
         }
     }};
 }
+
+#[macro_export]
+macro_rules! skip_if {
+    ($cond:expr, $return_value:expr $(,)?) => {{
+        if $cond {
+            eprintln!("Skipping test because condition was true.");
+            return $return_value;
+        }
+    }};
+}
