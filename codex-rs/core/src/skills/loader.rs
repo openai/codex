@@ -21,7 +21,7 @@ struct SkillFrontmatter {
 
 const SKILLS_FILENAME: &str = "SKILL.md";
 const SKILLS_DIR_NAME: &str = "skills";
-const SKILLS_REPO_DIR_NAME: &str = "codex";
+const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
 const MAX_NAME_LEN: usize = 100;
 const MAX_DESCRIPTION_LEN: usize = 500;
 
@@ -70,7 +70,11 @@ fn skill_roots(config: &Config) -> Vec<PathBuf> {
     let mut roots = vec![config.codex_home.join(SKILLS_DIR_NAME)];
 
     if let Some(repo_root) = resolve_root_git_project_for_trust(&config.cwd) {
-        roots.push(repo_root.join(SKILLS_REPO_DIR_NAME).join(SKILLS_DIR_NAME));
+        roots.push(
+            repo_root
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
+        );
     }
 
     roots
@@ -318,7 +322,7 @@ mod tests {
 
         let skills_root = repo_dir
             .path()
-            .join(SKILLS_REPO_DIR_NAME)
+            .join(REPO_ROOT_CONFIG_DIR_NAME)
             .join(SKILLS_DIR_NAME);
         write_skill_at(&skills_root, "repo", "repo-skill", "from repo");
         let mut cfg = make_config(&codex_home);
