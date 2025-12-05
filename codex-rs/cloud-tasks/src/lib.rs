@@ -284,10 +284,10 @@ async fn collect_attempt_diffs(
     Ok(attempts)
 }
 
-fn select_attempt<'a>(
-    attempts: &'a [AttemptDiffData],
+fn select_attempt(
+    attempts: &[AttemptDiffData],
     attempt: Option<usize>,
-) -> anyhow::Result<&'a AttemptDiffData> {
+) -> anyhow::Result<&AttemptDiffData> {
     if attempts.is_empty() {
         anyhow::bail!("No attempts available");
     }
