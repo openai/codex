@@ -26,7 +26,6 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::features::Feature;
-use codex_core::openai_models::model_family::find_family_for_model;
 use codex_core::openai_models::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::openai_models::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::openai_models::models_manager::ModelsManager;
@@ -162,7 +161,6 @@ async fn handle_model_migration_prompt_if_needed(
                     migration_config: migration_config_key.to_string(),
                 });
                 config.model = target_model.to_string();
-                config.model_family = find_family_for_model(&target_model);
 
                 let mapped_effort = if let Some(reasoning_effort_mapping) = reasoning_effort_mapping
                     && let Some(reasoning_effort) = config.model_reasoning_effort
@@ -680,9 +678,7 @@ impl App {
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
-                self.config.model = model.clone();
-                let family = find_family_for_model(&model);
-                self.config.model_family = family;
+                self.config.model = model;
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);

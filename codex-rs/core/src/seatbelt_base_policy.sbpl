@@ -102,3 +102,6 @@
   (require-all
     (regex #"^/dev/ttys[0-9]+")
     (extension "com.apple.sandbox.pty")))
+; PTYs created before entering seatbelt may lack the extension; allow ioctl
+; on those slave ttys so interactive shells detect a TTY and remain functional.
+(allow file-ioctl (regex #"^/dev/ttys[0-9]+"))

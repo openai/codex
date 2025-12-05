@@ -146,6 +146,7 @@ impl ToolHandler for UnifiedExecHandler {
                         codex_protocol::protocol::AskForApproval::OnRequest
                     )
                 {
+                    manager.release_process_id(&process_id).await;
                     return Err(FunctionCallError::RespondToModel(format!(
                         "approval policy is {policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {policy:?}",
                         policy = context.turn.approval_policy
@@ -169,6 +170,7 @@ impl ToolHandler for UnifiedExecHandler {
                 )
                 .await?
                 {
+                    manager.release_process_id(&process_id).await;
                     return Ok(output);
                 }
 

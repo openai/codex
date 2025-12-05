@@ -1,0 +1,6 @@
+*** Begin Patch
+*** Update File: input.txt
+@@
++added line 1
++added line 2
+*** End Patch

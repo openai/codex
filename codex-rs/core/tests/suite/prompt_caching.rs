@@ -1,7 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_core::features::Feature;
-use codex_core::openai_models::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
@@ -73,7 +72,6 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.features.disable(Feature::ApplyPatchFreeform);
             config.model = "codex-mini-latest".to_string();
-            config.model_family = find_family_for_model("codex-mini-latest")
         })
         .build(&server)
         .await?;
@@ -125,13 +123,22 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
     let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
-    let TestCodex { codex, config, .. } = test_codex()
+    let TestCodex {
+        codex,
+        config,
+        conversation_manager,
+        ..
+    } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
         })
         .build(&server)
         .await?;
-    let base_instructions = config.model_family.base_instructions.clone();
+    let base_instructions = conversation_manager
+        .get_models_manager()
+        .construct_model_family(&config.model, &config)
+        .base_instructions
+        .clone();
 
     codex
         .submit(Op::UserInput {

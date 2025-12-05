@@ -101,6 +101,7 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
     let crate::cli::ExecCommand {
         query,
         environment,
+        branch,
         attempts,
     } = args;
     let ctx = init_backend("codex_cloud_tasks_exec").await?;
@@ -110,7 +111,7 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
         &*ctx.backend,
         &env_id,
         &prompt,
-        "main",
+        &branch,
         false,
         attempts,
     )

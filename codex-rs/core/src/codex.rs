@@ -11,13 +11,15 @@ use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
+use crate::exec_policy::load_exec_policy_for_features;
 use crate::features::Feature;
 use crate::features::Features;
-use crate::function_tool::FunctionCallError;
 use crate::openai_models::models_manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
-use crate::response_processing::process_items;
+use crate::stream_events_utils::HandleOutputCtx;
+use crate::stream_events_utils::handle_non_tool_response_item;
+use crate::stream_events_utils::handle_output_item_done;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::user_notification::UserNotifier;
@@ -131,7 +133,6 @@ use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -174,9 +175,10 @@ impl Codex {
 
         let user_instructions = get_user_instructions(&config).await;
 
-        let exec_policy = crate::exec_policy::exec_policy_for(&config.features, &config.codex_home)
+        let exec_policy = load_exec_policy_for_features(&config.features, &config.codex_home)
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
+        let exec_policy = Arc::new(RwLock::new(exec_policy));
 
         let config = Arc::new(config);
 
@@ -398,7 +400,7 @@ pub(crate) struct SessionSettingsUpdate {
 impl Session {
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
-        models_manager: &ModelsManager,
+        models_manager: Arc<ModelsManager>,
         otel_event_manager: &OtelEventManager,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
@@ -407,13 +409,13 @@ impl Session {
     ) -> TurnContext {
         let config = session_configuration.original_config_do_not_use.clone();
         let features = &config.features;
-        let model_family = models_manager.construct_model_family(&session_configuration.model);
         let mut per_turn_config = (*config).clone();
         per_turn_config.model = session_configuration.model.clone();
-        per_turn_config.model_family = model_family.clone();
         per_turn_config.model_reasoning_effort = session_configuration.model_reasoning_effort;
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.features = features.clone();
+        let model_family =
+            models_manager.construct_model_family(&per_turn_config.model, &per_turn_config);
         if let Some(model_info) = get_model_info(&model_family) {
             per_turn_config.model_context_window = Some(model_info.context_window);
         }
@@ -426,6 +428,7 @@ impl Session {
         let client = ModelClient::new(
             Arc::new(per_turn_config.clone()),
             auth_manager,
+            model_family.clone(),
             otel_event_manager,
             provider,
             session_configuration.model_reasoning_effort,
@@ -455,7 +458,10 @@ impl Session {
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             exec_policy: session_configuration.exec_policy.clone(),
-            truncation_policy: TruncationPolicy::new(&per_turn_config),
+            truncation_policy: TruncationPolicy::new(
+                &per_turn_config,
+                model_family.truncation_policy,
+            ),
         }
     }
 
@@ -539,10 +545,12 @@ impl Session {
             });
         }
 
+        let model_family = models_manager.construct_model_family(&config.model, &config);
+        // todo(aibrahim): why are we passing model here while it can change?
         let otel_event_manager = OtelEventManager::new(
             conversation_id,
             config.model.as_str(),
-            config.model_family.slug.as_str(),
+            model_family.slug.as_str(),
             auth_manager.auth().and_then(|a| a.get_account_id()),
             auth_manager.auth().and_then(|a| a.get_account_email()),
             auth_manager.auth().map(|a| a.mode),
@@ -762,7 +770,7 @@ impl Session {
 
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
-            &self.services.models_manager,
+            Arc::clone(&self.services.models_manager),
             &self.services.otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
@@ -821,7 +829,7 @@ impl Session {
         }
     }
 
-    async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
+    pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
         self.send_event(
             turn_context,
             EventMsg::ItemStarted(ItemStartedEvent {
@@ -833,7 +841,11 @@ impl Session {
         .await;
     }
 
-    async fn emit_turn_item_completed(&self, turn_context: &TurnContext, item: TurnItem) {
+    pub(crate) async fn emit_turn_item_completed(
+        &self,
+        turn_context: &TurnContext,
+        item: TurnItem,
+    ) {
         self.send_event(
             turn_context,
             EventMsg::ItemCompleted(ItemCompletedEvent {
@@ -862,6 +874,7 @@ impl Session {
             auth_manager,
             &otel,
             self.conversation_id,
+            self.services.models_manager.clone(),
             turn_context.client.get_session_source(),
             call_id,
             command,
@@ -1891,7 +1904,10 @@ async fn spawn_review_thread(
     resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
     let model = config.review_model.clone();
-    let review_model_family = sess.services.models_manager.construct_model_family(&model);
+    let review_model_family = sess
+        .services
+        .models_manager
+        .construct_model_family(&model, &config);
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
     review_features
@@ -1911,7 +1927,6 @@ async fn spawn_review_thread(
     // Build per‑turn client with the requested model/family.
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = model.clone();
-    per_turn_config.model_family = model_family.clone();
     per_turn_config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
     per_turn_config.model_reasoning_summary = ReasoningSummaryConfig::Detailed;
     per_turn_config.features = review_features.clone();
@@ -1924,13 +1939,14 @@ async fn spawn_review_thread(
         .get_otel_event_manager()
         .with_model(
             per_turn_config.model.as_str(),
-            per_turn_config.model_family.slug.as_str(),
+            review_model_family.slug.as_str(),
         );
 
     let per_turn_config = Arc::new(per_turn_config);
     let client = ModelClient::new(
         per_turn_config.clone(),
         auth_manager,
+        model_family.clone(),
         otel_event_manager,
         provider,
         per_turn_config.model_reasoning_effort,
@@ -1955,7 +1971,7 @@ async fn spawn_review_thread(
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         exec_policy: parent_turn_context.exec_policy.clone(),
-        truncation_policy: TruncationPolicy::new(&per_turn_config),
+        truncation_policy: TruncationPolicy::new(&per_turn_config, model_family.truncation_policy),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2050,15 +2066,16 @@ pub(crate) async fn run_task(
         .await
         {
             Ok(turn_output) => {
-                let processed_items = turn_output;
+                let TurnRunResult {
+                    needs_follow_up,
+                    last_agent_message: turn_last_agent_message,
+                } = turn_output;
                 let limit = turn_context
                     .client
                     .get_auto_compact_token_limit()
                     .unwrap_or(i64::MAX);
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= limit;
-                let (responses, items_to_record_in_conversation_history) =
-                    process_items(processed_items, &sess, &turn_context).await;
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached {
@@ -2071,10 +2088,8 @@ pub(crate) async fn run_task(
                     continue;
                 }
 
-                if responses.is_empty() {
-                    last_agent_message = get_last_assistant_message_from_turn(
-                        &items_to_record_in_conversation_history,
-                    );
+                if !needs_follow_up {
+                    last_agent_message = turn_last_agent_message;
                     sess.notifier()
                         .notify(&UserNotification::AgentTurnComplete {
                             thread_id: sess.conversation_id.to_string(),
@@ -2087,10 +2102,7 @@ pub(crate) async fn run_task(
                 }
                 continue;
             }
-            Err(CodexErr::TurnAborted {
-                dangling_artifacts: processed_items,
-            }) => {
-                let _ = process_items(processed_items, &sess, &turn_context).await;
+            Err(CodexErr::TurnAborted) => {
                 // Aborted turn is reported via a different event.
                 break;
             }
@@ -2120,7 +2132,7 @@ async fn run_turn(
     turn_diff_tracker: SharedTurnDiffTracker,
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
-) -> CodexResult<Vec<ProcessedResponseItem>> {
+) -> CodexResult<TurnRunResult> {
     let mcp_tools = sess
         .services
         .mcp_connection_manager
@@ -2149,10 +2161,7 @@ async fn run_turn(
     let mut base_instructions = turn_context.base_instructions.clone();
     if parallel_tool_calls {
         static INSTRUCTIONS: &str = include_str!("../templates/parallel/instructions.md");
-        let family = sess
-            .services
-            .models_manager
-            .construct_model_family(&sess.state.lock().await.session_configuration.model);
+        let family = turn_context.client.get_model_family();
         let mut new_instructions = base_instructions.unwrap_or(family.base_instructions);
         new_instructions.push_str(INSTRUCTIONS);
         base_instructions = Some(new_instructions);
@@ -2177,13 +2186,10 @@ async fn run_turn(
         )
         .await
         {
+            // todo(aibrahim): map special cases and ? on other errors
             Ok(output) => return Ok(output),
-            Err(CodexErr::TurnAborted {
-                dangling_artifacts: processed_items,
-            }) => {
-                return Err(CodexErr::TurnAborted {
-                    dangling_artifacts: processed_items,
-                });
+            Err(CodexErr::TurnAborted) => {
+                return Err(CodexErr::TurnAborted);
             }
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
@@ -2236,14 +2242,29 @@ async fn run_turn(
     }
 }
 
-/// When the model is prompted, it returns a stream of events. Some of these
-/// events map to a `ResponseItem`. A `ResponseItem` may need to be
-/// "handled" such that it produces a `ResponseInputItem` that needs to be
-/// sent back to the model on the next turn.
 #[derive(Debug)]
-pub struct ProcessedResponseItem {
-    pub item: ResponseItem,
-    pub response: Option<ResponseInputItem>,
+struct TurnRunResult {
+    needs_follow_up: bool,
+    last_agent_message: Option<String>,
+}
+
+async fn drain_in_flight(
+    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+) -> CodexResult<()> {
+    while let Some(res) = in_flight.next().await {
+        match res {
+            Ok(response_input) => {
+                sess.record_conversation_items(&turn_context, &[response_input.into()])
+                    .await;
+            }
+            Err(err) => {
+                error_or_panic(format!("in-flight tool future failed during drain: {err}"));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2254,7 +2275,7 @@ async fn try_run_turn(
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
     cancellation_token: CancellationToken,
-) -> CodexResult<Vec<ProcessedResponseItem>> {
+) -> CodexResult<TurnRunResult> {
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
@@ -2278,114 +2299,47 @@ async fn try_run_turn(
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
     );
-    let mut output: FuturesOrdered<BoxFuture<CodexResult<ProcessedResponseItem>>> =
+    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
-
+    let mut needs_follow_up = false;
+    let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
-
-    loop {
-        // Poll the next item from the model stream. We must inspect *both* Ok and Err
-        // cases so that transient stream failures (e.g., dropped SSE connection before
-        // `response.completed`) bubble up and trigger the caller's retry logic.
+    let outcome: CodexResult<TurnRunResult> = loop {
         let event = match stream.next().or_cancel(&cancellation_token).await {
             Ok(event) => event,
-            Err(codex_async_utils::CancelErr::Cancelled) => {
-                let processed_items = output.try_collect().await?;
-                return Err(CodexErr::TurnAborted {
-                    dangling_artifacts: processed_items,
-                });
-            }
+            Err(codex_async_utils::CancelErr::Cancelled) => break Err(CodexErr::TurnAborted),
         };
 
         let event = match event {
             Some(res) => res?,
             None => {
-                return Err(CodexErr::Stream(
+                break Err(CodexErr::Stream(
                     "stream closed before response.completed".into(),
                     None,
                 ));
             }
         };
 
-        let add_completed = &mut |response_item: ProcessedResponseItem| {
-            output.push_back(future::ready(Ok(response_item)).boxed());
-        };
-
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
                 let previously_active_item = active_item.take();
-                match ToolRouter::build_tool_call(sess.as_ref(), item.clone()).await {
-                    Ok(Some(call)) => {
-                        let payload_preview = call.payload.log_payload().into_owned();
-                        tracing::info!("ToolCall: {} {}", call.tool_name, payload_preview);
+                let mut ctx = HandleOutputCtx {
+                    sess: sess.clone(),
+                    turn_context: turn_context.clone(),
+                    tool_runtime: tool_runtime.clone(),
+                    cancellation_token: cancellation_token.child_token(),
+                };
 
-                        let response =
-                            tool_runtime.handle_tool_call(call, cancellation_token.child_token());
-
-                        output.push_back(
-                            async move {
-                                Ok(ProcessedResponseItem {
-                                    item,
-                                    response: Some(response.await?),
-                                })
-                            }
-                            .boxed(),
-                        );
-                    }
-                    Ok(None) => {
-                        if let Some(turn_item) = handle_non_tool_response_item(&item).await {
-                            if previously_active_item.is_none() {
-                                sess.emit_turn_item_started(&turn_context, &turn_item).await;
-                            }
-
-                            sess.emit_turn_item_completed(&turn_context, turn_item)
-                                .await;
-                        }
-
-                        add_completed(ProcessedResponseItem {
-                            item,
-                            response: None,
-                        });
-                    }
-                    Err(FunctionCallError::MissingLocalShellCallId) => {
-                        let msg = "LocalShellCall without call_id or id";
-                        turn_context
-                            .client
-                            .get_otel_event_manager()
-                            .log_tool_failed("local_shell", msg);
-                        error!(msg);
-
-                        let response = ResponseInputItem::FunctionCallOutput {
-                            call_id: String::new(),
-                            output: FunctionCallOutputPayload {
-                                content: msg.to_string(),
-                                ..Default::default()
-                            },
-                        };
-                        add_completed(ProcessedResponseItem {
-                            item,
-                            response: Some(response),
-                        });
-                    }
-                    Err(FunctionCallError::RespondToModel(message))
-                    | Err(FunctionCallError::Denied(message)) => {
-                        let response = ResponseInputItem::FunctionCallOutput {
-                            call_id: String::new(),
-                            output: FunctionCallOutputPayload {
-                                content: message,
-                                ..Default::default()
-                            },
-                        };
-                        add_completed(ProcessedResponseItem {
-                            item,
-                            response: Some(response),
-                        });
-                    }
-                    Err(FunctionCallError::Fatal(message)) => {
-                        return Err(CodexErr::Fatal(message));
-                    }
+                let output_result =
+                    handle_output_item_done(&mut ctx, item, previously_active_item).await?;
+                if let Some(tool_future) = output_result.tool_future {
+                    in_flight.push_back(tool_future);
                 }
+                if let Some(agent_message) = output_result.last_agent_message {
+                    last_agent_message = Some(agent_message);
+                }
+                needs_follow_up |= output_result.needs_follow_up;
             }
             ResponseEvent::OutputItemAdded(item) => {
                 if let Some(turn_item) = handle_non_tool_response_item(&item).await {
@@ -2406,7 +2360,6 @@ async fn try_run_turn(
             } => {
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
-                let processed_items = output.try_collect().await?;
                 let unified_diff = {
                     let mut tracker = turn_diff_tracker.lock().await;
                     tracker.get_unified_diff()
@@ -2416,7 +2369,10 @@ async fn try_run_turn(
                     sess.send_event(&turn_context, msg).await;
                 }
 
-                return Ok(processed_items);
+                break Ok(TurnRunResult {
+                    needs_follow_up,
+                    last_agent_message,
+                });
             }
             ResponseEvent::OutputTextDelta(delta) => {
                 // In review child threads, suppress assistant text deltas; the
@@ -2483,22 +2439,11 @@ async fn try_run_turn(
                 }
             }
         }
-    }
-}
+    };
 
-async fn handle_non_tool_response_item(item: &ResponseItem) -> Option<TurnItem> {
-    debug!(?item, "Output item");
+    drain_in_flight(&mut in_flight, sess, turn_context).await?;
 
-    match item {
-        ResponseItem::Message { .. }
-        | ResponseItem::Reasoning { .. }
-        | ResponseItem::WebSearchCall { .. } => parse_turn_item(item),
-        ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. } => {
-            debug!("unexpected tool output from stream");
-            None
-        }
-        _ => None,
-    }
+    outcome
 }
 
 pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
@@ -2530,11 +2475,14 @@ pub(crate) use tests::make_session_and_context_with_rx;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CodexAuth;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
     use crate::exec::ExecToolCallOutput;
+    use crate::function_tool::FunctionCallError;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
+    use codex_protocol::models::FunctionCallOutputPayload;
 
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
@@ -2787,11 +2735,18 @@ mod tests {
         })
     }
 
-    fn otel_event_manager(conversation_id: ConversationId, config: &Config) -> OtelEventManager {
+    fn otel_event_manager(
+        conversation_id: ConversationId,
+        config: &Config,
+        models_manager: &ModelsManager,
+    ) -> OtelEventManager {
         OtelEventManager::new(
             conversation_id,
             config.model.as_str(),
-            config.model_family.slug.as_str(),
+            models_manager
+                .construct_model_family(&config.model, config)
+                .slug
+                .as_str(),
             None,
             Some("test@test.com".to_string()),
             Some(AuthMode::ChatGPT),
@@ -2811,13 +2766,11 @@ mod tests {
         .expect("load default test config");
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
-        let otel_event_manager = otel_event_manager(conversation_id, config.as_ref());
-        let auth_manager = AuthManager::shared(
-            config.cwd.clone(),
-            false,
-            config.cli_auth_credentials_store_mode,
-        );
-        let models_manager = Arc::new(ModelsManager::new(auth_manager.get_auth_mode()));
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
+        let otel_event_manager =
+            otel_event_manager(conversation_id, config.as_ref(), &models_manager);
 
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -2846,7 +2799,7 @@ mod tests {
             rollout: Mutex::new(None),
             user_shell: default_user_shell(),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
-            auth_manager: Arc::clone(&auth_manager),
+            auth_manager: auth_manager.clone(),
             otel_event_manager: otel_event_manager.clone(),
             models_manager: models_manager.clone(),
             tool_approvals: Mutex::new(ApprovalStore::default()),
@@ -2854,7 +2807,7 @@ mod tests {
 
         let turn_context = Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
-            &models_manager,
+            models_manager,
             &otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
@@ -2892,13 +2845,11 @@ mod tests {
         .expect("load default test config");
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
-        let otel_event_manager = otel_event_manager(conversation_id, config.as_ref());
-        let auth_manager = AuthManager::shared(
-            config.cwd.clone(),
-            false,
-            config.cli_auth_credentials_store_mode,
-        );
-        let models_manager = Arc::new(ModelsManager::new(auth_manager.get_auth_mode()));
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
+        let otel_event_manager =
+            otel_event_manager(conversation_id, config.as_ref(), &models_manager);
 
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -2935,7 +2886,7 @@ mod tests {
 
         let turn_context = Arc::new(Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
-            &models_manager,
+            models_manager,
             &otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,

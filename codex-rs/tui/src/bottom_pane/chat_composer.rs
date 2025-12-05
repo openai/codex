@@ -257,6 +257,8 @@ impl ChatComposer {
             return false;
         };
 
+        // normalize_pasted_path already handles Windows → WSL path conversion,
+        // so we can directly try to read the image dimensions.
         match image::image_dimensions(&path_buf) {
             Ok((w, h)) => {
                 tracing::info!("OK: {pasted}");
@@ -1502,14 +1504,9 @@ impl ChatComposer {
             return false;
         }
 
-        let toggles = matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char('?'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } if self.is_empty()
-        );
+        let toggles = matches!(key_event.code, KeyCode::Char('?'))
+            && !has_ctrl_or_alt(key_event.modifiers)
+            && self.is_empty();
 
         if !toggles {
             return false;

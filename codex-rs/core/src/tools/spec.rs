@@ -8,26 +8,13 @@ use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::registry::ToolRegistryBuilder;
+use codex_protocol::openai_models::ConfigShellToolType;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ConfigShellToolType {
-    Default,
-    Local,
-    UnifiedExec,
-    /// Do not include a shell tool by default. Useful when using Codex
-    /// with tools provided exclusively provided by MCP servers. Often used
-    /// with `--config base_instructions=CUSTOM_INSTRUCTIONS`
-    /// to customize agent behavior.
-    Disabled,
-    /// Takes a command as a single string to be run in the user's default shell.
-    ShellCommand,
-}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
@@ -58,7 +45,7 @@ impl ToolsConfig {
         } else if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
         } else {
-            model_family.shell_type.clone()
+            model_family.shell_type
         };
 
         let apply_patch_tool_type = match model_family.apply_patch_tool_type {

@@ -118,6 +118,7 @@ impl TestCodexBuilder {
             config,
             codex: new_conversation.conversation,
             session_configured: new_conversation.session_configured,
+            conversation_manager: Arc::new(conversation_manager),
         })
     }
 
@@ -160,6 +161,7 @@ pub struct TestCodex {
     pub codex: Arc<CodexConversation>,
     pub session_configured: SessionConfiguredEvent,
     pub config: Config,
+    pub conversation_manager: Arc<ConversationManager>,
 }
 
 impl TestCodex {

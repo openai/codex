@@ -393,7 +393,7 @@ fn make_chatwidget_manual() -> (
         active_cell: None,
         config: cfg.clone(),
         auth_manager: auth_manager.clone(),
-        models_manager: Arc::new(ModelsManager::new(auth_manager.get_auth_mode())),
+        models_manager: Arc::new(ModelsManager::new(auth_manager)),
         session_header: SessionHeader::new(cfg.model),
         initial_user_message: None,
         token_info: None,
@@ -431,7 +431,7 @@ fn make_chatwidget_manual() -> (
 fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    chat.models_manager = Arc::new(ModelsManager::new(chat.auth_manager.get_auth_mode()));
+    chat.models_manager = Arc::new(ModelsManager::new(chat.auth_manager.clone()));
 }
 
 pub(crate) fn make_chatwidget_manual_with_sender() -> (
