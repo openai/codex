@@ -78,7 +78,9 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
     );
     let auth_mode = auth_manager.get_auth_mode();
     let models_manager = Arc::new(ModelsManager::new(auth_manager));
-    let model_family = models_manager.construct_model_family(&config.model, &config);
+    let model_family = models_manager
+        .construct_model_family(&config.model, &config)
+        .await;
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),

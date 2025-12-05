@@ -1,6 +1,8 @@
 use crate::client_common::tools::ToolSpec;
+use crate::config::Config;
 use crate::error::Result;
 use crate::openai_models::model_family::ModelFamily;
+use crate::openai_models::model_family::find_family_for_model;
 pub use codex_api::common::ResponseEvent;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::models::ResponseItem;
@@ -22,6 +24,12 @@ pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
 pub const REVIEW_EXIT_SUCCESS_TMPL: &str = include_str!("../templates/review/exit_success.xml");
 pub const REVIEW_EXIT_INTERRUPTED_TMPL: &str =
     include_str!("../templates/review/exit_interrupted.xml");
+
+/// Helper for synchronous contexts (tests, CLI) that need to construct a model
+/// family using the async [`ModelsManager`] API.
+pub fn construct_model_family_offline(model: &str, config: &Config) -> ModelFamily {
+    find_family_for_model(model).with_config_overrides(config)
+}
 
 /// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]

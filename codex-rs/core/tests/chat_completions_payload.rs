@@ -78,7 +78,9 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         config.cli_auth_credentials_store_mode,
     );
     let models_manager = Arc::new(ModelsManager::new(auth_manager));
-    let model_family = models_manager.construct_model_family(&config.model, &config);
+    let model_family = models_manager
+        .construct_model_family(&config.model, &config)
+        .await;
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
