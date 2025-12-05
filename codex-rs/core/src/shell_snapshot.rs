@@ -255,6 +255,7 @@ $envVars | ForEach-Object {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
     async fn get_snapshot(shell_type: ShellType) -> Result<String> {
@@ -263,6 +264,74 @@ mod tests {
         write_shell_snapshot(shell_type, &path).await?;
         let content = fs::read_to_string(&path).await?;
         Ok(content)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wrap_command_with_snapshot_wraps_bash_shell() {
+        let shell = Shell {
+            shell_type: ShellType::Bash,
+            shell_path: PathBuf::from("/bin/bash"),
+        };
+        let snapshot_path = PathBuf::from("/tmp/snapshot.sh");
+        let original_command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "echo hello".to_string(),
+        ];
+
+        let wrapped = wrap_command_with_snapshot(
+            &shell,
+            &snapshot_path,
+            &original_command,
+            false,
+        );
+
+        let mut expected =
+            shell.derive_exec_args(". \"$1\" && shift && exec \"$@\"", false);
+        expected.push("codex-shell-snapshot".to_string());
+        expected.push(snapshot_path.to_string_lossy().to_string());
+        expected.extend_from_slice(&original_command);
+
+        assert_eq!(wrapped, expected);
+    }
+
+    #[test]
+    fn wrap_command_with_snapshot_preserves_cmd_shell() {
+        let shell = Shell {
+            shell_type: ShellType::Cmd,
+            shell_path: PathBuf::from("cmd"),
+        };
+        let snapshot_path = PathBuf::from("C:\\snapshot.cmd");
+        let original_command =
+            vec!["cmd".to_string(), "/c".to_string(), "echo hello".to_string()];
+
+        let wrapped =
+            wrap_command_with_snapshot(&shell, &snapshot_path, &original_command, false);
+
+        assert_eq!(wrapped, original_command);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
+        let dir = tempdir()?;
+        let shell = Shell {
+            shell_type: ShellType::Bash,
+            shell_path: PathBuf::from("/bin/bash"),
+        };
+
+        let snapshot = ShellSnapshot::try_new(dir.path(), &shell)
+            .await
+            .expect("snapshot should be created");
+        let path = snapshot.path.clone();
+        assert!(path.exists());
+
+        drop(snapshot);
+
+        assert!(!path.exists());
+
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]
