@@ -67,7 +67,7 @@ fn default_write_stdin_yield_time_ms() -> u64 {
 }
 
 fn default_login() -> bool {
-    true
+    false
 }
 
 #[async_trait]
