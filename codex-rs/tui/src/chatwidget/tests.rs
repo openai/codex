@@ -47,6 +47,7 @@ use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::ConversationId;
+use codex_protocol::account::PlanType;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::parse_command::ParsedCommand;
@@ -90,6 +91,7 @@ fn snapshot(percent: f64) -> RateLimitSnapshot {
         }),
         secondary: None,
         credits: None,
+        plan_type: None,
     }
 }
 
@@ -398,6 +400,7 @@ fn make_chatwidget_manual() -> (
         initial_user_message: None,
         token_info: None,
         rate_limit_snapshot: None,
+        plan_type: None,
         rate_limit_warnings: RateLimitWarningState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
         rate_limit_poller: None,
@@ -546,6 +549,7 @@ fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
             unlimited: false,
             balance: Some("17.5".to_string()),
         }),
+        plan_type: None,
     }));
     let initial_balance = chat
         .rate_limit_snapshot
@@ -562,6 +566,7 @@ fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
         }),
         secondary: None,
         credits: None,
+        plan_type: None,
     }));
 
     let display = chat
@@ -579,6 +584,59 @@ fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
         display.primary.as_ref().map(|window| window.used_percent),
         Some(80.0)
     );
+}
+
+#[test]
+fn rate_limit_snapshot_updates_and_retains_plan_type() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 10.0,
+            window_minutes: Some(60),
+            resets_at: None,
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 5.0,
+            window_minutes: Some(300),
+            resets_at: None,
+        }),
+        credits: None,
+        plan_type: Some(PlanType::Plus),
+    }));
+    assert_eq!(chat.plan_type, Some(PlanType::Plus));
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 25.0,
+            window_minutes: Some(30),
+            resets_at: Some(123),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 15.0,
+            window_minutes: Some(300),
+            resets_at: Some(234),
+        }),
+        credits: None,
+        plan_type: Some(PlanType::Pro),
+    }));
+    assert_eq!(chat.plan_type, Some(PlanType::Pro));
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 30.0,
+            window_minutes: Some(60),
+            resets_at: Some(456),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 18.0,
+            window_minutes: Some(300),
+            resets_at: Some(567),
+        }),
+        credits: None,
+        plan_type: None,
+    }));
+    assert_eq!(chat.plan_type, Some(PlanType::Pro));
 }
 
 #[test]

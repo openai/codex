@@ -2598,6 +2598,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("10.00".to_string()),
             }),
+            plan_type: Some(codex_protocol::account::PlanType::Plus),
         };
         state.set_rate_limits(initial.clone());
 
@@ -2613,6 +2614,7 @@ mod tests {
                 resets_at: Some(1_900),
             }),
             credits: None,
+            plan_type: None,
         };
         state.set_rate_limits(update.clone());
 
@@ -2622,6 +2624,78 @@ mod tests {
                 primary: update.primary.clone(),
                 secondary: update.secondary,
                 credits: initial.credits,
+                plan_type: initial.plan_type,
+            })
+        );
+    }
+
+    #[test]
+    fn set_rate_limits_updates_plan_type_when_present() {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load default test config");
+        let config = Arc::new(config);
+        let session_configuration = SessionConfiguration {
+            provider: config.model_provider.clone(),
+            model: config.model.clone(),
+            model_reasoning_effort: config.model_reasoning_effort,
+            model_reasoning_summary: config.model_reasoning_summary,
+            developer_instructions: config.developer_instructions.clone(),
+            user_instructions: config.user_instructions.clone(),
+            base_instructions: config.base_instructions.clone(),
+            compact_prompt: config.compact_prompt.clone(),
+            approval_policy: config.approval_policy,
+            sandbox_policy: config.sandbox_policy.clone(),
+            cwd: config.cwd.clone(),
+            original_config_do_not_use: Arc::clone(&config),
+            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
+            session_source: SessionSource::Exec,
+        };
+
+        let mut state = SessionState::new(session_configuration);
+        let initial = RateLimitSnapshot {
+            primary: Some(RateLimitWindow {
+                used_percent: 15.0,
+                window_minutes: Some(20),
+                resets_at: Some(1_600),
+            }),
+            secondary: Some(RateLimitWindow {
+                used_percent: 5.0,
+                window_minutes: Some(45),
+                resets_at: Some(1_650),
+            }),
+            credits: Some(CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("15.00".to_string()),
+            }),
+            plan_type: Some(codex_protocol::account::PlanType::Plus),
+        };
+        state.set_rate_limits(initial.clone());
+
+        let update = RateLimitSnapshot {
+            primary: Some(RateLimitWindow {
+                used_percent: 35.0,
+                window_minutes: Some(25),
+                resets_at: Some(1_700),
+            }),
+            secondary: None,
+            credits: None,
+            plan_type: Some(codex_protocol::account::PlanType::Pro),
+        };
+        state.set_rate_limits(update.clone());
+
+        assert_eq!(
+            state.latest_rate_limits,
+            Some(RateLimitSnapshot {
+                primary: update.primary,
+                secondary: update.secondary,
+                credits: initial.credits,
+                plan_type: update.plan_type,
             })
         );
     }

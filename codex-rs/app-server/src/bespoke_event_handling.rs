@@ -1499,6 +1499,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("5".to_string()),
             }),
+            plan_type: None,
         };
 
         handle_token_count_event(

@@ -58,6 +58,7 @@ use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_core::skills::model::SkillMetadata;
 use codex_protocol::ConversationId;
+use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::user_input::UserInput;
@@ -282,6 +283,7 @@ pub(crate) struct ChatWidget {
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
+    plan_type: Option<PlanType>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     rate_limit_poller: Option<JoinHandle<()>>,
@@ -579,6 +581,8 @@ impl ChatWidget {
                         balance: credits.balance.clone(),
                     });
             }
+
+            self.plan_type = snapshot.plan_type.or(self.plan_type);
 
             let warnings = self.rate_limit_warnings.take_warnings(
                 snapshot
@@ -1275,6 +1279,7 @@ impl ChatWidget {
             ),
             token_info: None,
             rate_limit_snapshot: None,
+            plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
@@ -1357,6 +1362,7 @@ impl ChatWidget {
             ),
             token_info: None,
             rate_limit_snapshot: None,
+            plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
@@ -2001,6 +2007,7 @@ impl ChatWidget {
             context_usage,
             &self.conversation_id,
             self.rate_limit_snapshot.as_ref(),
+            self.plan_type,
             Local::now(),
         ));
     }
