@@ -152,7 +152,12 @@ async fn handle_escalate_session_with_policy(
     let workdir = PathBuf::from(&workdir).absolutize()?.into_owned();
     let action = policy
         .determine_action(file.as_path(), &argv, &workdir)
-        .await?;
+        .await
+        .with_context(|| {
+            format!(
+                "failed to determine escalation action for file={file:?} argv={argv:?} workdir={workdir:?}",
+            )
+        })?;
 
     tracing::error!("decided {action:?} for {file:?} {argv:?} {workdir:?}");
 

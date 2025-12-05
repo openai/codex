@@ -1,3 +1,4 @@
+use anyhow::Context;
 use libc::c_uint;
 use serde::Deserialize;
 use serde::Serialize;
@@ -323,9 +324,10 @@ impl AsyncSocket {
 
     pub async fn receive_with_fds<T: for<'de> Deserialize<'de>>(
         &self,
-    ) -> std::io::Result<(T, Vec<OwnedFd>)> {
+    ) -> anyhow::Result<(T, Vec<OwnedFd>)> {
         let (payload, fds) = read_frame(&self.inner).await?;
-        let message: T = serde_json::from_slice(&payload)?;
+        let message: T = serde_json::from_slice(&payload)
+            .with_context(|| format!("failed to deserialize message from {payload:?}"))?;
         Ok((message, fds))
     }
 
@@ -336,8 +338,11 @@ impl AsyncSocket {
         self.send_with_fds(&msg, &[]).await
     }
 
-    pub async fn receive<T: for<'de> Deserialize<'de>>(&self) -> std::io::Result<T> {
-        let (msg, fds) = self.receive_with_fds().await?;
+    pub async fn receive<T: for<'de> Deserialize<'de>>(&self) -> anyhow::Result<T> {
+        let (msg, fds) = self
+            .receive_with_fds()
+            .await
+            .context("failed to receive message with fds")?;
         if !fds.is_empty() {
             tracing::warn!("unexpected fds in receive: {}", fds.len());
         }
@@ -415,7 +420,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn async_socket_round_trips_payload_and_fds() -> std::io::Result<()> {
+    async fn async_socket_round_trips_payload_and_fds() -> anyhow::Result<()> {
         let (server, client) = AsyncSocket::pair()?;
         let payload = TestPayload {
             id: 7,
@@ -487,6 +492,9 @@ mod tests {
             .receive::<serde_json::Value>()
             .await
             .expect_err("expected read failure");
-        assert_eq!(std::io::ErrorKind::UnexpectedEof, err.kind());
+        let io_err = err
+            .downcast_ref::<std::io::Error>()
+            .expect("expected io error from receive");
+        assert_eq!(std::io::ErrorKind::UnexpectedEof, io_err.kind());
     }
 }
