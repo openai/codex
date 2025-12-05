@@ -261,6 +261,7 @@ pub async fn process_chat_sse<S>(
                     let Some(state) = tool_calls.remove(&index) else {
                         continue;
                     };
+                    tool_call_order_seen.remove(&index);
                     let ToolCallState {
                         id,
                         name,
@@ -471,6 +472,45 @@ mod tests {
                 ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { call_id: call_b, name: name_b, arguments: args_b, .. }),
                 ResponseEvent::Completed { .. }
             ] if call_a == "call_a" && name_a == "do_a" && args_a == "{\"foo\":1}" && call_b == "call_b" && name_b == "do_b" && args_b == "{\"bar\":2}"
+        );
+    }
+
+    #[tokio::test]
+    async fn emits_tool_calls_for_multiple_choices() {
+        let payload = json!({
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [{
+                            "id": "call_a",
+                            "index": 0,
+                            "function": { "name": "do_a", "arguments": "{}" }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                },
+                {
+                    "delta": {
+                        "tool_calls": [{
+                            "id": "call_b",
+                            "index": 0,
+                            "function": { "name": "do_b", "arguments": "{}" }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }
+            ]
+        });
+
+        let body = build_body(&[payload]);
+        let events = collect_events(&body).await;
+        assert_matches!(
+            &events[..],
+            [
+                ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { call_id: call_a, name: name_a, arguments: args_a, .. }),
+                ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { call_id: call_b, name: name_b, arguments: args_b, .. }),
+                ResponseEvent::Completed { .. }
+            ] if call_a == "call_a" && name_a == "do_a" && args_a == "{}" && call_b == "call_b" && name_b == "do_b" && args_b == "{}"
         );
     }
 
