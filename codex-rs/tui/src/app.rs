@@ -320,9 +320,9 @@ impl App {
                     feedback: feedback.clone(),
                     skills: skills.clone(),
                     is_first_run,
-                    model_family: model_family.clone(),
+                    model_family,
                 };
-                ChatWidget::new(init, conversation_manager.clone(), model_family.clone())
+                ChatWidget::new(init, conversation_manager.clone())
             }
             ResumeSelection::Resume(path) => {
                 let resumed = conversation_manager
@@ -510,9 +510,9 @@ impl App {
                     feedback: self.feedback.clone(),
                     skills: self.skills.clone(),
                     is_first_run: false,
-                    model_family: model_family.clone(),
+                    model_family,
                 };
-                self.chat_widget = ChatWidget::new(init, self.server.clone(), model_family);
+                self.chat_widget = ChatWidget::new(init, self.server.clone());
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {

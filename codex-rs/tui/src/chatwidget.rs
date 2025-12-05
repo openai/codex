@@ -1236,7 +1236,6 @@ impl ChatWidget {
     pub(crate) fn new(
         common: ChatWidgetInit,
         conversation_manager: Arc<ConversationManager>,
-        model_family: ModelFamily,
     ) -> Self {
         let ChatWidgetInit {
             config,
@@ -1250,7 +1249,7 @@ impl ChatWidget {
             feedback,
             skills,
             is_first_run,
-            model_family: _,
+            model_family,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();

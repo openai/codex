@@ -365,9 +365,9 @@ async fn helpers_are_available_and_do_not_panic() {
         feedback: codex_feedback::CodexFeedback::new(),
         skills: None,
         is_first_run: true,
-        model_family: model_family.clone(),
+        model_family,
     };
-    let mut w = ChatWidget::new(init, conversation_manager, model_family);
+    let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
     let _ = &mut w;
 }
