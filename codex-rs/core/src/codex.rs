@@ -1448,18 +1448,13 @@ impl Session {
     ///
     /// Returns the new command and `true` if a shell snapshot has been
     /// applied, `false` otherwise.
-    pub(crate) async fn shell_snapshot(&self) -> Option<ShellSnapshot> {
+    pub(crate) async fn shell_snapshot(&self) -> Option<Arc<ShellSnapshot>> {
         if !self.enabled(Feature::ShellSnapshot) {
             return None;
         }
 
         let state = self.state.lock().await;
         state.shell_snapshot.clone()
-        // if let Some(path) = snapshot_path {
-        //     (wrap_command_with_snapshot(self.user_shell(), &path, command), true)
-        // } else {
-        //     (command.to_vec(), false)
-        // }
     }
 
     fn show_raw_agent_reasoning(&self) -> bool {

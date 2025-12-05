@@ -1,5 +1,6 @@
 //! Session-wide mutable state.
 
+use std::sync::Arc;
 use codex_protocol::models::ResponseItem;
 
 use crate::codex::SessionConfiguration;
@@ -15,7 +16,7 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
-    pub(crate) shell_snapshot: Option<ShellSnapshot>,
+    pub(crate) shell_snapshot: Option<Arc<ShellSnapshot>>,
 }
 
 impl SessionState {
@@ -29,7 +30,7 @@ impl SessionState {
             session_configuration,
             history,
             latest_rate_limits: None,
-            shell_snapshot,
+            shell_snapshot: shell_snapshot.map(Arc::new),
         }
     }
 

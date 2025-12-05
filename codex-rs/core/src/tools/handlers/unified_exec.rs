@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-
+use std::sync::Arc;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
@@ -253,7 +253,7 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
-fn get_command(args: &ExecCommandArgs, shell_snapshot: Option<ShellSnapshot>) -> Vec<String> {
+fn get_command(args: &ExecCommandArgs, shell_snapshot: Option<Arc<ShellSnapshot>>) -> Vec<String> {
     let shell = if let Some(shell_str) = &args.shell {
         get_shell_by_model_provided_path(&PathBuf::from(shell_str))
     } else {
