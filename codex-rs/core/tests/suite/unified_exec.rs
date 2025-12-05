@@ -1965,7 +1965,6 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
 async fn unified_exec_runs_on_all_platforms() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if!(cfg!(target_os = "windows"), Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1981,8 +1980,7 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
 
     let call_id = "uexec";
     let args = serde_json::json!({
-        "cmd": "echo 'hello'",
-        "yield_time_ms": 500,
+        "cmd": "echo 'hello crossplat'",
     });
 
     let responses = vec![
@@ -2029,7 +2027,7 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
     let output = outputs.get(call_id).expect("missing output");
 
     // TODO: Weaker match because windows produces control characters
-    assert_regex_match(".*?hello[\r\n]+", &output.output);
+    assert_regex_match(".*hello crossplat.*", &output.output);
 
     Ok(())
 }
