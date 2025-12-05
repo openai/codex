@@ -18,22 +18,22 @@ struct CrossPlatformCommand {
 }
 
 const ECHO_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
-    powershell: "Out-String 'hello, world'",
+    powershell: "Write-Output 'hello, world'",
     bash: "/bin/echo 'hello, world'",
 };
 
 const ECHO_FIRST_EXTRA_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
-    powershell: "\"first line`nsecond line\" | Out-String",
+    powershell: "Write-Output \"first line`nsecond line\"",
     bash: "printf $'first line\nsecond line\n'",
 };
 
 const ECHO_SECOND_EXTRA_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
-    powershell: "'mixed Case' | ForEach-Object { $_.ToUpper() } | Out-String",
+    powershell: "'mixed Case'.ToUpper()",
     bash: "printf 'mixed Case' | tr '[:lower:]' '[:upper:]'",
 };
 
 const ECHO_THIRD_EXTRA_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
-    powershell: "if ($true) { 'always true' } else { 'never' } | Out-String",
+    powershell: "if ($true) { 'always true' } else { 'never' }",
     bash: "if [ 1 -eq 1 ]; then printf 'always true'; else printf 'never'; fi",
 };
 
@@ -89,15 +89,17 @@ async fn mount_shell_responses(
 }
 
 fn assert_shell_command_output(output: &str, expected: &str) -> Result<()> {
+    let normalized_output = output
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim_end_matches('\n')
+        .to_string();
+
     let expected_pattern = format!(
-        r"(?s)^Exit code: 0
-Wall time: [0-9]+(?:\.[0-9]+)? seconds
-Output:
-{expected}
-?$"
+        r"(?s)^Exit code: 0\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n{expected}\n?$"
     );
 
-    assert_regex_match(&expected_pattern, output);
+    assert_regex_match(&expected_pattern, &normalized_output);
     Ok(())
 }
 
