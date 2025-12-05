@@ -689,10 +689,6 @@ fn derive_new_contents_from_chunks(
     path: &Path,
     chunks: &[UpdateFileChunk],
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    if cfg!(windows) {
-        return derive_new_contents_from_chunks_ignoring_crlf(path, chunks);
-    }
-
     let original_contents = match std::fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(err) => {
@@ -703,13 +699,7 @@ fn derive_new_contents_from_chunks(
         }
     };
 
-    let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
-
-    // Drop the trailing empty element that results from the final newline so
-    // that line counts match the behaviour of standard `diff`.
-    if original_lines.last().is_some_and(String::is_empty) {
-        original_lines.pop();
-    }
+    let original_lines: Vec<String> = build_lines_from_contents(&original_contents);
 
     let replacements = compute_replacements(&original_lines, path, chunks)?;
     let new_lines = apply_replacements(original_lines, &replacements);
@@ -717,60 +707,55 @@ fn derive_new_contents_from_chunks(
     if !new_lines.last().is_some_and(String::is_empty) {
         new_lines.push(String::new());
     }
-    let new_contents = new_lines.join("\n");
+    let new_contents = build_contents_from_lines(&original_contents, &new_lines);
     Ok(AppliedPatch {
         original_contents,
         new_contents,
     })
 }
 
-/// Return *only* the new file contents (joined into a single `String`) after
-/// applying the chunks to the file at `path`.
-fn derive_new_contents_from_chunks_ignoring_crlf(
-    path: &Path,
-    chunks: &[UpdateFileChunk],
-) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let original_contents = match std::fs::read_to_string(path) {
-        Ok(contents) => contents,
-        Err(err) => {
-            return Err(ApplyPatchError::IoError(IoError {
-                context: format!("Failed to read file to update {}", path.display()),
-                source: err,
-            }));
-        }
-    };
-
-    // Split the original contents into lines, handling CRLF vs LF line endings appropriately.
-    let uses_crlf = original_contents_uses_crlf(&original_contents);
-    let original_lines: Vec<String> = original_contents.lines().map(String::from).collect();
-
-    let replacements = compute_replacements(&original_lines, path, chunks)?;
-    let new_lines = apply_replacements(original_lines, &replacements);
-    let mut new_lines = new_lines;
-    if !new_lines.last().is_some_and(String::is_empty) {
-        new_lines.push(String::new());
-    }
-    let new_contents = if uses_crlf {
-        new_lines.join("\r\n")
+// TODO(dylan-hurd-oai): I think we can migrate to just use `contents.lines()`
+// across all platforms.
+fn build_lines_from_contents(contents: &str) -> Vec<String> {
+    if cfg!(windows) {
+        contents.lines().map(String::from).collect()
     } else {
-        new_lines.join("\n")
-    };
-    Ok(AppliedPatch {
-        original_contents,
-        new_contents,
-    })
+        let mut lines: Vec<String> = contents.split('\n').map(String::from).collect();
+
+        // Drop the trailing empty element that results from the final newline so
+        // that line counts match the behaviour of standard `diff`.
+        if lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+
+        lines
+    }
+}
+
+fn build_contents_from_lines(original_contents: &str, lines: &[String]) -> String {
+    if cfg!(windows) {
+        // for now, only compute this if we're on Windows.
+        let uses_crlf = contents_uses_crlf(original_contents);
+        if uses_crlf {
+            lines.join("\r\n")
+        } else {
+            lines.join("\n")
+        }
+    } else {
+        lines.join("\n")
+    }
 }
 
 /// Detects whether the source file uses Windows CRLF line endings consistently.
 /// We only consider a file CRLF-formatted if every newline is part of a
 /// CRLF sequence. This avoids rewriting an LF-formatted file that merely
-/// contains embedded "\r\n" within string literals.
+/// contains embedded sequences of "\r\n".
 ///
 /// Returns `true` if the file uses CRLF line endings, `false` otherwise.
-fn original_contents_uses_crlf(original_contents: &str) -> bool {
-    let bytes = original_contents.as_bytes();
-    let mut n_newlines = 0isize;
-    let mut n_crlf = 0isize;
+fn contents_uses_crlf(contents: &str) -> bool {
+    let bytes = contents.as_bytes();
+    let mut n_newlines = 0usize;
+    let mut n_crlf = 0usize;
     for i in 0..bytes.len() {
         if bytes[i] == b'\n' {
             n_newlines += 1;
@@ -1677,7 +1662,7 @@ PATCH"#,
     /// on Windows-style builds drops the synthetic trailing empty element so
     /// replacements behave like standard `diff` line numbering.
     #[test]
-    fn test_derive_new_contents_ignoring_crlf_lf_trailing_newline() {
+    fn test_derive_new_contents_lf_trailing_newline() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("lf_trailing_newline.txt");
         fs::write(&path, "foo\nbar\n").unwrap();
@@ -1699,7 +1684,7 @@ PATCH"#,
         };
 
         let AppliedPatch { new_contents, .. } =
-            derive_new_contents_from_chunks_ignoring_crlf(&path, chunks).unwrap();
+            derive_new_contents_from_chunks(&path, chunks).unwrap();
 
         assert_eq!(new_contents, "foo\nBAR\n");
     }
