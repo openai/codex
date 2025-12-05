@@ -202,19 +202,25 @@ impl<'a> ChatRequestBuilder<'a> {
                     name,
                     arguments,
                     call_id,
+                    extra_content,
                     ..
                 } => {
+                    let mut tool_call_obj = json!({
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": arguments,
+                        }
+                    });
+                    // Include extra_content (e.g., Gemini's thought_signature) if present
+                    if let Some(extra) = extra_content {
+                        tool_call_obj["extra_content"] = extra.clone();
+                    }
                     let mut msg = json!({
                         "role": "assistant",
                         "content": null,
-                        "tool_calls": [{
-                            "id": call_id,
-                            "type": "function",
-                            "function": {
-                                "name": name,
-                                "arguments": arguments,
-                            }
-                        }]
+                        "tool_calls": [tool_call_obj]
                     });
                     if let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
                         && let Some(obj) = msg.as_object_mut()

@@ -306,6 +306,7 @@ mod tests {
                 name: "tool".to_string(),
                 arguments: "{}".to_string(),
                 call_id: "c1".to_string(),
+                extra_content: None,
             },
             assistant_msg("a4"),
         ];
