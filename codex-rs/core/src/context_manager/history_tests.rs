@@ -156,6 +156,24 @@ fn get_history_for_prompt_drops_ghost_commits() {
 }
 
 #[test]
+fn estimate_token_count_ignores_ghost_snapshots() {
+    let policy = TruncationPolicy::Tokens(10_000);
+    let mut history = ContextManager::new();
+    history.record_items([&user_msg("first")], policy);
+
+    let baseline = ContextManager::estimate_items_token_count(&history.items);
+
+    let ghost_snapshot = ResponseItem::GhostSnapshot {
+        ghost_commit: GhostCommit::new("ghost-2".to_string(), None, Vec::new(), Vec::new()),
+    };
+    history.record_items([&ghost_snapshot], policy);
+
+    let with_ghost_snapshot = ContextManager::estimate_items_token_count(&history.items);
+
+    assert_eq!(baseline, with_ghost_snapshot);
+}
+
+#[test]
 fn remove_first_item_removes_matching_output_for_function_call() {
     let items = vec![
         ResponseItem::FunctionCall {
