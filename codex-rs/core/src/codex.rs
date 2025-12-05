@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
+#[cfg(test)]
 use crate::CodexAuth;
 use crate::SandboxState;
 use crate::client_common::REVIEW_PROMPT;

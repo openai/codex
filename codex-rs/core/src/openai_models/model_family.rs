@@ -266,6 +266,74 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::openai_models::ClientVersion;
+    use codex_protocol::openai_models::ModelVisibility;
+
+    fn remote(slug: &str, effort: ReasoningEffort, shell: ConfigShellToolType) -> ModelInfo {
+        ModelInfo {
+            slug: slug.to_string(),
+            display_name: slug.to_string(),
+            description: Some(format!("{slug} desc")),
+            default_reasoning_level: effort,
+            supported_reasoning_levels: vec![effort],
+            shell_type: shell,
+            visibility: ModelVisibility::List,
+            minimal_client_version: ClientVersion(0, 1, 0),
+            supported_in_api: true,
+            priority: 1,
+        }
+    }
+
+    #[test]
+    fn remote_overrides_apply_when_slug_matches() {
+        let family = model_family!("gpt-4o-mini", "gpt-4o-mini");
+        assert_ne!(family.default_reasoning_effort, Some(ReasoningEffort::High));
+
+        let updated = family.with_remote_overrides(vec![
+            remote(
+                "gpt-4o-mini",
+                ReasoningEffort::High,
+                ConfigShellToolType::ShellCommand,
+            ),
+            remote(
+                "other-model",
+                ReasoningEffort::Low,
+                ConfigShellToolType::UnifiedExec,
+            ),
+        ]);
+
+        assert_eq!(
+            updated.default_reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+        assert_eq!(updated.shell_type, ConfigShellToolType::ShellCommand);
+    }
+
+    #[test]
+    fn remote_overrides_skip_non_matching_models() {
+        let family = model_family!(
+            "codex-mini-latest",
+            "codex-mini-latest",
+            shell_type: ConfigShellToolType::Local
+        );
+
+        let updated = family.clone().with_remote_overrides(vec![remote(
+            "other",
+            ReasoningEffort::High,
+            ConfigShellToolType::ShellCommand,
+        )]);
+
+        assert_eq!(
+            updated.default_reasoning_effort,
+            family.default_reasoning_effort
+        );
+        assert_eq!(updated.shell_type, family.shell_type);
+    }
+}
+
 fn derive_default_model_family(model: &str) -> ModelFamily {
     ModelFamily {
         slug: model.to_string(),
