@@ -17,6 +17,7 @@ use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell::get_shell;
 
+#[derive(Clone, Debug)]
 pub struct ShellSnapshot {
     pub path: PathBuf,
 }
