@@ -81,6 +81,10 @@ fn extract_fds(control: &[u8]) -> Vec<OwnedFd> {
 /// message when receiving the frame header.
 async fn read_frame(async_socket: &AsyncFd<Socket>) -> std::io::Result<(Vec<u8>, Vec<OwnedFd>)> {
     let (message_len, fds) = read_frame_header(async_socket).await?;
+    tracing::error!(
+        "reading frame of length {message_len} with {} fds",
+        fds.len()
+    );
     let payload = read_frame_payload(async_socket, message_len).await?;
     Ok((payload, fds))
 }
