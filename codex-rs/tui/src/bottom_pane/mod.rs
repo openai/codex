@@ -442,6 +442,11 @@ impl BottomPane {
         !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
     }
 
+    /// Return true when no popups or modal views are active, regardless of task state.
+    pub(crate) fn can_launch_external_editor(&self) -> bool {
+        self.view_stack.is_empty() && !self.composer.popup_active()
+    }
+
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.push_view(view);
     }

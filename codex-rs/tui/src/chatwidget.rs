@@ -1669,6 +1669,10 @@ impl ChatWidget {
         self.bottom_pane.desired_height(width)
     }
 
+    pub(crate) fn can_launch_external_editor(&self) -> bool {
+        self.bottom_pane.can_launch_external_editor()
+    }
+
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(

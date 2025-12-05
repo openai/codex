@@ -1342,7 +1342,9 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             } => {
-                if self.overlay.is_none() {
+                // Only launch the external editor if there is no overlay and the bottom pane is not in use.
+                // Note that it can be launched while a task is running to enable editing while the previous turn is ongoing.
+                if self.overlay.is_none() && self.chat_widget.can_launch_external_editor() {
                     self.launch_external_editor(tui).await;
                 }
             }
