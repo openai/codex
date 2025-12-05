@@ -10,15 +10,26 @@ pub const HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG: &str = "hide_gpt5_1_migration_pro
 pub const HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG: &str =
     "hide_gpt-5.1-codex-max_migration_prompt";
 
-fn make_preset(
+struct ModelPresetArgs {
     name: ModelName,
-    description: &str,
+    description: &'static str,
     default_reasoning_effort: ReasoningEffort,
     supported_reasoning_efforts: Vec<ReasoningEffortPreset>,
     is_default: bool,
     upgrade: Option<ModelUpgrade>,
     show_in_picker: bool,
-) -> ModelPreset {
+}
+
+fn make_preset(args: ModelPresetArgs) -> ModelPreset {
+    let ModelPresetArgs {
+        name,
+        description,
+        default_reasoning_effort,
+        supported_reasoning_efforts,
+        is_default,
+        upgrade,
+        show_in_picker,
+    } = args;
     let slug = name.as_str().to_string();
     ModelPreset {
         id: slug.clone(),
@@ -35,11 +46,11 @@ fn make_preset(
 
 static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     vec![
-        make_preset(
-            ModelName::Gpt51CodexMax,
-            "Latest Codex-optimized flagship for deep and fast reasoning.",
-            ReasoningEffort::Medium,
-            vec![
+        make_preset(ModelPresetArgs {
+            name: ModelName::Gpt51CodexMax,
+            description: "Latest Codex-optimized flagship for deep and fast reasoning.",
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Low,
                     description: "Fast responses with lighter reasoning".to_string(),
@@ -57,15 +68,15 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                     description: "Extra high reasoning depth for complex problems".to_string(),
                 },
             ],
-            true,
-            None,
-            true,
-        ),
-        make_preset(
-            ModelName::Gpt51Codex,
-            "Optimized for codex.",
-            ReasoningEffort::Medium,
-            vec![
+            is_default: true,
+            upgrade: None,
+            show_in_picker: true,
+        }),
+        make_preset(ModelPresetArgs {
+            name: ModelName::Gpt51Codex,
+            description: "Optimized for codex.",
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Low,
                     description: "Fastest responses with limited reasoning".to_string(),
@@ -80,19 +91,19 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                         .to_string(),
                 },
             ],
-            false,
-            Some(ModelUpgrade {
+            is_default: false,
+            upgrade: Some(ModelUpgrade {
                 id: ModelName::Gpt51CodexMax.as_str().to_string(),
                 reasoning_effort_mapping: None,
                 migration_config_key: HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG.to_string(),
             }),
-            true,
-        ),
-        make_preset(
-            ModelName::Gpt51CodexMini,
-            "Optimized for codex. Cheaper, faster, but less capable.",
-            ReasoningEffort::Medium,
-            vec![
+            show_in_picker: true,
+        }),
+        make_preset(ModelPresetArgs {
+            name: ModelName::Gpt51CodexMini,
+            description: "Optimized for codex. Cheaper, faster, but less capable.",
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Medium,
                     description: "Dynamically adjusts reasoning based on the task".to_string(),
@@ -103,19 +114,19 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                         .to_string(),
                 },
             ],
-            false,
-            Some(ModelUpgrade {
+            is_default: false,
+            upgrade: Some(ModelUpgrade {
                 id: ModelName::Gpt51CodexMax.as_str().to_string(),
                 reasoning_effort_mapping: None,
                 migration_config_key: HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG.to_string(),
             }),
-            true,
-        ),
-        make_preset(
-            ModelName::Gpt51,
-            "Broad world knowledge with strong general reasoning.",
-            ReasoningEffort::Medium,
-            vec![
+            show_in_picker: true,
+        }),
+        make_preset(ModelPresetArgs {
+            name: ModelName::Gpt51,
+            description: "Broad world knowledge with strong general reasoning.",
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Low,
                     description: "Balances speed with some reasoning; useful for straightforward queries and short explanations".to_string(),
@@ -129,20 +140,20 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                     description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
                 },
             ],
-            false,
-            Some(ModelUpgrade {
+            is_default: false,
+            upgrade: Some(ModelUpgrade {
                 id: ModelName::Gpt51CodexMax.as_str().to_string(),
                 reasoning_effort_mapping: None,
                 migration_config_key: HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG.to_string(),
             }),
-            true,
-        ),
+            show_in_picker: true,
+        }),
         // Deprecated models.
-        make_preset(
-            ModelName::Gpt5Codex,
-            "Optimized for codex.",
-            ReasoningEffort::Medium,
-            vec![
+        make_preset(ModelPresetArgs {
+            name: ModelName::Gpt5Codex,
+            description: "Optimized for codex.",
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Low,
                     description: "Fastest responses with limited reasoning".to_string(),
@@ -156,19 +167,19 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                     description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
                 },
             ],
-            false,
-            Some(ModelUpgrade {
+            is_default: false,
+            upgrade: Some(ModelUpgrade {
                 id: ModelName::Gpt51CodexMax.as_str().to_string(),
                 reasoning_effort_mapping: None,
                 migration_config_key: HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG.to_string(),
             }),
-            false,
-        ),
-        make_preset(
-            ModelName::Gpt5CodexMini,
-            "Optimized for codex. Cheaper, faster, but less capable.",
-            ReasoningEffort::Medium,
-            vec![
+            show_in_picker: false,
+        }),
+        make_preset(ModelPresetArgs {
+            name: ModelName::Gpt5CodexMini,
+            description: "Optimized for codex. Cheaper, faster, but less capable.",
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Medium,
                     description: "Dynamically adjusts reasoning based on the task".to_string(),
@@ -178,19 +189,19 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                     description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
                 },
             ],
-            false,
-            Some(ModelUpgrade {
+            is_default: false,
+            upgrade: Some(ModelUpgrade {
                 id: ModelName::Gpt51CodexMini.as_str().to_string(),
                 reasoning_effort_mapping: None,
                 migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG.to_string(),
             }),
-            false,
-        ),
-        make_preset(
-            ModelName::Gpt5,
-            "Broad world knowledge with strong general reasoning.",
-            ReasoningEffort::Medium,
-            vec![
+            show_in_picker: false,
+        }),
+        make_preset(ModelPresetArgs {
+            name: ModelName::Gpt5,
+            description: "Broad world knowledge with strong general reasoning.",
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Minimal,
                     description: "Fastest responses with little reasoning".to_string(),
@@ -208,14 +219,14 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                     description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
                 },
             ],
-            false,
-            Some(ModelUpgrade {
+            is_default: false,
+            upgrade: Some(ModelUpgrade {
                 id: ModelName::Gpt51CodexMax.as_str().to_string(),
                 reasoning_effort_mapping: None,
                 migration_config_key: HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG.to_string(),
             }),
-            false,
-        ),
+            show_in_picker: false,
+        }),
     ]
 });
 
