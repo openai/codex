@@ -1,3 +1,4 @@
+use crate::model_provider_info::ModelProviderInfo;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use http::Error as HttpError;
 use reqwest::IntoUrl;
@@ -8,9 +9,21 @@ use reqwest::header::HeaderValue;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+
+/// TLS configuration for HTTP clients
+#[derive(Debug, Clone)]
+pub struct TlsConfig {
+    /// Path to a custom CA certificate (PEM format)
+    pub ca_certificate: Option<PathBuf>,
+    /// Path to the client certificate (PEM format) for mutual TLS
+    pub client_certificate: Option<PathBuf>,
+    /// Path to the client private key (PEM format) for mutual TLS
+    pub client_private_key: Option<PathBuf>,
+}
 
 /// Set this to add a suffix to the User-Agent string.
 ///
@@ -130,7 +143,7 @@ impl CodexRequestBuilder {
             }
             Err(error) => {
                 let status = error.status();
-                tracing::debug!(
+                tracing::error!(
                     method = %self.method,
                     url = %self.url,
                     status = status.map(|s| s.as_u16()),
@@ -262,7 +275,46 @@ pub fn create_client() -> CodexHttpClient {
     CodexHttpClient::new(inner)
 }
 
+/// Create an HTTP client with optional TLS configuration.
+/// Optionally configure TLS/mTLS settings via the `tls_config` parameter.
+pub fn create_configured_client(tls_config: Option<&TlsConfig>) -> CodexHttpClient {
+    let inner = build_configured_reqwest_client(tls_config);
+    CodexHttpClient::new(inner)
+}
+
 pub fn build_reqwest_client() -> reqwest::Client {
+    build_configured_reqwest_client(None)
+}
+
+/// Build a reqwest client configured for a specific model provider.
+/// This extracts TLS configuration from the provider if present.
+pub fn build_reqwest_client_for_provider(provider: &ModelProviderInfo) -> reqwest::Client {
+    let tls_config = provider.tls.as_ref().map(|tls| tls.to_tls_config());
+    build_configured_reqwest_client(tls_config.as_ref())
+}
+
+pub fn build_configured_reqwest_client(tls_config: Option<&TlsConfig>) -> reqwest::Client {
+    let builder = create_base_client_builder();
+
+    // Apply TLS configuration if provided
+    let builder = if let Some(tls) = tls_config {
+        match apply_tls_config(builder, tls) {
+            Ok(configured_builder) => configured_builder,
+            Err(e) => {
+                tracing::error!("Failed to apply TLS configuration: {}", e);
+                // Fall back to base builder without TLS
+                create_base_client_builder()
+            }
+        }
+    } else {
+        builder
+    };
+
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// Create the base HTTP client builder with standard configuration.
+fn create_base_client_builder() -> reqwest::ClientBuilder {
     use reqwest::header::HeaderMap;
 
     let mut headers = HeaderMap::new();
@@ -270,14 +322,90 @@ pub fn build_reqwest_client() -> reqwest::Client {
     let ua = get_codex_user_agent();
 
     let mut builder = reqwest::Client::builder()
-        // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
         .default_headers(headers);
+
     if is_sandboxed() {
         builder = builder.no_proxy();
     }
 
-    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+    builder
+}
+
+/// Apply TLS configuration to a reqwest ClientBuilder.
+/// Paths are resolved relative to ~/.codex/ if they're not absolute.
+fn apply_tls_config(
+    mut builder: reqwest::ClientBuilder,
+    tls: &TlsConfig,
+) -> Result<reqwest::ClientBuilder, String> {
+    use reqwest::Certificate;
+    use reqwest::Identity;
+
+    // Add custom CA certificate if provided
+    if let Some(ca_path) = &tls.ca_certificate {
+        let resolved_path = resolve_cert_path(ca_path);
+        let cert_pem = std::fs::read(&resolved_path)
+            .map_err(|e| format!("Failed to read CA certificate from {}: {}", resolved_path.display(), e))?;
+
+        let certificate = Certificate::from_pem(&cert_pem)
+            .map_err(|e| format!("Failed to parse CA certificate from {}: {}", resolved_path.display(), e))?;
+
+        // Disable built-in root certificates and use only our custom CA
+        builder = builder
+            .tls_built_in_root_certs(false)
+            .add_root_certificate(certificate);
+    }
+
+    // Configure client certificate and private key for mTLS
+    match (&tls.client_certificate, &tls.client_private_key) {
+        (Some(cert_path), Some(key_path)) => {
+            let cert_resolved = resolve_cert_path(cert_path);
+            let key_resolved = resolve_cert_path(key_path);
+
+            // Read cert and key files
+            let cert_pem = std::fs::read(&cert_resolved)
+                .map_err(|e| format!("Failed to read client certificate from {}: {}", cert_resolved.display(), e))?;
+            let key_pem = std::fs::read(&key_resolved)
+                .map_err(|e| format!("Failed to read client private key from {}: {}", key_resolved.display(), e))?;
+
+            // For rustls, Identity::from_pem() accepts combined cert+key PEM data
+            let mut combined_pem = cert_pem;
+            combined_pem.extend_from_slice(&key_pem);
+
+            let identity = Identity::from_pem(&combined_pem)
+                .map_err(|e| format!("Failed to create client identity from {} and {}: {}",
+                    cert_resolved.display(), key_resolved.display(), e))?;
+
+            builder = builder
+                .identity(identity)
+                .https_only(true);
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            return Err("client_certificate and client_private_key must both be provided for mTLS".to_string());
+        }
+        (None, None) => {
+            // No client certificate configured
+        }
+    }
+
+    Ok(builder)
+}
+
+/// Resolve certificate paths relative to ~/.codex/ if they're not absolute.
+fn resolve_cert_path(path: &PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path.clone()
+    } else {
+        // Resolve relative to $CODEX_HOME (defaults to ~/.codex)
+        let codex_home = std::env::var("CODEX_HOME")
+            .ok()
+            .and_then(|s| if s.is_empty() { None } else { Some(PathBuf::from(s)) })
+            .or_else(|| {
+                dirs::home_dir().map(|home| home.join(".codex"))
+            })
+            .unwrap_or_else(|| PathBuf::from(".codex"));
+        codex_home.join(path)
+    }
 }
 
 fn is_sandboxed() -> bool {

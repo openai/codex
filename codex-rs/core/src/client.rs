@@ -42,7 +42,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::config::Config;
-use crate::default_client::build_reqwest_client;
+use crate::default_client::build_reqwest_client_for_provider;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
@@ -168,7 +168,7 @@ impl ModelClient {
                 .provider
                 .to_api_provider(auth.as_ref().map(|a| a.mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
-            let transport = ReqwestTransport::new(build_reqwest_client());
+            let transport = ReqwestTransport::new(build_reqwest_client_for_provider(&self.provider));
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
             let client = ApiChatClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
@@ -253,7 +253,7 @@ impl ModelClient {
                 .provider
                 .to_api_provider(auth.as_ref().map(|a| a.mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
-            let transport = ReqwestTransport::new(build_reqwest_client());
+            let transport = ReqwestTransport::new(build_reqwest_client_for_provider(&self.provider));
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
             let client = ApiResponsesClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
@@ -337,7 +337,7 @@ impl ModelClient {
             .provider
             .to_api_provider(auth.as_ref().map(|a| a.mode))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
-        let transport = ReqwestTransport::new(build_reqwest_client());
+        let transport = ReqwestTransport::new(build_reqwest_client_for_provider(&self.provider));
         let request_telemetry = self.build_request_telemetry();
         let client = ApiCompactClient::new(transport, api_provider, api_auth)
             .with_telemetry(Some(request_telemetry));

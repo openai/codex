@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::env::VarError;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::error::EnvVarError;
@@ -42,6 +43,36 @@ pub enum WireApi {
     /// Regular Chat Completions compatible with `/v1/chat/completions`.
     #[default]
     Chat,
+}
+
+/// TLS configuration for mutual TLS (mTLS) authentication with model providers.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct ModelProviderTlsConfig {
+    /// Path to a custom CA certificate (PEM format) to trust when connecting to this provider.
+    /// Relative paths are resolved against `~/.codex/`.
+    pub ca_certificate: Option<PathBuf>,
+
+    /// Path to the client certificate (PEM format) for mutual TLS authentication.
+    /// Must be provided together with `client_private_key`.
+    /// Relative paths are resolved against `~/.codex/`.
+    pub client_certificate: Option<PathBuf>,
+
+    /// Path to the client private key (PEM format) for mutual TLS authentication.
+    /// Must be provided together with `client_certificate`.
+    /// Relative paths are resolved against `~/.codex/`.
+    pub client_private_key: Option<PathBuf>,
+}
+
+impl ModelProviderTlsConfig {
+    /// Convert to the default_client TlsConfig type
+    pub fn to_tls_config(&self) -> crate::default_client::TlsConfig {
+        crate::default_client::TlsConfig {
+            ca_certificate: self.ca_certificate.clone(),
+            client_certificate: self.client_certificate.clone(),
+            client_private_key: self.client_private_key.clone(),
+        }
+    }
 }
 
 /// Serializable representation of a provider definition.
@@ -96,6 +127,10 @@ pub struct ModelProviderInfo {
     /// and API key (if needed) comes from the "env_key" environment variable.
     #[serde(default)]
     pub requires_openai_auth: bool,
+
+    /// TLS configuration for mutual TLS (mTLS) authentication and custom CA certificates.
+    #[serde(default)]
+    pub tls: Option<ModelProviderTlsConfig>,
 }
 
 impl ModelProviderInfo {
@@ -263,6 +298,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: true,
+                tls: None,
             },
         ),
         (
@@ -314,6 +350,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
+        tls: None,
     }
 }
 
@@ -342,6 +379,7 @@ base_url = "http://localhost:11434/v1"
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            tls: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -372,6 +410,7 @@ query_params = { api-version = "2025-04-01-preview" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            tls: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -405,6 +444,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            tls: None,
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -436,6 +476,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
+                tls: None,
             };
             let api = provider.to_api_provider(None).expect("api provider");
             assert!(
@@ -458,6 +499,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            tls: None,
         };
         let named_api = named_provider.to_api_provider(None).expect("api provider");
         assert!(named_api.is_azure_responses_endpoint());
@@ -482,6 +524,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
+                tls: None,
             };
             let api = provider.to_api_provider(None).expect("api provider");
             assert!(
