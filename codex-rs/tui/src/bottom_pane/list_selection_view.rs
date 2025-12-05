@@ -266,9 +266,19 @@ impl BottomPaneView for ListSelectionView {
         match key_event {
             KeyEvent {
                 code: KeyCode::Up, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
             } => self.move_up(),
             KeyEvent {
                 code: KeyCode::Down,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
                 ..
             } => self.move_down(),
             KeyEvent {
@@ -711,6 +721,82 @@ mod tests {
         assert_snapshot!(
             "list_selection_narrow_width_preserves_rows",
             render_lines_with_width(&view, 24)
+        );
+    }
+
+    #[test]
+    fn ctrl_n_moves_selection_down() {
+        let mut view = make_selection_view(None);
+        // Initial selection is on first item (Read Only which is_current)
+        let initial = render_lines(&view);
+        assert!(
+            initial.contains("› 1. Read Only"),
+            "expected first item selected initially"
+        );
+
+        // Press Ctrl+n to move down
+        view.handle_key_event(KeyEvent::new(
+            KeyCode::Char('n'),
+            KeyModifiers::CONTROL,
+        ));
+        let after_ctrl_n = render_lines(&view);
+        assert!(
+            after_ctrl_n.contains("› 2. Full Access"),
+            "expected second item selected after Ctrl+n"
+        );
+    }
+
+    #[test]
+    fn ctrl_p_moves_selection_up() {
+        let mut view = make_selection_view(None);
+        // Move down first so we can move up
+        view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let after_down = render_lines(&view);
+        assert!(
+            after_down.contains("› 2. Full Access"),
+            "expected second item selected after Down"
+        );
+
+        // Press Ctrl+p to move up
+        view.handle_key_event(KeyEvent::new(
+            KeyCode::Char('p'),
+            KeyModifiers::CONTROL,
+        ));
+        let after_ctrl_p = render_lines(&view);
+        assert!(
+            after_ctrl_p.contains("› 1. Read Only"),
+            "expected first item selected after Ctrl+p"
+        );
+    }
+
+    #[test]
+    fn ctrl_n_and_ctrl_p_wrap_around() {
+        let mut view = make_selection_view(None);
+        // Move to second item
+        view.handle_key_event(KeyEvent::new(
+            KeyCode::Char('n'),
+            KeyModifiers::CONTROL,
+        ));
+        // Move past last item - should wrap to first
+        view.handle_key_event(KeyEvent::new(
+            KeyCode::Char('n'),
+            KeyModifiers::CONTROL,
+        ));
+        let wrapped_forward = render_lines(&view);
+        assert!(
+            wrapped_forward.contains("› 1. Read Only"),
+            "expected selection to wrap to first item"
+        );
+
+        // Move up from first item - should wrap to last
+        view.handle_key_event(KeyEvent::new(
+            KeyCode::Char('p'),
+            KeyModifiers::CONTROL,
+        ));
+        let wrapped_back = render_lines(&view);
+        assert!(
+            wrapped_back.contains("› 2. Full Access"),
+            "expected selection to wrap to last item"
         );
     }
 }
