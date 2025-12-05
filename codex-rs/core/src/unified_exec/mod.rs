@@ -80,7 +80,6 @@ pub(crate) struct ExecCommandRequest {
 
 #[derive(Debug)]
 pub(crate) struct WriteStdinRequest<'a> {
-    pub call_id: &'a str,
     pub process_id: &'a str,
     pub input: &'a str,
     pub yield_time_ms: u64,
@@ -216,7 +215,6 @@ mod tests {
             .services
             .unified_exec_manager
             .write_stdin(WriteStdinRequest {
-                call_id: "write-stdin",
                 process_id,
                 input,
                 yield_time_ms,

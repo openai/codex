@@ -215,7 +215,6 @@ impl ToolHandler for UnifiedExecHandler {
                 })?;
                 manager
                     .write_stdin(WriteStdinRequest {
-                        call_id: &call_id,
                         process_id: &args.session_id.to_string(),
                         input: &args.chars,
                         yield_time_ms: args.yield_time_ms,
