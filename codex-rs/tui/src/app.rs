@@ -302,7 +302,10 @@ impl App {
         };
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
-
+        let model_family = conversation_manager
+            .get_models_manager()
+            .construct_model_family(&config.model, &config)
+            .await;
         let mut chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -317,8 +320,9 @@ impl App {
                     feedback: feedback.clone(),
                     skills: skills.clone(),
                     is_first_run,
+                    model_family: model_family.clone(),
                 };
-                ChatWidget::new(init, conversation_manager.clone())
+                ChatWidget::new(init, conversation_manager.clone(), model_family.clone())
             }
             ResumeSelection::Resume(path) => {
                 let resumed = conversation_manager
@@ -343,6 +347,7 @@ impl App {
                     feedback: feedback.clone(),
                     skills: skills.clone(),
                     is_first_run,
+                    model_family,
                 };
                 ChatWidget::new_from_existing(
                     init,
@@ -505,8 +510,9 @@ impl App {
                     feedback: self.feedback.clone(),
                     skills: self.skills.clone(),
                     is_first_run: false,
+                    model_family: model_family.clone(),
                 };
-                self.chat_widget = ChatWidget::new(init, self.server.clone());
+                self.chat_widget = ChatWidget::new(init, self.server.clone(), model_family);
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
@@ -554,6 +560,7 @@ impl App {
                                     feedback: self.feedback.clone(),
                                     skills: self.skills.clone(),
                                     is_first_run: false,
+                                    model_family: model_family.clone(),
                                 };
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
@@ -642,8 +649,7 @@ impl App {
                     self.suppress_shutdown_complete = false;
                     return Ok(true);
                 }
-                self.chat_widget
-                    .handle_codex_event(event, model_family.clone());
+                self.chat_widget.handle_codex_event(event);
             }
             AppEvent::ConversationHistory(ev) => {
                 self.on_conversation_history_for_backtrack(tui, ev).await?;
@@ -683,7 +689,12 @@ impl App {
                 self.on_update_reasoning_effort(effort);
             }
             AppEvent::UpdateModel(model) => {
-                self.chat_widget.set_model(&model);
+                let model_family = self
+                    .server
+                    .get_models_manager()
+                    .construct_model_family(&model, &self.config)
+                    .await;
+                self.chat_widget.set_model(&model, model_family);
                 self.config.model = model;
             }
             AppEvent::OpenReasoningPopup { model } => {
@@ -1135,8 +1146,6 @@ mod tests {
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
-    use codex_core::openai_models::model_family::ModelFamily;
-    use codex_core::openai_models::model_family::find_family_for_model;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
@@ -1224,10 +1233,6 @@ mod tests {
 
     fn all_model_presets() -> Vec<ModelPreset> {
         codex_core::openai_models::model_presets::all_model_presets().clone()
-    }
-
-    fn model_family_for_config(config: &Config) -> ModelFamily {
-        find_family_for_model(&config.model)
     }
 
     #[test]
@@ -1384,13 +1389,10 @@ mod tests {
             rollout_path: PathBuf::new(),
         };
 
-        app.chat_widget.handle_codex_event(
-            Event {
-                id: String::new(),
-                msg: EventMsg::SessionConfigured(event),
-            },
-            model_family_for_config(app.chat_widget.config_ref()),
-        );
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(event),
+        });
 
         while app_event_rx.try_recv().is_ok() {}
         while op_rx.try_recv().is_ok() {}

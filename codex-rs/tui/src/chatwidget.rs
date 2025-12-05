@@ -9,7 +9,6 @@ use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::types::Notifications;
-use codex_core::config::types::ReasoningSummaryFormat;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::openai_models::model_family::ModelFamily;
@@ -262,6 +261,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) skills: Option<Vec<SkillMetadata>>,
     pub(crate) is_first_run: bool,
+    pub(crate) model_family: ModelFamily,
 }
 
 #[derive(Default)]
@@ -278,6 +278,7 @@ pub(crate) struct ChatWidget {
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
     config: Config,
+    model_family: ModelFamily,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     session_header: SessionHeader,
@@ -375,11 +376,7 @@ impl ChatWidget {
     }
 
     // --- Small event handlers ---
-    fn on_session_configured(
-        &mut self,
-        event: codex_core::protocol::SessionConfiguredEvent,
-        model_family: ModelFamily,
-    ) {
+    fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.conversation_id = Some(event.session_id);
@@ -393,7 +390,7 @@ impl ChatWidget {
             self.show_welcome_banner,
         ));
         if let Some(messages) = initial_messages {
-            self.replay_initial_messages(messages, model_family);
+            self.replay_initial_messages(messages);
         }
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
@@ -468,7 +465,8 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_agent_reasoning_final(&mut self, reasoning_summary_format: ReasoningSummaryFormat) {
+    fn on_agent_reasoning_final(&mut self) {
+        let reasoning_summary_format = self.get_model_family().reasoning_summary_format;
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         if !self.full_reasoning_buffer.is_empty() {
@@ -645,6 +643,9 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
+    }
+    pub(crate) fn get_model_family(&self) -> ModelFamily {
+        self.model_family.clone()
     }
 
     fn on_error(&mut self, message: String) {
@@ -1235,6 +1236,7 @@ impl ChatWidget {
     pub(crate) fn new(
         common: ChatWidgetInit,
         conversation_manager: Arc<ConversationManager>,
+        model_family: ModelFamily,
     ) -> Self {
         let ChatWidgetInit {
             config,
@@ -1248,6 +1250,7 @@ impl ChatWidget {
             feedback,
             skills,
             is_first_run,
+            model_family: _,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1269,6 +1272,7 @@ impl ChatWidget {
             }),
             active_cell: None,
             config: config.clone(),
+            model_family,
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(config.model),
@@ -1327,6 +1331,7 @@ impl ChatWidget {
             models_manager,
             feedback,
             skills,
+            model_family,
             ..
         } = common;
         let mut rng = rand::rng();
@@ -1351,6 +1356,7 @@ impl ChatWidget {
             }),
             active_cell: None,
             config: config.clone(),
+            model_family,
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(config.model),
@@ -1739,19 +1745,19 @@ impl ChatWidget {
     /// is intentionally conservative: only safe-to-replay items are rendered to
     /// avoid triggering side effects. Event ids are passed as `None` to
     /// distinguish replayed events from live ones.
-    fn replay_initial_messages(&mut self, events: Vec<EventMsg>, model_family: ModelFamily) {
+    fn replay_initial_messages(&mut self, events: Vec<EventMsg>) {
         for msg in events {
             if matches!(msg, EventMsg::SessionConfigured(_)) {
                 continue;
             }
             // `id: None` indicates a synthetic/fake id coming from replay.
-            self.dispatch_event_msg(None, msg, true, model_family.clone());
+            self.dispatch_event_msg(None, msg, true);
         }
     }
 
-    pub(crate) fn handle_codex_event(&mut self, event: Event, model_family: ModelFamily) {
+    pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
-        self.dispatch_event_msg(Some(id), msg, false, model_family);
+        self.dispatch_event_msg(Some(id), msg, false);
     }
 
     /// Dispatch a protocol `EventMsg` to the appropriate handler.
@@ -1759,13 +1765,7 @@ impl ChatWidget {
     /// `id` is `Some` for live events and `None` for replayed events from
     /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
     /// that must not be used to correlate follow-up actions.
-    fn dispatch_event_msg(
-        &mut self,
-        id: Option<String>,
-        msg: EventMsg,
-        from_replay: bool,
-        model_family: ModelFamily,
-    ) {
+    fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, from_replay: bool) {
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
@@ -1776,7 +1776,7 @@ impl ChatWidget {
         }
 
         match msg {
-            EventMsg::SessionConfigured(e) => self.on_session_configured(e, model_family),
+            EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::AgentMessage(AgentMessageEvent { message }) => self.on_agent_message(message),
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
@@ -1785,12 +1785,10 @@ impl ChatWidget {
             | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
             }) => self.on_agent_reasoning_delta(delta),
-            EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => {
-                self.on_agent_reasoning_final(model_family.reasoning_summary_format)
-            }
+            EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => self.on_agent_reasoning_final(),
             EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
                 self.on_agent_reasoning_delta(text);
-                self.on_agent_reasoning_final(model_family.reasoning_summary_format)
+                self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TaskStarted(_) => self.on_task_started(),
@@ -2847,9 +2845,10 @@ impl ChatWidget {
     }
 
     /// Set the model in the widget's config copy.
-    pub(crate) fn set_model(&mut self, model: &str) {
+    pub(crate) fn set_model(&mut self, model: &str, model_family: ModelFamily) {
         self.session_header.set_model(model);
         self.config.model = model.to_string();
+        self.model_family = model_family;
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
