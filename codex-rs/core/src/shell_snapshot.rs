@@ -1,0 +1,242 @@
+use std::path::Path;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use anyhow::Context;
+use anyhow::Result;
+use anyhow::anyhow;
+use anyhow::bail;
+use tokio::fs;
+use tokio::process::Command;
+use tokio::time::timeout;
+
+use crate::shell::Shell;
+use crate::shell::ShellType;
+use crate::shell::get_shell;
+
+pub async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> Result<PathBuf> {
+    let shell = get_shell(shell_type.clone(), None)
+        .with_context(|| format!("No available shell for {shell_type:?}"))?;
+
+    let snapshot = capture_snapshot(&shell).await?;
+
+    if let Some(parent) = output_path.parent() {
+        let parent_display = parent.display();
+        fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("Failed to create snapshot parent {parent_display}"))?;
+    }
+
+    let snapshot_path = output_path.display();
+    fs::write(output_path, snapshot)
+        .await
+        .with_context(|| format!("Failed to write snapshot to {snapshot_path}"))?;
+
+    Ok(output_path.to_path_buf())
+}
+
+async fn capture_snapshot(shell: &Shell) -> Result<String> {
+    let shell_type = shell.shell_type.clone();
+    match shell_type {
+        ShellType::Zsh => run_shell_script(shell, zsh_snapshot_script()).await,
+        ShellType::Bash => run_shell_script(shell, bash_snapshot_script()).await,
+        ShellType::Sh => run_shell_script(shell, sh_snapshot_script()).await,
+        ShellType::PowerShell => run_shell_script(shell, powershell_snapshot_script()).await,
+        ShellType::Cmd => bail!("Shell snapshotting is not yet supported for {shell_type:?}"),
+    }
+}
+
+async fn run_shell_script(shell: &Shell, script: &str) -> Result<String> {
+    let args = shell.derive_exec_args(script, true);
+    let shell_name = shell.name();
+    let output = timeout(
+        Duration::from_secs(10),
+        Command::new(&args[0]).args(&args[1..]).output(),
+    )
+    .await
+    .map_err(|_| anyhow!("Snapshot command timed out for {shell_name}"))?
+    .with_context(|| format!("Failed to execute {shell_name}"))?;
+
+    if !output.status.success() {
+        let status = output.status;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("Snapshot command exited with status {status}: {stderr}");
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn zsh_snapshot_script() -> &'static str {
+    r#"print '# Snapshot file'
+print '# Unset all aliases to avoid conflicts with functions'
+print 'unalias -a 2>/dev/null || true'
+print '# Functions'
+functions
+print ''
+setopt_count=$(setopt | wc -l | tr -d ' ')
+print "setopts $setopt_count"
+setopt | sed 's/^/setopt /'
+print ''
+alias_count=$(alias -L | wc -l | tr -d ' ')
+print "aliases $alias_count"
+alias -L
+print ''
+export_count=$(export -p | wc -l | tr -d ' ')
+print "exports $export_count"
+export -p
+"#
+}
+
+fn bash_snapshot_script() -> &'static str {
+    r#"echo '# Snapshot file'
+echo '# Unset all aliases to avoid conflicts with functions'
+unalias -a 2>/dev/null || true
+echo '# Functions'
+declare -f
+echo ''
+bash_opts=$(set -o | awk '$2=="on"{print $1}')
+bash_opt_count=$(printf '%s\n' "$bash_opts" | sed '/^$/d' | wc -l | tr -d ' ')
+echo "setopts $bash_opt_count"
+if [ -n "$bash_opts" ]; then
+  printf 'set -o %s\n' $bash_opts
+fi
+echo ''
+alias_count=$(alias -p | wc -l | tr -d ' ')
+echo "aliases $alias_count"
+alias -p
+echo ''
+export_count=$(export -p | wc -l | tr -d ' ')
+echo "exports $export_count"
+export -p
+"#
+}
+
+fn sh_snapshot_script() -> &'static str {
+    r#"echo '# Snapshot file'
+echo '# Unset all aliases to avoid conflicts with functions'
+unalias -a 2>/dev/null || true
+echo '# Functions'
+if command -v typeset >/dev/null 2>&1; then
+  typeset -f
+elif command -v declare >/dev/null 2>&1; then
+  declare -f
+fi
+echo ''
+if set -o >/dev/null 2>&1; then
+  sh_opts=$(set -o | awk '$2=="on"{print $1}')
+  sh_opt_count=$(printf '%s\n' "$sh_opts" | sed '/^$/d' | wc -l | tr -d ' ')
+  echo "setopts $sh_opt_count"
+  if [ -n "$sh_opts" ]; then
+    printf 'set -o %s\n' $sh_opts
+  fi
+else
+  echo 'setopts 0'
+fi
+echo ''
+if alias >/dev/null 2>&1; then
+  alias_count=$(alias | wc -l | tr -d ' ')
+  echo "aliases $alias_count"
+  alias
+  echo ''
+else
+  echo 'aliases 0'
+fi
+if export -p >/dev/null 2>&1; then
+  export_count=$(export -p | wc -l | tr -d ' ')
+  echo "exports $export_count"
+  export -p
+else
+  export_count=$(env | wc -l | tr -d ' ')
+  echo "exports $export_count"
+  env | sort | while IFS='=' read -r key value; do
+    escaped=$(printf "%s" "$value" | sed "s/'/'\"'\"'/g")
+    printf "export %s='%s'\n" "$key" "$escaped"
+  done
+fi
+"#
+}
+
+fn powershell_snapshot_script() -> &'static str {
+    r#"$ErrorActionPreference = 'Stop'
+Write-Output '# Snapshot file'
+Write-Output '# Unset all aliases to avoid conflicts with functions'
+Write-Output 'Remove-Item Alias:* -ErrorAction SilentlyContinue'
+Write-Output '# Functions'
+Get-ChildItem Function: | ForEach-Object {
+    "function {0} {{`n{1}`n}}" -f $_.Name, $_.Definition
+}
+Write-Output ''
+$aliases = Get-Alias
+Write-Output ("aliases " + $aliases.Count)
+$aliases | ForEach-Object {
+    "Set-Alias -Name {0} -Value {1}" -f $_.Name, $_.Definition
+}
+Write-Output ''
+$envVars = Get-ChildItem Env:
+Write-Output ("exports " + $envVars.Count)
+$envVars | ForEach-Object {
+    $escaped = $_.Value -replace "'", "''"
+    "`$env:{0}='{1}'" -f $_.Name, $escaped
+}
+"#
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    async fn get_snapshot(shell_type: ShellType) -> Result<String> {
+        let dir = tempdir()?;
+        let path = dir.path().join("snapshot.sh");
+        write_shell_snapshot(shell_type, &path).await?;
+        let content = fs::read_to_string(&path).await?;
+        Ok(content)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn macos_zsh_snapshot_includes_sections() -> Result<()> {
+        let snapshot = get_snapshot(ShellType::Zsh).await?;
+        assert!(snapshot.contains("# Snapshot file"));
+        assert!(snapshot.contains("aliases "));
+        assert!(snapshot.contains("exports "));
+        assert!(snapshot.contains("export CARGO"));
+        assert!(snapshot.contains("setopts "));
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn linux_bash_snapshot_includes_sections() -> Result<()> {
+        let snapshot = get_snapshot(ShellType::Bash).await?;
+        assert!(snapshot.contains("# Snapshot file"));
+        assert!(snapshot.contains("aliases "));
+        assert!(snapshot.contains("exports "));
+        assert!(snapshot.contains("export CARGO"));
+        assert!(snapshot.contains("setopts "));
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn linux_sh_snapshot_includes_sections() -> Result<()> {
+        let snapshot = get_snapshot(ShellType::Sh).await?;
+        assert!(snapshot.contains("# Snapshot file"));
+        assert!(snapshot.contains("aliases "));
+        assert!(snapshot.contains("exports "));
+        assert!(snapshot.contains("export CARGO"));
+        assert!(snapshot.contains("setopts "));
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_powershell_snapshot_includes_sections() -> Result<()> {
+        let snapshot = get_snapshot(ShellType::PowerShell).await?;
+        assert!(snapshot.contains("# Snapshot file"));
+        assert!(snapshot.contains("aliases "));
+        assert!(snapshot.contains("exports "));
+        Ok(())
+    }
+}
