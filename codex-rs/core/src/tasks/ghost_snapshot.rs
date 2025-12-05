@@ -58,7 +58,7 @@ impl SessionTask for GhostSnapshotTask {
                             session
                                 .session
                                 .send_event(
-                                    &ctx_for_task.sub_id,
+                                    &ctx_for_task,
                                     EventMsg::Warning(WarningEvent { message }),
                                 )
                                 .await;
