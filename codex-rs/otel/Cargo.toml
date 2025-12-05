@@ -29,7 +29,7 @@ opentelemetry-otlp = { workspace = true, features = [
     "http-proto",
     "http-json",
     "logs",
-    "reqwest",
+    "reqwest-blocking-client",
     "reqwest-rustls",
     "tls",
     "tls-roots",
@@ -40,7 +40,7 @@ opentelemetry_sdk = { workspace = true, features = [
     "rt-tokio",
 ], optional = true }
 http = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 strum_macros = { workspace = true }
