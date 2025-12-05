@@ -49,8 +49,7 @@ impl ShellCommandHandler {
         turn_context: &TurnContext,
     ) -> ExecParams {
         let shell = session.user_shell();
-        let use_login_shell = true;
-        let command = shell.derive_exec_args(&params.command, use_login_shell);
+        let command = shell.build_command(&params.command, None);
 
         ExecParams {
             command,
