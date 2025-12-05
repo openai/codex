@@ -2495,7 +2495,6 @@ mod tests {
     use crate::config::ConfigToml;
     use crate::exec::ExecToolCallOutput;
     use crate::function_tool::FunctionCallError;
-    use crate::openai_models::model_family::find_family_for_model;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
     use codex_protocol::models::FunctionCallOutputPayload;
