@@ -64,11 +64,6 @@ async fn responses_stream_includes_subagent_header_on_review() {
 
     let conversation_id = ConversationId::new();
     let auth_mode = AuthMode::ChatGPT;
-    let auth_manager = AuthManager::shared(
-        config.cwd.clone(),
-        false,
-        config.cli_auth_credentials_store_mode,
-    );
     let model_family = construct_model_family_sync(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
@@ -159,11 +154,6 @@ async fn responses_stream_includes_subagent_header_on_other() {
 
     let conversation_id = ConversationId::new();
     let auth_mode = AuthMode::ChatGPT;
-    let auth_manager = AuthManager::shared(
-        config.cwd.clone(),
-        false,
-        config.cli_auth_credentials_store_mode,
-    );
     let model_family = construct_model_family_sync(&config.model, &config);
 
     let otel_event_manager = OtelEventManager::new(
@@ -255,11 +245,12 @@ async fn responses_respects_model_family_overrides_from_config() {
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
-    let auth_manager = AuthManager::shared(
+    let auth_mode = AuthManager::shared(
         config.cwd.clone(),
         false,
         config.cli_auth_credentials_store_mode,
-    );
+    )
+    .get_auth_mode();
     let model_family = construct_model_family_sync(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
@@ -267,7 +258,7 @@ async fn responses_respects_model_family_overrides_from_config() {
         model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        auth_manager.get_auth_mode(),
+        auth_mode,
         false,
         "test".to_string(),
     );
