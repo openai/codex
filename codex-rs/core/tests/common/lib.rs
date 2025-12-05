@@ -369,3 +369,15 @@ macro_rules! skip_if_no_network {
         }
     }};
 }
+
+#[macro_export]
+macro_rules! skip_if_windows {
+    ($return_value:expr $(,)?) => {{
+        if cfg!(target_os = "windows") {
+            println!(
+                "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+            );
+            return $return_value;
+        }
+    }};
+}
