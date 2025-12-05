@@ -15,7 +15,7 @@ use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::protocol::SessionSource;
-use core_test_support::construct_model_family_sync;
+use core_test_support::construct_model_family_offline;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use futures::StreamExt;
@@ -65,7 +65,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
 
     let conversation_id = ConversationId::new();
     let auth_mode = AuthMode::ChatGPT;
-    let model_family = construct_model_family_sync(&config.model, &config);
+    let model_family = construct_model_family_offline(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
@@ -155,7 +155,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
 
     let conversation_id = ConversationId::new();
     let auth_mode = AuthMode::ChatGPT;
-    let model_family = construct_model_family_sync(&config.model, &config);
+    let model_family = construct_model_family_offline(&config.model, &config);
 
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
@@ -248,7 +248,7 @@ async fn responses_respects_model_family_overrides_from_config() {
     let conversation_id = ConversationId::new();
     let auth_mode =
         AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key")).get_auth_mode();
-    let model_family = construct_model_family_sync(&config.model, &config);
+    let model_family = construct_model_family_offline(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),

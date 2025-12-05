@@ -39,7 +39,7 @@ pub fn load_default_config_for_test(codex_home: &TempDir) -> Config {
     .expect("defaults for test should always succeed")
 }
 
-pub fn construct_model_family_sync(model: &str, config: &Config) -> ModelFamily {
+pub fn construct_model_family_offline(model: &str, config: &Config) -> ModelFamily {
     find_family_for_model(model).with_config_overrides(config)
 }
 

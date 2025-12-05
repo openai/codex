@@ -1,6 +1,6 @@
 use assert_matches::assert_matches;
 use codex_core::AuthManager;
-use core_test_support::construct_model_family_sync;
+use core_test_support::construct_model_family_offline;
 use std::sync::Arc;
 use tracing_test::traced_test;
 
@@ -74,7 +74,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
     let conversation_id = ConversationId::new();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let auth_mode = auth_manager.get_auth_mode();
-    let model_family = construct_model_family_sync(&config.model, &config);
+    let model_family = construct_model_family_offline(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
