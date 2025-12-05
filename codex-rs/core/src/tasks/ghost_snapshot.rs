@@ -56,12 +56,12 @@ impl SessionTask for GhostSnapshotTask {
                     .await
                         && let Some(message) = format_large_untracked_warning(&report) {
                             session
-                                .session
-                                .send_event(
-                                    &ctx_for_task,
-                                    EventMsg::Warning(WarningEvent { message }),
-                                )
-                                .await;
+                            .session
+                            .send_event(
+                                &ctx_for_task,
+                                EventMsg::Warning(WarningEvent { message }),
+                            )
+                            .await;
                             }
 
                     // Required to run in a dedicated blocking pool.
