@@ -1017,12 +1017,9 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
-    let auth_manager = AuthManager::shared(
-        config.cwd.clone(),
-        false,
-        config.cli_auth_credentials_store_mode,
-    );
-    let model_family = construct_model_family_sync(&config.model, &config);
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
+    let model_family = models_manager.construct_model_family(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
