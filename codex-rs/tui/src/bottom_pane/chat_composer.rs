@@ -1504,14 +1504,9 @@ impl ChatComposer {
             return false;
         }
 
-        let toggles = matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char('?'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } if self.is_empty()
-        );
+        let toggles = matches!(key_event.code, KeyCode::Char('?'))
+            && !has_ctrl_or_alt(key_event.modifiers)
+            && self.is_empty();
 
         if !toggles {
             return false;
