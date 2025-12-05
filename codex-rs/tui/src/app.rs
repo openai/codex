@@ -44,9 +44,13 @@ use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
+use crossterm::cursor::MoveTo;
+use crossterm::event;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::terminal::Clear;
+use crossterm::terminal::ClearType;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -59,6 +63,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
+use unicode_width::UnicodeWidthStr;
+
+const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -1161,6 +1168,13 @@ impl App {
         };
 
         let seed = self.chat_widget.composer_text_with_pending();
+        self.chat_widget.set_footer_hint_override(Some(vec![(
+            EXTERNAL_EDITOR_HINT.to_string(),
+            String::new(),
+        )]));
+        self.force_redraw_now(tui);
+        let hint_width = UnicodeWidthStr::width(EXTERNAL_EDITOR_HINT) as u16;
+        let cursor_row = self.move_cursor_for_external_editor(tui, hint_width);
 
         // Leave alt screen if active to avoid conflicts with editor.
         // This is defensive as we gate the external editor launch on there being no overlay.
@@ -1179,10 +1193,14 @@ impl App {
         if let Err(err) = tui::set_modes() {
             tracing::warn!("failed to re-enable terminal modes after editor: {err}");
         }
+        Self::discard_pending_terminal_input();
+        self.clear_bottom_pane_rows(tui, cursor_row);
+        self.chat_widget.clear_footer_hint_override();
 
         if was_alt_screen {
             let _ = tui.enter_alt_screen();
         }
+        self.force_redraw_now(tui);
 
         match editor_result {
             Ok(new_text) => {
@@ -1197,6 +1215,95 @@ impl App {
                         "Failed to open editor: {err}",
                     )));
             }
+        }
+    }
+
+    fn discard_pending_terminal_input() {
+        loop {
+            match event::poll(Duration::from_millis(0)) {
+                Ok(true) => {
+                    if let Err(err) = event::read() {
+                        tracing::warn!("failed to read pending terminal input: {err}");
+                        break;
+                    }
+                }
+                Ok(false) => break,
+                Err(err) => {
+                    tracing::warn!("failed to poll for pending terminal input: {err}");
+                    break;
+                }
+            }
+        }
+    }
+
+    fn clear_bottom_pane_rows(&mut self, tui: &mut tui::Tui, from_row: Option<u16>) {
+        let Ok(area) = tui.terminal.size() else {
+            return;
+        };
+        let viewport = tui.terminal.viewport_area;
+        if viewport.height == 0 || area.height == 0 {
+            return;
+        }
+        let start_row = from_row.unwrap_or_else(|| {
+            let pane_height = self.chat_widget.bottom_pane_height(area.width);
+            if pane_height == 0 {
+                viewport.y
+            } else {
+                let max_height = viewport.height.min(pane_height);
+                viewport
+                    .y
+                    .saturating_add(viewport.height.saturating_sub(max_height))
+            }
+        });
+        let start_row = start_row.min(area.height.saturating_sub(1));
+        let backend = tui.terminal.backend_mut();
+        if let Err(err) = crossterm::execute!(
+            backend,
+            MoveTo(viewport.x, start_row),
+            Clear(ClearType::FromCursorDown)
+        ) {
+            tracing::warn!("failed to clear prompt area after editor: {err}");
+        }
+    }
+
+    fn move_cursor_for_external_editor(&self, tui: &mut tui::Tui, hint_width: u16) -> Option<u16> {
+        let Ok(area) = tui.terminal.size() else {
+            return None;
+        };
+        let viewport = tui.terminal.viewport_area;
+        if viewport.height == 0 || area.height == 0 {
+            return None;
+        }
+        let pane_bottom = viewport.y.saturating_add(viewport.height.saturating_sub(1));
+        let mut row = pane_bottom.saturating_add(1);
+        if row >= area.height {
+            row = pane_bottom.min(area.height.saturating_sub(1));
+        }
+        let mut col = viewport.x;
+        if row == pane_bottom {
+            let max_col = area.width.saturating_sub(1);
+            let offset = hint_width.saturating_add(1).min(max_col);
+            col = col.saturating_add(offset);
+        }
+        if let Err(err) = crossterm::execute!(tui.terminal.backend_mut(), MoveTo(col, row)) {
+            tracing::warn!("failed to reposition cursor before launching editor: {err}");
+            return None;
+        }
+        Some(row)
+    }
+
+    fn force_redraw_now(&mut self, tui: &mut tui::Tui) {
+        let Ok(area) = tui.terminal.size() else {
+            return;
+        };
+        let desired_height = self.chat_widget.desired_height(area.width);
+        if let Err(err) = tui.draw(desired_height, |frame| {
+            self.chat_widget.render(frame.area(), frame.buffer);
+            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                frame.set_cursor_position((x, y));
+            }
+        }) {
+            tracing::warn!("failed to redraw TUI before launching editor: {err:?}");
         }
     }
 

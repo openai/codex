@@ -1661,6 +1661,18 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        self.bottom_pane.set_footer_hint_override(items);
+    }
+
+    pub(crate) fn clear_footer_hint_override(&mut self) {
+        self.bottom_pane.set_footer_hint_override(None);
+    }
+
+    pub(crate) fn bottom_pane_height(&self, width: u16) -> u16 {
+        self.bottom_pane.desired_height(width)
+    }
+
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(

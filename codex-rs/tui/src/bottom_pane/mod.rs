@@ -283,6 +283,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        self.composer.set_footer_hint_override(items);
+        self.request_redraw();
+    }
+
     /// Update the animated header shown to the left of the brackets in the
     /// status indicator (defaults to "Working"). No-ops if the status
     /// indicator is not active.
