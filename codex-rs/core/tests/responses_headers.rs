@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use codex_app_server_protocol::AuthMode;
 use codex_core::AuthManager;
+use codex_core::CodexAuth;
 use codex_core::ContentItem;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
@@ -245,12 +246,8 @@ async fn responses_respects_model_family_overrides_from_config() {
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
-    let auth_mode = AuthManager::shared(
-        config.cwd.clone(),
-        false,
-        config.cli_auth_credentials_store_mode,
-    )
-    .get_auth_mode();
+    let auth_mode =
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key")).get_auth_mode();
     let model_family = construct_model_family_sync(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
