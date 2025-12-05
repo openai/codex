@@ -1517,8 +1517,7 @@ mod tests {
     use codex_core::config::ConfigToml;
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
-    use codex_core::openai_models::model_family::ModelFamily;
-    use codex_core::openai_models::model_family::find_family_for_model;
+    use codex_core::openai_models::models_manager::ModelsManager;
     use codex_core::protocol::McpAuthStatus;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
@@ -1556,10 +1555,6 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
-    }
-
-    fn model_family_for_config(config: &Config) -> ModelFamily {
-        find_family_for_model(&config.model).with_config_overrides(config)
     }
 
     #[test]
@@ -2327,7 +2322,9 @@ mod tests {
     #[test]
     fn reasoning_summary_block() {
         let config = test_config();
-        let reasoning_format = model_family_for_config(&config).reasoning_summary_format;
+        let reasoning_format =
+            ModelsManager::construct_model_family_offline(&config.model, &config)
+                .reasoning_summary_format;
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
             reasoning_format,
@@ -2343,7 +2340,9 @@ mod tests {
     #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
         let config = test_config();
-        let reasoning_format = model_family_for_config(&config).reasoning_summary_format;
+        let reasoning_format =
+            ModelsManager::construct_model_family_offline(&config.model, &config)
+                .reasoning_summary_format;
         let cell = new_reasoning_summary_block(
             "Detailed reasoning goes here.".to_string(),
             reasoning_format,
@@ -2359,7 +2358,7 @@ mod tests {
         config.model = "gpt-3.5-turbo".to_string();
         config.model_supports_reasoning_summaries = Some(true);
         config.model_reasoning_summary_format = Some(ReasoningSummaryFormat::Experimental);
-        let model_family = model_family_for_config(&config);
+        let model_family = ModelsManager::construct_model_family_offline(&config.model, &config);
         assert_eq!(
             model_family.reasoning_summary_format,
             ReasoningSummaryFormat::Experimental
@@ -2377,7 +2376,9 @@ mod tests {
     #[test]
     fn reasoning_summary_block_falls_back_when_header_is_missing() {
         let config = test_config();
-        let reasoning_format = model_family_for_config(&config).reasoning_summary_format;
+        let reasoning_format =
+            ModelsManager::construct_model_family_offline(&config.model, &config)
+                .reasoning_summary_format;
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing".to_string(),
             reasoning_format,
@@ -2390,7 +2391,9 @@ mod tests {
     #[test]
     fn reasoning_summary_block_falls_back_when_summary_is_missing() {
         let config = test_config();
-        let reasoning_format = model_family_for_config(&config).reasoning_summary_format;
+        let reasoning_format =
+            ModelsManager::construct_model_family_offline(&config.model, &config)
+                .reasoning_summary_format;
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**".to_string(),
             reasoning_format.clone(),
@@ -2411,7 +2414,9 @@ mod tests {
     #[test]
     fn reasoning_summary_block_splits_header_and_summary_when_present() {
         let config = test_config();
-        let reasoning_format = model_family_for_config(&config).reasoning_summary_format;
+        let reasoning_format =
+            ModelsManager::construct_model_family_offline(&config.model, &config)
+                .reasoning_summary_format;
         let cell = new_reasoning_summary_block(
             "**High level plan**\n\nWe should fix the bug next.".to_string(),
             reasoning_format,

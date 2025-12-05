@@ -10,7 +10,7 @@ use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
-use codex_core::openai_models::model_family::find_family_for_model;
+use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -70,10 +70,6 @@ use tokio::sync::mpsc::unbounded_channel;
 #[cfg(target_os = "windows")]
 fn set_windows_sandbox_enabled(enabled: bool) {
     codex_core::set_windows_sandbox_enabled(enabled);
-}
-
-fn model_family_for_config(config: &Config) -> ModelFamily {
-    find_family_for_model(&config.model)
 }
 
 fn test_config() -> Config {
@@ -348,7 +344,7 @@ async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config();
-    let model_family = model_family_for_config(&cfg);
+    let model_family = ModelsManager::construct_model_family_offline(&cfg.model, &cfg);
     let conversation_manager = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
         "test",
     )));
@@ -399,7 +395,7 @@ fn make_chatwidget_manual() -> (
         bottom_pane: bottom,
         active_cell: None,
         config: cfg.clone(),
-        model_family: model_family_for_config(&cfg),
+        model_family: ModelsManager::construct_model_family_offline(&cfg.model, &cfg),
         auth_manager: auth_manager.clone(),
         models_manager: Arc::new(ModelsManager::new(auth_manager)),
         session_header: SessionHeader::new(cfg.model),

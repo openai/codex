@@ -2743,10 +2743,6 @@ mod tests {
         assert_eq!(expected, got);
     }
 
-    fn construct_model_family_offline(model: &str, config: &Config) -> ModelFamily {
-        find_family_for_model(model).with_config_overrides(config)
-    }
-
     fn text_block(s: &str) -> ContentBlock {
         ContentBlock::TextContent(TextContent {
             annotations: None,
@@ -2803,7 +2799,8 @@ mod tests {
             session_source: SessionSource::Exec,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
-        let model_family = construct_model_family_offline(&per_turn_config.model, &per_turn_config);
+        let model_family =
+            ModelsManager::construct_model_family_offline(&per_turn_config.model, &per_turn_config);
         let otel_event_manager =
             otel_event_manager(conversation_id, config.as_ref(), &model_family);
 
@@ -2884,7 +2881,8 @@ mod tests {
             session_source: SessionSource::Exec,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
-        let model_family = construct_model_family_offline(&per_turn_config.model, &per_turn_config);
+        let model_family =
+            ModelsManager::construct_model_family_offline(&per_turn_config.model, &per_turn_config);
         let otel_event_manager =
             otel_event_manager(conversation_id, config.as_ref(), &model_family);
 

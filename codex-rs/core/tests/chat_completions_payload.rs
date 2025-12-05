@@ -10,10 +10,10 @@ use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
+use codex_core::openai_models::models_manager::ModelsManager;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ReasoningItemContent;
-use core_test_support::construct_model_family_offline;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
 use futures::StreamExt;
@@ -71,7 +71,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
-    let model_family = construct_model_family_offline(&config.model, &config);
+    let model_family = ModelsManager::construct_model_family_offline(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),

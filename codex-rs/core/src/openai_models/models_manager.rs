@@ -67,6 +67,11 @@ impl ModelsManager {
             .with_remote_overrides(self.remote_models.read().await.clone())
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn construct_model_family_offline(model: &str, config: &Config) -> ModelFamily {
+        find_family_for_model(model).with_config_overrides(config)
+    }
+
     async fn build_available_models(&self) -> Vec<ModelPreset> {
         let mut available_models = self.remote_models.read().await.clone();
         available_models.sort_by(|a, b| b.priority.cmp(&a.priority));
