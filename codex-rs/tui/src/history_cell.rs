@@ -1514,6 +1514,7 @@ mod tests {
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
     use codex_core::AuthManager;
+    use codex_core::CodexAuth;
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
@@ -2325,11 +2326,8 @@ mod tests {
     #[test]
     fn reasoning_summary_block() {
         let config = test_config();
-        let auth_manager = AuthManager::shared(
-            config.cwd.clone(),
-            false,
-            config.cli_auth_credentials_store_mode,
-        );
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager));
         let model_family = models_manager.construct_model_family(&config.model, &config);
         let cell = new_reasoning_summary_block(
@@ -2347,11 +2345,8 @@ mod tests {
     #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
         let config = test_config();
-        let auth_manager = AuthManager::shared(
-            config.cwd.clone(),
-            false,
-            config.cli_auth_credentials_store_mode,
-        );
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager));
         let model_family = models_manager.construct_model_family(&config.model, &config);
         let cell =
@@ -2367,11 +2362,8 @@ mod tests {
         config.model = "gpt-3.5-turbo".to_string();
         config.model_supports_reasoning_summaries = Some(true);
         config.model_reasoning_summary_format = Some(ReasoningSummaryFormat::Experimental);
-        let auth_manager = AuthManager::shared(
-            config.cwd.clone(),
-            false,
-            config.cli_auth_credentials_store_mode,
-        );
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager));
 
         let model_family = models_manager.construct_model_family(&config.model, &config);
@@ -2392,11 +2384,8 @@ mod tests {
     #[test]
     fn reasoning_summary_block_falls_back_when_header_is_missing() {
         let config = test_config();
-        let auth_manager = AuthManager::shared(
-            config.cwd.clone(),
-            false,
-            config.cli_auth_credentials_store_mode,
-        );
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager));
         let model_family = models_manager.construct_model_family(&config.model, &config);
         let cell = new_reasoning_summary_block(
@@ -2411,11 +2400,8 @@ mod tests {
     #[test]
     fn reasoning_summary_block_falls_back_when_summary_is_missing() {
         let config = test_config();
-        let auth_manager = AuthManager::shared(
-            config.cwd.clone(),
-            false,
-            config.cli_auth_credentials_store_mode,
-        );
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager));
         let model_family = models_manager.construct_model_family(&config.model, &config);
         let cell = new_reasoning_summary_block(
@@ -2438,11 +2424,8 @@ mod tests {
     #[test]
     fn reasoning_summary_block_splits_header_and_summary_when_present() {
         let config = test_config();
-        let auth_manager = AuthManager::shared(
-            config.cwd.clone(),
-            false,
-            config.cli_auth_credentials_store_mode,
-        );
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager));
         let model_family = models_manager.construct_model_family(&config.model, &config);
         let cell = new_reasoning_summary_block(

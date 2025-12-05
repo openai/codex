@@ -65,7 +65,7 @@ impl ModelsManager {
         find_family_for_model(model).with_config_overrides(config)
     }
 
-    pub async fn build_available_models(&self) -> Vec<ModelPreset> {
+    async fn build_available_models(&self) -> Vec<ModelPreset> {
         let mut available_models = self.remote_models.read().await.clone();
         available_models.sort_by(|a, b| b.priority.cmp(&a.priority));
         let mut model_presets: Vec<ModelPreset> =

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
+use crate::CodexAuth;
 use crate::SandboxState;
 use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
@@ -2763,11 +2764,8 @@ mod tests {
         .expect("load default test config");
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
-        let auth_manager = AuthManager::shared(
-            config.cwd.clone(),
-            false,
-            config.cli_auth_credentials_store_mode,
-        );
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
         let otel_event_manager =
             otel_event_manager(conversation_id, config.as_ref(), &models_manager);
@@ -2845,11 +2843,8 @@ mod tests {
         .expect("load default test config");
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
-        let auth_manager = AuthManager::shared(
-            config.cwd.clone(),
-            false,
-            config.cli_auth_credentials_store_mode,
-        );
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
         let otel_event_manager =
             otel_event_manager(conversation_id, config.as_ref(), &models_manager);

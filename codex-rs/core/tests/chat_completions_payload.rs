@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use codex_app_server_protocol::AuthMode;
 use codex_core::AuthManager;
+use codex_core::CodexAuth;
 use codex_core::ContentItem;
 use codex_core::LocalShellAction;
 use codex_core::LocalShellExecAction;
@@ -72,11 +73,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
-    let auth_manager = AuthManager::shared(
-        config.cwd.clone(),
-        false,
-        config.cli_auth_credentials_store_mode,
-    );
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let models_manager = Arc::new(ModelsManager::new(auth_manager));
     let model_family = models_manager.construct_model_family(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
