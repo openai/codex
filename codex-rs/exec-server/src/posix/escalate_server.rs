@@ -138,19 +138,23 @@ async fn handle_escalate_session_with_policy(
     socket: AsyncSocket,
     policy: Arc<dyn EscalationPolicy>,
 ) -> anyhow::Result<()> {
+    tracing::error!("in handle_escalate_session_with_policy");
     let EscalateRequest {
         file,
         argv,
         workdir,
         env,
-    } = socket.receive::<EscalateRequest>().await?;
+    } = socket
+        .receive::<EscalateRequest>()
+        .await
+        .context("failed to receive EscalateRequest")?;
     let file = PathBuf::from(&file).absolutize()?.into_owned();
     let workdir = PathBuf::from(&workdir).absolutize()?.into_owned();
     let action = policy
         .determine_action(file.as_path(), &argv, &workdir)
         .await?;
 
-    tracing::debug!("decided {action:?} for {file:?} {argv:?} {workdir:?}");
+    tracing::error!("decided {action:?} for {file:?} {argv:?} {workdir:?}");
 
     match action {
         EscalateAction::Run => {
@@ -165,7 +169,8 @@ async fn handle_escalate_session_with_policy(
                 .send(EscalateResponse {
                     action: EscalateAction::Escalate,
                 })
-                .await?;
+                .await
+                .context("failed to send EscalateResponse")?;
             let (msg, fds) = socket
                 .receive_with_fds::<SuperExecMessage>()
                 .await
