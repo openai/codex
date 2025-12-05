@@ -82,6 +82,8 @@ mod mcp_escalation_policy;
 mod socket;
 mod stopwatch;
 
+pub use mcp::ExecResult;
+
 /// Default value of --execve option relative to the current executable.
 /// Note this must match the name of the binary as specified in Cargo.toml.
 const CODEX_EXECVE_WRAPPER_EXE_NAME: &str = "codex-execve-wrapper";

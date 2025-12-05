@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd as _;
@@ -34,21 +35,30 @@ pub(crate) async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> 
         .send_with_fds(&HANDSHAKE_MESSAGE, &[server.into_inner().into()])
         .await
         .context("failed to send handshake datagram")?;
-    let env = std::env::vars()
-        .filter(|(k, _)| {
-            !matches!(
-                k.as_str(),
-                ESCALATE_SOCKET_ENV_VAR | BASH_EXEC_WRAPPER_ENV_VAR
-            )
-        })
-        .collect();
+    let mut env = HashMap::new();
+    const MAX_ENV_ENTRY_LEN: i64 = 8_192;
+    for (key, value) in std::env::vars() {
+        if matches!(
+            key.as_str(),
+            ESCALATE_SOCKET_ENV_VAR | BASH_EXEC_WRAPPER_ENV_VAR
+        ) {
+            continue;
+        }
+        let entry_len = (key.len() + value.len()) as i64;
+        if entry_len > MAX_ENV_ENTRY_LEN {
+            tracing::debug!(key, entry_len, "skipping oversized environment variable");
+            continue;
+        }
+        env.insert(key, value);
+    }
+    let request = EscalateRequest {
+        file: file.clone().into(),
+        argv: argv.clone(),
+        workdir: std::env::current_dir()?,
+        env,
+    };
     client
-        .send(EscalateRequest {
-            file: file.clone().into(),
-            argv: argv.clone(),
-            workdir: std::env::current_dir()?,
-            env,
-        })
+        .send(request)
         .await
         .context("failed to send EscalateRequest")?;
     let message = client.receive::<EscalateResponse>().await?;
