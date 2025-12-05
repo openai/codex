@@ -46,6 +46,13 @@ pub enum WireApi {
 }
 
 /// TLS configuration for mutual TLS (mTLS) authentication with model providers.
+///
+/// Each certificate/key path can be specified either directly or via an environment variable:
+/// - `ca-certificate` / `ca-certificate-env`: Path to a custom CA certificate (PEM format)
+/// - `client-certificate` / `client-certificate-env`: Path to the client certificate (PEM format)
+/// - `client-private-key` / `client-private-key-env`: Path to the client private key (PEM format)
+///
+/// If both the direct path and env var are specified, the env var takes precedence.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct ModelProviderTlsConfig {
@@ -53,25 +60,64 @@ pub struct ModelProviderTlsConfig {
     /// Relative paths are resolved against `~/.codex/`.
     pub ca_certificate: Option<PathBuf>,
 
+    /// Environment variable containing the path to a custom CA certificate.
+    /// Takes precedence over `ca_certificate` if set.
+    pub ca_certificate_env: Option<String>,
+
     /// Path to the client certificate (PEM format) for mutual TLS authentication.
     /// Must be provided together with `client_private_key`.
     /// Relative paths are resolved against `~/.codex/`.
     pub client_certificate: Option<PathBuf>,
 
+    /// Environment variable containing the path to the client certificate.
+    /// Takes precedence over `client_certificate` if set.
+    pub client_certificate_env: Option<String>,
+
     /// Path to the client private key (PEM format) for mutual TLS authentication.
     /// Must be provided together with `client_certificate`.
     /// Relative paths are resolved against `~/.codex/`.
     pub client_private_key: Option<PathBuf>,
+
+    /// Environment variable containing the path to the client private key.
+    /// Takes precedence over `client_private_key` if set.
+    pub client_private_key_env: Option<String>,
 }
 
 impl ModelProviderTlsConfig {
-    /// Convert to the default_client TlsConfig type
+    /// Convert to the default_client TlsConfig type.
+    /// Environment variable values take precedence over direct path values.
     pub fn to_tls_config(&self) -> crate::default_client::TlsConfig {
         crate::default_client::TlsConfig {
-            ca_certificate: self.ca_certificate.clone(),
-            client_certificate: self.client_certificate.clone(),
-            client_private_key: self.client_private_key.clone(),
+            ca_certificate: Self::resolve_path(&self.ca_certificate_env, &self.ca_certificate),
+            client_certificate: Self::resolve_path(
+                &self.client_certificate_env,
+                &self.client_certificate,
+            ),
+            client_private_key: Self::resolve_path(
+                &self.client_private_key_env,
+                &self.client_private_key,
+            ),
         }
+    }
+
+    /// Resolve a path from either an environment variable or a direct value.
+    /// The env var takes precedence if set and non-empty.
+    fn resolve_path(env_var: &Option<String>, direct: &Option<PathBuf>) -> Option<PathBuf> {
+        let env_value = env_var.as_ref().and_then(|name| std::env::var(name).ok());
+        Self::resolve_path_with_value(env_value.as_deref(), direct)
+    }
+
+    /// Pure function to resolve a path given an optional env var value and direct path.
+    /// The env var value takes precedence if non-empty.
+    fn resolve_path_with_value(env_value: Option<&str>, direct: &Option<PathBuf>) -> Option<PathBuf> {
+        if let Some(value) = env_value {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(PathBuf::from(trimmed));
+            }
+        }
+        // Fall back to direct path
+        direct.clone()
     }
 }
 
@@ -532,5 +578,84 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 "expected {base_url} not to be detected as Azure"
             );
         }
+    }
+
+    #[test]
+    fn test_tls_config_resolve_path_env_var_precedence() {
+        // Test that env var value takes precedence when set
+        let result = ModelProviderTlsConfig::resolve_path_with_value(
+            Some("/from/env/ca.pem"),
+            &Some(PathBuf::from("/direct/ca.pem")),
+        );
+        assert_eq!(result, Some(PathBuf::from("/from/env/ca.pem")));
+    }
+
+    #[test]
+    fn test_tls_config_resolve_path_fallback_to_direct() {
+        // Test fallback to direct path when env var is not set
+        let result = ModelProviderTlsConfig::resolve_path_with_value(
+            None,
+            &Some(PathBuf::from("/fallback/ca.pem")),
+        );
+        assert_eq!(result, Some(PathBuf::from("/fallback/ca.pem")));
+    }
+
+    #[test]
+    fn test_tls_config_resolve_path_empty_env_var_falls_back() {
+        // Test fallback when env var is empty
+        let result = ModelProviderTlsConfig::resolve_path_with_value(
+            Some(""),
+            &Some(PathBuf::from("/fallback/ca.pem")),
+        );
+        assert_eq!(result, Some(PathBuf::from("/fallback/ca.pem")));
+    }
+
+    #[test]
+    fn test_tls_config_resolve_path_whitespace_env_var_falls_back() {
+        // Test fallback when env var is whitespace only
+        let result = ModelProviderTlsConfig::resolve_path_with_value(
+            Some("   "),
+            &Some(PathBuf::from("/fallback/ca.pem")),
+        );
+        assert_eq!(result, Some(PathBuf::from("/fallback/ca.pem")));
+    }
+
+    #[test]
+    fn test_tls_config_resolve_path_no_env_var_name() {
+        // Test when no env var value is provided
+        let result = ModelProviderTlsConfig::resolve_path_with_value(
+            None,
+            &Some(PathBuf::from("/direct/ca.pem")),
+        );
+        assert_eq!(result, Some(PathBuf::from("/direct/ca.pem")));
+    }
+
+    #[test]
+    fn test_tls_config_resolve_path_both_none() {
+        // Test when neither is specified
+        let result = ModelProviderTlsConfig::resolve_path_with_value(None, &None);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_deserialize_tls_config_with_env_vars() {
+        let toml_str = r#"
+ca-certificate = "/direct/ca.pem"
+ca-certificate-env = "MY_CA_CERT"
+client-certificate-env = "MY_CLIENT_CERT"
+client-private-key-env = "MY_CLIENT_KEY"
+        "#;
+
+        let config: ModelProviderTlsConfig = toml::from_str(toml_str).unwrap();
+
+        assert_eq!(config.ca_certificate, Some(PathBuf::from("/direct/ca.pem")));
+        assert_eq!(config.ca_certificate_env, Some("MY_CA_CERT".into()));
+        assert_eq!(config.client_certificate, None);
+        assert_eq!(
+            config.client_certificate_env,
+            Some("MY_CLIENT_CERT".into())
+        );
+        assert_eq!(config.client_private_key, None);
+        assert_eq!(config.client_private_key_env, Some("MY_CLIENT_KEY".into()));
     }
 }
