@@ -6,15 +6,27 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
+#[cfg(unix)]
+use std::ffi::OsStr;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+
 use anyhow::Result;
 use portable_pty::native_pty_system;
 use portable_pty::CommandBuilder;
 use portable_pty::PtySize;
+#[cfg(unix)]
+use tempfile::TempDir;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::task::JoinHandle;
+
+#[cfg(unix)]
+type Arg0TempDir = Option<TempDir>;
+#[cfg(not(unix))]
+type Arg0TempDir = ();
 
 #[derive(Debug)]
 pub struct ExecCommandSession {
@@ -26,6 +38,7 @@ pub struct ExecCommandSession {
     wait_handle: StdMutex<Option<JoinHandle<()>>>,
     exit_status: Arc<AtomicBool>,
     exit_code: Arc<StdMutex<Option<i32>>>,
+    _arg0_temp_dir: Arg0TempDir,
 }
 
 impl ExecCommandSession {
@@ -39,6 +52,7 @@ impl ExecCommandSession {
         wait_handle: JoinHandle<()>,
         exit_status: Arc<AtomicBool>,
         exit_code: Arc<StdMutex<Option<i32>>>,
+        _arg0_temp_dir: Arg0TempDir,
     ) -> (Self, broadcast::Receiver<Vec<u8>>) {
         let initial_output_rx = output_tx.subscribe();
         (
@@ -51,6 +65,7 @@ impl ExecCommandSession {
                 wait_handle: StdMutex::new(Some(wait_handle)),
                 exit_status,
                 exit_code,
+                _arg0_temp_dir,
             },
             initial_output_rx,
         )
@@ -106,6 +121,43 @@ pub struct SpawnedPty {
     pub exit_rx: oneshot::Receiver<i32>,
 }
 
+#[cfg(unix)]
+fn program_for_command_builder(
+    program: &str,
+    arg0: &Option<String>,
+) -> Result<(String, Arg0TempDir)> {
+    let Some(arg0) = arg0.as_ref() else {
+        return Ok((program.to_string(), None));
+    };
+
+    let program_path = Path::new(program);
+    if !program_path.is_absolute() {
+        return Ok((program.to_string(), None));
+    }
+
+    let Some(filename) = Path::new(arg0).file_name() else {
+        return Ok((program.to_string(), None));
+    };
+
+    if filename == OsStr::new(".") || filename == OsStr::new("..") {
+        return Ok((program.to_string(), None));
+    }
+
+    let temp_dir = TempDir::new()?;
+    let link_path = temp_dir.path().join(filename);
+    symlink(program_path, &link_path)?;
+
+    Ok((link_path.to_string_lossy().to_string(), Some(temp_dir)))
+}
+
+#[cfg(not(unix))]
+fn program_for_command_builder(
+    program: &str,
+    _arg0: &Option<String>,
+) -> Result<(String, Arg0TempDir)> {
+    Ok((program.to_string(), ()))
+}
+
 pub async fn spawn_pty_process(
     program: &str,
     args: &[String],
@@ -117,6 +169,8 @@ pub async fn spawn_pty_process(
         anyhow::bail!("missing program for PTY spawn");
     }
 
+    let (program_for_builder, arg0_temp_dir) = program_for_command_builder(program, arg0)?;
+
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
         rows: 24,
@@ -125,7 +179,7 @@ pub async fn spawn_pty_process(
         pixel_height: 0,
     })?;
 
-    let mut command_builder = CommandBuilder::new(arg0.as_ref().unwrap_or(&program.to_string()));
+    let mut command_builder = CommandBuilder::new(&program_for_builder);
     command_builder.cwd(cwd);
     command_builder.env_clear();
     for arg in args {
@@ -201,6 +255,7 @@ pub async fn spawn_pty_process(
         wait_handle,
         exit_status,
         exit_code,
+        arg0_temp_dir,
     );
 
     Ok(SpawnedPty {
