@@ -54,7 +54,7 @@ pub struct ExecParams {
     pub login: Option<bool>,
 }
 
-#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ExecResult {
     pub exit_code: i32,
     pub output: String,
