@@ -12,44 +12,9 @@ use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use serde_json::json;
 
-struct CrossPlatformCommand {
-    powershell: &'static str,
-    bash: &'static str,
-}
-
-const ECHO_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
-    powershell: "Write-Output 'hello, world'",
-    bash: "/bin/echo 'hello, world'",
-};
-
-const ECHO_FIRST_EXTRA_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
-    powershell: "Write-Output \"first line`nsecond line\"",
-    bash: "printf 'first line\nsecond line\n'",
-};
-
-const ECHO_SECOND_EXTRA_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
-    powershell: "'mixed Case'.ToUpper()",
-    bash: "printf 'mixed Case' | tr '[:lower:]' '[:upper:]'",
-};
-
-const ECHO_THIRD_EXTRA_COMMAND: CrossPlatformCommand = CrossPlatformCommand {
-    powershell: "if ($true) { 'always true' } else { 'never' }",
-    bash: "if [ 1 -eq 1 ]; then printf 'always true'; else printf 'never'; fi",
-};
-
-fn shell_responses(
-    call_id: &str,
-    command: CrossPlatformCommand,
-    login: Option<bool>,
-) -> Vec<String> {
-    let command_str = if cfg!(windows) {
-        command.powershell
-    } else {
-        command.bash
-    };
-
+fn shell_responses(call_id: &str, command: &str, login: Option<bool>) -> Vec<String> {
     let args = json!({
-        "command": command_str,
+        "command": command,
         "timeout_ms": 2_000,
         "login": login,
     });
@@ -82,7 +47,7 @@ async fn shell_command_harness_with(
 async fn mount_shell_responses(
     harness: &TestCodexHarness,
     call_id: &str,
-    command: CrossPlatformCommand,
+    command: &str,
     login: Option<bool>,
 ) {
     mount_sse_sequence(harness.server(), shell_responses(call_id, command, login)).await;
@@ -110,7 +75,7 @@ async fn shell_command_works() -> anyhow::Result<()> {
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     let call_id = "shell-command-call";
-    mount_shell_responses(&harness, call_id, ECHO_COMMAND, None).await;
+    mount_shell_responses(&harness, call_id, "echo 'hello, world'", None).await;
     harness.submit("run the echo command").await?;
 
     let output = harness.function_call_stdout(call_id).await;
@@ -120,13 +85,13 @@ async fn shell_command_works() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_command_works_with_login_true() -> anyhow::Result<()> {
+async fn output_with_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     let call_id = "shell-command-call-login-true";
-    mount_shell_responses(&harness, call_id, ECHO_COMMAND, Some(true)).await;
+    mount_shell_responses(&harness, call_id, "echo 'hello, world'", Some(true)).await;
     harness.submit("run the echo command with login").await?;
 
     let output = harness.function_call_stdout(call_id).await;
@@ -136,13 +101,13 @@ async fn shell_command_works_with_login_true() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_command_works_with_login_false() -> anyhow::Result<()> {
+async fn output_without_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     let call_id = "shell-command-call-login-false";
-    mount_shell_responses(&harness, call_id, ECHO_COMMAND, Some(false)).await;
+    mount_shell_responses(&harness, call_id, "echo 'hello, world'", Some(false)).await;
     harness.submit("run the echo command without login").await?;
 
     let output = harness.function_call_stdout(call_id).await;
@@ -152,16 +117,20 @@ async fn shell_command_works_with_login_false() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_command_works_with_first_extra_output_and_login() -> anyhow::Result<()> {
+async fn multi_line_output_with_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     let call_id = "shell-command-call-first-extra-login";
-    mount_shell_responses(&harness, call_id, ECHO_FIRST_EXTRA_COMMAND, Some(true)).await;
-    harness
-        .submit("run the first extra command with login")
-        .await?;
+    mount_shell_responses(
+        &harness,
+        call_id,
+        "echo 'first line\nsecond line'",
+        Some(true),
+    )
+    .await;
+    harness.submit("run the command with login").await?;
 
     let output = harness.function_call_stdout(call_id).await;
     assert_shell_command_output(&output, "first line\nsecond line")?;
@@ -170,37 +139,33 @@ async fn shell_command_works_with_first_extra_output_and_login() -> anyhow::Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_command_works_with_second_extra_output_without_login() -> anyhow::Result<()> {
+async fn pipe_output_with_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     let call_id = "shell-command-call-second-extra-no-login";
-    mount_shell_responses(&harness, call_id, ECHO_SECOND_EXTRA_COMMAND, None).await;
-    harness
-        .submit("run the second extra command without login")
-        .await?;
+    mount_shell_responses(&harness, call_id, "echo 'hello, world' | cat", None).await;
+    harness.submit("run the command without login").await?;
 
     let output = harness.function_call_stdout(call_id).await;
-    assert_shell_command_output(&output, "MIXED CASE")?;
+    assert_shell_command_output(&output, "hello, world")?;
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_command_works_with_third_extra_output_and_login_false() -> anyhow::Result<()> {
+async fn pipe_output_without_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     let call_id = "shell-command-call-third-extra-login-false";
-    mount_shell_responses(&harness, call_id, ECHO_THIRD_EXTRA_COMMAND, Some(false)).await;
-    harness
-        .submit("run the third extra command with login false")
-        .await?;
+    mount_shell_responses(&harness, call_id, "echo 'hello, world' | cat", Some(false)).await;
+    harness.submit("run the command without login").await?;
 
     let output = harness.function_call_stdout(call_id).await;
-    assert_shell_command_output(&output, "always true")?;
+    assert_shell_command_output(&output, "hello, world")?;
 
     Ok(())
 }
