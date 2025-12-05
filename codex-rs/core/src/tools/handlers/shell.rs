@@ -288,18 +288,21 @@ mod tests {
         let bash_shell = Shell {
             shell_type: ShellType::Bash,
             shell_path: PathBuf::from("/bin/bash"),
+            shell_snapshot: None,
         };
         assert_safe(&bash_shell, "ls -la");
 
         let zsh_shell = Shell {
             shell_type: ShellType::Zsh,
             shell_path: PathBuf::from("/bin/zsh"),
+            shell_snapshot: None,
         };
         assert_safe(&zsh_shell, "ls -la");
 
         let powershell = Shell {
             shell_type: ShellType::PowerShell,
             shell_path: PathBuf::from("pwsh.exe"),
+            shell_snapshot: None,
         };
         assert_safe(&powershell, "ls -Name");
     }

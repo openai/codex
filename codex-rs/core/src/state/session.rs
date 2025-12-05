@@ -1,6 +1,5 @@
 //! Session-wide mutable state.
 
-use std::sync::Arc;
 use codex_protocol::models::ResponseItem;
 
 use crate::codex::SessionConfiguration;
@@ -8,7 +7,6 @@ use crate::context_manager::ContextManager;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
-use crate::shell_snapshot::ShellSnapshot;
 use crate::truncate::TruncationPolicy;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
@@ -16,21 +14,16 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
-    pub(crate) shell_snapshot: Option<Arc<ShellSnapshot>>,
 }
 
 impl SessionState {
     /// Create a new session state mirroring previous `State::default()` semantics.
-    pub(crate) fn new(
-        session_configuration: SessionConfiguration,
-        shell_snapshot: Option<ShellSnapshot>,
-    ) -> Self {
+    pub(crate) fn new(session_configuration: SessionConfiguration) -> Self {
         let history = ContextManager::new();
         Self {
             session_configuration,
             history,
             latest_rate_limits: None,
-            shell_snapshot: shell_snapshot.map(Arc::new),
         }
     }
 

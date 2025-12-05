@@ -17,7 +17,7 @@ use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell::get_shell;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShellSnapshot {
     pub path: PathBuf,
 }
@@ -53,49 +53,6 @@ impl Drop for ShellSnapshot {
                 self.path
             );
         }
-    }
-}
-
-/// Wraps an existing shell command so that it is executed after applying a
-/// previously captured shell snapshot.
-///
-/// The snapshot script at `snapshot_path` replays functions, aliases, and
-/// environment variables from an earlier shell session. This helper builds a
-/// new command line that:
-///   1. Starts the user's shell in non-login mode,
-///   2. Sources or runs the snapshot script, and then
-///   3. Executes the original `command` with its arguments.
-///
-/// The wrapper shell always runs in non-login mode; callers control login
-/// behavior for the final command itself when they construct `command`.
-pub fn wrap_command_with_snapshot(
-    shell: &Shell,
-    snapshot_path: &Path,
-    command: &[String],
-) -> Vec<String> {
-    if command.is_empty() {
-        return command.to_vec();
-    }
-
-    match shell.shell_type {
-        ShellType::Zsh | ShellType::Bash | ShellType::Sh => {
-            // `. "$1" && shift && exec "$@"`:
-            //   1. source the snapshot script passed as the first argument,
-            //   2. drop that argument so "$@" becomes the original command and args,
-            //   3. exec the original command, replacing the wrapper shell.
-            let mut args = shell.derive_exec_args(". \"$1\" && shift && exec \"$@\"", false);
-            args.push("codex-shell-snapshot".to_string());
-            args.push(snapshot_path.to_string_lossy().to_string());
-            args.extend_from_slice(command);
-            args
-        }
-        ShellType::PowerShell => {
-            let mut args = shell.derive_exec_args("param($snapshot) . $snapshot; & @args", false);
-            args.push(snapshot_path.to_string_lossy().to_string());
-            args.extend_from_slice(command);
-            args
-        }
-        ShellType::Cmd => command.to_vec(),
     }
 }
 
@@ -270,6 +227,7 @@ $envVars | ForEach-Object {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     fn assert_posix_snapshot_sections(snapshot: &str) {
@@ -294,18 +252,21 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn wrap_command_with_snapshot_wraps_bash_shell() {
+        let snapshot_path = PathBuf::from("/tmp/snapshot.sh");
         let shell = Shell {
             shell_type: ShellType::Bash,
             shell_path: PathBuf::from("/bin/bash"),
+            shell_snapshot: Some(Arc::new(ShellSnapshot {
+                path: snapshot_path.clone(),
+            })),
         };
-        let snapshot_path = PathBuf::from("/tmp/snapshot.sh");
         let original_command = vec![
             "bash".to_string(),
             "-lc".to_string(),
             "echo hello".to_string(),
         ];
 
-        let wrapped = wrap_command_with_snapshot(&shell, &snapshot_path, &original_command);
+        let wrapped = shell.wrap_command_with_snapshot(&original_command);
 
         let mut expected = shell.derive_exec_args(". \"$1\" && shift && exec \"$@\"", false);
         expected.push("codex-shell-snapshot".to_string());
@@ -317,18 +278,21 @@ mod tests {
 
     #[test]
     fn wrap_command_with_snapshot_preserves_cmd_shell() {
+        let snapshot_path = PathBuf::from("C:\\snapshot.cmd");
         let shell = Shell {
             shell_type: ShellType::Cmd,
             shell_path: PathBuf::from("cmd"),
+            shell_snapshot: Some(Arc::new(ShellSnapshot {
+                path: snapshot_path.clone(),
+            })),
         };
-        let snapshot_path = PathBuf::from("C:\\snapshot.cmd");
         let original_command = vec![
             "cmd".to_string(),
             "/c".to_string(),
             "echo hello".to_string(),
         ];
 
-        let wrapped = wrap_command_with_snapshot(&shell, &snapshot_path, &original_command);
+        let wrapped = shell.wrap_command_with_snapshot(&original_command);
 
         assert_eq!(wrapped, original_command);
     }
@@ -340,6 +304,7 @@ mod tests {
         let shell = Shell {
             shell_type: ShellType::Bash,
             shell_path: PathBuf::from("/bin/bash"),
+            shell_snapshot: None,
         };
 
         let snapshot = ShellSnapshot::try_new(dir.path(), &shell)

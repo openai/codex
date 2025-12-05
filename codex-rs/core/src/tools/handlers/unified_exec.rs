@@ -1,15 +1,11 @@
-use std::path::PathBuf;
-use std::sync::Arc;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecOutputStream;
-use crate::shell::default_user_shell;
+use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
-use crate::shell_snapshot::ShellSnapshot;
-use crate::shell_snapshot::wrap_command_with_snapshot;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -26,6 +22,8 @@ use crate::unified_exec::UnifiedExecSessionManager;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
 use serde::Deserialize;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 pub struct UnifiedExecHandler;
 
@@ -91,7 +89,7 @@ impl ToolHandler for UnifiedExecHandler {
         let Ok(params) = serde_json::from_str::<ExecCommandArgs>(arguments) else {
             return true;
         };
-        let command = get_command(&params, invocation.session.shell_snapshot().await);
+        let command = get_command(&params, invocation.session.user_shell());
         !is_known_safe_command(&command)
     }
 
@@ -128,7 +126,7 @@ impl ToolHandler for UnifiedExecHandler {
                 })?;
                 let process_id = manager.allocate_process_id().await;
 
-                let command = get_command(&args, session.shell_snapshot().await);
+                let command = get_command(&args, session.user_shell());
                 let ExecCommandArgs {
                     workdir,
                     yield_time_ms,
@@ -253,18 +251,16 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
-fn get_command(args: &ExecCommandArgs, shell_snapshot: Option<Arc<ShellSnapshot>>) -> Vec<String> {
-    let shell = if let Some(shell_str) = &args.shell {
-        get_shell_by_model_provided_path(&PathBuf::from(shell_str))
-    } else {
-        default_user_shell()
-    };
-
-    let command = shell.derive_exec_args(&args.cmd, args.login.unwrap_or(shell_snapshot.is_none()));
-    if let Some(snapshot) = shell_snapshot {
-        return wrap_command_with_snapshot(&shell, &snapshot.path, &command);
+fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String> {
+    if let Some(shell_str) = &args.shell {
+        let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
+        shell.shell_snapshot = None;
+        return shell.derive_exec_args(&args.cmd, args.login.unwrap_or(true))
     }
-    command
+
+    let use_login_shell = args.login.unwrap_or(session_shell.shell_snapshot.is_none());
+    let command = session_shell.derive_exec_args(&args.cmd, use_login_shell);
+    session_shell.wrap_command_with_snapshot(&command)
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {
@@ -299,6 +295,8 @@ fn format_response(response: &UnifiedExecResponse) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell::default_user_shell;
+    use std::sync::Arc;
 
     #[test]
     fn test_get_command_uses_default_shell_when_unspecified() {
@@ -309,7 +307,7 @@ mod tests {
 
         assert!(args.shell.is_none());
 
-        let command = get_command(&args, None);
+        let command = get_command(&args, Arc::new(default_user_shell()));
 
         assert_eq!(command.len(), 3);
         assert_eq!(command[2], "echo hello");
@@ -324,7 +322,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
 
-        let command = get_command(&args, None);
+        let command = get_command(&args, Arc::new(default_user_shell()));
 
         assert_eq!(command[2], "echo hello");
     }
@@ -338,7 +336,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("powershell"));
 
-        let command = get_command(&args, None);
+        let command = get_command(&args, Arc::new(default_user_shell()));
 
         assert_eq!(command[2], "echo hello");
     }
@@ -352,7 +350,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("cmd"));
 
-        let command = get_command(&args, None);
+        let command = get_command(&args, Arc::new(default_user_shell()));
 
         assert_eq!(command[2], "echo hello");
     }
