@@ -1167,13 +1167,16 @@ impl App {
             }
         };
 
+        // Seed the temp file with the full composer text (including pending pastes),
         let seed = self.chat_widget.composer_text_with_pending();
+        // show a footer hint, and make sure it's visible before we drop TUI modes.
         self.chat_widget.set_footer_hint_override(Some(vec![(
             EXTERNAL_EDITOR_HINT.to_string(),
             String::new(),
         )]));
         self.force_redraw_now(tui);
         let hint_width = UnicodeWidthStr::width(EXTERNAL_EDITOR_HINT) as u16;
+        // Park the cursor after/below the hint.
         let cursor_row = self.move_cursor_for_external_editor(tui, hint_width);
 
         // Leave alt screen if active to avoid conflicts with editor.
@@ -1193,9 +1196,11 @@ impl App {
         if let Err(err) = tui::set_modes() {
             tracing::warn!("failed to re-enable terminal modes after editor: {err}");
         }
+        // After the editor exits, reset terminal state, flush any buffered keypresses,
+        // and clear the area below the bottom pane, as it may have been scribbled over while the external editor was open.
         Self::discard_pending_terminal_input();
         self.clear_bottom_pane_rows(tui, cursor_row);
-        self.chat_widget.clear_footer_hint_override();
+        self.chat_widget.set_footer_hint_override(None);
 
         if was_alt_screen {
             let _ = tui.enter_alt_screen();
@@ -1218,6 +1223,7 @@ impl App {
         }
     }
 
+    /// Drain any keystrokes the OS delivered while the external editor was running.
     fn discard_pending_terminal_input() {
         loop {
             match event::poll(Duration::from_millis(0)) {
@@ -1236,54 +1242,42 @@ impl App {
         }
     }
 
+    /// Clear the portion of the screen occupied by the bottom pane (or the provided row).
     fn clear_bottom_pane_rows(&mut self, tui: &mut tui::Tui, from_row: Option<u16>) {
+        let Some((pane_start, _pane_height)) = self.pane_rows(tui) else {
+            return;
+        };
         let Ok(area) = tui.terminal.size() else {
             return;
         };
-        let viewport = tui.terminal.viewport_area;
-        if viewport.height == 0 || area.height == 0 {
-            return;
-        }
-        let start_row = from_row.unwrap_or_else(|| {
-            let pane_height = self.chat_widget.bottom_pane_height(area.width);
-            if pane_height == 0 {
-                viewport.y
-            } else {
-                let max_height = viewport.height.min(pane_height);
-                viewport
-                    .y
-                    .saturating_add(viewport.height.saturating_sub(max_height))
-            }
-        });
-        let start_row = start_row.min(area.height.saturating_sub(1));
+        let start_row = from_row
+            .unwrap_or(pane_start)
+            .min(area.height.saturating_sub(1));
+        let viewport_x = tui.terminal.viewport_area.x;
         let backend = tui.terminal.backend_mut();
         if let Err(err) = crossterm::execute!(
             backend,
-            MoveTo(viewport.x, start_row),
+            MoveTo(viewport_x, start_row),
             Clear(ClearType::FromCursorDown)
         ) {
             tracing::warn!("failed to clear prompt area after editor: {err}");
         }
     }
 
+    /// Park the cursor after/below the hint.
+    /// This prevents keystrokes while the external editor is open from overwriting TUI state.
     fn move_cursor_for_external_editor(&self, tui: &mut tui::Tui, hint_width: u16) -> Option<u16> {
-        let Ok(area) = tui.terminal.size() else {
-            return None;
-        };
-        let viewport = tui.terminal.viewport_area;
-        if viewport.height == 0 || area.height == 0 {
-            return None;
-        }
-        let pane_bottom = viewport.y.saturating_add(viewport.height.saturating_sub(1));
-        let mut row = pane_bottom.saturating_add(1);
-        if row >= area.height {
-            row = pane_bottom.min(area.height.saturating_sub(1));
-        }
-        let mut col = viewport.x;
+        let (pane_start, pane_height) = self.pane_rows(tui)?;
+        let area = tui.terminal.size().ok()?;
+        let pane_bottom = pane_start.saturating_add(pane_height.saturating_sub(1));
+        let row = pane_bottom
+            .saturating_add(1)
+            .min(area.height.saturating_sub(1));
+        let mut col = tui.terminal.viewport_area.x;
         if row == pane_bottom {
+            // When we must reuse the footer row, offset the cursor past the hint so it stays readable.
             let max_col = area.width.saturating_sub(1);
-            let offset = hint_width.saturating_add(1).min(max_col);
-            col = col.saturating_add(offset);
+            col = col.saturating_add(hint_width.saturating_add(1).min(max_col));
         }
         if let Err(err) = crossterm::execute!(tui.terminal.backend_mut(), MoveTo(col, row)) {
             tracing::warn!("failed to reposition cursor before launching editor: {err}");
@@ -1292,6 +1286,7 @@ impl App {
         Some(row)
     }
 
+    /// Force an immediate render.
     fn force_redraw_now(&mut self, tui: &mut tui::Tui) {
         let Ok(area) = tui.terminal.size() else {
             return;
@@ -1305,6 +1300,26 @@ impl App {
         }) {
             tracing::warn!("failed to redraw TUI before launching editor: {err:?}");
         }
+    }
+
+    /// Return the top row and height of the bottom pane within the current viewport.
+    fn pane_rows(&self, tui: &tui::Tui) -> Option<(u16, u16)> {
+        let area = tui.terminal.size().ok()?;
+        let viewport = tui.terminal.viewport_area;
+        if viewport.height == 0 || area.height == 0 {
+            return None;
+        }
+        let pane_height = self
+            .chat_widget
+            .bottom_pane_height(area.width)
+            .min(viewport.height);
+        if pane_height == 0 {
+            return None;
+        }
+        let pane_start = viewport
+            .y
+            .saturating_add(viewport.height.saturating_sub(pane_height));
+        Some((pane_start, pane_height))
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
