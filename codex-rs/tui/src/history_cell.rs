@@ -1512,15 +1512,13 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
-    use codex_core::AuthManager;
-    use codex_core::CodexAuth;
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
-    use codex_core::construct_model_family_sync;
     use codex_core::openai_models::model_family::ModelFamily;
+    use codex_core::openai_models::model_family::find_family_for_model;
     use codex_core::protocol::McpAuthStatus;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
@@ -1544,10 +1542,6 @@ mod tests {
         .expect("config")
     }
 
-    fn model_family_for_config(config: &Config) -> ModelFamily {
-        construct_model_family_sync(&config.model, config)
-    }
-
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
         lines
             .iter()
@@ -1562,6 +1556,10 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
+    }
+
+    fn model_family_for_config(config: &Config) -> ModelFamily {
+        find_family_for_model(&config.model).with_config_overrides(config)
     }
 
     #[test]

@@ -6,6 +6,8 @@ use codex_core::CodexConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::openai_models::model_family::ModelFamily;
+use codex_core::openai_models::model_family::find_family_for_model;
 use regex_lite::Regex;
 
 #[cfg(target_os = "linux")]
@@ -35,6 +37,10 @@ pub fn load_default_config_for_test(codex_home: &TempDir) -> Config {
         codex_home.path().to_path_buf(),
     )
     .expect("defaults for test should always succeed")
+}
+
+pub fn construct_model_family_sync(model: &str, config: &Config) -> ModelFamily {
+    find_family_for_model(model).with_config_overrides(config)
 }
 
 #[cfg(target_os = "linux")]

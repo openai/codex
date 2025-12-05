@@ -2492,9 +2492,9 @@ mod tests {
     use crate::CodexAuth;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
-    use crate::construct_model_family_sync;
     use crate::exec::ExecToolCallOutput;
     use crate::function_tool::FunctionCallError;
+    use crate::openai_models::model_family::find_family_for_model;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
     use codex_protocol::models::FunctionCallOutputPayload;
@@ -2740,6 +2740,10 @@ mod tests {
         };
 
         assert_eq!(expected, got);
+    }
+
+    fn construct_model_family_sync(model: &str, config: &Config) -> ModelFamily {
+        find_family_for_model(model).with_config_overrides(config)
     }
 
     fn text_block(s: &str) -> ContentBlock {

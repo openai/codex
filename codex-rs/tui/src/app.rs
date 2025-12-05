@@ -1135,6 +1135,8 @@ mod tests {
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
+    use codex_core::openai_models::model_family::ModelFamily;
+    use codex_core::openai_models::model_family::find_family_for_model;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
@@ -1222,6 +1224,10 @@ mod tests {
 
     fn all_model_presets() -> Vec<ModelPreset> {
         codex_core::openai_models::model_presets::all_model_presets().clone()
+    }
+
+    fn model_family_for_config(config: &Config) -> ModelFamily {
+        find_family_for_model(&config.model)
     }
 
     #[test]
@@ -1378,10 +1384,13 @@ mod tests {
             rollout_path: PathBuf::new(),
         };
 
-        app.chat_widget.handle_codex_event_for_test(Event {
-            id: String::new(),
-            msg: EventMsg::SessionConfigured(event),
-        });
+        app.chat_widget.handle_codex_event(
+            Event {
+                id: String::new(),
+                msg: EventMsg::SessionConfigured(event),
+            },
+            model_family_for_config(app.chat_widget.config_ref()),
+        );
 
         while app_event_rx.try_recv().is_ok() {}
         while op_rx.try_recv().is_ok() {}

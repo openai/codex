@@ -1,6 +1,6 @@
 use assert_matches::assert_matches;
 use codex_core::AuthManager;
-use codex_core::construct_model_family_sync;
+use core_test_support::construct_model_family_sync;
 use std::sync::Arc;
 use tracing_test::traced_test;
 
