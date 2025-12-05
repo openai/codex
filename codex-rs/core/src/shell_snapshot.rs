@@ -280,15 +280,9 @@ mod tests {
             "echo hello".to_string(),
         ];
 
-        let wrapped = wrap_command_with_snapshot(
-            &shell,
-            &snapshot_path,
-            &original_command,
-            false,
-        );
+        let wrapped = wrap_command_with_snapshot(&shell, &snapshot_path, &original_command, false);
 
-        let mut expected =
-            shell.derive_exec_args(". \"$1\" && shift && exec \"$@\"", false);
+        let mut expected = shell.derive_exec_args(". \"$1\" && shift && exec \"$@\"", false);
         expected.push("codex-shell-snapshot".to_string());
         expected.push(snapshot_path.to_string_lossy().to_string());
         expected.extend_from_slice(&original_command);
@@ -303,11 +297,13 @@ mod tests {
             shell_path: PathBuf::from("cmd"),
         };
         let snapshot_path = PathBuf::from("C:\\snapshot.cmd");
-        let original_command =
-            vec!["cmd".to_string(), "/c".to_string(), "echo hello".to_string()];
+        let original_command = vec![
+            "cmd".to_string(),
+            "/c".to_string(),
+            "echo hello".to_string(),
+        ];
 
-        let wrapped =
-            wrap_command_with_snapshot(&shell, &snapshot_path, &original_command, false);
+        let wrapped = wrap_command_with_snapshot(&shell, &snapshot_path, &original_command, false);
 
         assert_eq!(wrapped, original_command);
     }
