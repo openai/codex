@@ -12,6 +12,49 @@ pub const HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG: &str =
 static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     vec![
         ModelPreset {
+            id: "codex-auto-fast".to_string(),
+            model: "codex-auto-fast".to_string(),
+            display_name: "Fast".to_string(),
+            description: "Auto-picks speed-first Codex options with lighter reasoning.".to_string(),
+            default_reasoning_effort: ReasoningEffort::Low,
+            supported_reasoning_efforts: vec![ReasoningEffortPreset {
+                effort: ReasoningEffort::Low,
+                description: "Fast responses with lighter reasoning".to_string(),
+            }],
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+        },
+        ModelPreset {
+            id: "codex-auto-balanced".to_string(),
+            model: "codex-auto-balanced".to_string(),
+            display_name: "Balanced".to_string(),
+            description: "Balances speed and reasoning automatically for everyday coding tasks."
+                .to_string(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![ReasoningEffortPreset {
+                effort: ReasoningEffort::Medium,
+                description: "Balances speed and reasoning depth for everyday tasks".to_string(),
+            }],
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+        },
+        ModelPreset {
+            id: "codex-auto-thorough".to_string(),
+            model: "codex-auto-thorough".to_string(),
+            display_name: "Thorough".to_string(),
+            description: "Auto-picks deeper reasoning for complex or ambiguous work.".to_string(),
+            default_reasoning_effort: ReasoningEffort::High,
+            supported_reasoning_efforts: vec![ReasoningEffortPreset {
+                effort: ReasoningEffort::High,
+                description: "Maximizes reasoning depth for complex problems".to_string(),
+            }],
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+        },
+        ModelPreset {
             id: "gpt-5.1-codex-max".to_string(),
             model: "gpt-5.1-codex-max".to_string(),
             display_name: "gpt-5.1-codex-max".to_string(),

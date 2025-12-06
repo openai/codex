@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use anyhow::anyhow;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
@@ -45,6 +44,43 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
     } = to_response::<ModelListResponse>(response)?;
 
     let expected_models = vec![
+        Model {
+            id: "codex-auto-fast".to_string(),
+            model: "codex-auto-fast".to_string(),
+            display_name: "Fast".to_string(),
+            description: "Auto-picks speed-first Codex options with lighter reasoning.".to_string(),
+            supported_reasoning_efforts: vec![ReasoningEffortOption {
+                reasoning_effort: ReasoningEffort::Low,
+                description: "Fast responses with lighter reasoning".to_string(),
+            }],
+            default_reasoning_effort: ReasoningEffort::Low,
+            is_default: false,
+        },
+        Model {
+            id: "codex-auto-balanced".to_string(),
+            model: "codex-auto-balanced".to_string(),
+            display_name: "Balanced".to_string(),
+            description: "Balances speed and reasoning automatically for everyday coding tasks."
+                .to_string(),
+            supported_reasoning_efforts: vec![ReasoningEffortOption {
+                reasoning_effort: ReasoningEffort::Medium,
+                description: "Balances speed and reasoning depth for everyday tasks".to_string(),
+            }],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            is_default: false,
+        },
+        Model {
+            id: "codex-auto-thorough".to_string(),
+            model: "codex-auto-thorough".to_string(),
+            display_name: "Thorough".to_string(),
+            description: "Auto-picks deeper reasoning for complex or ambiguous work.".to_string(),
+            supported_reasoning_efforts: vec![ReasoningEffortOption {
+                reasoning_effort: ReasoningEffort::High,
+                description: "Maximizes reasoning depth for complex problems".to_string(),
+            }],
+            default_reasoning_effort: ReasoningEffort::High,
+            is_default: false,
+        },
         Model {
             id: "gpt-5.1-codex-max".to_string(),
             model: "gpt-5.1-codex-max".to_string(),
@@ -155,93 +191,47 @@ async fn list_models_pagination_works() -> Result<()> {
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let first_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: None,
-        })
-        .await?;
+    let mut cursor: Option<String> = None;
+    let mut seen: Vec<String> = Vec::new();
+    let expected = vec![
+        "codex-auto-fast",
+        "codex-auto-balanced",
+        "codex-auto-thorough",
+        "gpt-5.1-codex-max",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-mini",
+        "gpt-5.1",
+    ];
 
-    let first_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(first_request)),
-    )
-    .await??;
+    loop {
+        let request_id = mcp
+            .send_list_models_request(ModelListParams {
+                limit: Some(1),
+                cursor: cursor.clone(),
+            })
+            .await?;
 
-    let ModelListResponse {
-        data: first_items,
-        next_cursor: first_cursor,
-    } = to_response::<ModelListResponse>(first_response)?;
+        let response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
 
-    assert_eq!(first_items.len(), 1);
-    assert_eq!(first_items[0].id, "gpt-5.1-codex-max");
-    let next_cursor = first_cursor.ok_or_else(|| anyhow!("cursor for second page"))?;
+        let ModelListResponse {
+            data: items,
+            next_cursor,
+        } = to_response::<ModelListResponse>(response)?;
 
-    let second_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(next_cursor.clone()),
-        })
-        .await?;
+        assert_eq!(items.len(), 1);
+        seen.push(items[0].id.clone());
 
-    let second_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(second_request)),
-    )
-    .await??;
+        cursor = next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
 
-    let ModelListResponse {
-        data: second_items,
-        next_cursor: second_cursor,
-    } = to_response::<ModelListResponse>(second_response)?;
-
-    assert_eq!(second_items.len(), 1);
-    assert_eq!(second_items[0].id, "gpt-5.1-codex");
-    let third_cursor = second_cursor.ok_or_else(|| anyhow!("cursor for third page"))?;
-
-    let third_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(third_cursor.clone()),
-        })
-        .await?;
-
-    let third_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(third_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: third_items,
-        next_cursor: third_cursor,
-    } = to_response::<ModelListResponse>(third_response)?;
-
-    assert_eq!(third_items.len(), 1);
-    assert_eq!(third_items[0].id, "gpt-5.1-codex-mini");
-    let fourth_cursor = third_cursor.ok_or_else(|| anyhow!("cursor for fourth page"))?;
-
-    let fourth_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(fourth_cursor.clone()),
-        })
-        .await?;
-
-    let fourth_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(fourth_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: fourth_items,
-        next_cursor: fourth_cursor,
-    } = to_response::<ModelListResponse>(fourth_response)?;
-
-    assert_eq!(fourth_items.len(), 1);
-    assert_eq!(fourth_items[0].id, "gpt-5.1");
-    assert!(fourth_cursor.is_none());
+    assert_eq!(seen, expected);
     Ok(())
 }
 
