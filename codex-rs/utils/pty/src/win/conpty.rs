@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 // This file is copied from https://github.com/wezterm/wezterm (MIT license).
 // Copyright (c) 2018-Present Wez Furlong
 // Permission is hereby granted, free of charge, to any person obtaining a copy

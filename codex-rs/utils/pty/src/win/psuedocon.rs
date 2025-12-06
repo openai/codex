@@ -1,3 +1,6 @@
+#![allow(clippy::expect_used)]
+#![allow(clippy::upper_case_acronyms)]
+
 // This file is copied from https://github.com/wezterm/wezterm (MIT license).
 // Copyright (c) 2018-Present Wez Furlong
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -111,8 +114,7 @@ impl PsuedoCon {
         };
         ensure!(
             result == S_OK,
-            "failed to create psuedo console: HRESULT {}",
-            result
+            "failed to create psuedo console: HRESULT {result}"
         );
         Ok(Self { con })
     }
@@ -158,7 +160,7 @@ impl PsuedoCon {
                 0,
                 EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
                 env_block.as_mut_ptr() as *mut _,
-                cwd.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
+                cwd.as_ref().map_or(ptr::null(), std::vec::Vec::as_ptr),
                 &mut si.StartupInfo,
                 &mut pi,
             )
@@ -171,8 +173,8 @@ impl PsuedoCon {
                 cwd.as_ref().map(|c| OsString::from_wide(c)),
                 err
             );
-            log::error!("{}", msg);
-            bail!("{}", msg);
+            log::error!("{msg}");
+            bail!("{msg}");
         }
 
         let _main_thread = unsafe { OwnedHandle::from_raw_handle(pi.hThread as _) };
@@ -238,8 +240,7 @@ fn build_cmdline(cmd: &CommandBuilder) -> anyhow::Result<(Vec<u16>, Vec<u16>)> {
         cmdline.push(' ' as u16);
         ensure!(
             !arg.encode_wide().any(|c| c == 0),
-            "invalid encoding for command line argument {:?}",
-            arg
+            "invalid encoding for command line argument {arg:?}"
         );
         append_quoted(arg, &mut cmdline);
     }
