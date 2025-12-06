@@ -5,6 +5,7 @@ use crate::protocol::common::AuthMode;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Verbosity;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::ResponseItem;
@@ -12,6 +13,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
+use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
@@ -159,6 +161,91 @@ pub enum ConfigLayerName {
     User,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct SandboxWorkspaceWrite {
+    #[serde(default)]
+    pub writable_roots: Vec<PathBuf>,
+    #[serde(default)]
+    pub network_access: bool,
+    #[serde(default)]
+    pub exclude_tmpdir_env_var: bool,
+    #[serde(default)]
+    pub exclude_slash_tmp: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct Config {
+    pub model: Option<String>,
+    pub review_model: Option<String>,
+    pub model_context_window: Option<i64>,
+    pub model_auto_compact_token_limit: Option<i64>,
+    pub model_provider: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_approval_policy",
+        serialize_with = "serialize_approval_policy"
+    )]
+    pub approval_policy: Option<AskForApproval>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_sandbox_mode",
+        serialize_with = "serialize_sandbox_mode"
+    )]
+    pub sandbox_mode: Option<SandboxMode>,
+    pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
+    pub instructions: Option<String>,
+    pub developer_instructions: Option<String>,
+    pub compact_prompt: Option<String>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub model_reasoning_summary: Option<ReasoningSummary>,
+    pub model_verbosity: Option<Verbosity>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+fn deserialize_approval_policy<'de, D>(deserializer: D) -> Result<Option<AskForApproval>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<CoreAskForApproval>::deserialize(deserializer)?;
+    Ok(value.map(AskForApproval::from))
+}
+
+fn serialize_approval_policy<S>(
+    value: &Option<AskForApproval>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    value
+        .as_ref()
+        .map(|policy| policy.to_core())
+        .serialize(serializer)
+}
+
+fn deserialize_sandbox_mode<'de, D>(deserializer: D) -> Result<Option<SandboxMode>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<codex_protocol::config_types::SandboxMode>::deserialize(deserializer)?;
+    Ok(value.map(SandboxMode::from))
+}
+
+fn serialize_sandbox_mode<S>(value: &Option<SandboxMode>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    value
+        .as_ref()
+        .map(|mode| mode.to_core())
+        .serialize(serializer)
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -237,7 +324,7 @@ pub struct ConfigReadParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigReadResponse {
-    pub config: JsonValue,
+    pub config: Config,
     pub origins: HashMap<String, ConfigLayerMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layers: Option<Vec<ConfigLayer>>,

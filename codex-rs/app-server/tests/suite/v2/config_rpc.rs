@@ -1,6 +1,7 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigLayerName;
@@ -12,9 +13,11 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::WriteStatus;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -57,7 +60,7 @@ sandbox_mode = "workspace-write"
         layers,
     } = to_response(resp)?;
 
-    assert_eq!(config.get("model"), Some(&json!("gpt-user")));
+    assert_eq!(config.model.as_deref(), Some("gpt-user"));
     assert_eq!(
         origins.get("model").expect("origin").name,
         ConfigLayerName::User
@@ -123,30 +126,29 @@ writable_roots = ["/system"]
         layers,
     } = to_response(resp)?;
 
-    assert_eq!(config.get("model"), Some(&json!("gpt-system")));
+    assert_eq!(config.model.as_deref(), Some("gpt-system"));
     assert_eq!(
         origins.get("model").expect("origin").name,
         ConfigLayerName::System
     );
 
-    assert_eq!(config.get("approval_policy"), Some(&json!("never")));
+    assert_eq!(config.approval_policy, Some(AskForApproval::Never));
     assert_eq!(
         origins.get("approval_policy").expect("origin").name,
         ConfigLayerName::System
     );
 
-    assert_eq!(config.get("sandbox_mode"), Some(&json!("workspace-write")));
+    assert_eq!(config.sandbox_mode, Some(SandboxMode::WorkspaceWrite));
     assert_eq!(
         origins.get("sandbox_mode").expect("origin").name,
         ConfigLayerName::User
     );
 
-    assert_eq!(
-        config
-            .get("sandbox_workspace_write")
-            .and_then(|v| v.get("writable_roots")),
-        Some(&json!(["/system"]))
-    );
+    let sandbox = config
+        .sandbox_workspace_write
+        .as_ref()
+        .expect("sandbox workspace write");
+    assert_eq!(sandbox.writable_roots, vec![PathBuf::from("/system")]);
     assert_eq!(
         origins
             .get("sandbox_workspace_write.writable_roots.0")
@@ -155,12 +157,7 @@ writable_roots = ["/system"]
         ConfigLayerName::System
     );
 
-    assert_eq!(
-        config
-            .get("sandbox_workspace_write")
-            .and_then(|v| v.get("network_access")),
-        Some(&json!(true))
-    );
+    assert!(sandbox.network_access);
     assert_eq!(
         origins
             .get("sandbox_workspace_write.network_access")
@@ -242,7 +239,7 @@ model = "gpt-old"
     )
     .await??;
     let verify: ConfigReadResponse = to_response(verify_resp)?;
-    assert_eq!(verify.config.get("model"), Some(&json!("gpt-new")));
+    assert_eq!(verify.config.model.as_deref(), Some("gpt-new"));
 
     Ok(())
 }
@@ -342,22 +339,14 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     )
     .await??;
     let read: ConfigReadResponse = to_response(read_resp)?;
-    assert_eq!(
-        read.config.get("sandbox_mode"),
-        Some(&json!("workspace-write"))
-    );
-    assert_eq!(
-        read.config
-            .get("sandbox_workspace_write")
-            .and_then(|v| v.get("writable_roots")),
-        Some(&json!(["/tmp"]))
-    );
-    assert_eq!(
-        read.config
-            .get("sandbox_workspace_write")
-            .and_then(|v| v.get("network_access")),
-        Some(&json!(false))
-    );
+    assert_eq!(read.config.sandbox_mode, Some(SandboxMode::WorkspaceWrite));
+    let sandbox = read
+        .config
+        .sandbox_workspace_write
+        .as_ref()
+        .expect("sandbox workspace write");
+    assert_eq!(sandbox.writable_roots, vec![PathBuf::from("/tmp")]);
+    assert!(!sandbox.network_access);
 
     Ok(())
 }

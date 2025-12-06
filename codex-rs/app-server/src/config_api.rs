@@ -1,5 +1,6 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use codex_app_server_protocol::Config;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigLayer;
 use codex_app_server_protocol::ConfigLayerMetadata;
@@ -75,8 +76,10 @@ impl ConfigApi {
         let effective = layers.effective_config();
         validate_config(&effective).map_err(|err| internal_error("invalid configuration", err))?;
 
+        let config: Config = serde_json::from_value(to_json_value(&effective))
+            .map_err(|err| internal_error("failed to deserialize configuration", err))?;
         let response = ConfigReadResponse {
-            config: to_json_value(&effective),
+            config,
             origins: layers.origins(),
             layers: params.include_layers.then(|| layers.layers_high_to_low()),
         };
@@ -773,6 +776,7 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_app_server_protocol::AskForApproval;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
@@ -895,10 +899,7 @@ remote_compaction = true
             .await
             .expect("response");
 
-        assert_eq!(
-            response.config.get("approval_policy"),
-            Some(&json!("never"))
-        );
+        assert_eq!(response.config.approval_policy, Some(AskForApproval::Never));
 
         assert_eq!(
             response
@@ -953,8 +954,10 @@ remote_compaction = true
             })
             .await
             .expect("read");
-        let config_object = read_after.config.as_object().expect("object");
-        assert_eq!(config_object.get("approval_policy"), Some(&json!("never")));
+        assert_eq!(
+            read_after.config.approval_policy,
+            Some(AskForApproval::Never)
+        );
         assert_eq!(
             read_after
                 .origins
@@ -1093,7 +1096,7 @@ remote_compaction = true
             .await
             .expect("response");
 
-        assert_eq!(response.config.get("model"), Some(&json!("system")));
+        assert_eq!(response.config.model.as_deref(), Some("system"));
         assert_eq!(
             response.origins.get("model").expect("origin").name,
             ConfigLayerName::System
