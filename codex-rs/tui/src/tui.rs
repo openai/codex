@@ -39,6 +39,9 @@ use tokio_stream::Stream;
 pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
+use crate::notifications::DesktopNotificationBackend;
+use crate::notifications::NotificationBackendKind;
+use crate::notifications::detect_backend;
 #[cfg(unix)]
 use crate::tui::job_control::SUSPEND_KEY;
 #[cfg(unix)]
@@ -173,6 +176,7 @@ pub struct Tui {
     // True when terminal/tab is focused; updated internally from crossterm events
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
+    notification_backend: Option<DesktopNotificationBackend>,
 }
 
 impl Tui {
@@ -198,6 +202,7 @@ impl Tui {
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
+            notification_backend: Some(detect_backend()),
         }
     }
 
@@ -212,11 +217,47 @@ impl Tui {
     /// Emit a desktop notification now if the terminal is unfocused.
     /// Returns true if a notification was posted.
     pub fn notify(&mut self, message: impl AsRef<str>) -> bool {
-        if !self.terminal_focused.load(Ordering::Relaxed) {
-            let _ = execute!(stdout(), PostNotification(message.as_ref().to_string()));
-            true
-        } else {
-            false
+        if self.terminal_focused.load(Ordering::Relaxed) {
+            return false;
+        }
+
+        let Some(backend) = self.notification_backend.as_mut() else {
+            return false;
+        };
+
+        let message = message.as_ref().to_string();
+        match backend.notify(&message) {
+            Ok(()) => true,
+            Err(err) => match backend.kind() {
+                NotificationBackendKind::WindowsToast => {
+                    tracing::error!(
+                        error = %err,
+                        "Failed to send Windows toast notification; falling back to OSC 9"
+                    );
+                    self.notification_backend = Some(DesktopNotificationBackend::osc9());
+                    if let Some(backend) = self.notification_backend.as_mut() {
+                        if let Err(osc_err) = backend.notify(&message) {
+                            tracing::warn!(
+                                error = %osc_err,
+                                "Failed to emit OSC 9 notification after toast fallback; \
+                                 disabling future notifications"
+                            );
+                            self.notification_backend = None;
+                            return false;
+                        }
+                        return true;
+                    }
+                    false
+                }
+                NotificationBackendKind::Osc9 => {
+                    tracing::warn!(
+                        error = %err,
+                        "Failed to emit OSC 9 notification; disabling future notifications"
+                    );
+                    self.notification_backend = None;
+                    false
+                }
+            },
         }
     }
 
@@ -415,27 +456,5 @@ impl Tui {
             }
         }
         Ok(None)
-    }
-}
-
-/// Command that emits an OSC 9 desktop notification with a message.
-#[derive(Debug, Clone)]
-pub struct PostNotification(pub String);
-
-impl Command for PostNotification {
-    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        write!(f, "\x1b]9;{}\x07", self.0)
-    }
-
-    #[cfg(windows)]
-    fn execute_winapi(&self) -> Result<()> {
-        Err(std::io::Error::other(
-            "tried to execute PostNotification using WinAPI; use ANSI instead",
-        ))
-    }
-
-    #[cfg(windows)]
-    fn is_ansi_code_supported(&self) -> bool {
-        true
     }
 }
