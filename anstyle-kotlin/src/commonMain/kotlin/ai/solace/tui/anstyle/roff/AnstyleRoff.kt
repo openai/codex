@@ -1,10 +1,50 @@
 /**
+ * # anstyle-roff
+ *
  * Convert from ANSI stylings to ROFF Control Lines.
  *
- * This module bridges anstyle with roff for generating ROFF output from
- * ANSI-styled text. Useful for generating man pages from colored terminal output.
+ * This module bridges [ai.solace.tui.anstyle] with [ai.solace.tui.roff] for generating
+ * ROFF output from ANSI-styled text. This is particularly useful for generating man pages
+ * from colored terminal output, such as help text from CLI applications.
  *
- * Copyright (C) 2024-2025 Sydney Renee <sydney@thesolace.ai>
+ * ## Usage
+ *
+ * ```kotlin
+ * import ai.solace.tui.anstyle.roff.toRoff
+ *
+ * // Convert ANSI-styled text to ROFF
+ * val ansiText = "\u001b[31mError:\u001b[0m Something went wrong"
+ * val roffDoc = toRoff(ansiText)
+ *
+ * // Render to ROFF format
+ * val roffOutput = roffDoc.render()
+ * ```
+ *
+ * ## Color Mapping
+ *
+ * ANSI colors are mapped to ROFF color names:
+ * - 4-bit colors (e.g., red, blue) map directly to ROFF color names
+ * - 8-bit (256) colors are converted to the nearest 4-bit color or RGB
+ * - 24-bit RGB colors are defined using ROFF's `defcolor` request
+ *
+ * ## Effect Mapping
+ *
+ * - **Bold** (`\u001b[1m`) renders as ROFF bold (`\fB...\fR`)
+ * - **Italic** (`\u001b[3m`) renders as ROFF italic (`\fI...\fR`)
+ * - **Bright colors** (e.g., `\u001b[91m`) render as bold text
+ * - Other effects (underline, blink, etc.) are not supported by ROFF
+ *
+ * ## Dependencies
+ *
+ * This module depends on:
+ * - [ai.solace.tui.cansi] for parsing ANSI escape codes
+ * - [ai.solace.tui.roff] for generating ROFF documents
+ * - [ai.solace.tui.anstyle] for style representation
+ *
+ * @see toRoff Main conversion function
+ * @see styledStream Parse ANSI text into styled segments
+ *
+ * Copyright (C) 2024-2025 Sydney Renee / The Solace Project
  * Licensed under Apache-2.0 OR MIT
  */
 package ai.solace.tui.anstyle.roff
@@ -40,8 +80,11 @@ internal object ControlRequests {
 /**
  * A styled string segment parsed from ANSI escape codes.
  *
- * @property text The text content.
- * @property style The ANSI style applied to this text.
+ * Represents a contiguous piece of text with consistent styling. When parsing
+ * ANSI-styled text, the input is broken into these segments wherever the style changes.
+ *
+ * @property text The text content (without ANSI escape codes).
+ * @property style The [Style] applied to this text segment.
  */
 data class StyledStr(
     val text: String,
@@ -51,10 +94,21 @@ data class StyledStr(
 /**
  * Parse ANSI-styled text into a stream of [StyledStr] segments.
  *
- * This function converts cansi parsing results to anstyle [Style] objects.
+ * This function uses [ai.solace.tui.cansi.categoriseText] to parse the ANSI escape codes
+ * and converts the results to anstyle [Style] objects. Each segment represents a piece
+ * of text with consistent styling.
  *
- * @param text The ANSI escape code formatted text.
- * @return Sequence of styled string segments.
+ * Example:
+ * ```kotlin
+ * val text = "\u001b[31mred\u001b[0m normal \u001b[32mgreen\u001b[0m"
+ * val segments = styledStream(text).toList()
+ * // segments[0]: StyledStr(text="red", style=Style(fg=Red))
+ * // segments[1]: StyledStr(text=" normal ", style=Style())
+ * // segments[2]: StyledStr(text="green", style=Style(fg=Green))
+ * ```
+ *
+ * @param text The ANSI escape code formatted text to parse.
+ * @return A [Sequence] of [StyledStr] segments representing the styled text.
  */
 fun styledStream(text: String): Sequence<StyledStr> = sequence {
     val slices = ai.solace.tui.cansi.categoriseText(text)
@@ -146,21 +200,40 @@ private fun cansiColorToAnstyle(color: ai.solace.tui.cansi.Color): Color {
 /**
  * Generate a [Roff] document from ANSI escape codes.
  *
+ * This is the main entry point for converting ANSI-styled terminal output to ROFF format.
+ * The resulting [Roff] document can be rendered to a string using [Roff.render] (with
+ * apostrophe handling) or [Roff.toRoff] (raw output).
+ *
+ * ## Color Handling
+ *
+ * Foreground colors are set using `.gcolor` and background colors using `.fcolor`.
+ * When a color changes, the appropriate control request is emitted. When color is
+ * reset to default, `.gcolor default` or `.fcolor default` is emitted.
+ *
+ * ## Effect Handling
+ *
+ * - Bold text is wrapped with `\fB...\fR`
+ * - Italic text is wrapped with `\fI...\fR`
+ * - Bright foreground colors are treated as bold
+ * - Plain text uses roman font (no wrapping)
+ *
  * Example:
  * ```kotlin
- * val text = "\u001b[44;31mtest\u001b[0m"
- *
+ * val text = "\u001b[31;1mError:\u001b[0m File not found"
  * val roffDoc = toRoff(text)
- * val expected = """.gcolor red
- * .fcolor blue
- * test
- * """
- *
- * assertEquals(expected, roffDoc.toRoff())
+ * println(roffDoc.render())
+ * // Output:
+ * // .gcolor red
+ * // \fBError:\fR
+ * // .gcolor default
+ * // File not found
  * ```
  *
- * @param styledText The ANSI escape code formatted text.
+ * @param styledText The ANSI escape code formatted text to convert.
  * @return A [Roff] document representing the styled content.
+ * @see styledStream For lower-level access to styled segments
+ * @see Roff.render To render with apostrophe handling
+ * @see Roff.toRoff To render raw ROFF output
  */
 fun toRoff(styledText: String): Roff {
     val doc = Roff()
