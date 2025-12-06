@@ -31,10 +31,11 @@ cargo build
 # Launch the TUI with a sample prompt.
 cargo run --bin codex -- "explain this codebase to me"
 
-# After making changes, ensure the code is clean.
-cargo fmt -- --config imports_granularity=Item
-cargo clippy --tests
+# After making changes, use the root justfile helpers (they default to codex-rs):
+just fmt
+just fix -p <crate-you-touched>
 
-# Run the tests.
-cargo test
+# Run the relevant tests (project-specific is fastest), for example:
+cargo test -p codex-tui
+just test  # if you need a full sweep
 ```
