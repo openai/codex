@@ -2,7 +2,7 @@ plugins {
     kotlin("multiplatform") version "2.2.10"
 }
 
-group = "ai.solace.tui"
+group = "io.github.kotlinmania"
 version = "0.1.0-SNAPSHOT"
 
 repositories {
@@ -21,8 +21,8 @@ kotlin {
     sourceSets {
         val commonMain by getting {
             dependencies {
-                implementation("ai.solace.tui:roff-kotlin")
-                implementation("ai.solace.tui:cansi-kotlin")
+                implementation("io.github.kotlinmania:roff-kotlin")
+                implementation("io.github.kotlinmania:cansi-kotlin")
             }
         }
         val commonTest by getting {

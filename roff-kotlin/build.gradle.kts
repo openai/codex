@@ -2,7 +2,7 @@ plugins {
     kotlin("multiplatform") version "2.2.10"
 }
 
-group = "ai.solace.tui"
+group = "io.github.kotlinmania"
 version = "0.1.0-SNAPSHOT"
 
 repositories {
