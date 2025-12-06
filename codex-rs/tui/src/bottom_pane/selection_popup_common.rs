@@ -19,8 +19,8 @@ pub(crate) struct GenericDisplayRow {
     pub name: String,
     pub display_shortcut: Option<KeyBinding>,
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
-    pub is_current: bool,
-    pub description: Option<String>, // optional grey text after the name
+    pub description: Option<String>,       // optional grey text after the name
+    pub wrap_indent: Option<usize>,        // optional indent for wrapped lines
 }
 
 /// Compute a shared description-column start based on the widest visible name
@@ -47,13 +47,30 @@ fn compute_desc_col(
     desc_col
 }
 
+/// Determine how many spaces to indent wrapped lines for a row.
+fn wrap_indent(row: &GenericDisplayRow, desc_col: usize, max_width: u16) -> usize {
+    let max_indent = max_width.saturating_sub(1) as usize;
+    let indent = row.wrap_indent.unwrap_or_else(|| {
+        if row.description.is_some() {
+            desc_col
+        } else {
+            0
+        }
+    });
+    indent.min(max_indent)
+}
+
 /// Build the full display line for a row with the description padded to start
 /// at `desc_col`. Applies fuzzy-match bolding when indices are present and
 /// dims the description.
 fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
     // Enforce single-line name: allow at most desc_col - 2 cells for name,
     // reserving two spaces before the description column.
-    let name_limit = desc_col.saturating_sub(2);
+    let name_limit = row
+        .description
+        .as_ref()
+        .map(|_| desc_col.saturating_sub(2))
+        .unwrap_or(usize::MAX);
 
     let mut name_spans: Vec<Span> = Vec::with_capacity(row.name.len());
     let mut used_width = 0usize;
@@ -63,11 +80,12 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
         let mut idx_iter = idxs.iter().peekable();
         for (char_idx, ch) in row.name.chars().enumerate() {
             let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
-            if used_width + ch_w > name_limit {
+            let next_width = used_width.saturating_add(ch_w);
+            if next_width > name_limit {
                 truncated = true;
                 break;
             }
-            used_width += ch_w;
+            used_width = next_width;
 
             if idx_iter.peek().is_some_and(|next| **next == char_idx) {
                 idx_iter.next();
@@ -79,11 +97,12 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
     } else {
         for ch in row.name.chars() {
             let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
-            if used_width + ch_w > name_limit {
+            let next_width = used_width.saturating_add(ch_w);
+            if next_width > name_limit {
                 truncated = true;
                 break;
             }
-            used_width += ch_w;
+            used_width = next_width;
             name_spans.push(ch.to_string().into());
         }
     }
@@ -161,24 +180,7 @@ pub(crate) fn render_rows(
             break;
         }
 
-        let GenericDisplayRow {
-            name,
-            match_indices,
-            display_shortcut,
-            is_current: _is_current,
-            description,
-        } = row;
-
-        let mut full_line = build_full_line(
-            &GenericDisplayRow {
-                name: name.clone(),
-                match_indices: match_indices.clone(),
-                display_shortcut: *display_shortcut,
-                is_current: *_is_current,
-                description: description.clone(),
-            },
-            desc_col,
-        );
+        let mut full_line = build_full_line(row, desc_col);
         if Some(i) == state.selected_idx {
             // Match previous behavior: cyan + bold for the selected row.
             // Reset the style first to avoid inheriting dim from keyboard shortcuts.
@@ -190,9 +192,10 @@ pub(crate) fn render_rows(
         // Wrap with subsequent indent aligned to the description column.
         use crate::wrapping::RtOptions;
         use crate::wrapping::word_wrap_line;
+        let continuation_indent = wrap_indent(row, desc_col, area.width);
         let options = RtOptions::new(area.width as usize)
             .initial_indent(Line::from(""))
-            .subsequent_indent(Line::from(" ".repeat(desc_col)));
+            .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
         let wrapped = word_wrap_line(&full_line, options);
 
         // Render the wrapped lines.
@@ -256,9 +259,10 @@ pub(crate) fn measure_rows_height(
         .map(|(_, r)| r)
     {
         let full_line = build_full_line(row, desc_col);
+        let continuation_indent = wrap_indent(row, desc_col, content_width);
         let opts = RtOptions::new(content_width as usize)
             .initial_indent(Line::from(""))
-            .subsequent_indent(Line::from(" ".repeat(desc_col)));
+            .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
         total = total.saturating_add(word_wrap_line(&full_line, opts).len() as u16);
     }
     total.max(1)
