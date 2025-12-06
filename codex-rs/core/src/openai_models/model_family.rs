@@ -291,6 +291,7 @@ mod tests {
     use super::*;
     use codex_protocol::openai_models::ClientVersion;
     use codex_protocol::openai_models::ModelVisibility;
+    use codex_protocol::openai_models::ReasoningEffortPreset;
 
     fn remote(slug: &str, effort: ReasoningEffort, shell: ConfigShellToolType) -> ModelInfo {
         ModelInfo {
@@ -298,12 +299,16 @@ mod tests {
             display_name: slug.to_string(),
             description: Some(format!("{slug} desc")),
             default_reasoning_level: effort,
-            supported_reasoning_levels: vec![effort],
+            supported_reasoning_levels: vec![ReasoningEffortPreset {
+                effort,
+                description: effort.to_string(),
+            }],
             shell_type: shell,
             visibility: ModelVisibility::List,
             minimal_client_version: ClientVersion(0, 1, 0),
             supported_in_api: true,
             priority: 1,
+            upgrade: None,
         }
     }
 
