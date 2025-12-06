@@ -107,11 +107,12 @@ jobs:
       - name: Cargo build
         run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
 
-      - if: ${{ contains(matrix.target, 'linux') }}
+      - if: ${{ contains(matrix.target, 'linux') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         name: Cosign Linux artifacts
         uses: ./.github/actions/linux-code-sign
         with:
           target: ${{ matrix.target }}
+          artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
 
       # - if: ${{ contains(matrix.target, 'windows') }}
       #   name: Sign Windows binaries with Azure Trusted Signing
