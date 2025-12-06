@@ -45,6 +45,7 @@ mod clipboard_paste;
 mod color;
 pub mod custom_terminal;
 mod diff_render;
+mod editor;
 mod exec_cell;
 mod exec_command;
 mod file_search;

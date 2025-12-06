@@ -1,0 +1,159 @@
+use std::env;
+use std::fs;
+use std::process::Stdio;
+
+use color_eyre::eyre::Report;
+use color_eyre::eyre::Result;
+use shlex::split as shlex_split;
+use tempfile::Builder;
+use thiserror::Error;
+use tokio::process::Command;
+
+#[derive(Debug, Error)]
+pub(crate) enum EditorError {
+    #[error("neither VISUAL nor EDITOR is set")]
+    MissingEditor,
+    #[error("failed to parse editor command")]
+    ParseFailed,
+    #[error("editor command is empty")]
+    EmptyCommand,
+}
+
+/// Resolve the editor command from environment variables.
+/// Prefers `VISUAL` over `EDITOR`.
+pub(crate) fn resolve_editor_command() -> std::result::Result<Vec<String>, EditorError> {
+    let raw = env::var("VISUAL")
+        .or_else(|_| env::var("EDITOR"))
+        .map_err(|_| EditorError::MissingEditor)?;
+    let parts = shlex_split(&raw).ok_or(EditorError::ParseFailed)?;
+    if parts.is_empty() {
+        return Err(EditorError::EmptyCommand);
+    }
+    Ok(parts)
+}
+
+/// Write `seed` to a temp file, launch the editor command, and return the updated content.
+pub(crate) async fn run_editor(seed: &str, editor_cmd: &[String]) -> Result<String> {
+    if editor_cmd.is_empty() {
+        return Err(Report::msg("editor command is empty"));
+    }
+
+    let tempfile = Builder::new().suffix(".md").tempfile()?;
+    fs::write(tempfile.path(), seed)?;
+
+    let mut cmd = Command::new(&editor_cmd[0]);
+    if editor_cmd.len() > 1 {
+        cmd.args(&editor_cmd[1..]);
+    }
+    let status = cmd
+        .arg(tempfile.path())
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .await?;
+
+    if !status.success() {
+        return Err(Report::msg(format!("editor exited with status {status}")));
+    }
+
+    let contents = fs::read_to_string(tempfile.path())?;
+    Ok(contents)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use serial_test::serial;
+    #[cfg(unix)]
+    use tempfile::tempdir;
+
+    struct EnvGuard {
+        visual: Option<String>,
+        editor: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn new() -> Self {
+            Self {
+                visual: env::var("VISUAL").ok(),
+                editor: env::var("EDITOR").ok(),
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            restore_env("VISUAL", self.visual.take());
+            restore_env("EDITOR", self.editor.take());
+        }
+    }
+
+    fn restore_env(key: &str, value: Option<String>) {
+        match value {
+            Some(val) => unsafe { env::set_var(key, val) },
+            None => unsafe { env::remove_var(key) },
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_editor_prefers_visual() {
+        let _guard = EnvGuard::new();
+        unsafe {
+            env::set_var("VISUAL", "vis");
+            env::set_var("EDITOR", "ed");
+        }
+        let cmd = resolve_editor_command().unwrap();
+        assert_eq!(cmd, vec!["vis".to_string()]);
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_editor_errors_when_unset() {
+        let _guard = EnvGuard::new();
+        unsafe {
+            env::remove_var("VISUAL");
+            env::remove_var("EDITOR");
+        }
+        assert!(matches!(
+            resolve_editor_command(),
+            Err(EditorError::MissingEditor)
+        ));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn run_editor_returns_updated_content() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let script_path = dir.path().join("edit.sh");
+        fs::write(&script_path, "#!/bin/sh\nprintf \"edited\" > \"$1\"\n").unwrap();
+        let mut perms = fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).unwrap();
+
+        let cmd = vec![script_path.to_string_lossy().to_string()];
+        let result = run_editor("seed", &cmd).await.unwrap();
+        assert_eq!(result, "edited".to_string());
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn run_editor_returns_none_when_file_empty() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let script_path = dir.path().join("edit.sh");
+        fs::write(&script_path, "#!/bin/sh\n: > \"$1\"\n").unwrap();
+        let mut perms = fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).unwrap();
+
+        let cmd = vec![script_path.to_string_lossy().to_string()];
+        let result = run_editor("seed", &cmd).await.unwrap();
+        assert_eq!(result, "");
+    }
+}
