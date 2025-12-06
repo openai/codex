@@ -15,6 +15,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
@@ -54,12 +55,16 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         display_name: "Remote Unified Exec".to_string(),
         description: Some("A remote model that requires the unified exec shell".to_string()),
         default_reasoning_level: ReasoningEffort::Medium,
-        supported_reasoning_levels: vec![ReasoningEffort::Medium],
+        supported_reasoning_levels: vec![ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: ReasoningEffort::Medium.to_string(),
+        }],
         shell_type: ConfigShellToolType::UnifiedExec,
         visibility: ModelVisibility::List,
         minimal_client_version: ClientVersion(0, 1, 0),
         supported_in_api: true,
         priority: 1,
+        upgrade: None,
     };
 
     let models_mock = mount_models_once(
