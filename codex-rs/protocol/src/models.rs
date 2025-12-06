@@ -348,6 +348,9 @@ pub struct ShellCommandToolCallParams {
     pub command: String,
     pub workdir: Option<String>,
 
+    /// Whether to run the shell with login shell semantics
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login: Option<bool>,
     /// This is the maximum time in milliseconds that the command is allowed to run.
     #[serde(alias = "timeout")]
     pub timeout_ms: Option<u64>,
