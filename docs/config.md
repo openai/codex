@@ -615,12 +615,12 @@ Set `otel.exporter` to control where events go:
   endpoint, protocol, and headers your collector expects:
 
   ```toml
-  [otel]
-  exporter = { otlp-http = {
-    endpoint = "https://otel.example.com/v1/logs",
-    protocol = "binary",
-    headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" }
-  }}
+  [otel.exporter."otlp-http"]
+  endpoint = "https://otel.example.com/v1/logs"
+  protocol = "binary"
+
+  [otel.exporter."otlp-http".headers]
+  "x-otlp-api-key" = "${OTLP_TOKEN}"
   ```
 
 - `otlp-grpc` – streams OTLP log records over gRPC. Provide the endpoint and any
@@ -628,27 +628,24 @@ Set `otel.exporter` to control where events go:
 
   ```toml
   [otel]
-  exporter = { otlp-grpc = {
-    endpoint = "https://otel.example.com:4317",
-    headers = { "x-otlp-meta" = "abc123" }
-  }}
+  exporter = { otlp-grpc = {endpoint = "https://otel.example.com:4317",headers = { "x-otlp-meta" = "abc123" }}}
   ```
 
 Both OTLP exporters accept an optional `tls` block so you can trust a custom CA
 or enable mutual TLS. Relative paths are resolved against `~/.codex/`:
 
 ```toml
-[otel]
-exporter = { otlp-http = {
-  endpoint = "https://otel.example.com/v1/logs",
-  protocol = "binary",
-  headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" },
-  tls = {
-    ca-certificate = "certs/otel-ca.pem",
-    client-certificate = "/etc/codex/certs/client.pem",
-    client-private-key = "/etc/codex/certs/client-key.pem",
-  }
-}}
+[otel.exporter."otlp-http"]
+endpoint = "https://otel.example.com/v1/logs"
+protocol = "binary"
+
+[otel.exporter."otlp-http".headers]
+"x-otlp-api-key" = "${OTLP_TOKEN}"
+
+[otel.exporter."otlp-http".tls]
+ca-certificate = "certs/otel-ca.pem"
+client-certificate = "/etc/codex/certs/client.pem"
+client-private-key = "/etc/codex/certs/client-key.pem"
 ```
 
 If the exporter is `none` nothing is written anywhere; otherwise you must run or point to your
