@@ -186,7 +186,8 @@ APPENDIX: How to apply the Apache License to your work.
       same "printed page" as the copyright notice for easier
       identification within third-party archives.
 
-Copyright 2025 OpenAI
+Original Rust/Typescript code: Copyright 2025 OpenAI
+Kotlin port: Copyright 2025, Sydney Renee/The Solace Project
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

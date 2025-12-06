@@ -751,7 +751,7 @@ private fun tryParseErrorMessage(body: String): String {
 /**
  * Parse ID token JWT and extract claims.
  *
- * Uses the com.auth0.jwt library to decode the JWT without verification.
+ * Uses the io.github.kotlinmania.jwt library to decode the JWT without verification.
  * Extracts claims from the payload:
  * - email
  * - https://api.openai.com/auth.chatgpt_plan_type
@@ -765,7 +765,7 @@ private fun tryParseErrorMessage(body: String): String {
 private fun parseIdToken(jwt: String): Result<IdTokenInfo> {
     return try {
         // Decode JWT without verification
-        val decoded = com.auth0.jwt.JWT.decode(jwt)
+        val decoded = io.github.kotlinmania.jwt.JWT.decode(jwt)
 
         // Extract email
         val email = decoded.getClaim("email").asString()
@@ -787,7 +787,7 @@ private fun parseIdToken(jwt: String): Result<IdTokenInfo> {
                 rawJwt = jwt
             )
         )
-    } catch (e: com.auth0.jwt.exceptions.JWTDecodeException) {
+    } catch (e: io.github.kotlinmania.jwt.exceptions.JWTDecodeException) {
         Result.failure(Exception("Failed to decode JWT: ${e.message}", e))
     } catch (e: Exception) {
         Result.failure(Exception("JWT parsing failed: ${e.message}", e))

@@ -1,5 +1,5 @@
-import com.auth0.jwt.JWT
-import com.auth0.jwt.algorithms.Algorithm
+import io.github.kotlinmania.jwt.JWT
+import io.github.kotlinmania.jwt.algorithms.Algorithm
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlin.time.Duration.Companion.hours

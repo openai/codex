@@ -18,14 +18,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "codex-kotlin"
 
-// Vendored libraries - these will eventually become separate projects
-include(":ratatui-kotlin")
-include(":ansi-to-tui-kotlin")
-include(":anstyle-kotlin")
-include(":kasuari-kotlin")
-include(":roff-kotlin")
-include(":cansi-kotlin")
-
 // Tree-sitter Kotlin bindings (vendored from wip/k2 branch)
 includeBuild("ktreesitter-kotlin") {
     dependencySubstitution {
