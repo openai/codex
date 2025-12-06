@@ -182,21 +182,26 @@ fn send_message_bytes(socket: &Socket, data: &[u8], fds: &[OwnedFd]) -> std::io:
     frame.extend_from_slice(&encode_length(data.len())?);
     frame.extend_from_slice(data);
 
-    let mut control = vec![0u8; control_space_for_fds(fds.len())];
-    unsafe {
-        let cmsg = control.as_mut_ptr().cast::<libc::cmsghdr>();
-        (*cmsg).cmsg_len = libc::CMSG_LEN(size_of::<RawFd>() as c_uint * fds.len() as c_uint) as _;
-        (*cmsg).cmsg_level = libc::SOL_SOCKET;
-        (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-        let data_ptr = libc::CMSG_DATA(cmsg).cast::<RawFd>();
-        for (i, fd) in fds.iter().enumerate() {
-            data_ptr.add(i).write(fd.as_raw_fd());
-        }
-    }
-
+    let mut control;
     let payload = [IoSlice::new(&frame)];
-    let msg = MsgHdr::new().with_buffers(&payload).with_control(&control);
-    let mut sent = socket.sendmsg(&msg, 0)?;
+    let mut sent = if fds.is_empty() {
+        socket.send(&frame)?
+    } else {
+        control = vec![0u8; control_space_for_fds(fds.len())];
+        unsafe {
+            let cmsg = control.as_mut_ptr().cast::<libc::cmsghdr>();
+            (*cmsg).cmsg_len =
+                libc::CMSG_LEN(size_of::<RawFd>() as c_uint * fds.len() as c_uint) as _;
+            (*cmsg).cmsg_level = libc::SOL_SOCKET;
+            (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+            let data_ptr = libc::CMSG_DATA(cmsg).cast::<RawFd>();
+            for (i, fd) in fds.iter().enumerate() {
+                data_ptr.add(i).write(fd.as_raw_fd());
+            }
+        }
+        let msg = MsgHdr::new().with_buffers(&payload).with_control(&control);
+        socket.sendmsg(&msg, 0)?
+    };
     while sent < frame.len() {
         let bytes = socket.send(&frame[sent..])?;
         if bytes == 0 {
@@ -236,8 +241,9 @@ fn send_datagram_bytes(socket: &Socket, data: &[u8], fds: &[OwnedFd]) -> std::io
             format!("too many fds: {}", fds.len()),
         ));
     }
-    let mut control = vec![0u8; control_space_for_fds(fds.len())];
-    if !fds.is_empty() {
+
+    let control = if !fds.is_empty() {
+        let mut control = vec![0u8; control_space_for_fds(fds.len())];
         unsafe {
             let cmsg = control.as_mut_ptr().cast::<libc::cmsghdr>();
             (*cmsg).cmsg_len =
@@ -249,7 +255,10 @@ fn send_datagram_bytes(socket: &Socket, data: &[u8], fds: &[OwnedFd]) -> std::io
                 data_ptr.add(i).write(fd.as_raw_fd());
             }
         }
-    }
+        control
+    } else {
+        vec![]
+    };
     let payload = [IoSlice::new(data)];
     let msg = MsgHdr::new().with_buffers(&payload).with_control(&control);
     let written = socket.sendmsg(&msg, 0)?;
@@ -430,6 +439,22 @@ mod tests {
             fd_status >= 0,
             "expected received file descriptor to be valid, but got {fd_status}",
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn async_socket_round_trips_without_fds() -> std::io::Result<()> {
+        let (server, client) = AsyncSocket::pair()?;
+        let payload = TestPayload {
+            id: 13,
+            label: "no-fds".to_string(),
+        };
+
+        let receive_task = tokio::spawn(async move { server.receive::<TestPayload>().await });
+        client.send(payload.clone()).await?;
+
+        let received_payload = receive_task.await.unwrap()?;
+        assert_eq!(payload, received_payload);
         Ok(())
     }
 
