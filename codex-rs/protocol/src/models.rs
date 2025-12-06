@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use base64::Engine;
 use codex_utils_image::load_and_resize_to_fit;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
@@ -175,6 +174,16 @@ fn invalid_image_error_placeholder(
     }
 }
 
+fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> ContentItem {
+    ContentItem::InputText {
+        text: format!(
+            "Codex cannot attach image at `{}`: unsupported image format `{}`.",
+            path.display(),
+            mime
+        ),
+    }
+}
+
 impl From<ResponseInputItem> for ResponseItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
@@ -285,37 +294,20 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             } else if err.is_invalid_image() {
                                 invalid_image_error_placeholder(&path, &err)
                             } else {
-                                match std::fs::read(&path) {
-                                    Ok(bytes) => {
-                                        let Some(mime_guess) = mime_guess::from_path(&path).first()
-                                        else {
-                                            return local_image_error_placeholder(
-                                                &path,
-                                                "unsupported MIME type (unknown)",
-                                            );
-                                        };
-                                        let mime = mime_guess.essence_str().to_owned();
-                                        if !mime.starts_with("image/") {
-                                            return local_image_error_placeholder(
-                                                &path,
-                                                format!("unsupported MIME type `{mime}`"),
-                                            );
-                                        }
-                                        let encoded =
-                                            base64::engine::general_purpose::STANDARD.encode(bytes);
-                                        ContentItem::InputImage {
-                                            image_url: format!("data:{mime};base64,{encoded}"),
-                                        }
-                                    }
-                                    Err(read_err) => {
-                                        tracing::warn!(
-                                            "Skipping image {} – could not read file: {}",
-                                            path.display(),
-                                            read_err
-                                        );
-                                        local_image_error_placeholder(&path, &read_err)
-                                    }
+                                let Some(mime_guess) = mime_guess::from_path(&path).first() else {
+                                    return local_image_error_placeholder(
+                                        &path,
+                                        "unsupported MIME type (unknown)",
+                                    );
+                                };
+                                let mime = mime_guess.essence_str().to_owned();
+                                if !mime.starts_with("image/") {
+                                    return local_image_error_placeholder(
+                                        &path,
+                                        format!("unsupported MIME type `{mime}`"),
+                                    );
                                 }
+                                unsupported_image_error_placeholder(&path, &mime)
                             }
                         }
                     },
@@ -815,6 +807,38 @@ mod tests {
                             "placeholder should mention path: {text}"
                         );
                     }
+                    other => panic!("expected placeholder text but found {other:?}"),
+                }
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn local_image_unsupported_image_format_adds_placeholder() -> Result<()> {
+        let dir = tempdir()?;
+        let svg_path = dir.path().join("example.svg");
+        std::fs::write(
+            &svg_path,
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#,
+        )?;
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            path: svg_path.clone(),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(content.len(), 1);
+                let expected = format!(
+                    "Codex cannot attach image at `{}`: unsupported image format `image/svg+xml`.",
+                    svg_path.display()
+                );
+                match &content[0] {
+                    ContentItem::InputText { text } => assert_eq!(text, &expected),
                     other => panic!("expected placeholder text but found {other:?}"),
                 }
             }
