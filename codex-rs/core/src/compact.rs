@@ -303,7 +303,8 @@ async fn drain_to_completed(
         };
         match event {
             Ok(ResponseEvent::OutputItemDone(item)) => {
-                sess.record_into_history(std::slice::from_ref(&item), turn_context)
+                let _ = sess
+                    .record_into_history(std::slice::from_ref(&item), turn_context)
                     .await;
             }
             Ok(ResponseEvent::RateLimits(snapshot)) => {

@@ -47,21 +47,28 @@ impl ContextManager {
     }
 
     /// `items` is ordered from oldest to newest.
-    pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
+    pub(crate) fn record_items<I>(
+        &mut self,
+        items: I,
+        policy: TruncationPolicy,
+    ) -> Vec<ResponseItem>
     where
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
+        let mut processed = Vec::new();
         for item in items {
             let item_ref = item.deref();
             let is_ghost_snapshot = matches!(item_ref, ResponseItem::GhostSnapshot { .. });
             if !is_api_message(item_ref) && !is_ghost_snapshot {
                 continue;
             }
-
-            let processed = self.process_item(item_ref, policy);
-            self.items.push(processed);
+            if let Some(result) = process_item(item_ref, policy) {
+                self.items.push(result.clone());
+                processed.push(result);
+            }
         }
+        processed
     }
 
     pub(crate) fn get_history(&mut self) -> Vec<ResponseItem> {
@@ -223,46 +230,6 @@ impl ContextManager {
     fn remove_ghost_snapshots(items: &mut Vec<ResponseItem>) {
         items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
     }
-
-    fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
-        let policy_with_serialization_budget = policy.mul(1.2);
-        match item {
-            ResponseItem::FunctionCallOutput { call_id, output } => {
-                let truncated =
-                    truncate_text(output.content.as_str(), policy_with_serialization_budget);
-                let truncated_items = output.content_items.as_ref().map(|items| {
-                    truncate_function_output_items_with_policy(
-                        items,
-                        policy_with_serialization_budget,
-                    )
-                });
-                ResponseItem::FunctionCallOutput {
-                    call_id: call_id.clone(),
-                    output: FunctionCallOutputPayload {
-                        content: truncated,
-                        content_items: truncated_items,
-                        success: output.success,
-                    },
-                }
-            }
-            ResponseItem::CustomToolCallOutput { call_id, output } => {
-                let truncated = truncate_text(output, policy_with_serialization_budget);
-                ResponseItem::CustomToolCallOutput {
-                    call_id: call_id.clone(),
-                    output: truncated,
-                }
-            }
-            ResponseItem::Message { .. }
-            | ResponseItem::Reasoning { .. }
-            | ResponseItem::LocalShellCall { .. }
-            | ResponseItem::FunctionCall { .. }
-            | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::CustomToolCall { .. }
-            | ResponseItem::CompactionSummary { .. }
-            | ResponseItem::GhostSnapshot { .. }
-            | ResponseItem::Other => item.clone(),
-        }
-    }
 }
 
 /// API messages include every non-system item (user/assistant messages, reasoning,
@@ -280,6 +247,43 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::CompactionSummary { .. } => true,
         ResponseItem::GhostSnapshot { .. } => false,
         ResponseItem::Other => false,
+    }
+}
+
+fn process_item(item: &ResponseItem, policy: TruncationPolicy) -> Option<ResponseItem> {
+    let policy_with_serialization_budget = policy.mul(1.2);
+    match item {
+        ResponseItem::FunctionCallOutput { call_id, output } => {
+            let truncated =
+                truncate_text(output.content.as_str(), policy_with_serialization_budget);
+            let truncated_items = output.content_items.as_ref().map(|items| {
+                truncate_function_output_items_with_policy(items, policy_with_serialization_budget)
+            });
+            Some(ResponseItem::FunctionCallOutput {
+                call_id: call_id.clone(),
+                output: FunctionCallOutputPayload {
+                    content: truncated,
+                    content_items: truncated_items,
+                    success: output.success,
+                },
+            })
+        }
+        ResponseItem::CustomToolCallOutput { call_id, output } => {
+            let truncated = truncate_text(output, policy_with_serialization_budget);
+            Some(ResponseItem::CustomToolCallOutput {
+                call_id: call_id.clone(),
+                output: truncated,
+            })
+        }
+        ResponseItem::Message { .. }
+        | ResponseItem::Reasoning { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CompactionSummary { .. }
+        | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::Other => Some(item.clone()),
     }
 }
 
