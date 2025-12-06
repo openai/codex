@@ -158,12 +158,14 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     })
     .await;
 
+    eprintln!("begin_event: {:?}", begin_event);
+
     assert!(
         begin_event
             .source
             .to_string()
             .to_lowercase()
-            .contains("unified_exec")
+            .contains("unifiedexec")
     );
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
