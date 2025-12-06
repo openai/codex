@@ -1,0 +1,39 @@
+name: linux-code-sign
+description: Sign Linux artifacts with cosign.
+inputs:
+  target:
+    description: Target triple for the artifacts to sign.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install cosign
+      uses: sigstore/cosign-installer@v3.7.0
+
+    - name: Cosign Linux artifacts
+      shell: bash
+      env:
+        COSIGN_EXPERIMENTAL: "1"
+        COSIGN_YES: "true"
+        COSIGN_OIDC_CLIENT_ID: "sigstore"
+        COSIGN_OIDC_ISSUER: "https://oauth2.sigstore.dev/auth"
+      run: |
+        set -euo pipefail
+
+        dest="dist/${{ inputs.target }}"
+        if [[ ! -d "$dest" ]]; then
+          echo "Destination $dest does not exist"
+          exit 1
+        fi
+
+        shopt -s nullglob
+        for artifact in "$dest"/*; do
+          if [[ -f "$artifact" ]]; then
+            cosign sign-blob \
+              --yes \
+              --output-signature "${artifact}.sig" \
+              --output-certificate "${artifact}.pem" \
+              "$artifact"
+          fi
+        done
