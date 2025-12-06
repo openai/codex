@@ -1,3 +1,5 @@
+#[cfg(not(target_os = "windows"))]
+// unified exec is not supported on Windows
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -41,8 +43,6 @@ use wiremock::MockServer;
 const REMOTE_MODEL_SLUG: &str = "codex-test";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-// unified exec is not supported on Windows
-#[cfg(not(target_os = "windows"))]
 async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
