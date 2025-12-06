@@ -90,3 +90,6 @@ CHANGELOG.ignore.md
 **/.gradle/
 **/.kotlin/
 **/build/
+
+# Build logs
+build_log*.txt
