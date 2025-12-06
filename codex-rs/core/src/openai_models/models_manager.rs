@@ -110,12 +110,13 @@ mod tests {
             "display_name": display,
             "description": format!("{display} desc"),
             "default_reasoning_level": "medium",
-            "supported_reasoning_levels": ["low", "medium"],
+            "supported_reasoning_levels": [{"effort": "low", "description": "low"}, {"effort": "medium", "description": "medium"}],
             "shell_type": "shell_command",
             "visibility": "list",
             "minimal_client_version": [0, 1, 0],
             "supported_in_api": true,
-            "priority": priority
+            "priority": priority,
+            "upgrade": null,
         }))
         .expect("valid model")
     }

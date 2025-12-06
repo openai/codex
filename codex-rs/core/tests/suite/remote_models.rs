@@ -159,10 +159,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     })
     .await;
 
-    assert_eq!(
-        begin_event.source,
-        ExecCommandSource::UnifiedExecInteraction
-    );
+    assert_eq!(begin_event.source, ExecCommandSource::UnifiedExecStartup);
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
