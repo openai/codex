@@ -7,7 +7,11 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
+#[cfg(windows)]
+mod win;
+
 use anyhow::Result;
+#[cfg(not(windows))]
 use portable_pty::native_pty_system;
 use portable_pty::CommandBuilder;
 use portable_pty::MasterPty;
@@ -125,6 +129,16 @@ pub struct SpawnedPty {
     pub exit_rx: oneshot::Receiver<i32>,
 }
 
+#[cfg(windows)]
+fn platform_native_pty_system() -> Box<dyn portable_pty::PtySystem + Send> {
+    Box::new(win::ConPtySystem::default())
+}
+
+#[cfg(not(windows))]
+fn platform_native_pty_system() -> Box<dyn portable_pty::PtySystem + Send> {
+    native_pty_system()
+}
+
 pub async fn spawn_pty_process(
     program: &str,
     args: &[String],
@@ -136,7 +150,7 @@ pub async fn spawn_pty_process(
         anyhow::bail!("missing program for PTY spawn");
     }
 
-    let pty_system = native_pty_system();
+    let pty_system = platform_native_pty_system();
     let pair = pty_system.openpty(PtySize {
         rows: 24,
         cols: 80,
