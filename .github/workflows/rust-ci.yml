@@ -394,7 +394,12 @@ jobs:
           key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
           restore-keys: |
             cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
-
+      - name: Disk usage (summary)
+        shell: bash
+        run: |
+          df -h || true
+          du -hx --max-depth=2 / | sort -hr | head -n 20 || true
+          du -sh ~/.cargo ~/.npm ~/.cache ~/.gradle 2>/dev/null || true
       - name: Install sccache
         if: ${{ env.USE_SCCACHE == 'true' }}
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
@@ -436,14 +441,32 @@ jobs:
         with:
           tool: nextest
           version: 0.9.103
-
+      - name: Disk usage (before fetch)
+        shell: bash
+        run: |
+          df -h || true
+          du -hx --max-depth=2 / | sort -hr | head -n 20 || true
+          du -sh ~/.cargo ~/.npm ~/.cache ~/.gradle 2>/dev/null || true
+      - name: cargo fetch
+        run: cargo fetch --target ${{ matrix.target }}
+      - name: Disk usage (before tests)
+        shell: bash
+        run: |
+          df -h || true
+          du -hx --max-depth=2 / | sort -hr | head -n 20 || true
+          du -sh ~/.cargo ~/.npm ~/.cache ~/.gradle 2>/dev/null || true
       - name: tests
         id: test
         run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test
         env:
           RUST_BACKTRACE: 1
           NEXTEST_STATUS_LEVEL: leak
-
+      - name: Disk usage (after tests)
+        shell: bash
+        run: |
+          df -h || true
+          du -hx --max-depth=2 / | sort -hr | head -n 20 || true
+          du -sh ~/.cargo ~/.npm ~/.cache ~/.gradle 2>/dev/null || true
       - name: Save cargo home cache
         if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
         continue-on-error: true
