@@ -54,9 +54,9 @@ jobs:
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
-    permissions:
-      contents: read
-      id-token: write
+    # permissions:
+    #   contents: read
+    #   id-token: write
     defaults:
       run:
         working-directory: codex-rs
@@ -112,6 +112,7 @@ jobs:
         uses: ./.github/actions/linux-code-sign
         with:
           target: ${{ matrix.target }}
+          artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
 
       # - if: ${{ contains(matrix.target, 'windows') }}
       #   name: Sign Windows binaries with Azure Trusted Signing
