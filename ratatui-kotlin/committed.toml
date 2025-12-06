@@ -1,0 +1,30 @@
+# configuration for https://github.com/crate-ci/committed
+
+# https://www.conventionalcommits.org
+style = "conventional"
+# disallow merge commits
+merge_commit = false
+# subject is not required to be capitalized
+subject_capitalized = false
+# subject should start with an imperative verb
+imperative_subject = true
+# subject should not end with a punctuation
+subject_not_punctuated = true
+# disable line length
+line_length = 0
+# disable subject length
+subject_length = 0
+# default allowed_types [ "chore", "docs", "feat", "fix", "perf", "refactor", "style", "test" ]
+allowed_types = [
+  "build",
+  "chore",
+  "ci",
+  "docs",
+  "feat",
+  "fix",
+  "perf",
+  "refactor",
+  "revert",
+  "style",
+  "test",
+]

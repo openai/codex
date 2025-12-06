@@ -1,0 +1,12 @@
+include = ["**/*.toml"]
+
+[formatting]
+column_width = 100
+reorder_keys = false
+
+[[rule]]
+include = ["**/Cargo.toml"]
+keys = ["dependencies", "dev-dependencies", "build-dependencies", "workspace.dependencies"]
+
+[rule.formatting]
+reorder_keys = true

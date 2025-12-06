@@ -1,0 +1,80 @@
+[package]
+name = "ratatui-widgets"
+# Note that this started at 0.3.0 as there was a previous crate using the name `ratatui-widgets`.
+# <https://github.com/joshka/ratatui-widgets/issues/46>
+version = "0.3.0-beta.0"
+description = "A collection of Ratatui widgets for building terminal user interfaces using Ratatui."
+documentation = "https://docs.rs/ratatui-widgets"
+readme = "README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+exclude.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = ["all-widgets"]
+
+## enables std
+std = ["time/local-offset"]
+
+## enables serialization and deserialization of style and color types using the [`serde`] crate.
+## This is useful if you want to save themes to a file.
+serde = ["dep:serde", "ratatui-core/serde"]
+
+#! Widgets that add dependencies are gated behind feature flags to prevent unused transitive
+#! dependencies. The available features are:
+
+## enables all widgets.
+all-widgets = ["calendar"]
+
+## enables the [`calendar`](calendar) widget module and adds a dependency on [`time`].
+calendar = ["dep:time"]
+
+## Enable all unstable features.
+unstable = ["unstable-rendered-line-info"]
+
+## Enables the [`Paragraph::line_count`](paragraph::Paragraph::line_count)
+## [`Paragraph::line_width`](paragraph::Paragraph::line_width) methods
+## which are experimental and may change in the future.
+## See [Issue 293](https://github.com/ratatui/ratatui/issues/293) for more details.
+unstable-rendered-line-info = []
+
+[dependencies]
+bitflags.workspace = true
+document-features = { workspace = true, optional = true }
+hashbrown.workspace = true
+indoc.workspace = true
+instability.workspace = true
+itertools.workspace = true
+line-clipping.workspace = true
+ratatui-core = { workspace = true }
+serde = { workspace = true, optional = true }
+strum.workspace = true
+time = { workspace = true, optional = true }
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+color-eyre.workspace = true
+crossterm.workspace = true
+pretty_assertions.workspace = true
+ratatui.workspace = true
+rstest.workspace = true
+
+[lints]
+workspace = true
+
+# Adding a single example is enough for activating rustdoc-scrape-examples
+[[example]]
+name = "barchart"
+doc-scrape-examples = true

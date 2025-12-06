@@ -1,0 +1,13 @@
+[package]
+name = "xtask"
+edition.workspace = true
+publish = false
+license.workspace = true
+
+[dependencies]
+clap.workspace = true
+clap-verbosity-flag = { version = "3", default-features = false, features = ["tracing"] }
+color-eyre.workspace = true
+duct = "1"
+tracing.workspace = true
+tracing-subscriber.workspace = true

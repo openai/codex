@@ -1,0 +1,71 @@
+[package]
+name = "ratatui-crossterm"
+version = "0.1.0-beta.0"
+description = "Crossterm backend for the Ratatui Terminal UI library."
+documentation = "https://docs.rs/ratatui-crossterm"
+readme = "README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+exclude.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+features = ["document-features"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = ["underline-color", "crossterm_0_29"]
+
+#! One of the following versions of crossterm must be enabled. By default, the latest version is
+#! enabled. This will always default to the most recent version of crossterm, but you can override
+#! this by specifying the version you want to use in your Cargo.toml file. The purpose of these
+#! features is to allow widget libraries to depend on specific versions of crossterm in a way that
+#! doesn't cause version conflicts. A compiler error will be raised if you don't enable at least one
+#! of the following features.
+
+## Enables crossterm 0.28.x
+crossterm_0_28 = ["dep:crossterm_0_28"]
+## Enables crossterm 0.29.x
+crossterm_0_29 = ["dep:crossterm_0_29"]
+
+#! The following features are optional and can be enabled to add additional functionality to the
+#! library. These features are not required for the library to function, but they may be useful in
+#! certain situations.
+
+## Enables serde for crossterm dependency
+serde = ["crossterm_0_28?/serde", "crossterm_0_29?/serde"]
+
+## enables the backend code that sets the underline color.
+## Underline color is not supported on Windows 7.
+underline-color = ["ratatui-core/underline-color"]
+
+## Use terminal scrolling regions to make Terminal::insert_before less prone to flickering.
+scrolling-regions = ["ratatui-core/scrolling-regions"]
+
+#! The following features are unstable and may change in the future:
+
+## Enable all unstable features.
+unstable = ["unstable-backend-writer"]
+
+## Enables getting access to backends' writers.
+unstable-backend-writer = []
+
+
+[dependencies]
+cfg-if = "1.0.1"
+crossterm_0_28 = { version = "0.28", package = "crossterm", optional = true }
+crossterm_0_29 = { version = "0.29", package = "crossterm", optional = true }
+document-features = { workspace = true, optional = true }
+instability.workspace = true
+ratatui-core.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+
+[lints]
+workspace = true

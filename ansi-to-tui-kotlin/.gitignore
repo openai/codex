@@ -1,0 +1,15 @@
+# Gradle
+/build/
+.gradle/
+
+# IDE
+.idea/
+*.iml
+
+# Environment
+.direnv
+.envrc
+
+# Kotlin/Native
+*.kexe
+*.klib

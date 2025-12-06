@@ -1,0 +1,13 @@
+[package]
+name = "minimal"
+publish = false
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+crossterm.workspace = true
+ratatui.workspace = true
+
+[lints]
+workspace = true

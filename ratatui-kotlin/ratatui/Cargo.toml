@@ -1,0 +1,165 @@
+[package]
+name = "ratatui"
+description = "A library that's all about cooking up terminal user interfaces"
+version = "0.30.0-beta.0"
+authors.workspace = true
+documentation.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+license.workspace = true
+exclude.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+# see https://doc.rust-lang.org/nightly/rustdoc/scraped-examples.html
+cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+#! The crate provides a set of optional features that can be enabled in your `Cargo.toml` file.
+#!
+## By default, we enable the crossterm backend as this is a reasonable choice for most applications
+## as it is supported on Linux/Mac/Windows systems. We also enable the `underline-color` feature
+## which allows you to set the underline color of text, the `macros` feature which provides
+## some useful macros and `layout-cache` which speeds up layout cache calculations
+## in `std`-enabled environments.
+default = ["crossterm", "underline-color", "all-widgets", "macros", "layout-cache"]
+#! Generally an application will only use one backend, so you should only enable one of the following features:
+## enables the [`CrosstermBackend`](backend::CrosstermBackend) backend and adds a dependency on [`crossterm`].
+crossterm = ["std", "dep:ratatui-crossterm"]
+## enables the [`TermionBackend`](backend::TermionBackend) backend and adds a dependency on [`termion`].
+termion = ["std", "dep:ratatui-termion"]
+## enables the [`TermwizBackend`](backend::TermwizBackend) backend and adds a dependency on [`termwiz`].
+termwiz = ["std", "dep:ratatui-termwiz"]
+
+## enables std
+std = ["ratatui-core/std", "ratatui-widgets/std"]
+
+#! The following optional features are available for all backends:
+## enables serialization and deserialization of style and color types using the [`serde`] crate.
+## This is useful if you want to save themes to a file.
+serde = [
+  "std",
+  "dep:serde",
+  "ratatui-core/serde",
+  "ratatui-widgets/serde",
+  "ratatui-crossterm?/serde",
+  "ratatui-termion?/serde",
+  "ratatui-termwiz?/serde",
+]
+
+## enables layout cache
+layout-cache = ["std", "ratatui-core/layout-cache"]
+
+## enables conversions from colors in the [`palette`] crate to [`Color`](crate::style::Color).
+palette = ["std", "ratatui-core/palette", "dep:palette"]
+
+## enables portable-atomic integration for targets that don't support atomic types.
+portable-atomic = ["ratatui-core/portable-atomic"]
+
+## Use terminal scrolling regions to make some operations less prone to
+## flickering. (i.e. Terminal::insert_before).
+scrolling-regions = [
+  "ratatui-core/scrolling-regions",
+  "ratatui-crossterm?/scrolling-regions",
+  "ratatui-termion?/scrolling-regions",
+  "ratatui-termwiz?/scrolling-regions",
+]
+
+## enables the [`macros`](macros) module which provides some useful macros for creating spans,
+## lines, text, and layouts
+macros = ["dep:ratatui-macros"]
+
+## enables all widgets.
+all-widgets = ["widget-calendar"]
+
+#! Widgets that add dependencies are gated behind feature flags to prevent unused transitive
+#! dependencies. The available features are:
+## enables the [`calendar`](widgets::calendar) widget module.
+widget-calendar = ["ratatui-widgets/calendar"]
+
+#! The following optional features are only available for some backends:
+
+## Enables the backend code that sets the underline color.
+## Underline color is only supported by the Crossterm and Termwiz backends, and is not supported on
+## Windows 7.
+underline-color = [
+  "ratatui-core/underline-color",
+  "ratatui-crossterm?/underline-color",
+  "ratatui-termwiz?/underline-color",
+]
+
+#! The following features are unstable and may change in the future:
+
+## Enable all unstable features.
+unstable = ["unstable-rendered-line-info", "unstable-widget-ref", "unstable-backend-writer"]
+
+## Enables the [`Paragraph::line_count`](widgets::Paragraph::line_count)
+## [`Paragraph::line_width`](widgets::Paragraph::line_width) methods
+## which are experimental and may change in the future.
+## See [Issue 293](https://github.com/ratatui/ratatui/issues/293) for more details.
+unstable-rendered-line-info = ["ratatui-widgets/unstable-rendered-line-info"]
+
+## enables the [`WidgetRef`] and [`StatefulWidgetRef`] traits which are experimental and may change
+## in the future.
+##
+## [`WidgetRef`]: widgets::WidgetRef
+## [`StatefulWidgetRef`]: widgets::StatefulWidgetRef
+unstable-widget-ref = []
+
+## Enables getting access to backends' writers.
+unstable-backend-writer = [
+  "ratatui-crossterm?/unstable-backend-writer",
+  "ratatui-termion?/unstable-backend-writer",
+]
+
+[dependencies]
+document-features = { workspace = true, optional = true }
+instability.workspace = true
+palette = { workspace = true, optional = true }
+ratatui-core = { workspace = true }
+ratatui-crossterm = { workspace = true, optional = true }
+ratatui-macros = { workspace = true, optional = true }
+ratatui-termwiz = { workspace = true, optional = true }
+ratatui-widgets = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[target.'cfg(not(windows))'.dependencies]
+ratatui-termion = { workspace = true, optional = true }
+
+[dev-dependencies]
+color-eyre.workspace = true
+criterion.workspace = true
+crossterm = { workspace = true, features = ["event-stream"] }
+fakeit.workspace = true
+futures.workspace = true
+indoc.workspace = true
+pretty_assertions.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+rstest.workspace = true
+serde_json.workspace = true
+time = { workspace = true, features = ["local-offset"] }
+tokio = { workspace = true, features = ["rt", "macros", "time", "rt-multi-thread"] }
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[lints]
+workspace = true
+
+[lib]
+bench = false
+
+[[bench]]
+name = "main"
+harness = false
+
+[[test]]
+name = "state_serde"
+required-features = ["serde"]

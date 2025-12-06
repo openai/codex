@@ -1,0 +1,43 @@
+[package]
+name = "ratatui-termion"
+version = "0.1.0-beta.0"
+description = "Termion backend for the Ratatui Terminal UI library."
+documentation = "https://docs.rs/ratatui-termion"
+readme = "README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+exclude.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = []
+## Enables serde for termion dependency
+serde = ["termion/serde"]
+## Use terminal scrolling regions to make Terminal::insert_before less prone to flickering.
+scrolling-regions = ["ratatui-core/scrolling-regions"]
+## Enables all unstable features.
+unstable = ["unstable-backend-writer"]
+## Enables getting access to backends' writer.
+unstable-backend-writer = []
+
+[dependencies]
+document-features = { workspace = true, optional = true }
+instability.workspace = true
+ratatui-core = { workspace = true }
+termion.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+
+[lints]
+workspace = true

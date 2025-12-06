@@ -1,0 +1,17 @@
+[package]
+name = "table"
+publish = false
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+color-eyre.workspace = true
+crossterm.workspace = true
+fakeit.workspace = true
+itertools.workspace = true
+ratatui.workspace = true
+unicode-width.workspace = true
+
+[lints]
+workspace = true

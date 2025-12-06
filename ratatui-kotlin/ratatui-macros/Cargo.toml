@@ -1,0 +1,18 @@
+[package]
+name = "ratatui-macros"
+version = "0.7.0-beta.0"
+description = "Macros for Ratatui"
+edition.workspace = true
+authors = ["The Ratatui Developers"]
+license = "MIT"
+repository = "https://github.com/ratatui/ratatui"
+documentation = "https://docs.rs/ratatui-macros"
+keywords = ["ratatui", "macros", "tui", "ui"]
+categories = ["command-line-interface"]
+
+[dependencies]
+ratatui-core.workspace = true
+ratatui-widgets.workspace = true
+
+[dev-dependencies]
+trybuild = { workspace = true, features = ["diff"] }

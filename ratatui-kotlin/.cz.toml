@@ -1,0 +1,78 @@
+# configuration for https://github.com/commitizen/cz-cli
+
+[tool.commitizen]
+name = "cz_customize"
+tag_format = "$version"
+version_type = "semver"
+version_provider = "cargo"
+update_changelog_on_bump = true
+major_version_zero = true
+use_shortcuts = true
+
+[tool.commitizen.customize]
+message_template = """{{change_type}}({{scope}}): {{subject}}
+
+{% if body %}\
+{{body}}\
+{% endif %}
+
+{%if is_breaking_change %}\
+BREAKING_CHANGE: \
+{% endif %}\
+{{footer}}\
+"""
+example = "feature: this feature enable customize through config file"
+schema = "<type>(<scope>): <subject>\n\n<body>\n\n<footer>"
+schema_pattern = "(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)\\(\\w+\\):\\s(?P<subject>.*)(\\n\\n(?P<body>.*))?(\\n\\n(?P<footer>.*))?"
+
+# The order needs to be preserved, as it influences the order when executing cz commit/cz c
+
+# Change types
+[[tool.commitizen.customize.questions]]
+type = "list"
+name = "change_type"
+choices = [
+  { value = "build", name = "build: Changes that affect the build system or external dependencies (example scopes: pip, docker, npm)", key = "b" },
+  { value = "chore", name = "chore: A modification that generally does not fall into any other category", key = "c" },
+  { value = "ci", name = "ci: Changes to our CI configuration files and scripts (example scopes: GitLabCI)", key = "i" },
+  { value = "docs", name = "docs: Documentation only changes", key = "d" },
+  { value = "feat", name = "feat: A new feature.", key = "f" },
+  { value = "fix", name = "fix: A bug fix.", key = "x" },
+  { value = "perf", name = "perf: A code change that improves performance", key = "p" },
+  { value = "refactor", name = "refactor: A code change that neither fixes a bug nor adds a feature", key = "r" },
+  { value = "revert", name = "revert: Revert previous commits", key = "v" },
+  { value = "style", name = "style: Changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc)", key = "s" },
+  { value = "test", name = "test: Adding missing or correcting existing tests", key = "t" },
+]
+message = "Select the type of change you are committing"
+
+# The scope of the change, can be a file, class name or other context
+[[tool.commitizen.customize.questions]]
+type = "input"
+name = "scope"
+message = "What is the scope of this change? (class or file name): (press [enter] to skip)\n"
+
+# Summary of the changes
+[[tool.commitizen.customize.questions]]
+"type" = "input"
+"name" = "subject"
+"message" = "Write a short and imperative summary of the code changes: (lower case and no period)\n"
+
+# The commit body, elaborate the changes if need be.
+[[tool.commitizen.customize.questions]]
+type = "input"
+name = "body"
+message = "Provide additional contextual information about the code changes: (press [enter] to skip)\n"
+
+# Specify if the changes are breaking
+[[tool.commitizen.customize.questions]]
+type = "confirm"
+name = "is_breaking_change"
+message = "Is this a BREAKING CHANGE?"
+default = false
+
+# Reference closing issues and share other
+[[tool.commitizen.customize.questions]]
+type = "input"
+name = "footer"
+message = "Footer. Information about Breaking Changes and reference issues that this commit closes: (press [enter] to skip)"

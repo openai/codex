@@ -1,0 +1,22 @@
+[package]
+name = "async-github"
+publish = false
+authors.workspace = true
+documentation.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+license.workspace = true
+exclude.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+color-eyre.workspace = true
+crossterm = { workspace = true, features = ["event-stream"] }
+octocrab.workspace = true
+ratatui.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio-stream.workspace = true

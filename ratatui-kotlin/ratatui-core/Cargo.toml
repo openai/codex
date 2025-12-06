@@ -1,0 +1,85 @@
+[package]
+name = "ratatui-core"
+version = "0.1.0-beta.0"
+description = """
+    Core types and traits for the Ratatui Terminal UI library.
+    Widget libraries should use this crate. Applications should use the main Ratatui crate.
+"""
+documentation = "https://docs.rs/ratatui-core"
+readme = "README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+exclude.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = []
+
+## enables std
+std = [
+  "itertools/use_std",
+  "thiserror/std",
+  "kasuari/std",
+  "compact_str/std",
+  "unicode-truncate/std",
+  "strum/std",
+]
+
+## enables layout cache
+layout-cache = ["std"]
+
+## enables conversions to / from colors, modifiers, and styles in the ['anstyle'] crate
+anstyle = ["dep:anstyle"]
+
+## enables conversions from colors in the [`palette`] crate to [`Color`](crate::style::Color).
+palette = ["std", "dep:palette"]
+
+## enables portable-atomic integration for targets that don't support atomic types.
+portable-atomic = ["kasuari/portable-atomic"]
+
+## enables the backend code that sets the underline color. Underline color is only supported by
+## the Crossterm backend, and is not supported on Windows 7.
+underline-color = []
+
+## Use terminal scrolling regions to make some operations less prone to
+## flickering. (i.e. Terminal::insert_before).
+scrolling-regions = []
+
+## enables serialization and deserialization of style and color types using the [`serde`] crate.
+## This is useful if you want to save themes to a file.
+serde = ["std", "dep:serde", "bitflags/serde", "compact_str/serde"]
+
+[dependencies]
+anstyle = { workspace = true, optional = true }
+bitflags.workspace = true
+compact_str.workspace = true
+document-features = { workspace = true, optional = true }
+hashbrown.workspace = true
+indoc.workspace = true
+itertools.workspace = true
+kasuari = { workspace = true, default-features = false }
+lru.workspace = true
+palette = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+strum.workspace = true
+thiserror = { workspace = true, default-features = false }
+unicode-segmentation.workspace = true
+unicode-truncate = { workspace = true, default-features = false }
+unicode-width.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+rstest.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

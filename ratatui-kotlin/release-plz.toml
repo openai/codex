@@ -1,0 +1,5 @@
+[workspace]
+changelog_path = "./CHANGELOG.md"
+changelog_config = "cliff.toml"
+release_always = false
+semver_check = false
