@@ -24,7 +24,6 @@ use portable_pty::ExitStatus;
 use std::io::Error as IoError;
 use std::io::Result as IoResult;
 use std::os::windows::io::AsRawHandle;
-use std::os::windows::io::RawHandle;
 use std::pin::Pin;
 use std::sync::Mutex;
 use std::task::Context;
@@ -153,16 +152,11 @@ impl std::future::Future for WinChild {
             Ok(Some(status)) => Poll::Ready(Ok(status)),
             Err(err) => Poll::Ready(Err(err).context("Failed to retrieve process exit status")),
             Ok(None) => {
-                struct PassRawHandleToWaiterThread(pub RawHandle);
-                unsafe impl Send for PassRawHandleToWaiterThread {}
-
                 let proc = self.proc.lock().unwrap().try_clone()?;
-                let handle = PassRawHandleToWaiterThread(proc.as_raw_handle());
-
                 let waker = cx.waker().clone();
                 std::thread::spawn(move || {
                     unsafe {
-                        WaitForSingleObject(handle.0 as _, INFINITE);
+                        WaitForSingleObject(proc.as_raw_handle() as _, INFINITE);
                     }
                     waker.wake();
                 });

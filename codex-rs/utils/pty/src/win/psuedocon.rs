@@ -26,9 +26,12 @@ use filedescriptor::OwnedHandle;
 use lazy_static::lazy_static;
 use portable_pty::cmdbuilder::CommandBuilder;
 use shared_library::shared_library;
+use std::env;
+use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::io::Error as IoError;
 use std::mem;
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
@@ -49,9 +52,7 @@ use winapi::um::winnt::HANDLE;
 
 pub type HPCON = HANDLE;
 
-pub const PSUEDOCONSOLE_INHERIT_CURSOR: DWORD = 0x1;
 pub const PSEUDOCONSOLE_RESIZE_QUIRK: DWORD = 0x2;
-pub const PSEUDOCONSOLE_WIN32_INPUT_MODE: DWORD = 0x4;
 #[allow(dead_code)]
 pub const PSEUDOCONSOLE_PASSTHROUGH_MODE: DWORD = 0x8;
 
@@ -104,9 +105,7 @@ impl PsuedoCon {
                 size,
                 input.as_raw_handle() as _,
                 output.as_raw_handle() as _,
-                PSUEDOCONSOLE_INHERIT_CURSOR
-                    | PSEUDOCONSOLE_RESIZE_QUIRK
-                    | PSEUDOCONSOLE_WIN32_INPUT_MODE,
+                PSEUDOCONSOLE_RESIZE_QUIRK,
                 &mut con,
             )
         };
@@ -144,23 +143,22 @@ impl PsuedoCon {
 
         let mut pi: PROCESS_INFORMATION = unsafe { mem::zeroed() };
 
-        let (mut exe, mut cmdline) = cmd.cmdline()?;
+        let (mut exe, mut cmdline) = build_cmdline(&cmd)?;
         let cmd_os = OsString::from_wide(&cmdline);
 
-        let cwd = cmd.current_directory();
+        let cwd = resolve_current_directory(&cmd);
+        let mut env_block = build_environment_block(&cmd);
 
         let res = unsafe {
             CreateProcessW(
-                exe.as_mut_slice().as_mut_ptr(),
-                cmdline.as_mut_slice().as_mut_ptr(),
+                exe.as_mut_ptr(),
+                cmdline.as_mut_ptr(),
                 ptr::null_mut(),
                 ptr::null_mut(),
                 0,
                 EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
-                cmd.environment_block().as_mut_slice().as_mut_ptr() as *mut _,
-                cwd.as_ref()
-                    .map(|c| c.as_slice().as_ptr())
-                    .unwrap_or(ptr::null()),
+                env_block.as_mut_ptr() as *mut _,
+                cwd.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
                 &mut si.StartupInfo,
                 &mut pi,
             )
@@ -184,4 +182,140 @@ impl PsuedoCon {
             proc: Mutex::new(proc),
         })
     }
+}
+
+fn resolve_current_directory(cmd: &CommandBuilder) -> Option<Vec<u16>> {
+    let home = cmd
+        .get_env("USERPROFILE")
+        .and_then(|path| Path::new(path).is_dir().then(|| path.to_owned()));
+    let cwd = cmd
+        .get_cwd()
+        .and_then(|path| Path::new(path).is_dir().then(|| path.to_owned()));
+    let dir = cwd.or(home)?;
+
+    let mut wide = Vec::new();
+    if Path::new(&dir).is_relative() {
+        if let Ok(current_dir) = env::current_dir() {
+            wide.extend(current_dir.join(&dir).as_os_str().encode_wide());
+        } else {
+            wide.extend(dir.encode_wide());
+        }
+    } else {
+        wide.extend(dir.encode_wide());
+    }
+    wide.push(0);
+    Some(wide)
+}
+
+fn build_environment_block(cmd: &CommandBuilder) -> Vec<u16> {
+    let mut block = Vec::new();
+    for (key, value) in cmd.iter_full_env_as_str() {
+        block.extend(OsStr::new(key).encode_wide());
+        block.push(b'=' as u16);
+        block.extend(OsStr::new(value).encode_wide());
+        block.push(0);
+    }
+    block.push(0);
+    block
+}
+
+fn build_cmdline(cmd: &CommandBuilder) -> anyhow::Result<(Vec<u16>, Vec<u16>)> {
+    let exe_os: OsString = if cmd.is_default_prog() {
+        cmd.get_env("ComSpec")
+            .unwrap_or(OsStr::new("cmd.exe"))
+            .to_os_string()
+    } else {
+        let argv = cmd.get_argv();
+        let Some(first) = argv.first() else {
+            anyhow::bail!("missing program name");
+        };
+        search_path(cmd, first)
+    };
+
+    let mut cmdline = Vec::new();
+    append_quoted(&exe_os, &mut cmdline);
+    for arg in cmd.get_argv().iter().skip(1) {
+        cmdline.push(' ' as u16);
+        ensure!(
+            !arg.encode_wide().any(|c| c == 0),
+            "invalid encoding for command line argument {:?}",
+            arg
+        );
+        append_quoted(arg, &mut cmdline);
+    }
+    cmdline.push(0);
+
+    let mut exe: Vec<u16> = exe_os.encode_wide().collect();
+    exe.push(0);
+
+    Ok((exe, cmdline))
+}
+
+fn search_path(cmd: &CommandBuilder, exe: &OsStr) -> OsString {
+    if let Some(path) = cmd.get_env("PATH") {
+        let extensions = cmd.get_env("PATHEXT").unwrap_or(OsStr::new(".EXE"));
+        for path in env::split_paths(path) {
+            let candidate = path.join(exe);
+            if candidate.exists() {
+                return candidate.into_os_string();
+            }
+
+            for ext in env::split_paths(extensions) {
+                let ext = ext.to_str().unwrap_or("");
+                let path = path
+                    .join(exe)
+                    .with_extension(ext.strip_prefix('.').unwrap_or(ext));
+                if path.exists() {
+                    return path.into_os_string();
+                }
+            }
+        }
+    }
+
+    exe.to_os_string()
+}
+
+fn append_quoted(arg: &OsStr, cmdline: &mut Vec<u16>) {
+    if !arg.is_empty()
+        && !arg.encode_wide().any(|c| {
+            c == ' ' as u16
+                || c == '\t' as u16
+                || c == '\n' as u16
+                || c == '\x0b' as u16
+                || c == '\"' as u16
+        })
+    {
+        cmdline.extend(arg.encode_wide());
+        return;
+    }
+    cmdline.push('"' as u16);
+
+    let arg: Vec<_> = arg.encode_wide().collect();
+    let mut i = 0;
+    while i < arg.len() {
+        let mut num_backslashes = 0;
+        while i < arg.len() && arg[i] == '\\' as u16 {
+            i += 1;
+            num_backslashes += 1;
+        }
+
+        if i == arg.len() {
+            for _ in 0..num_backslashes * 2 {
+                cmdline.push('\\' as u16);
+            }
+            break;
+        } else if arg[i] == b'"' as u16 {
+            for _ in 0..num_backslashes * 2 + 1 {
+                cmdline.push('\\' as u16);
+            }
+            cmdline.push(arg[i]);
+        } else {
+            for _ in 0..num_backslashes {
+                cmdline.push('\\' as u16);
+            }
+            cmdline.push(arg[i]);
+        }
+        i += 1;
+    }
+    cmdline.push('"' as u16);
 }
