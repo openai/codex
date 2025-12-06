@@ -377,6 +377,14 @@ impl ChatWidget {
         self.bottom_pane.update_status_header(header);
     }
 
+    fn restore_retry_status_header_if_present(&mut self) {
+        if let Some(header) = self.retry_status_header.take()
+            && self.current_status_header != header
+        {
+            self.set_status_header(header);
+        }
+    }
+
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
@@ -1771,6 +1779,11 @@ impl ChatWidget {
     /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
     /// that must not be used to correlate follow-up actions.
     fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, from_replay: bool) {
+        let is_stream_error = matches!(&msg, EventMsg::StreamError(_));
+        if !is_stream_error {
+            self.restore_retry_status_header_if_present();
+        }
+
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
