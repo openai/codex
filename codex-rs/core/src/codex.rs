@@ -1470,6 +1470,16 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
     let mut previous_context: Option<Arc<TurnContext>> =
         Some(sess.new_turn(SessionSettingsUpdate::default()).await);
 
+    if config.features.enabled(Feature::RemoteModels)
+        && let Err(err) = sess
+            .services
+            .models_manager
+            .refresh_available_models(&config.model_provider)
+            .await
+    {
+        error!("failed to refresh available models: {err}");
+    }
+
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");

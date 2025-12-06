@@ -41,6 +41,7 @@ mod otel;
 mod prompt_caching;
 mod quota_exceeded;
 mod read_file;
+mod remote_models;
 mod resume;
 mod review;
 mod rmcp_client;

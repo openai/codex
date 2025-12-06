@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use strum::IntoEnumIterator;
 use strum_macros::Display;
 use strum_macros::EnumIter;
 use ts_rs::TS;
@@ -36,7 +37,7 @@ pub enum ReasoningEffort {
 }
 
 /// A reasoning effort option that can be surfaced for a model.
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
 pub struct ReasoningEffortPreset {
     /// Effort level that the model supports.
     pub effort: ReasoningEffort,
@@ -123,7 +124,7 @@ pub struct ModelInfo {
     #[serde(default)]
     pub description: Option<String>,
     pub default_reasoning_level: ReasoningEffort,
-    pub supported_reasoning_levels: Vec<ReasoningEffort>,
+    pub supported_reasoning_levels: Vec<ReasoningEffortPreset>,
     pub shell_type: ConfigShellToolType,
     #[serde(default = "default_visibility")]
     pub visibility: ModelVisibility,
@@ -132,6 +133,8 @@ pub struct ModelInfo {
     pub supported_in_api: bool,
     #[serde(default)]
     pub priority: i32,
+    #[serde(default)]
+    pub upgrade: Option<String>,
 }
 
 /// Response wrapper for `/models`.
@@ -149,22 +152,57 @@ impl From<ModelInfo> for ModelPreset {
     fn from(info: ModelInfo) -> Self {
         ModelPreset {
             id: info.slug.clone(),
-            model: info.slug,
+            model: info.slug.clone(),
             display_name: info.display_name,
             description: info.description.unwrap_or_default(),
             default_reasoning_effort: info.default_reasoning_level,
-            supported_reasoning_efforts: info
-                .supported_reasoning_levels
-                .into_iter()
-                .map(|level| ReasoningEffortPreset {
-                    effort: level,
-                    // todo: add description for each reasoning effort
-                    description: level.to_string(),
-                })
-                .collect(),
+            supported_reasoning_efforts: info.supported_reasoning_levels.clone(),
             is_default: false, // default is the highest priority available model
-            upgrade: None,     // no upgrade available (todo: think about it)
+            upgrade: info.upgrade.as_ref().map(|upgrade_slug| ModelUpgrade {
+                id: upgrade_slug.clone(),
+                reasoning_effort_mapping: reasoning_effort_mapping_from_presets(
+                    &info.supported_reasoning_levels,
+                ),
+                migration_config_key: info.slug.clone(),
+            }),
             show_in_picker: info.visibility == ModelVisibility::List,
         }
     }
+}
+
+fn reasoning_effort_mapping_from_presets(
+    presets: &[ReasoningEffortPreset],
+) -> Option<HashMap<ReasoningEffort, ReasoningEffort>> {
+    if presets.is_empty() {
+        return None;
+    }
+
+    // Map every canonical effort to the closest supported effort for the new model.
+    let supported: Vec<ReasoningEffort> = presets.iter().map(|p| p.effort).collect();
+    let mut map = HashMap::new();
+    for effort in ReasoningEffort::iter() {
+        let nearest = nearest_effort(effort, &supported);
+        map.insert(effort, nearest);
+    }
+    Some(map)
+}
+
+fn effort_rank(effort: ReasoningEffort) -> i32 {
+    match effort {
+        ReasoningEffort::None => 0,
+        ReasoningEffort::Minimal => 1,
+        ReasoningEffort::Low => 2,
+        ReasoningEffort::Medium => 3,
+        ReasoningEffort::High => 4,
+        ReasoningEffort::XHigh => 5,
+    }
+}
+
+fn nearest_effort(target: ReasoningEffort, supported: &[ReasoningEffort]) -> ReasoningEffort {
+    let target_rank = effort_rank(target);
+    supported
+        .iter()
+        .copied()
+        .min_by_key(|candidate| (effort_rank(*candidate) - target_rank).abs())
+        .unwrap_or(target)
 }

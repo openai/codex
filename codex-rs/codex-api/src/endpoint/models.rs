@@ -181,12 +181,13 @@ mod tests {
                     "display_name": "gpt-test",
                     "description": "desc",
                     "default_reasoning_level": "medium",
-                    "supported_reasoning_levels": ["low", "medium", "high"],
+                    "supported_reasoning_levels": [{"effort": "low", "description": "low"}, {"effort": "medium", "description": "medium"}, {"effort": "high", "description": "high"}],
                     "shell_type": "shell_command",
                     "visibility": "list",
                     "minimal_client_version": [0, 99, 0],
                     "supported_in_api": true,
-                    "priority": 1
+                    "priority": 1,
+                    "upgrade": null,
                 }))
                 .unwrap(),
             ],
