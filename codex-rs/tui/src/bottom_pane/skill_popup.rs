@@ -93,6 +93,7 @@ impl SkillPopup {
                     is_current: false,
                     display_shortcut: None,
                     description: Some(description),
+                    wrap_indent: None,
                 }
             })
             .collect()
