@@ -43,44 +43,8 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
         next_cursor,
     } = to_response::<ModelListResponse>(response)?;
 
-    let expected_models = vec![
-        Model {
-            id: "codex-auto-fast".to_string(),
-            model: "codex-auto-fast".to_string(),
-            display_name: "Fast".to_string(),
-            description: "Auto-picks speed-first Codex options with lighter reasoning.".to_string(),
-            supported_reasoning_efforts: vec![ReasoningEffortOption {
-                reasoning_effort: ReasoningEffort::Low,
-                description: "Fast responses with lighter reasoning".to_string(),
-            }],
-            default_reasoning_effort: ReasoningEffort::Low,
-            is_default: false,
-        },
-        Model {
-            id: "codex-auto-balanced".to_string(),
-            model: "codex-auto-balanced".to_string(),
-            display_name: "Balanced".to_string(),
-            description: "Balances speed and reasoning automatically for everyday coding tasks."
-                .to_string(),
-            supported_reasoning_efforts: vec![ReasoningEffortOption {
-                reasoning_effort: ReasoningEffort::Medium,
-                description: "Balances speed and reasoning depth for everyday tasks".to_string(),
-            }],
-            default_reasoning_effort: ReasoningEffort::Medium,
-            is_default: false,
-        },
-        Model {
-            id: "codex-auto-thorough".to_string(),
-            model: "codex-auto-thorough".to_string(),
-            display_name: "Thorough".to_string(),
-            description: "Auto-picks deeper reasoning for complex or ambiguous work.".to_string(),
-            supported_reasoning_efforts: vec![ReasoningEffortOption {
-                reasoning_effort: ReasoningEffort::High,
-                description: "Maximizes reasoning depth for complex problems".to_string(),
-            }],
-            default_reasoning_effort: ReasoningEffort::High,
-            is_default: false,
-        },
+    let mut expected_models = codex_auto_models();
+    expected_models.extend(vec![
         Model {
             id: "gpt-5.1-codex-max".to_string(),
             model: "gpt-5.1-codex-max".to_string(),
@@ -177,7 +141,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             default_reasoning_effort: ReasoningEffort::Medium,
             is_default: false,
         },
-    ];
+    ]);
 
     assert_eq!(items, expected_models);
     assert!(next_cursor.is_none());
@@ -192,18 +156,14 @@ async fn list_models_pagination_works() -> Result<()> {
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let mut cursor: Option<String> = None;
-    let mut seen: Vec<String> = Vec::new();
-    let expected = vec![
-        "codex-auto-fast",
-        "codex-auto-balanced",
-        "codex-auto-thorough",
+    let expected_ids = AUTO_MODEL_IDS.iter().copied().chain([
         "gpt-5.1-codex-max",
         "gpt-5.1-codex",
         "gpt-5.1-codex-mini",
         "gpt-5.1",
-    ];
+    ]);
 
-    loop {
+    for expected_id in expected_ids {
         let request_id = mcp
             .send_list_models_request(ModelListParams {
                 limit: Some(1),
@@ -222,16 +182,13 @@ async fn list_models_pagination_works() -> Result<()> {
             next_cursor,
         } = to_response::<ModelListResponse>(response)?;
 
-        assert_eq!(items.len(), 1);
-        seen.push(items[0].id.clone());
+        let model = items.into_iter().next().expect("one model per page");
+        assert_eq!(model.id, expected_id);
 
         cursor = next_cursor;
-        if cursor.is_none() {
-            break;
-        }
     }
 
-    assert_eq!(seen, expected);
+    assert!(cursor.is_none());
     Ok(())
 }
 
@@ -259,4 +216,60 @@ async fn list_models_rejects_invalid_cursor() -> Result<()> {
     assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
     assert_eq!(error.error.message, "invalid cursor: invalid");
     Ok(())
+}
+
+struct AutoModelConfig {
+    id: &'static str,
+    display_name: &'static str,
+    description: &'static str,
+    effort: ReasoningEffort,
+    effort_description: &'static str,
+}
+
+const AUTO_MODELS: &[AutoModelConfig] = &[
+    AutoModelConfig {
+        id: "codex-auto-fast",
+        display_name: "Fast",
+        description: "Auto-picks speed-first Codex options with lighter reasoning.",
+        effort: ReasoningEffort::Low,
+        effort_description: "Fast responses with lighter reasoning",
+    },
+    AutoModelConfig {
+        id: "codex-auto-balanced",
+        display_name: "Balanced",
+        description: "Balances speed and reasoning automatically for everyday coding tasks.",
+        effort: ReasoningEffort::Medium,
+        effort_description: "Balances speed and reasoning depth for everyday tasks",
+    },
+    AutoModelConfig {
+        id: "codex-auto-thorough",
+        display_name: "Thorough",
+        description: "Auto-picks deeper reasoning for complex or ambiguous work.",
+        effort: ReasoningEffort::High,
+        effort_description: "Maximizes reasoning depth for complex problems",
+    },
+];
+
+const AUTO_MODEL_IDS: &[&str] = &[
+    "codex-auto-fast",
+    "codex-auto-balanced",
+    "codex-auto-thorough",
+];
+
+fn codex_auto_models() -> Vec<Model> {
+    AUTO_MODELS
+        .iter()
+        .map(|config| Model {
+            id: config.id.to_string(),
+            model: config.id.to_string(),
+            display_name: config.display_name.to_string(),
+            description: config.description.to_string(),
+            supported_reasoning_efforts: vec![ReasoningEffortOption {
+                reasoning_effort: config.effort,
+                description: config.effort_description.to_string(),
+            }],
+            default_reasoning_effort: config.effort,
+            is_default: false,
+        })
+        .collect()
 }

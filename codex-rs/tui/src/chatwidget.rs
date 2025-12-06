@@ -2188,27 +2188,26 @@ impl ChatWidget {
 
         auto_presets.sort_by_key(|preset| Self::auto_model_order(&preset.model));
 
-        let mut items: Vec<SelectionItem> = Vec::new();
-        for preset in auto_presets.into_iter() {
-            let description = if preset.description.is_empty() {
-                None
-            } else {
-                Some(preset.description.to_string())
-            };
-            let is_current = preset.model == current_model;
-            let actions = Self::model_selection_actions(
-                preset.model.clone(),
-                Some(preset.default_reasoning_effort),
-            );
-            items.push(SelectionItem {
-                name: preset.display_name.to_string(),
-                description,
-                is_current,
-                actions,
-                dismiss_on_select: true,
-                ..Default::default()
-            });
-        }
+        let mut items: Vec<SelectionItem> = auto_presets
+            .into_iter()
+            .map(|preset| {
+                let description =
+                    (!preset.description.is_empty()).then_some(preset.description.clone());
+                let model = preset.model.clone();
+                let actions = Self::model_selection_actions(
+                    model.clone(),
+                    Some(preset.default_reasoning_effort),
+                );
+                SelectionItem {
+                    name: preset.display_name.to_string(),
+                    description,
+                    is_current: model == current_model,
+                    actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect();
 
         if !other_presets.is_empty() {
             let all_models = other_presets;
@@ -2267,11 +2266,8 @@ impl ChatWidget {
         let current_model = self.config.model.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {
-            let description = if preset.description.is_empty() {
-                None
-            } else {
-                Some(preset.description.to_string())
-            };
+            let description =
+                (!preset.description.is_empty()).then_some(preset.description.to_string());
             let is_current = preset.model == current_model;
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
@@ -2308,6 +2304,9 @@ impl ChatWidget {
         effort_for_action: Option<ReasoningEffortConfig>,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
+            let effort_label = effort_for_action
+                .map(|effort| effort.to_string())
+                .unwrap_or_else(|| "default".to_string());
             tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: None,
@@ -2325,9 +2324,7 @@ impl ChatWidget {
             tracing::info!(
                 "Selected model: {}, Selected effort: {}",
                 model_for_action,
-                effort_for_action
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "default".to_string())
+                effort_label
             );
         })]
     }

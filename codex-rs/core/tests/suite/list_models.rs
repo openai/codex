@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
+use codex_core::openai_models::codex_auto_model_presets;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -30,79 +31,25 @@ async fn list_models_returns_chatgpt_models() -> Result<()> {
 }
 
 fn expected_models_for_api_key() -> Vec<ModelPreset> {
-    vec![
-        codex_auto_fast(),
-        codex_auto_balanced(),
-        codex_auto_thorough(),
+    let mut models = codex_auto_model_presets();
+    models.extend(vec![
         gpt_5_1_codex_max(),
         gpt_5_1_codex(),
         gpt_5_1_codex_mini(),
         gpt_5_1(),
-    ]
+    ]);
+    models
 }
 
 fn expected_models_for_chatgpt() -> Vec<ModelPreset> {
-    vec![
-        codex_auto_fast(),
-        codex_auto_balanced(),
-        codex_auto_thorough(),
+    let mut models = codex_auto_model_presets();
+    models.extend(vec![
         gpt_5_1_codex_max(),
         gpt_5_1_codex(),
         gpt_5_1_codex_mini(),
         gpt_5_1(),
-    ]
-}
-
-fn codex_auto_fast() -> ModelPreset {
-    ModelPreset {
-        id: "codex-auto-fast".to_string(),
-        model: "codex-auto-fast".to_string(),
-        display_name: "Fast".to_string(),
-        description: "Auto-picks speed-first Codex options with lighter reasoning.".to_string(),
-        default_reasoning_effort: ReasoningEffort::Low,
-        supported_reasoning_efforts: vec![effort(
-            ReasoningEffort::Low,
-            "Fast responses with lighter reasoning",
-        )],
-        is_default: false,
-        upgrade: None,
-        show_in_picker: true,
-    }
-}
-
-fn codex_auto_balanced() -> ModelPreset {
-    ModelPreset {
-        id: "codex-auto-balanced".to_string(),
-        model: "codex-auto-balanced".to_string(),
-        display_name: "Balanced".to_string(),
-        description: "Balances speed and reasoning automatically for everyday coding tasks."
-            .to_string(),
-        default_reasoning_effort: ReasoningEffort::Medium,
-        supported_reasoning_efforts: vec![effort(
-            ReasoningEffort::Medium,
-            "Balances speed and reasoning depth for everyday tasks",
-        )],
-        is_default: false,
-        upgrade: None,
-        show_in_picker: true,
-    }
-}
-
-fn codex_auto_thorough() -> ModelPreset {
-    ModelPreset {
-        id: "codex-auto-thorough".to_string(),
-        model: "codex-auto-thorough".to_string(),
-        display_name: "Thorough".to_string(),
-        description: "Auto-picks deeper reasoning for complex or ambiguous work.".to_string(),
-        default_reasoning_effort: ReasoningEffort::High,
-        supported_reasoning_efforts: vec![effort(
-            ReasoningEffort::High,
-            "Maximizes reasoning depth for complex problems",
-        )],
-        is_default: false,
-        upgrade: None,
-        show_in_picker: true,
-    }
+    ]);
+    models
 }
 
 fn gpt_5_1_codex_max() -> ModelPreset {

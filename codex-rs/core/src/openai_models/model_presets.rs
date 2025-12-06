@@ -9,51 +9,41 @@ pub const HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG: &str = "hide_gpt5_1_migration_pro
 pub const HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG: &str =
     "hide_gpt-5.1-codex-max_migration_prompt";
 
+struct AutoModelConfig {
+    id: &'static str,
+    display_name: &'static str,
+    description: &'static str,
+    effort: ReasoningEffort,
+    effort_description: &'static str,
+}
+
+const AUTO_MODELS: &[AutoModelConfig] = &[
+    AutoModelConfig {
+        id: "codex-auto-fast",
+        display_name: "Fast",
+        description: "Auto-picks speed-first Codex options with lighter reasoning.",
+        effort: ReasoningEffort::Low,
+        effort_description: "Fast responses with lighter reasoning",
+    },
+    AutoModelConfig {
+        id: "codex-auto-balanced",
+        display_name: "Balanced",
+        description: "Balances speed and reasoning automatically for everyday coding tasks.",
+        effort: ReasoningEffort::Medium,
+        effort_description: "Balances speed and reasoning depth for everyday tasks",
+    },
+    AutoModelConfig {
+        id: "codex-auto-thorough",
+        display_name: "Thorough",
+        description: "Auto-picks deeper reasoning for complex or ambiguous work.",
+        effort: ReasoningEffort::High,
+        effort_description: "Maximizes reasoning depth for complex problems",
+    },
+];
+
 static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
-    vec![
-        ModelPreset {
-            id: "codex-auto-fast".to_string(),
-            model: "codex-auto-fast".to_string(),
-            display_name: "Fast".to_string(),
-            description: "Auto-picks speed-first Codex options with lighter reasoning.".to_string(),
-            default_reasoning_effort: ReasoningEffort::Low,
-            supported_reasoning_efforts: vec![ReasoningEffortPreset {
-                effort: ReasoningEffort::Low,
-                description: "Fast responses with lighter reasoning".to_string(),
-            }],
-            is_default: false,
-            upgrade: None,
-            show_in_picker: true,
-        },
-        ModelPreset {
-            id: "codex-auto-balanced".to_string(),
-            model: "codex-auto-balanced".to_string(),
-            display_name: "Balanced".to_string(),
-            description: "Balances speed and reasoning automatically for everyday coding tasks."
-                .to_string(),
-            default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![ReasoningEffortPreset {
-                effort: ReasoningEffort::Medium,
-                description: "Balances speed and reasoning depth for everyday tasks".to_string(),
-            }],
-            is_default: false,
-            upgrade: None,
-            show_in_picker: true,
-        },
-        ModelPreset {
-            id: "codex-auto-thorough".to_string(),
-            model: "codex-auto-thorough".to_string(),
-            display_name: "Thorough".to_string(),
-            description: "Auto-picks deeper reasoning for complex or ambiguous work.".to_string(),
-            default_reasoning_effort: ReasoningEffort::High,
-            supported_reasoning_efforts: vec![ReasoningEffortPreset {
-                effort: ReasoningEffort::High,
-                description: "Maximizes reasoning depth for complex problems".to_string(),
-            }],
-            is_default: false,
-            upgrade: None,
-            show_in_picker: true,
-        },
+    let mut presets = codex_auto_model_presets();
+    presets.extend(vec![
         ModelPreset {
             id: "gpt-5.1-codex-max".to_string(),
             model: "gpt-5.1-codex-max".to_string(),
@@ -249,8 +239,29 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             }),
             show_in_picker: false,
         },
-    ]
+    ]);
+    presets
 });
+
+pub fn codex_auto_model_presets() -> Vec<ModelPreset> {
+    AUTO_MODELS
+        .iter()
+        .map(|config| ModelPreset {
+            id: config.id.to_string(),
+            model: config.id.to_string(),
+            display_name: config.display_name.to_string(),
+            description: config.description.to_string(),
+            default_reasoning_effort: config.effort,
+            supported_reasoning_efforts: vec![ReasoningEffortPreset {
+                effort: config.effort,
+                description: config.effort_description.to_string(),
+            }],
+            is_default: false,
+            upgrade: None,
+            show_in_picker: true,
+        })
+        .collect()
+}
 
 pub(crate) fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
     PRESETS
