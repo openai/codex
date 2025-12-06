@@ -19,9 +19,8 @@ pub(crate) struct GenericDisplayRow {
     pub name: String,
     pub display_shortcut: Option<KeyBinding>,
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
-    pub is_current: bool,
-    pub description: Option<String>, // optional grey text after the name
-    pub wrap_indent: Option<usize>,  // optional indent for wrapped lines
+    pub description: Option<String>,       // optional grey text after the name
+    pub wrap_indent: Option<usize>,        // optional indent for wrapped lines
 }
 
 /// Compute a shared description-column start based on the widest visible name

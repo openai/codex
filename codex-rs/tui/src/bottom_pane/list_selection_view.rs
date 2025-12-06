@@ -211,7 +211,6 @@ impl ListSelectionView {
                         name: display_name,
                         display_shortcut: item.display_shortcut,
                         match_indices: None,
-                        is_current: item.is_current,
                         description,
                         wrap_indent,
                     }
