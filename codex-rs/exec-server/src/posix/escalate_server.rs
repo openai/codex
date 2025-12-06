@@ -258,12 +258,18 @@ mod tests {
             }),
         ));
 
+        let mut env = HashMap::new();
+        for i in 0..10 {
+            let value = "A".repeat(1024);
+            env.insert(format!("CODEX_TEST_VAR{i}"), value);
+        }
+
         client
             .send(EscalateRequest {
                 file: PathBuf::from("/bin/echo"),
                 argv: vec!["echo".to_string()],
                 workdir: PathBuf::from("/tmp"),
-                env: HashMap::new(),
+                env,
             })
             .await?;
 
