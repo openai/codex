@@ -65,9 +65,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
 
     let conversation_id = ConversationId::new();
     let auth_mode = AuthMode::ChatGPT;
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let models_manager = Arc::new(ModelsManager::new(auth_manager));
-    let model_family = models_manager.construct_model_family(&config.model, &config);
+    let model_family = ModelsManager::construct_model_family_offline(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
@@ -157,9 +155,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
 
     let conversation_id = ConversationId::new();
     let auth_mode = AuthMode::ChatGPT;
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let models_manager = Arc::new(ModelsManager::new(auth_manager));
-    let model_family = models_manager.construct_model_family(&config.model, &config);
+    let model_family = ModelsManager::construct_model_family_offline(&config.model, &config);
 
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
@@ -250,16 +246,16 @@ async fn responses_respects_model_family_overrides_from_config() {
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
-    let model_family = models_manager.construct_model_family(&config.model, &config);
+    let auth_mode =
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key")).get_auth_mode();
+    let model_family = ModelsManager::construct_model_family_offline(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
         model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        auth_manager.get_auth_mode(),
+        auth_mode,
         false,
         "test".to_string(),
     );

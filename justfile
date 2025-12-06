@@ -1,3 +1,4 @@
+set working-directory := "codex-rs"
 set positional-arguments
 
 # Display help

@@ -227,23 +227,6 @@ impl CodexAuth {
             })
     }
 
-    /// Raw plan string from the ID token (including unknown/new plan types).
-    pub fn raw_plan_type(&self) -> Option<String> {
-        self.get_plan_type().map(|plan| match plan {
-            InternalPlanType::Known(k) => format!("{k:?}"),
-            InternalPlanType::Unknown(raw) => raw,
-        })
-    }
-
-    /// Raw internal plan value from the ID token.
-    /// Exposes the underlying `token_data::PlanType` without mapping it to the
-    /// public `AccountPlanType`. Use this when downstream code needs to inspect
-    /// internal/unknown plan strings exactly as issued in the token.
-    pub(crate) fn get_plan_type(&self) -> Option<InternalPlanType> {
-        self.get_current_token_data()
-            .and_then(|t| t.id_token.chatgpt_plan_type)
-    }
-
     fn get_current_auth_json(&self) -> Option<AuthDotJson> {
         #[expect(clippy::unwrap_used)]
         self.auth_dot_json.lock().unwrap().clone()
@@ -1041,10 +1024,6 @@ mod tests {
             .expect("auth available");
 
         pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Pro));
-        pretty_assertions::assert_eq!(
-            auth.get_plan_type(),
-            Some(InternalPlanType::Known(InternalKnownPlan::Pro))
-        );
     }
 
     #[test]
@@ -1065,10 +1044,6 @@ mod tests {
             .expect("auth available");
 
         pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Unknown));
-        pretty_assertions::assert_eq!(
-            auth.get_plan_type(),
-            Some(InternalPlanType::Unknown("mystery-tier".to_string()))
-        );
     }
 }
 

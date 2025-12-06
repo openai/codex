@@ -137,6 +137,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     let base_instructions = conversation_manager
         .get_models_manager()
         .construct_model_family(&config.model, &config)
+        .await
         .base_instructions
         .clone();
 

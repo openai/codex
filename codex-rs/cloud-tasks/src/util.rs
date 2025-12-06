@@ -1,4 +1,6 @@
 use base64::Engine as _;
+use chrono::DateTime;
+use chrono::Local;
 use chrono::Utc;
 use reqwest::header::HeaderMap;
 
@@ -119,4 +121,28 @@ pub fn task_url(base_url: &str, task_id: &str) -> String {
         return format!("{normalized}/tasks/{task_id}");
     }
     format!("{normalized}/codex/tasks/{task_id}")
+}
+
+pub fn format_relative_time(reference: DateTime<Utc>, ts: DateTime<Utc>) -> String {
+    let mut secs = (reference - ts).num_seconds();
+    if secs < 0 {
+        secs = 0;
+    }
+    if secs < 60 {
+        return format!("{secs}s ago");
+    }
+    let mins = secs / 60;
+    if mins < 60 {
+        return format!("{mins}m ago");
+    }
+    let hours = mins / 60;
+    if hours < 24 {
+        return format!("{hours}h ago");
+    }
+    let local = ts.with_timezone(&Local);
+    local.format("%b %e %H:%M").to_string()
+}
+
+pub fn format_relative_time_now(ts: DateTime<Utc>) -> String {
+    format_relative_time(Utc::now(), ts)
 }

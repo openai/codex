@@ -1015,11 +1015,9 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let effort = config.model_reasoning_effort;
     let summary = config.model_reasoning_summary;
     let config = Arc::new(config);
-
+    let model_family = ModelsManager::construct_model_family_offline(&config.model, &config);
     let conversation_id = ConversationId::new();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
-    let model_family = models_manager.construct_model_family(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
@@ -1195,7 +1193,8 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "window_minutes": 60,
                     "resets_at": 1704074400
                 },
-                "credits": null
+                "credits": null,
+                "plan_type": null
             }
         })
     );
@@ -1243,7 +1242,8 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "window_minutes": 60,
                     "resets_at": 1704074400
                 },
-                "credits": null
+                "credits": null,
+                "plan_type": null
             }
         })
     );
@@ -1314,7 +1314,8 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
             "window_minutes": 60,
             "resets_at": null
         },
-        "credits": null
+        "credits": null,
+        "plan_type": null
     });
 
     let submission_id = codex

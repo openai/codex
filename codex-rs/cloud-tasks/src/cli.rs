@@ -16,6 +16,12 @@ pub struct Cli {
 pub enum Command {
     /// Submit a new Codex Cloud task without launching the TUI.
     Exec(ExecCommand),
+    /// Show the status of a Codex Cloud task.
+    Status(StatusCommand),
+    /// Apply the diff for a Codex Cloud task locally.
+    Apply(ApplyCommand),
+    /// Show the unified diff for a Codex Cloud task.
+    Diff(DiffCommand),
 }
 
 #[derive(Debug, Args)]
@@ -50,4 +56,33 @@ fn parse_attempts(input: &str) -> Result<usize, String> {
     } else {
         Err("attempts must be between 1 and 4".to_string())
     }
+}
+
+#[derive(Debug, Args)]
+pub struct StatusCommand {
+    /// Codex Cloud task identifier to inspect.
+    #[arg(value_name = "TASK_ID")]
+    pub task_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ApplyCommand {
+    /// Codex Cloud task identifier to apply.
+    #[arg(value_name = "TASK_ID")]
+    pub task_id: String,
+
+    /// Attempt number to apply (1-based).
+    #[arg(long = "attempt", value_parser = parse_attempts, value_name = "N")]
+    pub attempt: Option<usize>,
+}
+
+#[derive(Debug, Args)]
+pub struct DiffCommand {
+    /// Codex Cloud task identifier to display.
+    #[arg(value_name = "TASK_ID")]
+    pub task_id: String,
+
+    /// Attempt number to display (1-based).
+    #[arg(long = "attempt", value_parser = parse_attempts, value_name = "N")]
+    pub attempt: Option<usize>,
 }
