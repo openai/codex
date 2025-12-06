@@ -332,6 +332,15 @@ fn create_shell_command_tool() -> ToolSpec {
         },
     );
     properties.insert(
+        "login".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Whether to run the shell with login shell semantics. Defaults to true."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
         "timeout_ms".to_string(),
         JsonSchema::Number {
             description: Some("The timeout for the command in milliseconds".to_string()),

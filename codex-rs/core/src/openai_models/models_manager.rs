@@ -61,7 +61,14 @@ impl ModelsManager {
         Ok(models)
     }
 
-    pub fn construct_model_family(&self, model: &str, config: &Config) -> ModelFamily {
+    pub async fn construct_model_family(&self, model: &str, config: &Config) -> ModelFamily {
+        find_family_for_model(model)
+            .with_config_overrides(config)
+            .with_remote_overrides(self.remote_models.read().await.clone())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn construct_model_family_offline(model: &str, config: &Config) -> ModelFamily {
         find_family_for_model(model).with_config_overrides(config)
     }
 
