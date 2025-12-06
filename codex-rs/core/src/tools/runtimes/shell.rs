@@ -133,7 +133,8 @@ impl Approvable<ShellRequest> for ShellRuntime {
             || matches!(
                 req.exec_approval_requirement,
                 ExecApprovalRequirement::Skip {
-                    bypass_sandbox: true
+                    bypass_sandbox: true,
+                    ..
                 }
             )
         {

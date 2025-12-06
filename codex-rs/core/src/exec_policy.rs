@@ -147,41 +147,54 @@ pub(crate) async fn append_execpolicy_amendment_and_update(
     Ok(())
 }
 
-/// Returns a proposed execpolicy amendment only when heuristics caused
-/// the prompt decision, so we can offer to apply that amendment for future runs.
-///
-/// The amendment uses the first command heuristics marked as `Prompt`. If any explicit
-/// execpolicy rule also prompts, we return `None` because applying the amendment would not
-/// skip that policy requirement.
-///
-/// Examples:
-/// - execpolicy: empty. Command: `["python"]`. Heuristics prompt -> `Some(vec!["python"])`.
-/// - execpolicy: empty. Command: `["bash", "-c", "cd /some/folder && prog1 --option1 arg1 && prog2 --option2 arg2"]`.
-///   Parsed commands include `cd /some/folder`, `prog1 --option1 arg1`, and `prog2 --option2 arg2`. If heuristics allow `cd` but prompt
-///   on `prog1`, we return `Some(vec!["prog1", "--option1", "arg1"])`.
-/// - execpolicy: contains a `prompt for prefix ["prog2"]` rule. For the same command as above,
-///   we return `None` because an execpolicy prompt still applies even if we amend execpolicy to allow ["prog1", "--option1", "arg1"].
-fn proposed_execpolicy_amendment(evaluation: &Evaluation) -> Option<ExecPolicyAmendment> {
-    if evaluation.decision != Decision::Prompt {
+// - If any execpolicy rule prompts, return None, because an amendment would not skip that policy requirement.
+// - Otherwise return the first heuristics Prompt.
+// Examples:
+// - execpolicy: empty. Command: `["python"]`. Heuristics prompt -> `Some(vec!["python"])`.
+// - execpolicy: empty. Command: `["bash", "-c", "cd /some/folder && prog1 --option1 arg1 && prog2 --option2 arg2"]`.
+//   Parsed commands include `cd /some/folder`, `prog1 --option1 arg1`, and `prog2 --option2 arg2`. If heuristics allow `cd` but prompt
+//   on `prog1`, we return `Some(vec!["prog1", "--option1", "arg1"])`.
+// - execpolicy: contains a `prompt for prefix ["prog2"]` rule. For the same command as above,
+//   we return `None` because an execpolicy prompt still applies even if we amend execpolicy to allow ["prog1", "--option1", "arg1"].
+fn prompt_execpolicy_amendment(matched_rules: &[RuleMatch]) -> Option<ExecPolicyAmendment> {
+    if matched_rules.iter().any(|rule_match| {
+        !matches!(rule_match, RuleMatch::HeuristicsRuleMatch { .. })
+            && rule_match.decision() == Decision::Prompt
+    }) {
         return None;
     }
 
-    let mut first_prompt_from_heuristics: Option<Vec<String>> = None;
-    for rule_match in &evaluation.matched_rules {
-        match rule_match {
-            RuleMatch::HeuristicsRuleMatch { command, decision } => {
-                if *decision == Decision::Prompt && first_prompt_from_heuristics.is_none() {
-                    first_prompt_from_heuristics = Some(command.clone());
-                }
-            }
-            _ if rule_match.decision() == Decision::Prompt => {
-                return None;
-            }
-            _ => {}
-        }
+    matched_rules
+        .iter()
+        .find_map(|rule_match| match rule_match {
+            RuleMatch::HeuristicsRuleMatch {
+                command,
+                decision: Decision::Prompt,
+            } => Some(ExecPolicyAmendment::from(command.clone())),
+            _ => None,
+        })
+}
+
+// - Note: we only use this amendment when the command fails to run in sandbox and codex prompts the user to run outside the sandbox
+// - The purpose of this amendment is to bypass sandbox for similar commands in the future
+// - If any execpolicy rule matches, return None, because we would already be running command outside the sandbox
+fn allow_execpolicy_amendment(matched_rules: &[RuleMatch]) -> Option<ExecPolicyAmendment> {
+    if matched_rules
+        .iter()
+        .any(|rule_match| !matches!(rule_match, RuleMatch::HeuristicsRuleMatch { .. }))
+    {
+        return None;
     }
 
-    first_prompt_from_heuristics.map(ExecPolicyAmendment::from)
+    matched_rules
+        .iter()
+        .find_map(|rule_match| match rule_match {
+            RuleMatch::HeuristicsRuleMatch {
+                command,
+                decision: Decision::Allow,
+            } => Some(ExecPolicyAmendment::from(command.clone())),
+            _ => None,
+        })
 }
 
 /// Only return PROMPT_REASON when an execpolicy rule drove the prompt decision.
@@ -233,7 +246,7 @@ pub(crate) async fn create_exec_approval_requirement_for_command(
                 ExecApprovalRequirement::NeedsApproval {
                     reason: derive_prompt_reason(&evaluation),
                     proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
-                        proposed_execpolicy_amendment(&evaluation)
+                        prompt_execpolicy_amendment(&evaluation.matched_rules)
                     } else {
                         None
                     },
@@ -242,6 +255,11 @@ pub(crate) async fn create_exec_approval_requirement_for_command(
         }
         Decision::Allow => ExecApprovalRequirement::Skip {
             bypass_sandbox: has_policy_allow,
+            proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
+                allow_execpolicy_amendment(&evaluation.matched_rules)
+            } else {
+                None
+            },
         },
     }
 }
@@ -727,6 +745,58 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                     "apple".to_string()
                 ])),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn proposed_execpolicy_amendment_is_present_when_heuristics_allow() {
+        let command = vec!["echo".to_string(), "safe".to_string()];
+
+        let requirement = create_exec_approval_requirement_for_command(
+            &Arc::new(RwLock::new(Policy::empty())),
+            &Features::with_defaults(),
+            &command,
+            AskForApproval::OnRequest,
+            &SandboxPolicy::ReadOnly,
+            SandboxPermissions::UseDefault,
+        )
+        .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn proposed_execpolicy_amendment_is_suppressed_when_policy_matches_allow() {
+        let policy_src = r#"prefix_rule(pattern=["echo"], decision="allow")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.codexpolicy", policy_src)
+            .expect("parse policy");
+        let policy = Arc::new(RwLock::new(parser.build()));
+        let command = vec!["echo".to_string(), "safe".to_string()];
+
+        let requirement = create_exec_approval_requirement_for_command(
+            &policy,
+            &Features::with_defaults(),
+            &command,
+            AskForApproval::OnRequest,
+            &SandboxPolicy::ReadOnly,
+            SandboxPermissions::UseDefault,
+        )
+        .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
             }
         );
     }
