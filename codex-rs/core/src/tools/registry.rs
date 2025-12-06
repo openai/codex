@@ -30,7 +30,7 @@ pub trait ToolHandler: Send + Sync {
         )
     }
 
-    fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         false
     }
 
@@ -110,7 +110,7 @@ impl ToolRegistry {
                     let output_cell = &output_cell;
                     let invocation = invocation;
                     async move {
-                        if handler.is_mutating(&invocation) {
+                        if handler.is_mutating(&invocation).await {
                             tracing::trace!("waiting for tool gate");
                             invocation.turn.tool_call_gate.wait_ready().await;
                             tracing::trace!("tool gate released");
