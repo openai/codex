@@ -53,7 +53,7 @@ kotlin {
 ## Quick Start
 
 ```kotlin
-import roff.*
+import ai.solace.tui.roff.*
 
 val page = Roff()
     .control("TH", "CORRUPT", "1")
@@ -81,6 +81,8 @@ print(page)
 ### Creating Documents
 
 ```kotlin
+import ai.solace.tui.roff.*
+
 val doc = Roff()
     .control("TH", "NAME", "SECTION")  // Control line with arguments
     .text(roman("Plain text"))          // Text line

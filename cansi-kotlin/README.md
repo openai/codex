@@ -55,7 +55,7 @@ kotlin {
 ## Quick Start
 
 ```kotlin
-import cansi.*
+import ai.solace.tui.cansi.*
 
 // Parse text with ANSI escape sequences
 val text = "\u001b[31mHello\u001b[0m, \u001b[32mWorld\u001b[0m!"
@@ -102,7 +102,7 @@ println(plainText) // "Hello, World!"
 ## Example: Styled Text Analysis
 
 ```kotlin
-import cansi.*
+import ai.solace.tui.cansi.*
 
 val styledText = "\u001b[1;31;4mError:\u001b[0m Something went wrong"
 val slices = categoriseText(styledText)
