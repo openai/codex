@@ -2610,6 +2610,14 @@ pub async fn run_security_review_setup(
         });
     }
 
+    if let Err(mut err) = check_executable_available("gh") {
+        logs.append(&mut err.logs);
+        return Err(SecurityReviewFailure {
+            message: err.message,
+            logs,
+        });
+    }
+
     let mut servers =
         load_global_mcp_servers(&codex_home)
             .await
@@ -2762,10 +2770,35 @@ fn check_executable_available(name: &str) -> Result<(), SecurityReviewFailure> {
         Ok(output) if output.status.success() => Ok(()),
         _ => Err(SecurityReviewFailure {
             message: format!("{name} is required for security review setup but was not found."),
-            logs: vec![format!(
-                "Install `{name}` and ensure it is on PATH, then rerun /secreview setup."
-            )],
+            logs: vec![
+                format!("Install `{name}` and ensure it is on PATH, then rerun /secreview setup."),
+                format!("Try: {}", install_hint_for(name)),
+            ],
         }),
+    }
+}
+
+fn install_hint_for(name: &str) -> String {
+    match name {
+        "node" => {
+            if cfg!(target_os = "macos") {
+                "brew install node".to_string()
+            } else if cfg!(target_os = "windows") {
+                "winget install OpenJS.NodeJS".to_string()
+            } else {
+                "sudo apt-get update && sudo apt-get install -y nodejs npm".to_string()
+            }
+        }
+        "gh" => {
+            if cfg!(target_os = "macos") {
+                "brew install gh".to_string()
+            } else if cfg!(target_os = "windows") {
+                "winget install GitHub.cli".to_string()
+            } else {
+                "type -p curl >/dev/null || sudo apt-get install -y curl && \\\n  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \\\n  sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \\\n  echo \"deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \\\n  sudo apt-get update && sudo apt-get install -y gh".to_string()
+            }
+        }
+        other => format!("Please install `{other}` and ensure it is on PATH."),
     }
 }
 
