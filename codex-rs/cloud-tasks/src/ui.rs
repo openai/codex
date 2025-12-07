@@ -20,8 +20,7 @@ use std::time::Instant;
 
 use crate::app::App;
 use crate::app::AttemptView;
-use chrono::Local;
-use chrono::Utc;
+use crate::util::format_relative_time_now;
 use codex_cloud_tasks_client::AttemptStatus;
 use codex_cloud_tasks_client::TaskStatus;
 use codex_tui::render_markdown_text;
@@ -804,7 +803,7 @@ fn render_task_item(_app: &App, t: &codex_cloud_tasks_client::TaskSummary) -> Li
     if let Some(lbl) = t.environment_label.as_ref().filter(|s| !s.is_empty()) {
         meta.push(lbl.clone().dim());
     }
-    let when = format_relative_time(t.updated_at).dim();
+    let when = format_relative_time_now(t.updated_at).dim();
     if !meta.is_empty() {
         meta.push("  ".into());
         meta.push("•".dim());
@@ -839,27 +838,6 @@ fn render_task_item(_app: &App, t: &codex_cloud_tasks_client::TaskSummary) -> Li
     // Insert a blank spacer line after the summary to separate tasks
     let spacer = Line::from("");
     ListItem::new(vec![title, meta_line, sub, spacer])
-}
-
-fn format_relative_time(ts: chrono::DateTime<Utc>) -> String {
-    let now = Utc::now();
-    let mut secs = (now - ts).num_seconds();
-    if secs < 0 {
-        secs = 0;
-    }
-    if secs < 60 {
-        return format!("{secs}s ago");
-    }
-    let mins = secs / 60;
-    if mins < 60 {
-        return format!("{mins}m ago");
-    }
-    let hours = mins / 60;
-    if hours < 24 {
-        return format!("{hours}h ago");
-    }
-    let local = ts.with_timezone(&Local);
-    local.format("%b %e %H:%M").to_string()
 }
 
 fn draw_inline_spinner(
