@@ -1,5 +1,5 @@
 #![cfg(not(target_os = "windows"))]
-// unified exec is not supported on Windows
+// unified exec is not supported on Windows OS
 use std::sync::Arc;
 
 use anyhow::Result;
