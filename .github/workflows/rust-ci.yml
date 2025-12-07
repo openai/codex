@@ -369,6 +369,22 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      # We have been running out of space when running this job on Linux for
+      # x86_64-unknown-linux-gnu, so remove some unnecessary dependencies.
+      - name: Remove unnecessary dependencies to save space
+        if: ${{ startsWith(matrix.runner, 'ubuntu') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /usr/local/lib/node_modules \
+            /opt/ghc
+          sudo apt-get remove -y docker.io docker-compose podman buildah
+
       - uses: dtolnay/rust-toolchain@1.90
         with:
           targets: ${{ matrix.target }}
