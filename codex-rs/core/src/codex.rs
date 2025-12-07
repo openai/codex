@@ -2174,13 +2174,7 @@ async fn run_turn(
     // TODO(jif) revert once testing phase is done.
     let parallel_tool_calls = model_supports_parallel && sess.enabled(Feature::ParallelToolCalls);
     let mut base_instructions = turn_context.base_instructions.clone();
-    if parallel_tool_calls {
-        static INSTRUCTIONS: &str = include_str!("../templates/parallel/instructions.md");
-        let family = turn_context.client.get_model_family();
-        let mut new_instructions = base_instructions.unwrap_or(family.base_instructions);
-        new_instructions.push_str(INSTRUCTIONS);
-        base_instructions = Some(new_instructions);
-    }
+
     let prompt = Prompt {
         input,
         tools: router.specs(),
