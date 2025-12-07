@@ -24,6 +24,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 rustup component add rustfmt
 rustup component add clippy
+# Install helper tools used by the workspace justfile:
+cargo install just
+# Optional: install nextest for the `just test` helper (or use `cargo test --all-features` as a fallback)
+cargo install cargo-nextest
 
 # Build Codex.
 cargo build
@@ -37,5 +41,8 @@ just fix -p <crate-you-touched>
 
 # Run the relevant tests (project-specific is fastest), for example:
 cargo test -p codex-tui
-just test  # if you need a full sweep
+# If you have cargo-nextest installed, `just test` runs the full suite:
+just test
+# Otherwise, fall back to:
+cargo test --all-features
 ```
