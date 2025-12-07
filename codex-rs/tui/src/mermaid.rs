@@ -77,6 +77,34 @@ impl MermaidLinter {
                         && !is_within_double_quotes(line, start, end)
                 })
                 .collect();
+
+            if filtered_arrows.is_empty()
+                && in_diagram
+                && !in_sequence
+                && line.contains("--|")
+                && let Some((lhs, rest)) = line.split_once("--|")
+                && let Some((label, rhs)) = rest.split_once('|')
+            {
+                let left = wrap_node_if_plain(lhs.trim());
+                let right = wrap_node_if_plain(rhs.trim());
+                if !left.is_empty() && !right.is_empty() {
+                    let sanitized_label = sanitize_label_text(label);
+                    let normalized_label = if sanitized_label.is_empty() {
+                        label.trim().to_string()
+                    } else {
+                        sanitized_label
+                    };
+                    let replacement = format!("{left} -->|{normalized_label}| {right}");
+                    issues.push(Issue::new(
+                        line_no,
+                        0,
+                        line.len(),
+                        "Normalized labeled edge to use '-->' and sanitized label.",
+                        Box::new(move |_| replacement.clone()),
+                    ));
+                    continue;
+                }
+            }
             if filtered_arrows.len() > 1 {
                 let replacement = filtered_arrows
                     .iter()

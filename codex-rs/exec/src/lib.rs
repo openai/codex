@@ -35,9 +35,11 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
 use codex_tui::SecurityReviewMode;
 use codex_tui::SecurityReviewRequest;
+use codex_tui::SecurityReviewSetupResult;
 use codex_tui::latest_running_review_candidate;
 use codex_tui::prepare_security_review_output_root;
 use codex_tui::run_security_review;
+use codex_tui::run_security_review_setup;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
@@ -331,6 +333,26 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         config.cli_auth_credentials_store_mode,
     );
     if let Some(review_args) = parse_security_review_command(&prompt, &default_cwd)? {
+        if review_args.setup {
+            match run_security_review_setup(&config).await {
+                Ok(SecurityReviewSetupResult { logs }) => {
+                    for line in logs {
+                        eprintln!("{line}");
+                    }
+                    return Ok(());
+                }
+                Err(error) => {
+                    for line in error.logs {
+                        eprintln!("{line}");
+                    }
+                    return Err(anyhow::anyhow!(
+                        "Security review setup failed: {}",
+                        error.message
+                    ));
+                }
+            }
+        }
+
         let (output_root, include_paths, scope_display_paths, mode, resume_checkpoint) =
             if review_args.resume {
                 if let Some(candidate) = latest_running_review_candidate(&default_cwd) {
@@ -339,7 +361,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                         Vec::new(),
                         Vec::new(),
                         review_args.mode,
-                        Some(candidate.checkpoint.clone()),
+                        Some(candidate.checkpoint),
                     )
                 } else {
                     eprintln!("No in-progress security review found to resume.");
@@ -532,6 +554,7 @@ struct SecurityReviewCliArgs {
     include_paths: Vec<PathBuf>,
     scope_display_paths: Vec<String>,
     auto_scope_prompt: Option<String>,
+    setup: bool,
     resume: bool,
 }
 
@@ -552,6 +575,7 @@ fn parse_security_review_command(
     let mut mode = SecurityReviewMode::Full;
     let mut raw_paths: Vec<String> = Vec::new();
     let mut auto_scope_prompt: Option<String> = None;
+    let mut setup = false;
     let mut resume = false;
 
     let mut iter = tokens.into_iter();
@@ -594,6 +618,9 @@ fn parse_security_review_command(
             "resume" | "--resume" => {
                 resume = true;
             }
+            "setup" | "--setup" => {
+                setup = true;
+            }
             other if other.starts_with("--") => {
                 return Err(anyhow::anyhow!(
                     "Unknown flag `{other}` for /secreview command."
@@ -619,6 +646,7 @@ fn parse_security_review_command(
         include_paths,
         scope_display_paths,
         auto_scope_prompt,
+        setup,
         resume,
     }))
 }

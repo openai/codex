@@ -197,6 +197,9 @@ pub(crate) enum AppEvent {
         resume_from: Option<PathBuf>,
     },
 
+    /// Prepare required connectors for the security review.
+    StartSecurityReviewSetup,
+
     /// Resume a previously generated security review from disk.
     ResumeSecurityReview {
         output_root: PathBuf,
@@ -237,6 +240,16 @@ pub(crate) enum AppEvent {
     /// Security review completed successfully.
     SecurityReviewComplete {
         result: SecurityReviewResult,
+    },
+
+    /// Security review setup completed successfully.
+    SecurityReviewSetupComplete {
+        logs: Vec<String>,
+    },
+
+    /// Security review setup failed.
+    SecurityReviewSetupFailed {
+        error: SecurityReviewFailure,
     },
 
     /// Security review failed prior to completion.

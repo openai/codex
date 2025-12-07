@@ -302,7 +302,7 @@ Evaluate the project for concrete, exploitable security vulnerabilities. Prefer 
 
 Follow these rules:
 - Read this file in full and review the provided context to understand intended behavior before judging safety.
-- Start locally: prefer `READ` to open the current file and its immediate neighbors (imports, same directory/module, referenced configs) before using `GREP_FILES`. Use `GREP_FILES` only when you need to locate unknown files across the repository.
+{scope_reminder}- Start locally: prefer `READ` to open the current file and its immediate neighbors (imports, same directory/module, referenced configs) before using `GREP_FILES`. Use `GREP_FILES` only when you need to locate unknown files across the repository.
 - When you reference a function, method, or class, look up its definition and usages across files: search by the identifier, then open the definition and a few call sites to verify behavior end-to-end.
 - The current file is provided in full. Analyze it first; do not issue broad searches for generic or dangerous keywords (e.g., "password", "token") unless you are tracing a concrete dataflow across files.
 - Use the search tools below to inspect additional in-scope files only when tracing data flows or confirming a hypothesis that clearly spans multiple files; cite the relevant variables, functions, and any validation or sanitization steps you discover.
@@ -330,7 +330,10 @@ For each vulnerability, emit a markdown block:
 - **Description:** Detailed narrative with annotated code references explaining the bug.
 - **Snippet:** Fenced code block (specify language) showing only the relevant lines with inline comments or numbered markers that you reference in the description.
 - **Dataflow:** Describe sources, propagation, sanitization, and sinks using relative paths and `L<start>-L<end>` ranges.
-- **PoC:** Concrete steps or payload to reproduce (or `n/a` if infeasible).
+    - **PoC:** Provide two variants when possible:
+      - Minimal standalone snippet or test file that runs in isolation (no full project setup) to validate the specific flaw. Run it locally first to ensure the syntax is correct and that it executes successfully. You do not need a full exploit chain—focus on the precise issue (e.g., missing validation, comparison/logic error, injection behavior) and mock other components as needed. You may use the same dependencies referenced in the reviewed code.
+      - Attacker-style reproduction steps or payload against the exposed interface (HTTP request, CLI invocation, message payload, etc.).
+      If only one is feasible, provide that. Use fenced code blocks for code where appropriate. If the minimal PoC is lengthy, include it as file contents and specify that it should be saved under `bug-<index>-poc/` (where `<index>` is this finding’s 1-based order), with clear filenames.
 - **Recommendation:** Actionable remediation guidance.
 - **Verification Type:** JSON array subset of ["network_api", "crash_poc", "web_browser"].
 - TAXONOMY: {{"vuln_class": "...", "cwe_ids": [...], "owasp_categories": [...], "vuln_tag": "..."}}

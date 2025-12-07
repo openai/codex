@@ -1544,6 +1544,7 @@ dependencies = [
  "codex-file-search",
  "codex-login",
  "codex-protocol",
+ "codex-rmcp-client",
  "codex-windows-sandbox",
  "color-eyre",
  "crossterm",

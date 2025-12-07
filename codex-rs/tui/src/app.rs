@@ -831,6 +831,9 @@ impl App {
                     resume_from,
                 );
             }
+            AppEvent::StartSecurityReviewSetup => {
+                self.chat_widget.start_security_review_setup();
+            }
             AppEvent::ResumeSecurityReview {
                 output_root,
                 metadata,
@@ -867,6 +870,12 @@ impl App {
             }
             AppEvent::SecurityReviewComplete { result } => {
                 self.chat_widget.on_security_review_complete(result);
+            }
+            AppEvent::SecurityReviewSetupComplete { logs } => {
+                self.chat_widget.on_security_review_setup_complete(logs);
+            }
+            AppEvent::SecurityReviewSetupFailed { error } => {
+                self.chat_widget.on_security_review_setup_failed(error);
             }
             AppEvent::SecurityReviewFailed { error } => {
                 self.chat_widget.on_security_review_failed(error);

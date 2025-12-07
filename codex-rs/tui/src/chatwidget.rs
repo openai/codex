@@ -3660,6 +3660,16 @@ impl ChatWidget {
         });
 
         items.push(SelectionItem {
+            name: "Set up connectors".to_string(),
+            description: Some("Configure Linear, Notion, Google Workspace, and Secbot MCP.".into()),
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::StartSecurityReviewSetup);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        items.push(SelectionItem {
             name: "Full review for specific paths".to_string(),
             description: Some("Enter relative paths to scope the run".into()),
             actions: vec![Box::new(|tx: &AppEventSender| {
@@ -3985,6 +3995,29 @@ impl ChatWidget {
         self.security_review_task = Some(handle);
     }
 
+    pub(crate) fn start_security_review_setup(&mut self) {
+        if self.bottom_pane.is_task_running() || self.security_review_context.is_some() {
+            self.add_error_message(
+                "A security task is already running. Wait for it to finish before starting setup."
+                    .to_string(),
+            );
+            return;
+        }
+
+        self.bottom_pane.set_task_running(true);
+        self.bottom_pane
+            .update_status_header("Security review setup — preparing".to_string());
+
+        let tx = self.app_event_tx.clone();
+        let config = self.config.clone();
+        tokio::spawn(async move {
+            match crate::security_review::run_security_review_setup(&config).await {
+                Ok(result) => tx.send(AppEvent::SecurityReviewSetupComplete { logs: result.logs }),
+                Err(error) => tx.send(AppEvent::SecurityReviewSetupFailed { error }),
+            }
+        });
+    }
+
     pub(crate) fn show_security_review_path_prompt(&mut self, mode: SecurityReviewMode) {
         let tx = self.app_event_tx.clone();
         let repo_root = self.config.cwd.clone();
@@ -4252,6 +4285,29 @@ impl ChatWidget {
             );
             ctx.last_log = Some(header_text);
         }
+    }
+
+    pub(crate) fn on_security_review_setup_complete(&mut self, logs: Vec<String>) {
+        self.bottom_pane.set_task_running(false);
+        self.bottom_pane
+            .update_status_header(String::from("Working"));
+        self.security_review_task = None;
+        for line in logs {
+            self.add_info_message(line, None);
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_security_review_setup_failed(&mut self, error: SecurityReviewFailure) {
+        self.bottom_pane.set_task_running(false);
+        self.bottom_pane
+            .update_status_header(String::from("Working"));
+        self.security_review_task = None;
+        for line in error.logs {
+            self.add_error_message(line);
+        }
+        self.add_error_message(error.message);
+        self.request_redraw();
     }
 
     pub(crate) fn on_security_review_complete(&mut self, result: SecurityReviewResult) {

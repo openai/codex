@@ -18,14 +18,20 @@ use codex_core::ModelProviderInfo;
 use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_core::config::GPT_5_CODEX_MEDIUM_MODEL;
+use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::load_global_mcp_servers;
+use codex_core::config::types::McpServerConfig;
+use codex_core::config::types::McpServerTransportConfig;
 use codex_core::default_client::CodexHttpClient;
 use codex_core::default_client::create_client;
 use codex_core::default_retry_backoff;
 use codex_core::features::Feature;
 use codex_core::git_info::collect_git_info;
 use codex_core::git_info::get_git_repo_root;
+use codex_core::mcp::auth::compute_auth_statuses;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
+use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SubAgentSource;
@@ -34,6 +40,8 @@ use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::user_input::UserInput;
+use codex_rmcp_client::perform_oauth_login;
+use codex_rmcp_client::supports_oauth_login;
 use dirs::home_dir;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
@@ -57,6 +65,7 @@ use std::io::Read;
 use std::io::Write as IoWrite;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command as StdCommand;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
@@ -354,6 +363,11 @@ pub struct SecurityReviewRequest {
     pub skip_auto_scope_confirmation: bool,
     pub auto_scope_prompt: Option<String>,
     pub resume_checkpoint: Option<SecurityReviewCheckpoint>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SecurityReviewSetupResult {
+    pub logs: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -2445,6 +2459,316 @@ fn is_ignored_file(path: &Path) -> bool {
     false
 }
 
+fn linear_mcp_server() -> McpServerConfig {
+    McpServerConfig {
+        transport: McpServerTransportConfig::StreamableHttp {
+            url: "https://mcp.linear.app/mcp".to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+        },
+        enabled: true,
+        startup_timeout_sec: None,
+        tool_timeout_sec: Some(Duration::from_secs(300)),
+        enabled_tools: None,
+        disabled_tools: None,
+    }
+}
+
+fn notion_mcp_server() -> McpServerConfig {
+    McpServerConfig {
+        transport: McpServerTransportConfig::StreamableHttp {
+            url: "https://mcp.notion.com/mcp".to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+        },
+        enabled: true,
+        startup_timeout_sec: None,
+        tool_timeout_sec: Some(Duration::from_secs(300)),
+        enabled_tools: None,
+        disabled_tools: None,
+    }
+}
+
+fn secbot_mcp_server() -> McpServerConfig {
+    McpServerConfig {
+        transport: McpServerTransportConfig::StreamableHttp {
+            url: "http://localhost:8082/mcp".to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+        },
+        enabled: true,
+        startup_timeout_sec: None,
+        tool_timeout_sec: Some(Duration::from_secs(300)),
+        enabled_tools: None,
+        disabled_tools: None,
+    }
+}
+
+fn google_workspace_mcp_server(bin_path: PathBuf) -> McpServerConfig {
+    McpServerConfig {
+        transport: McpServerTransportConfig::Stdio {
+            command: "node".to_string(),
+            args: vec![bin_path.display().to_string()],
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        enabled: true,
+        startup_timeout_sec: None,
+        tool_timeout_sec: Some(Duration::from_secs(300)),
+        enabled_tools: None,
+        disabled_tools: None,
+    }
+}
+
+async fn ensure_google_workspace_plugin(
+    codex_home: &Path,
+    existing: Option<&McpServerConfig>,
+    logs: &mut Vec<String>,
+) -> Result<PathBuf, SecurityReviewFailure> {
+    let dest = codex_home.join("plugins/google-workspace-mcp/bin/mcp-server.js");
+    if dest.exists() {
+        logs.push(format!(
+            "Found google-workspace-mcp binary at {}.",
+            dest.display()
+        ));
+        return Ok(dest);
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(cfg) = existing
+        && let McpServerTransportConfig::Stdio { args, .. } = &cfg.transport
+        && let Some(first) = args.first()
+    {
+        let candidate = PathBuf::from(first);
+        if candidate.exists() {
+            candidates.push(candidate);
+        }
+    }
+
+    let repo_candidate =
+        PathBuf::from("/Users/kh.ai/code/codex/google-workspace-mcp/bin/mcp-server.js");
+    if repo_candidate.exists() {
+        candidates.push(repo_candidate);
+    }
+
+    for candidate in candidates {
+        if candidate.exists() {
+            if let Some(parent) = dest.parent() {
+                tokio_fs::create_dir_all(parent)
+                    .await
+                    .map_err(|err| SecurityReviewFailure {
+                        message: format!(
+                            "Failed to prepare google-workspace-mcp plugin directory {}: {err}",
+                            parent.display()
+                        ),
+                        logs: logs.clone(),
+                    })?;
+            }
+            tokio_fs::copy(&candidate, &dest)
+                .await
+                .map_err(|err| SecurityReviewFailure {
+                    message: format!(
+                        "Failed to copy google-workspace-mcp binary from {} to {}: {err}",
+                        candidate.display(),
+                        dest.display()
+                    ),
+                    logs: logs.clone(),
+                })?;
+            logs.push(format!(
+                "Copied google-workspace-mcp binary from {} to {}.",
+                candidate.display(),
+                dest.display()
+            ));
+            return Ok(dest);
+        }
+    }
+
+    Err(SecurityReviewFailure {
+        message: format!(
+            "google-workspace-mcp binary not found; expected at {}.",
+            dest.display()
+        ),
+        logs: logs.clone(),
+    })
+}
+
+pub async fn run_security_review_setup(
+    config: &Config,
+) -> Result<SecurityReviewSetupResult, SecurityReviewFailure> {
+    let codex_home = config.codex_home.clone();
+    let mut logs = Vec::new();
+
+    if let Err(mut err) = check_executable_available("node") {
+        logs.append(&mut err.logs);
+        return Err(SecurityReviewFailure {
+            message: err.message,
+            logs,
+        });
+    }
+
+    let mut servers =
+        load_global_mcp_servers(&codex_home)
+            .await
+            .map_err(|err| SecurityReviewFailure {
+                message: format!("Failed to load MCP servers: {err}"),
+                logs: Vec::new(),
+            })?;
+
+    let google_bin =
+        ensure_google_workspace_plugin(&codex_home, servers.get("google-workspace-mcp"), &mut logs)
+            .await?;
+
+    let defaults: [(&str, McpServerConfig); 4] = [
+        ("linear", linear_mcp_server()),
+        ("notion", notion_mcp_server()),
+        (
+            "google-workspace-mcp",
+            google_workspace_mcp_server(google_bin.clone()),
+        ),
+        ("secbot", secbot_mcp_server()),
+    ];
+
+    for (name, desired) in defaults {
+        match servers.get_mut(name) {
+            Some(existing) => {
+                let desired_transport = desired.transport.clone();
+                if !existing.enabled {
+                    existing.enabled = true;
+                    logs.push(format!("Enabled MCP server `{name}`."));
+                }
+                if existing.tool_timeout_sec.is_none() && desired.tool_timeout_sec.is_some() {
+                    existing.tool_timeout_sec = desired.tool_timeout_sec;
+                }
+                if name != "google-workspace-mcp" && existing.transport != desired_transport {
+                    existing.transport = desired_transport.clone();
+                    logs.push(format!(
+                        "Updated MCP server `{name}` to use the default transport."
+                    ));
+                }
+                if name == "google-workspace-mcp" {
+                    match &mut existing.transport {
+                        McpServerTransportConfig::Stdio { args, .. } => {
+                            if args.is_empty() {
+                                args.push(google_bin.display().to_string());
+                            } else if let Some(arg) = args.first_mut() {
+                                *arg = google_bin.display().to_string();
+                            }
+                        }
+                        other => {
+                            if matches!(desired_transport, McpServerTransportConfig::Stdio { .. }) {
+                                *other = desired_transport;
+                            }
+                        }
+                    };
+                }
+            }
+            None => {
+                servers.insert(name.to_string(), desired);
+                logs.push(format!("Added MCP server `{name}`."));
+            }
+        }
+    }
+
+    ConfigEditsBuilder::new(&codex_home)
+        .replace_mcp_servers(&servers)
+        .apply()
+        .await
+        .map_err(|err| SecurityReviewFailure {
+            message: format!("Failed to write MCP servers: {err}"),
+            logs: logs.clone(),
+        })?;
+
+    logs.push(format!(
+        "Saved MCP connector entries to {}.",
+        codex_home.join("config.toml").display()
+    ));
+
+    let auth_statuses =
+        compute_auth_statuses(servers.iter(), config.mcp_oauth_credentials_store_mode).await;
+
+    for target in ["linear", "notion", "secbot"] {
+        if let Some(entry) = auth_statuses.get(target) {
+            match entry.auth_status {
+                McpAuthStatus::NotLoggedIn => {
+                    if let McpServerTransportConfig::StreamableHttp {
+                        url,
+                        http_headers,
+                        env_http_headers,
+                        ..
+                    } = &entry.config.transport
+                    {
+                        match supports_oauth_login(url).await {
+                            Ok(true) => {
+                                logs.push(format!(
+                                    "Launching OAuth login for `{target}` in your browser..."
+                                ));
+                                perform_oauth_login(
+                                    target,
+                                    url,
+                                    config.mcp_oauth_credentials_store_mode,
+                                    http_headers.clone(),
+                                    env_http_headers.clone(),
+                                    &Vec::new(),
+                                )
+                                .await
+                                .map_err(|err| {
+                                    SecurityReviewFailure {
+                                        message: format!(
+                                            "OAuth login failed for `{target}`: {err}"
+                                        ),
+                                        logs: logs.clone(),
+                                    }
+                                })?;
+                                logs.push(format!("OAuth login completed for `{target}`."));
+                            }
+                            Ok(false) => logs.push(format!(
+                                "`{target}` does not advertise OAuth; skipping login."
+                            )),
+                            Err(err) => logs.push(format!(
+                                "Could not check OAuth support for `{target}`: {err}"
+                            )),
+                        }
+                    } else {
+                        logs.push(format!(
+                            "`{target}` is not a streamable HTTP server; skipping OAuth login."
+                        ));
+                    }
+                }
+                McpAuthStatus::BearerToken | McpAuthStatus::OAuth => logs.push(format!(
+                    "`{target}` already authenticated ({}).",
+                    entry.auth_status
+                )),
+                McpAuthStatus::Unsupported => logs.push(format!(
+                    "`{target}` does not support OAuth detection; skipping login."
+                )),
+            }
+        } else {
+            logs.push(format!(
+                "MCP server `{target}` missing after write; skipping OAuth check."
+            ));
+        }
+    }
+
+    Ok(SecurityReviewSetupResult { logs })
+}
+
+fn check_executable_available(name: &str) -> Result<(), SecurityReviewFailure> {
+    let result = StdCommand::new(name).arg("--version").output();
+    match result {
+        Ok(output) if output.status.success() => Ok(()),
+        _ => Err(SecurityReviewFailure {
+            message: format!("{name} is required for security review setup but was not found."),
+            logs: vec![format!(
+                "Install `{name}` and ensure it is on PATH, then rerun /secreview setup."
+            )],
+        }),
+    }
+}
+
 pub async fn run_security_review(
     request: SecurityReviewRequest,
 ) -> Result<SecurityReviewResult, SecurityReviewFailure> {
@@ -2897,6 +3221,7 @@ pub async fn run_security_review(
             &request.provider,
             &request.auth,
             &request.triage_model,
+            auto_scope_prompt.clone(),
             pruned_snippets,
             progress_sender.clone(),
             log_sink.clone(),
@@ -2969,6 +3294,14 @@ pub async fn run_security_review(
     );
 
     let repository_summary = build_repository_summary(&selected_snippets);
+    let bug_scope_prompt = if matches!(mode, SecurityReviewMode::Bugs) {
+        auto_scope_prompt
+            .as_ref()
+            .map(|prompt| prompt.trim().to_string())
+            .filter(|prompt| !prompt.is_empty())
+    } else {
+        None
+    };
     let mut spec_targets: Vec<PathBuf> = if !include_paths.is_empty() {
         include_paths.clone()
     } else {
@@ -3192,6 +3525,7 @@ pub async fn run_security_review(
             request.auth_manager.clone(),
             &repository_summary,
             spec_for_bug_analysis,
+            bug_scope_prompt.as_deref(),
             &request.repo_path,
             &selected_snippets,
             git_link_info.clone(),
@@ -3939,6 +4273,7 @@ async fn triage_files_for_bug_analysis(
     provider: &ModelProviderInfo,
     auth: &Option<CodexAuth>,
     triage_model: &str,
+    scope_prompt: Option<String>,
     snippets: Vec<FileSnippet>,
     progress_sender: Option<AppEventSender>,
     log_sink: Option<Arc<SecurityReviewLogSink>>,
@@ -3961,6 +4296,20 @@ async fn triage_files_for_bug_analysis(
         &mut logs,
         start_message.clone(),
     );
+
+    let scope_prompt = scope_prompt
+        .map(|prompt| prompt.trim().to_string())
+        .filter(|prompt| !prompt.is_empty())
+        .map(Arc::<str>::from);
+    if let Some(prompt) = scope_prompt.as_deref() {
+        let summarized = truncate_text(prompt, MODEL_REASONING_LOG_MAX_GRAPHEMES);
+        push_progress_log(
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+            format!("Guiding file triage with user prompt: {summarized}"),
+        );
+    }
 
     let chunk_requests: Vec<FileTriageChunkRequest> = snippets
         .iter()
@@ -4024,6 +4373,7 @@ async fn triage_files_for_bug_analysis(
                 provider.clone(),
                 auth.clone(),
                 triage_model.to_string(),
+                scope_prompt.clone(),
                 request,
                 progress_sender.clone(),
                 log_sink.clone(),
@@ -4057,6 +4407,7 @@ async fn triage_files_for_bug_analysis(
                         provider.clone(),
                         auth.clone(),
                         triage_model.to_string(),
+                        scope_prompt.clone(),
                         next_request,
                         progress_sender.clone(),
                         log_sink.clone(),
@@ -4110,12 +4461,27 @@ async fn triage_files_for_bug_analysis(
     Ok(FileTriageResult { included, logs })
 }
 
+fn build_file_triage_prompt(listing: &str, scope_prompt: Option<&str>) -> String {
+    let base = FILE_TRIAGE_PROMPT_TEMPLATE.replace("{files}", listing);
+    if let Some(prompt) = scope_prompt {
+        let trimmed = prompt.trim();
+        if trimmed.is_empty() {
+            return base;
+        }
+        return format!(
+            "{base}\n\nUser scope prompt:\n{trimmed}\nUse this to keep files that align with the request and skip those that do not."
+        );
+    }
+    base
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn triage_chunk(
     client: &CodexHttpClient,
     provider: ModelProviderInfo,
     auth: Option<CodexAuth>,
     triage_model: String,
+    scope_prompt: Option<Arc<str>>,
     request: FileTriageChunkRequest,
     progress_sender: Option<AppEventSender>,
     log_sink: Option<Arc<SecurityReviewLogSink>>,
@@ -4140,6 +4506,7 @@ async fn triage_chunk(
         total_files
     );
 
+    let prompt = build_file_triage_prompt(&listing, scope_prompt.as_deref());
     let response = await_with_heartbeat(
         progress_sender.clone(),
         "running file triage",
@@ -4150,7 +4517,7 @@ async fn triage_chunk(
             &auth,
             &triage_model,
             FILE_TRIAGE_SYSTEM_PROMPT,
-            &FILE_TRIAGE_PROMPT_TEMPLATE.replace("{files}", &listing),
+            &prompt,
             metrics.clone(),
             0.0,
         ),
@@ -7394,6 +7761,7 @@ async fn analyze_files_individually(
     auth_manager: Arc<AuthManager>,
     repository_summary: &str,
     spec_markdown: Option<&str>,
+    scope_prompt: Option<&str>,
     repo_root: &Path,
     snippets: &[FileSnippet],
     git_link_info: Option<GitLinkInfo>,
@@ -7429,6 +7797,7 @@ async fn analyze_files_individually(
                 auth_manager.clone(),
                 repository_summary,
                 spec_markdown,
+                scope_prompt,
                 repo_root,
                 snippet.clone(),
                 index,
@@ -7479,6 +7848,7 @@ async fn analyze_files_individually(
                         auth_manager.clone(),
                         repository_summary,
                         spec_markdown,
+                        scope_prompt,
                         repo_root,
                         snippet.clone(),
                         index,
@@ -7791,6 +8161,7 @@ async fn analyze_single_file(
     auth_manager: Arc<AuthManager>,
     repository_summary: &str,
     spec_markdown: Option<&str>,
+    scope_prompt: Option<&str>,
     repo_root: &Path,
     snippet: FileSnippet,
     index: usize,
@@ -7808,7 +8179,12 @@ async fn analyze_single_file(
     push_progress_log(&progress_sender, &log_sink, &mut logs, start_message);
 
     let base_context = build_single_file_context(&snippet);
-    let prompt_data = build_bugs_user_prompt(repository_summary, spec_markdown, &base_context);
+    let prompt_data = build_bugs_user_prompt(
+        repository_summary,
+        spec_markdown,
+        &base_context,
+        scope_prompt,
+    );
     for line in &prompt_data.logs {
         push_progress_log(&progress_sender, &log_sink, &mut logs, line.clone());
     }
@@ -10225,9 +10601,26 @@ fn build_bugs_user_prompt(
     repository_summary: &str,
     spec_markdown: Option<&str>,
     code_context: &str,
+    scope_prompt: Option<&str>,
 ) -> BugPromptData {
+    let scope_reminder = scope_prompt
+        .and_then(|prompt| {
+            let trimmed = prompt.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                let normalized = trimmed
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                Some(format!("- User scope prompt: {normalized}\n- After reading the file, if it does not meaningfully relate to that scope, skip it and move on (respond with `no bugs found` for this file).\n"))
+            }
+        })
+        .unwrap_or_default();
     let repository_section = format!("# Repository context\n{repository_summary}\n");
-    let code_and_task = BUGS_USER_CODE_AND_TASK.replace("{code_context}", code_context);
+    let code_and_task = BUGS_USER_CODE_AND_TASK
+        .replace("{code_context}", code_context)
+        .replace("{scope_reminder}", scope_reminder.as_str());
     let base_len = repository_section.len() + code_and_task.len();
     let mut prompt =
         String::with_capacity(base_len + spec_markdown.map(str::len).unwrap_or_default());
