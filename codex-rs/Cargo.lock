@@ -1188,6 +1188,7 @@ dependencies = [
  "regex-lite",
  "reqwest",
  "seccompiler",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",

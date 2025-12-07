@@ -3,6 +3,7 @@ use codex_api::ReqwestTransport;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use http::HeaderMap;
+use semver::Version;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -46,12 +47,9 @@ impl ModelsManager {
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
-        let mut client_version = env!("CARGO_PKG_VERSION");
-        if client_version == "0.0.0" {
-            client_version = "99.99.99";
-        }
+        let client_version = format_client_version(env!("CARGO_PKG_VERSION"));
         let response = client
-            .list_models(client_version, HeaderMap::new())
+            .list_models(&client_version, HeaderMap::new())
             .await
             .map_err(map_api_error)?;
 
@@ -91,12 +89,49 @@ impl ModelsManager {
     }
 }
 
+fn format_client_version(raw_version: &str) -> String {
+    const ZERO_VERSION: &str = "0.0.0";
+    const FALLBACK_VERSION: &str = "99.99.99";
+
+    let trimmed = raw_version.trim();
+    let normalized = Version::parse(trimmed)
+        .map(|version| {
+            let major = version.major;
+            let minor = version.minor;
+            let patch = version.patch;
+            format!("{major}.{minor}.{patch}")
+        })
+        .unwrap_or_else(|_| {
+            let mut numbers = [0i64; 3];
+            let mut parts = trimmed
+                .split(|c| c == '-' || c == '+')
+                .next()
+                .unwrap_or(ZERO_VERSION)
+                .split('.');
+            for slot in &mut numbers {
+                *slot = parts
+                    .next()
+                    .and_then(|segment| segment.parse::<i64>().ok())
+                    .unwrap_or(0)
+                    .max(0);
+            }
+            format!("{}.{}.{}", numbers[0], numbers[1], numbers[2])
+        });
+
+    if normalized == ZERO_VERSION {
+        FALLBACK_VERSION.to_string()
+    } else {
+        normalized
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::CodexAuth;
     use crate::model_provider_info::WireApi;
     use codex_protocol::openai_models::ModelsResponse;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -183,5 +218,27 @@ mod tests {
         );
         assert_eq!(available[1].model, "priority-low");
         assert!(!available[1].is_default);
+    }
+
+    #[test]
+    fn format_client_version_strips_prerelease_segments() {
+        assert_eq!(format_client_version("1.2.3-alpha.4"), "1.2.3");
+        assert_eq!(format_client_version("4.5.6-alpha.7+build.8"), "4.5.6");
+    }
+
+    #[test]
+    fn format_client_version_enforces_three_segments() {
+        assert_eq!(format_client_version("3.4"), "3.4.0");
+        assert_eq!(format_client_version("9"), "9.0.0");
+    }
+
+    #[test]
+    fn format_client_version_maps_placeholder_release() {
+        assert_eq!(format_client_version("0.0.0"), "99.99.99");
+    }
+
+    #[test]
+    fn format_client_version_handles_whitespace() {
+        assert_eq!(format_client_version(" 2.3.4-beta.1 "), "2.3.4");
     }
 }
