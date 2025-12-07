@@ -47,7 +47,7 @@ impl ModelsManager {
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
-        let client_version = format_client_version(env!("CARGO_PKG_VERSION"));
+        let client_version = format_client_version_to_whole(env!("CARGO_PKG_VERSION"));
         let response = client
             .list_models(&client_version, HeaderMap::new())
             .await
@@ -89,7 +89,8 @@ impl ModelsManager {
     }
 }
 
-fn format_client_version(raw_version: &str) -> String {
+/// Convert a client version string to a whole version string (e.g. "1.2.3-alpha.4" -> "1.2.3")
+fn format_client_version_to_whole(raw_version: &str) -> String {
     const ZERO_VERSION: &str = "0.0.0";
     const FALLBACK_VERSION: &str = "99.99.99";
 
@@ -104,7 +105,7 @@ fn format_client_version(raw_version: &str) -> String {
         .unwrap_or_else(|_| {
             let mut numbers = [0i64; 3];
             let mut parts = trimmed
-                .split(|c| c == '-' || c == '+')
+                .split(['-', '+'])
                 .next()
                 .unwrap_or(ZERO_VERSION)
                 .split('.');
@@ -222,23 +223,26 @@ mod tests {
 
     #[test]
     fn format_client_version_strips_prerelease_segments() {
-        assert_eq!(format_client_version("1.2.3-alpha.4"), "1.2.3");
-        assert_eq!(format_client_version("4.5.6-alpha.7+build.8"), "4.5.6");
+        assert_eq!(format_client_version_to_whole("1.2.3-alpha.4"), "1.2.3");
+        assert_eq!(
+            format_client_version_to_whole("4.5.6-alpha.7+build.8"),
+            "4.5.6"
+        );
     }
 
     #[test]
     fn format_client_version_enforces_three_segments() {
-        assert_eq!(format_client_version("3.4"), "3.4.0");
-        assert_eq!(format_client_version("9"), "9.0.0");
+        assert_eq!(format_client_version_to_whole("3.4"), "3.4.0");
+        assert_eq!(format_client_version_to_whole("9"), "9.0.0");
     }
 
     #[test]
     fn format_client_version_maps_placeholder_release() {
-        assert_eq!(format_client_version("0.0.0"), "99.99.99");
+        assert_eq!(format_client_version_to_whole("0.0.0"), "99.99.99");
     }
 
     #[test]
     fn format_client_version_handles_whitespace() {
-        assert_eq!(format_client_version(" 2.3.4-beta.1 "), "2.3.4");
+        assert_eq!(format_client_version_to_whole(" 2.3.4-beta.1 "), "2.3.4");
     }
 }
