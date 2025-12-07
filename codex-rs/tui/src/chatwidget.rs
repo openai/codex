@@ -2199,7 +2199,7 @@ impl ChatWidget {
                     Some(preset.default_reasoning_effort),
                 );
                 SelectionItem {
-                    name: preset.display_name.to_string(),
+                    name: preset.display_name,
                     description,
                     is_current: model == current_model,
                     actions,
