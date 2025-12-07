@@ -1,3 +1,5 @@
+#![cfg(not(target_os = "windows"))]
+// unified exec is not supported on Windows OS
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -5,6 +7,7 @@ use codex_core::features::Feature;
 use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
@@ -16,7 +19,6 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
-use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -38,7 +40,7 @@ use tokio::time::sleep;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
 
-const REMOTE_MODEL_SLUG: &str = "codex-with-unified-exec";
+const REMOTE_MODEL_SLUG: &str = "codex-test";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
@@ -52,8 +54,8 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
 
     let remote_model = ModelInfo {
         slug: REMOTE_MODEL_SLUG.to_string(),
-        display_name: "Remote Unified Exec".to_string(),
-        description: Some("A remote model that requires the unified exec shell".to_string()),
+        display_name: "Remote Test".to_string(),
+        description: Some("A remote model that requires the test shell".to_string()),
         default_reasoning_level: ReasoningEffort::Medium,
         supported_reasoning_levels: vec![ReasoningEffortPreset {
             effort: ReasoningEffort::Medium,
@@ -77,8 +79,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         config.features.enable(Feature::RemoteModels);
-        config.features.enable(Feature::UnifiedExec);
-        config.use_experimental_unified_exec_tool = true;
         config.model = "gpt-5.1".to_string();
     });
 
@@ -119,9 +119,9 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         })
         .await?;
 
-    let call_id = "remote-unified-exec";
+    let call_id = "call";
     let args = json!({
-        "cmd": "/bin/echo remote unified exec",
+        "cmd": "/bin/echo call",
         "yield_time_ms": 250,
     });
     let responses = vec![
@@ -141,7 +141,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
-                text: "run unified exec".into(),
+                text: "run call".into(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
