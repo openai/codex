@@ -1603,7 +1603,24 @@ impl ChatComposer {
                 .find(|(_, c)| c.is_whitespace())
                 .map(|(i, _)| i)
                 .unwrap_or(first_line.len());
-            cursor <= token_end
+
+            let maybe_command_name = &first_line[1..token_end];
+            let rest_after_token = first_line[token_end..].trim_start();
+
+            // Validation rules:
+            // - If name is empty (input is exactly '/' so far), only show the popup
+            //   when there is no non-whitespace content after the '/' token.
+            //   This prevents recalled texts like "/ test" from activating command mode.
+            // - Otherwise, require that the typed name is a prefix of any built-in command.
+            let looks_like_prefix = if maybe_command_name.is_empty() {
+                rest_after_token.is_empty()
+            } else {
+                built_in_slash_commands()
+                    .into_iter()
+                    .any(|(cmd_name, _)| cmd_name.starts_with(maybe_command_name))
+            };
+
+            looks_like_prefix && cursor <= token_end
         } else {
             false
         };
