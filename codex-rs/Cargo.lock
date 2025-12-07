@@ -1256,11 +1256,14 @@ name = "codex-exec-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "async-trait",
  "clap",
  "codex-core",
  "codex-execpolicy",
+ "exec_server_test_support",
  "libc",
+ "maplit",
  "path-absolutize",
  "pretty_assertions",
  "rmcp",
@@ -1273,6 +1276,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "which",
 ]
 
 [[package]]
@@ -2499,6 +2503,18 @@ dependencies = [
  "futures-core",
  "nom",
  "pin-project-lite",
+]
+
+[[package]]
+name = "exec_server_test_support"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "codex-core",
+ "rmcp",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
