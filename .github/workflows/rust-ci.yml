@@ -385,6 +385,28 @@ jobs:
             /opt/ghc
           sudo apt-get remove -y docker.io docker-compose podman buildah
 
+      # Ensure brew includes this fix so that brew's shellenv.sh loads
+      # cleanly in the Codex sandbox (it is frequently eval'd via .zprofile
+      # for Brew users, including the macOS runners on GitHub):
+      #
+      # https://github.com/Homebrew/brew/pull/21157
+      #
+      # Once brew 5.0.5 is released and is the default on macOS runners, this
+      # step can be removed.
+      - name: Upgrade brew
+        if: ${{ startsWith(matrix.runner, 'macos') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew --version
+          git -C "$(brew --repo)" fetch origin
+          git -C "$(brew --repo)" checkout main
+          git -C "$(brew --repo)" reset --hard origin/main
+          export HOMEBREW_UPDATE_TO_TAG=0
+          brew update
+          brew upgrade
+          brew --version
+
       - uses: dtolnay/rust-toolchain@1.90
         with:
           targets: ${{ matrix.target }}
