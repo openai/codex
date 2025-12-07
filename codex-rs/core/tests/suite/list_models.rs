@@ -1,7 +1,6 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
-use codex_core::openai_models::codex_auto_model_presets;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -31,25 +30,21 @@ async fn list_models_returns_chatgpt_models() -> Result<()> {
 }
 
 fn expected_models_for_api_key() -> Vec<ModelPreset> {
-    let mut models = codex_auto_model_presets();
-    models.extend(vec![
+    vec![
         gpt_5_1_codex_max(),
         gpt_5_1_codex(),
         gpt_5_1_codex_mini(),
         gpt_5_1(),
-    ]);
-    models
+    ]
 }
 
 fn expected_models_for_chatgpt() -> Vec<ModelPreset> {
-    let mut models = codex_auto_model_presets();
-    models.extend(vec![
+    vec![
         gpt_5_1_codex_max(),
         gpt_5_1_codex(),
         gpt_5_1_codex_mini(),
         gpt_5_1(),
-    ]);
-    models
+    ]
 }
 
 fn gpt_5_1_codex_max() -> ModelPreset {
