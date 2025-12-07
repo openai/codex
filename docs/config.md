@@ -349,6 +349,8 @@ Though using this option may also be necessary if you try to use Codex in enviro
 
 ### tools.\*
 
+These `[tools]` configuration options are deprecated. Use `[features]` instead (see [Feature flags](#feature-flags)).
+
 Use the optional `[tools]` table to toggle built-in tools that the agent may call. `web_search` stays off unless you opt in, while `view_image` is now enabled by default:
 
 ```toml
@@ -356,8 +358,6 @@ Use the optional `[tools]` table to toggle built-in tools that the agent may cal
 web_search = true   # allow Codex to issue first-party web searches without prompting you (deprecated)
 view_image = false  # disable image uploads (they're enabled by default)
 ```
-
-`web_search` is deprecated; use the `web_search_request` feature flag instead.
 
 The `view_image` toggle is useful when you want to include screenshots or diagrams from your repo without pasting them manually. Codex still respects sandboxing: it can only attach files inside the workspace roots you allow.
 
