@@ -73,7 +73,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         &server,
         ModelsResponse {
             models: vec![remote_model],
-            etag: None,
+            etag: String::new(),
         },
     )
     .await;

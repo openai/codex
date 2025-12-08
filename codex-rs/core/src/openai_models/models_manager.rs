@@ -77,6 +77,8 @@ impl ModelsManager {
             .await
             .map_err(map_api_error)?;
 
+        let etag = (!etag.is_empty()).then_some(etag);
+
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
         self.persist_cache(provider, &models, etag).await;
@@ -222,7 +224,7 @@ mod tests {
         ];
         let response = ModelsResponse {
             models: remote_models.clone(),
-            etag: None,
+            etag: String::new(),
         };
         Mock::given(method("GET"))
             .and(path("/models"))
@@ -266,7 +268,7 @@ mod tests {
         let remote_models = vec![remote_model("cached", "Cached", 5)];
         let response = ModelsResponse {
             models: remote_models.clone(),
-            etag: None,
+            etag: String::new(),
         };
         Mock::given(method("GET"))
             .and(path("/models"))
@@ -304,7 +306,7 @@ mod tests {
         let initial_models = vec![remote_model("stale", "Stale", 1)];
         let first_response = ModelsResponse {
             models: initial_models.clone(),
-            etag: None,
+            etag: String::new(),
         };
         Mock::given(method("GET"))
             .and(path("/models"))
@@ -340,7 +342,7 @@ mod tests {
         let updated_models = vec![remote_model("fresh", "Fresh", 9)];
         let second_response = ModelsResponse {
             models: updated_models.clone(),
-            etag: None,
+            etag: String::new(),
         };
         server.reset().await;
         Mock::given(method("GET"))

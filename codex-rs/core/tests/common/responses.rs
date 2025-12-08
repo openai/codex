@@ -681,7 +681,7 @@ pub async fn start_mock_server() -> MockServer {
         &server,
         ModelsResponse {
             models: Vec::new(),
-            etag: None,
+            etag: String::new(),
         },
     )
     .await;

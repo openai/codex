@@ -74,10 +74,9 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
                 ))
             })?;
 
-        Ok(ModelsResponse {
-            models,
-            etag: header_etag.or(etag),
-        })
+        let etag = header_etag.unwrap_or(etag);
+
+        Ok(ModelsResponse { models, etag })
     }
 }
 
@@ -111,7 +110,7 @@ mod tests {
                 last_request: Arc::new(Mutex::new(None)),
                 body: Arc::new(ModelsResponse {
                     models: Vec::new(),
-                    etag: None,
+                    etag: String::new(),
                 }),
             }
         }
@@ -123,8 +122,8 @@ mod tests {
             *self.last_request.lock().unwrap() = Some(req);
             let body = serde_json::to_vec(&*self.body).unwrap();
             let mut headers = HeaderMap::new();
-            if let Some(etag) = &self.body.etag {
-                headers.insert(ETAG, etag.parse().unwrap());
+            if !self.body.etag.is_empty() {
+                headers.insert(ETAG, self.body.etag.parse().unwrap());
             }
             Ok(Response {
                 status: StatusCode::OK,
@@ -169,7 +168,7 @@ mod tests {
     async fn appends_client_version_query() {
         let response = ModelsResponse {
             models: Vec::new(),
-            etag: None,
+            etag: String::new(),
         };
 
         let transport = CapturingTransport {
@@ -223,7 +222,7 @@ mod tests {
                 }))
                 .unwrap(),
             ],
-            etag: None,
+            etag: String::new(),
         };
 
         let transport = CapturingTransport {
@@ -252,7 +251,7 @@ mod tests {
     async fn list_models_includes_etag() {
         let response = ModelsResponse {
             models: Vec::new(),
-            etag: Some("\"abc\"".to_string()),
+            etag: "\"abc\"".to_string(),
         };
 
         let transport = CapturingTransport {
@@ -272,6 +271,6 @@ mod tests {
             .expect("request should succeed");
 
         assert_eq!(result.models.len(), 0);
-        assert_eq!(result.etag.as_deref(), Some("\"abc\""));
+        assert_eq!(result.etag, "\"abc\"");
     }
 }
