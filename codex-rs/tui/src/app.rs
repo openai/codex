@@ -127,7 +127,7 @@ async fn handle_model_migration_prompt_if_needed(
     auth_mode: Option<AuthMode>,
     models_manager: Arc<ModelsManager>,
 ) -> Option<AppExitInfo> {
-    let available_models = models_manager.available_models.read().await.clone();
+    let available_models = models_manager.list_models().await;
     let upgrade = available_models
         .iter()
         .find(|preset| preset.model == config.model)
@@ -139,12 +139,12 @@ async fn handle_model_migration_prompt_if_needed(
         migration_config_key,
     }) = upgrade
     {
-        if !migration_prompt_allows_auth_mode(auth_mode, migration_config_key) {
+        if !migration_prompt_allows_auth_mode(auth_mode, migration_config_key.as_str()) {
             return None;
         }
 
         let target_model = target_model.to_string();
-        let hide_prompt_flag = migration_prompt_hidden(config, migration_config_key);
+        let hide_prompt_flag = migration_prompt_hidden(config, migration_config_key.as_str());
         if !should_show_model_migration_prompt(
             &config.model,
             &target_model,
@@ -154,7 +154,7 @@ async fn handle_model_migration_prompt_if_needed(
             return None;
         }
 
-        let prompt_copy = migration_copy_for_config(migration_config_key);
+        let prompt_copy = migration_copy_for_config(migration_config_key.as_str());
         match run_model_migration_prompt(tui, prompt_copy).await {
             ModelMigrationOutcome::Accepted => {
                 app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
@@ -700,6 +700,9 @@ impl App {
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
+            AppEvent::OpenAllModelsPopup { models } => {
+                self.chat_widget.open_all_models_popup(models);
+            }
             AppEvent::OpenFullAccessConfirmation { preset } => {
                 self.chat_widget.open_full_access_confirmation(preset);
             }
@@ -799,20 +802,17 @@ impl App {
                     .await
                 {
                     Ok(()) => {
-                        let reasoning_label = Self::reasoning_label(effort);
-                        if let Some(profile) = profile {
-                            self.chat_widget.add_info_message(
-                                format!(
-                                    "Model changed to {model} {reasoning_label} for {profile} profile"
-                                ),
-                                None,
-                            );
-                        } else {
-                            self.chat_widget.add_info_message(
-                                format!("Model changed to {model} {reasoning_label}"),
-                                None,
-                            );
+                        let mut message = format!("Model changed to {model}");
+                        if let Some(label) = Self::reasoning_label_for(&model, effort) {
+                            message.push(' ');
+                            message.push_str(label);
                         }
+                        if let Some(profile) = profile {
+                            message.push_str(" for ");
+                            message.push_str(profile);
+                            message.push_str(" profile");
+                        }
+                        self.chat_widget.add_info_message(message, None);
                     }
                     Err(err) => {
                         tracing::error!(
@@ -1010,6 +1010,13 @@ impl App {
             Some(ReasoningEffortConfig::XHigh) => "xhigh",
             None | Some(ReasoningEffortConfig::None) => "default",
         }
+    }
+
+    fn reasoning_label_for(
+        model: &str,
+        reasoning_effort: Option<ReasoningEffortConfig>,
+    ) -> Option<&'static str> {
+        (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
     }
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {

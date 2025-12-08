@@ -74,6 +74,11 @@ pub(crate) enum AppEvent {
         model: ModelPreset,
     },
 
+    /// Open the full model picker (non-auto models).
+    OpenAllModelsPopup {
+        models: Vec<ModelPreset>,
+    },
+
     /// Open the confirmation prompt before enabling full access mode.
     OpenFullAccessConfirmation {
         preset: ApprovalPreset,

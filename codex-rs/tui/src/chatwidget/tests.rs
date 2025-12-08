@@ -961,9 +961,11 @@ fn active_blob(chat: &ChatWidget) -> String {
 }
 
 fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
-    chat.models_manager
-        .available_models
-        .blocking_read()
+    let models = chat
+        .models_manager
+        .try_list_models()
+        .expect("models lock available");
+    models
         .iter()
         .find(|&preset| preset.model == model)
         .cloned()
@@ -1964,7 +1966,7 @@ fn reasoning_popup_escape_returns_to_model_popup() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
     let after_escape = render_bottom_popup(&chat, 80);
-    assert!(after_escape.contains("Select Model and Effort"));
+    assert!(after_escape.contains("Select Model"));
     assert!(!after_escape.contains("Select Reasoning Level"));
 }
 
@@ -2906,6 +2908,39 @@ fn warning_event_adds_warning_history_cell() {
         rendered.contains("test warning message"),
         "warning cell missing content: {rendered}"
     );
+}
+
+#[test]
+fn stream_recovery_restores_previous_status_header() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    chat.handle_codex_event(Event {
+        id: "task".into(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
+    });
+    drain_insert_history(&mut rx);
+    chat.handle_codex_event(Event {
+        id: "retry".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: "Reconnecting... 1/5".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+        }),
+    });
+    drain_insert_history(&mut rx);
+    chat.handle_codex_event(Event {
+        id: "delta".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "hello".to_string(),
+        }),
+    });
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Working");
+    assert!(chat.retry_status_header.is_none());
 }
 
 #[test]
