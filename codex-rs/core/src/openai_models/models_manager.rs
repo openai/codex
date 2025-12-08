@@ -90,14 +90,21 @@ impl ModelsManager {
 
 /// Convert a client version string to a whole version string (e.g. "1.2.3-alpha.4" -> "1.2.3")
 fn format_client_version_to_whole() -> String {
-    let major = env!("CARGO_PKG_VERSION_MAJOR");
-    let minor = env!("CARGO_PKG_VERSION_MINOR");
-    let patch = env!("CARGO_PKG_VERSION_PATCH");
+    format_client_version_from_parts(
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR"),
+        env!("CARGO_PKG_VERSION_PATCH"),
+    )
+}
+
+fn format_client_version_from_parts(major: &str, minor: &str, patch: &str) -> String {
+    const PLACEHOLDER_VERSION: &str = "0.0.0";
+    const FALLBACK_VERSION: &str = "99.99.99";
 
     let normalized = format!("{major}.{minor}.{patch}");
 
-    if normalized == "0.0.0" {
-        "99.99.99".to_string()
+    if normalized == PLACEHOLDER_VERSION {
+        FALLBACK_VERSION.to_string()
     } else {
         normalized
     }
@@ -109,7 +116,6 @@ mod tests {
     use crate::CodexAuth;
     use crate::model_provider_info::WireApi;
     use codex_protocol::openai_models::ModelsResponse;
-    use pretty_assertions::assert_eq;
     use serde_json::json;
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -196,5 +202,27 @@ mod tests {
         );
         assert_eq!(available[1].model, "priority-low");
         assert!(!available[1].is_default);
+    }
+
+    #[test]
+    fn format_client_version_matches_embedded_version() {
+        let expected = format!(
+            "{}.{}.{}",
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            env!("CARGO_PKG_VERSION_MINOR"),
+            env!("CARGO_PKG_VERSION_PATCH"),
+        );
+        assert_eq!(format_client_version_to_whole(), expected);
+    }
+
+    #[test]
+    fn format_client_version_uses_three_segments() {
+        assert_eq!(format_client_version_from_parts("1", "2", "3"), "1.2.3");
+        assert_eq!(format_client_version_from_parts("8", "0", "4"), "8.0.4");
+    }
+
+    #[test]
+    fn format_client_version_replaces_placeholder() {
+        assert_eq!(format_client_version_from_parts("0", "0", "0"), "99.99.99");
     }
 }
