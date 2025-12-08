@@ -956,9 +956,11 @@ fn active_blob(chat: &ChatWidget) -> String {
 }
 
 fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
-    chat.models_manager
-        .available_models
-        .blocking_read()
+    let models = chat
+        .models_manager
+        .try_list_models()
+        .expect("models lock available");
+    models
         .iter()
         .find(|&preset| preset.model == model)
         .cloned()

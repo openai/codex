@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tokio::sync::TryLockError;
 use tracing::error;
 
 use super::cache;
@@ -31,7 +32,7 @@ const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 #[derive(Debug)]
 pub struct ModelsManager {
     // todo(aibrahim) merge available_models and model family creation into one struct
-    pub available_models: RwLock<Vec<ModelPreset>>,
+    available_models: RwLock<Vec<ModelPreset>>,
     pub remote_models: RwLock<Vec<ModelInfo>>,
     pub auth_manager: Arc<AuthManager>,
     etag: RwLock<Option<String>>,
@@ -83,6 +84,16 @@ impl ModelsManager {
         *self.etag.write().await = etag.clone();
         self.persist_cache(provider, &models, etag).await;
         Ok(models)
+    }
+
+    pub async fn list_models(&self) -> Vec<ModelPreset> {
+        self.available_models.read().await.clone()
+    }
+
+    pub fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
+        self.available_models
+            .try_read()
+            .map(|models| models.clone())
     }
 
     /// Look up the requested model family while applying remote metadata overrides.
@@ -242,7 +253,7 @@ mod tests {
         let cached_remote = manager.remote_models.read().await.clone();
         assert_eq!(cached_remote, remote_models);
 
-        let available = manager.available_models.read().await.clone();
+        let available = manager.list_models().await;
         assert_eq!(available.len(), 2);
         assert_eq!(available[0].model, "priority-high");
         assert!(
