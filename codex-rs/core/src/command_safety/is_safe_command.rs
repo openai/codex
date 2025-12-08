@@ -54,7 +54,6 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
             "cd" |
             "cut" |
             "echo" |
-            "env" |
             "expr" |
             "false" |
             "grep" |
