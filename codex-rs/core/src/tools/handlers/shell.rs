@@ -148,6 +148,20 @@ impl ToolHandler for ShellCommandHandler {
         matches!(payload, ToolPayload::Function { .. })
     }
 
+    fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return true;
+        };
+
+        serde_json::from_str::<ShellCommandToolCallParams>(arguments)
+            .map(|params| {
+                let shell = invocation.session.user_shell();
+                let command = shell.derive_exec_args(&params.command, params.login.unwrap_or(true));
+                !is_known_safe_command(&command)
+            })
+            .unwrap_or(true)
+    }
+
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
             session,
