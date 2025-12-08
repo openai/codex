@@ -1,0 +1,44 @@
+name: linux-code-sign
+description: Sign Linux artifacts with cosign.
+inputs:
+  target:
+    description: Target triple for the artifacts to sign.
+    required: true
+  artifacts-dir:
+    description: Absolute path to the directory containing built binaries to sign.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install cosign
+      uses: sigstore/cosign-installer@v3.7.0
+
+    - name: Cosign Linux artifacts
+      shell: bash
+      env:
+        COSIGN_EXPERIMENTAL: "1"
+        COSIGN_YES: "true"
+        COSIGN_OIDC_CLIENT_ID: "sigstore"
+        COSIGN_OIDC_ISSUER: "https://oauth2.sigstore.dev/auth"
+      run: |
+        set -euo pipefail
+
+        dest="${{ inputs.artifacts-dir }}"
+        if [[ ! -d "$dest" ]]; then
+          echo "Destination $dest does not exist"
+          exit 1
+        fi
+
+        for binary in codex codex-responses-api-proxy; do
+          artifact="${dest}/${binary}"
+          if [[ ! -f "$artifact" ]]; then
+            echo "Binary $artifact not found"
+            exit 1
+          fi
+
+          cosign sign-blob \
+            --yes \
+            --bundle "${artifact}.sigstore" \
+            "$artifact"
+        done

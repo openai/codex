@@ -536,7 +536,7 @@ impl Session {
 
         for (alias, feature) in config.features.legacy_feature_usages() {
             let canonical = feature.key();
-            let summary = format!("`{alias}` is deprecated. Use `{canonical}` instead.");
+            let summary = format!("`{alias}` is deprecated. Use `[features].{canonical}` instead.");
             let details = if alias == canonical {
                 None
             } else {
