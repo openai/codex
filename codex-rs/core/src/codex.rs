@@ -414,7 +414,7 @@ impl Session {
         otel_event_manager: &OtelEventManager,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
-        mut per_turn_config: Config,
+        per_turn_config: Config,
         model_family: ModelFamily,
         conversation_id: ConversationId,
         sub_id: String,
