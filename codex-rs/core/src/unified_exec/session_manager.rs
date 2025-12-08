@@ -90,10 +90,11 @@ fn strip_ansi_escape_sequences(input: &str) -> String {
                             break;
                         }
                         if c == '\u{1b}'
-                            && let Some('\\') = iter.peek().copied() {
-                                let _ = iter.next();
-                                break;
-                            }
+                            && let Some('\\') = iter.peek().copied()
+                        {
+                            let _ = iter.next();
+                            break;
+                        }
                     }
                 }
                 Some(_) => {
@@ -211,7 +212,10 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let raw_text = String::from_utf8_lossy(&collected).to_string();
+        #[cfg(target_os = "windows")]
         let text = normalize_unified_exec_text(&raw_text);
+        #[cfg(not(target_os = "windows"))]
+        let text = raw_text;
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let has_exited = session.has_exited();
         let exit_code = session.exit_code();
@@ -334,7 +338,10 @@ impl UnifiedExecSessionManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let raw_text = String::from_utf8_lossy(&collected).to_string();
+        #[cfg(target_os = "windows")]
         let text = normalize_unified_exec_text(&raw_text);
+        #[cfg(not(target_os = "windows"))]
+        let text = raw_text;
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let original_token_count = approx_token_count(&text);
         let chunk_id = generate_chunk_id();
