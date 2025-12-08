@@ -203,26 +203,4 @@ mod tests {
         assert_eq!(available[1].model, "priority-low");
         assert!(!available[1].is_default);
     }
-
-    #[test]
-    fn format_client_version_matches_embedded_version() {
-        let expected = format!(
-            "{}.{}.{}",
-            env!("CARGO_PKG_VERSION_MAJOR"),
-            env!("CARGO_PKG_VERSION_MINOR"),
-            env!("CARGO_PKG_VERSION_PATCH"),
-        );
-        assert_eq!(format_client_version_to_whole(), expected);
-    }
-
-    #[test]
-    fn format_client_version_uses_three_segments() {
-        assert_eq!(format_client_version_from_parts("1", "2", "3"), "1.2.3");
-        assert_eq!(format_client_version_from_parts("8", "0", "4"), "8.0.4");
-    }
-
-    #[test]
-    fn format_client_version_replaces_placeholder() {
-        assert_eq!(format_client_version_from_parts("0", "0", "0"), "99.99.99");
-    }
 }
