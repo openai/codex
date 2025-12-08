@@ -30,6 +30,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
+use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
@@ -2311,6 +2312,90 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     assert!(
         pruned_probe.contains("UnknownSessionId") || pruned_probe.contains("Unknown process id"),
         "expected probe to fail after pruning, got {pruned_probe:?}"
+    );
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_unified_exec_escape_output_snapshot() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "windows-uexec-escapes";
+    let args = json!({
+        "cmd": "Write-Host \"UEXEC-WINDOWS-ESCAPES\"",
+        "yield_time_ms": 500,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "capture unified_exec escape output on Windows".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert!(!requests.is_empty(), "expected at least one POST request");
+
+    let bodies = requests
+        .iter()
+        .map(|req| req.body_json::<Value>().expect("request json"))
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let parsed = outputs
+        .get(call_id)
+        .expect("missing unified_exec output for Windows escape snapshot");
+
+    let raw_output = parsed.output.as_str();
+
+    // Intentionally failing assertion so CI logs show the raw PTY output,
+    // including any escape sequences produced by ConPTY / PowerShell.
+    let expected = "UEXEC-WINDOWS-ESCAPES\n";
+    assert_eq!(
+        raw_output, expected,
+        "raw unified_exec PTY output on Windows (expected simple marker, got full stream)"
     );
 
     Ok(())
