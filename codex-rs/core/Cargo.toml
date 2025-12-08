@@ -53,7 +53,6 @@ reqwest = { workspace = true, features = ["json", "stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
-semver = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }

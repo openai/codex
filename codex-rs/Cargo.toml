@@ -139,7 +139,7 @@ icu_provider = { version = "2.1", features = ["sync"] }
 ignore = "0.4.23"
 image = { version = "^0.25.9", default-features = false }
 indexmap = "2.12.0"
-insta = "1.43.2"
+insta = "1.44.3"
 itertools = "0.14.0"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.1"
@@ -177,7 +177,6 @@ rmcp = { version = "0.10.0", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 sentry = "0.34.0"
-semver = "1.0.23"
 serde = "1"
 serde_json = "1"
 serde_with = "3.16"
@@ -224,7 +223,7 @@ vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "6"
-wildmatch = "2.5.0"
+wildmatch = "2.6.1"
 
 wiremock = "0.6"
 zeroize = "1.8.2"
