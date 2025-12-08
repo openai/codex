@@ -127,7 +127,7 @@ async fn handle_model_migration_prompt_if_needed(
     auth_mode: Option<AuthMode>,
     models_manager: Arc<ModelsManager>,
 ) -> Option<AppExitInfo> {
-    let available_models = models_manager.available_models.read().await.clone();
+    let available_models = models_manager.list_models().await;
     let upgrade = available_models
         .iter()
         .find(|preset| preset.model == config.model)
@@ -139,12 +139,12 @@ async fn handle_model_migration_prompt_if_needed(
         migration_config_key,
     }) = upgrade
     {
-        if !migration_prompt_allows_auth_mode(auth_mode, migration_config_key) {
+        if !migration_prompt_allows_auth_mode(auth_mode, migration_config_key.as_str()) {
             return None;
         }
 
         let target_model = target_model.to_string();
-        let hide_prompt_flag = migration_prompt_hidden(config, migration_config_key);
+        let hide_prompt_flag = migration_prompt_hidden(config, migration_config_key.as_str());
         if !should_show_model_migration_prompt(
             &config.model,
             &target_model,
@@ -154,7 +154,7 @@ async fn handle_model_migration_prompt_if_needed(
             return None;
         }
 
-        let prompt_copy = migration_copy_for_config(migration_config_key);
+        let prompt_copy = migration_copy_for_config(migration_config_key.as_str());
         match run_model_migration_prompt(tui, prompt_copy).await {
             ModelMigrationOutcome::Accepted => {
                 app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
