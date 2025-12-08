@@ -105,7 +105,7 @@ impl ModelFamily {
         (context_window * 9) / 10
     }
 
-    fn finalize_context_defaults(mut self) -> Self {
+    fn finalize_auto_compact_default(mut self) -> Self {
         if self.auto_compact_token_limit.is_none()
             && let Some(context_window) = self.context_window
         {
@@ -125,7 +125,7 @@ macro_rules! model_family {
             slug: $slug.to_string(),
             family: $family.to_string(),
             needs_special_apply_patch_instructions: false,
-            context_window: None,
+            context_window: Some(CONTEXT_WINDOW_272K),
             auto_compact_token_limit: None,
             supports_reasoning_summaries: false,
             reasoning_summary_format: ReasoningSummaryFormat::None,
@@ -145,7 +145,7 @@ macro_rules! model_family {
         $(
             mf.$key = $value;
         )*
-        mf.finalize_context_defaults()
+        mf.finalize_auto_compact_default()
     }};
 }
 
@@ -315,7 +315,7 @@ fn derive_default_model_family(model: &str) -> ModelFamily {
         slug: model.to_string(),
         family: model.to_string(),
         needs_special_apply_patch_instructions: false,
-        context_window: None,
+        context_window: Some(CONTEXT_WINDOW_272K),
         auto_compact_token_limit: None,
         supports_reasoning_summaries: false,
         reasoning_summary_format: ReasoningSummaryFormat::None,
@@ -330,7 +330,7 @@ fn derive_default_model_family(model: &str) -> ModelFamily {
         default_reasoning_effort: None,
         truncation_policy: TruncationPolicy::Bytes(10_000),
     }
-    .finalize_context_defaults()
+    .finalize_auto_compact_default()
 }
 
 #[cfg(test)]
