@@ -26,7 +26,6 @@ use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
-use crate::openai_models::model_family::find_family_for_model;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
@@ -1105,17 +1104,11 @@ impl Config {
 
         let forced_login_method = cfg.forced_login_method;
 
+        // todo(aibrahim): make model optional
         let model = model
             .or(config_profile.model)
             .or(cfg.model)
             .unwrap_or_else(default_model);
-
-        let model_family = find_family_for_model(&model);
-
-        let model_context_window = cfg.model_context_window.or(model_family.context_window);
-        let model_auto_compact_token_limit = cfg
-            .model_auto_compact_token_limit
-            .or(model_family.auto_compact_token_limit);
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();
@@ -1162,8 +1155,8 @@ impl Config {
         let config = Self {
             model,
             review_model,
-            model_context_window,
-            model_auto_compact_token_limit,
+            model_context_window: cfg.model_context_window,
+            model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
