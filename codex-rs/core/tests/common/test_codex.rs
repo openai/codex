@@ -11,7 +11,6 @@ use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::features::Feature;
-use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -71,7 +70,6 @@ impl TestCodexBuilder {
         let new_model = model.to_string();
         self.with_config(move |config| {
             config.model = new_model.clone();
-            config.model_family = find_family_for_model(&new_model).expect("model family");
         })
     }
 
@@ -120,6 +118,7 @@ impl TestCodexBuilder {
             config,
             codex: new_conversation.conversation,
             session_configured: new_conversation.session_configured,
+            conversation_manager: Arc::new(conversation_manager),
         })
     }
 
@@ -162,6 +161,7 @@ pub struct TestCodex {
     pub codex: Arc<CodexConversation>,
     pub session_configured: SessionConfiguredEvent,
     pub config: Config,
+    pub conversation_manager: Arc<ConversationManager>,
 }
 
 impl TestCodex {

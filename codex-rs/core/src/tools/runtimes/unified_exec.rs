@@ -10,7 +10,7 @@ use crate::exec::ExecExpiration;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ApprovalRequirement;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxOverride;
@@ -36,7 +36,7 @@ pub struct UnifiedExecRequest {
     pub env: HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
-    pub approval_requirement: ApprovalRequirement,
+    pub exec_approval_requirement: ExecApprovalRequirement,
 }
 
 impl ProvidesSandboxRetryData for UnifiedExecRequest {
@@ -66,7 +66,7 @@ impl UnifiedExecRequest {
         env: HashMap<String, String>,
         with_escalated_permissions: Option<bool>,
         justification: Option<String>,
-        approval_requirement: ApprovalRequirement,
+        exec_approval_requirement: ExecApprovalRequirement,
     ) -> Self {
         Self {
             command,
@@ -74,7 +74,7 @@ impl UnifiedExecRequest {
             env,
             with_escalated_permissions,
             justification,
-            approval_requirement,
+            exec_approval_requirement,
         }
     }
 }
@@ -125,23 +125,37 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         Box::pin(async move {
             with_cached_approval(&session.services, key, || async move {
                 session
-                    .request_command_approval(turn, call_id, command, cwd, reason, risk)
+                    .request_command_approval(
+                        turn,
+                        call_id,
+                        command,
+                        cwd,
+                        reason,
+                        risk,
+                        req.exec_approval_requirement
+                            .proposed_execpolicy_amendment()
+                            .cloned(),
+                    )
                     .await
             })
             .await
         })
     }
 
-    fn approval_requirement(&self, req: &UnifiedExecRequest) -> Option<ApprovalRequirement> {
-        Some(req.approval_requirement.clone())
+    fn exec_approval_requirement(
+        &self,
+        req: &UnifiedExecRequest,
+    ) -> Option<ExecApprovalRequirement> {
+        Some(req.exec_approval_requirement.clone())
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
         if req.with_escalated_permissions.unwrap_or(false)
             || matches!(
-                req.approval_requirement,
-                ApprovalRequirement::Skip {
-                    bypass_sandbox: true
+                req.exec_approval_requirement,
+                ExecApprovalRequirement::Skip {
+                    bypass_sandbox: true,
+                    ..
                 }
             )
         {

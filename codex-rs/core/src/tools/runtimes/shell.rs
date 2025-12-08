@@ -9,7 +9,7 @@ use crate::sandboxing::execute_env;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ApprovalRequirement;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxOverride;
@@ -32,7 +32,7 @@ pub struct ShellRequest {
     pub env: std::collections::HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
-    pub approval_requirement: ApprovalRequirement,
+    pub exec_approval_requirement: ExecApprovalRequirement,
 }
 
 impl ProvidesSandboxRetryData for ShellRequest {
@@ -107,23 +107,34 @@ impl Approvable<ShellRequest> for ShellRuntime {
         Box::pin(async move {
             with_cached_approval(&session.services, key, move || async move {
                 session
-                    .request_command_approval(turn, call_id, command, cwd, reason, risk)
+                    .request_command_approval(
+                        turn,
+                        call_id,
+                        command,
+                        cwd,
+                        reason,
+                        risk,
+                        req.exec_approval_requirement
+                            .proposed_execpolicy_amendment()
+                            .cloned(),
+                    )
                     .await
             })
             .await
         })
     }
 
-    fn approval_requirement(&self, req: &ShellRequest) -> Option<ApprovalRequirement> {
-        Some(req.approval_requirement.clone())
+    fn exec_approval_requirement(&self, req: &ShellRequest) -> Option<ExecApprovalRequirement> {
+        Some(req.exec_approval_requirement.clone())
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {
         if req.with_escalated_permissions.unwrap_or(false)
             || matches!(
-                req.approval_requirement,
-                ApprovalRequirement::Skip {
-                    bypass_sandbox: true
+                req.exec_approval_requirement,
+                ExecApprovalRequirement::Skip {
+                    bypass_sandbox: true,
+                    ..
                 }
             )
         {

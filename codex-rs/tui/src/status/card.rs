@@ -10,6 +10,7 @@ use codex_core::config::Config;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
 use codex_protocol::ConversationId;
+use codex_protocol::account::PlanType;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
@@ -65,6 +66,7 @@ struct StatusHistoryCell {
     rate_limits: StatusRateLimitData,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output(
     config: &Config,
     auth_manager: &AuthManager,
@@ -72,6 +74,7 @@ pub(crate) fn new_status_output(
     context_usage: Option<&TokenUsage>,
     session_id: &Option<ConversationId>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
+    plan_type: Option<PlanType>,
     now: DateTime<Local>,
 ) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
@@ -82,6 +85,7 @@ pub(crate) fn new_status_output(
         context_usage,
         session_id,
         rate_limits,
+        plan_type,
         now,
     );
 
@@ -89,6 +93,7 @@ pub(crate) fn new_status_output(
 }
 
 impl StatusHistoryCell {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         config: &Config,
         auth_manager: &AuthManager,
@@ -96,6 +101,7 @@ impl StatusHistoryCell {
         context_usage: Option<&TokenUsage>,
         session_id: &Option<ConversationId>,
         rate_limits: Option<&RateLimitSnapshotDisplay>,
+        plan_type: Option<PlanType>,
         now: DateTime<Local>,
     ) -> Self {
         let config_entries = create_config_summary_entries(config);
@@ -111,7 +117,7 @@ impl StatusHistoryCell {
             SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
         };
         let agents_summary = compose_agents_summary(config);
-        let account = compose_account_display(auth_manager);
+        let account = compose_account_display(auth_manager, plan_type);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let context_window = config.model_context_window.and_then(|window| {
             context_usage.map(|usage| StatusContextWindowData {

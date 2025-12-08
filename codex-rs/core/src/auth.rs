@@ -32,7 +32,9 @@ use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
 use crate::util::try_parse_error_message;
 use codex_protocol::account::PlanType as AccountPlanType;
+use once_cell::sync::Lazy;
 use serde_json::Value;
+use tempfile::TempDir;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -61,6 +63,8 @@ const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
     "Your access token could not be refreshed. Please log out and sign in again.";
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
+
+static TEST_AUTH_TEMP_DIRS: Lazy<Mutex<Vec<TempDir>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 #[derive(Debug, Error)]
 pub enum RefreshTokenError {
@@ -225,23 +229,6 @@ impl CodexAuth {
                 InternalPlanType::Known(k) => map_known(&k),
                 InternalPlanType::Unknown(_) => AccountPlanType::Unknown,
             })
-    }
-
-    /// Raw plan string from the ID token (including unknown/new plan types).
-    pub fn raw_plan_type(&self) -> Option<String> {
-        self.get_plan_type().map(|plan| match plan {
-            InternalPlanType::Known(k) => format!("{k:?}"),
-            InternalPlanType::Unknown(raw) => raw,
-        })
-    }
-
-    /// Raw internal plan value from the ID token.
-    /// Exposes the underlying `token_data::PlanType` without mapping it to the
-    /// public `AccountPlanType`. Use this when downstream code needs to inspect
-    /// internal/unknown plan strings exactly as issued in the token.
-    pub(crate) fn get_plan_type(&self) -> Option<InternalPlanType> {
-        self.get_current_token_data()
-            .and_then(|t| t.id_token.chatgpt_plan_type)
     }
 
     fn get_current_auth_json(&self) -> Option<AuthDotJson> {
@@ -1041,10 +1028,6 @@ mod tests {
             .expect("auth available");
 
         pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Pro));
-        pretty_assertions::assert_eq!(
-            auth.get_plan_type(),
-            Some(InternalPlanType::Known(InternalKnownPlan::Pro))
-        );
     }
 
     #[test]
@@ -1065,10 +1048,6 @@ mod tests {
             .expect("auth available");
 
         pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Unknown));
-        pretty_assertions::assert_eq!(
-            auth.get_plan_type(),
-            Some(InternalPlanType::Unknown("mystery-tier".to_string()))
-        );
     }
 }
 
@@ -1113,11 +1092,19 @@ impl AuthManager {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    #[expect(clippy::expect_used)]
     /// Create an AuthManager with a specific CodexAuth, for testing only.
     pub fn from_auth_for_testing(auth: CodexAuth) -> Arc<Self> {
         let cached = CachedAuth { auth: Some(auth) };
+        let temp_dir = tempfile::tempdir().expect("temp codex home");
+        let codex_home = temp_dir.path().to_path_buf();
+        TEST_AUTH_TEMP_DIRS
+            .lock()
+            .expect("lock test codex homes")
+            .push(temp_dir);
         Arc::new(Self {
-            codex_home: PathBuf::new(),
+            codex_home,
             inner: RwLock::new(cached),
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
@@ -1127,6 +1114,10 @@ impl AuthManager {
     /// Current cached auth (clone). May be `None` if not logged in or load failed.
     pub fn auth(&self) -> Option<CodexAuth> {
         self.inner.read().ok().and_then(|c| c.auth.clone())
+    }
+
+    pub fn codex_home(&self) -> &Path {
+        &self.codex_home
     }
 
     /// Force a reload of the auth information from auth.json. Returns
@@ -1200,5 +1191,9 @@ impl AuthManager {
         // Always reload to clear any cached auth (even if file absent).
         self.reload();
         Ok(removed)
+    }
+
+    pub fn get_auth_mode(&self) -> Option<AuthMode> {
+        self.auth().map(|a| a.mode)
     }
 }

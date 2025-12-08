@@ -2,9 +2,6 @@
 #![allow(clippy::expect_used)]
 
 use anyhow::Result;
-use codex_core::config::Config;
-use codex_core::features::Feature;
-use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SandboxPolicy;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
@@ -18,6 +15,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::ApplyPatchModelOutput;
 use core_test_support::test_codex::ShellModelOutput;
+use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
@@ -40,20 +38,6 @@ const FIXTURE_JSON: &str = r#"{
     }
 }
 "#;
-
-fn configure_shell_command_model(output_type: ShellModelOutput, config: &mut Config) {
-    if !matches!(output_type, ShellModelOutput::ShellCommand) {
-        return;
-    }
-
-    if let Some(shell_command_family) = find_family_for_model("test-gpt-5-codex") {
-        if config.model_family.shell_type == shell_command_family.shell_type {
-            return;
-        }
-        config.model = shell_command_family.slug.clone();
-        config.model_family = shell_command_family;
-    }
-}
 
 fn shell_responses(
     call_id: &str,
@@ -114,6 +98,24 @@ fn shell_responses(
     }
 }
 
+fn configure_shell_model(
+    builder: TestCodexBuilder,
+    output_type: ShellModelOutput,
+    include_apply_patch_tool: bool,
+) -> TestCodexBuilder {
+    let builder = match (output_type, include_apply_patch_tool) {
+        (ShellModelOutput::ShellCommand, _) => builder.with_model("test-gpt-5-codex"),
+        (ShellModelOutput::LocalShell, true) => builder.with_model("gpt-5.1-codex"),
+        (ShellModelOutput::Shell, true) => builder.with_model("gpt-5.1-codex"),
+        (ShellModelOutput::LocalShell, false) => builder.with_model("codex-mini-latest"),
+        (ShellModelOutput::Shell, false) => builder.with_model("gpt-5"),
+    };
+
+    builder.with_config(move |config| {
+        config.include_apply_patch_tool = include_apply_patch_tool;
+    })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ShellModelOutput::Shell)]
 #[test_case(ShellModelOutput::LocalShell)]
@@ -123,10 +125,7 @@ async fn shell_output_stays_json_without_freeform_apply_patch(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5").with_config(move |config| {
-        config.features.disable(Feature::ApplyPatchFreeform);
-        configure_shell_command_model(output_type, config);
-    });
+    let mut builder = configure_shell_model(test_codex(), output_type, false);
     let test = builder.build(&server).await?;
 
     let call_id = "shell-json";
@@ -178,10 +177,7 @@ async fn shell_output_is_structured_with_freeform_apply_patch(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(move |config| {
-        config.features.enable(Feature::ApplyPatchFreeform);
-        configure_shell_command_model(output_type, config);
-    });
+    let mut builder = configure_shell_model(test_codex(), output_type, true);
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
@@ -226,10 +222,7 @@ async fn shell_output_preserves_fixture_json_without_serialization(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5").with_config(move |config| {
-        config.features.disable(Feature::ApplyPatchFreeform);
-        configure_shell_command_model(output_type, config);
-    });
+    let mut builder = configure_shell_model(test_codex(), output_type, false);
     let test = builder.build(&server).await?;
 
     let fixture_path = test.cwd.path().join("fixture.json");
@@ -293,10 +286,7 @@ async fn shell_output_structures_fixture_with_serialization(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(move |config| {
-        config.features.enable(Feature::ApplyPatchFreeform);
-        configure_shell_command_model(output_type, config);
-    });
+    let mut builder = configure_shell_model(test_codex(), output_type, true);
     let test = builder.build(&server).await?;
 
     let fixture_path = test.cwd.path().join("fixture.json");
@@ -355,10 +345,7 @@ async fn shell_output_for_freeform_tool_records_duration(
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_config(move |config| {
-        config.include_apply_patch_tool = true;
-        configure_shell_command_model(output_type, config);
-    });
+    let mut builder = configure_shell_model(test_codex(), output_type, true);
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
@@ -408,11 +395,9 @@ async fn shell_output_reserializes_truncated_content(output_type: ShellModelOutp
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("gpt-5.1-codex")
-        .with_config(move |config| {
+    let mut builder =
+        configure_shell_model(test_codex(), output_type, true).with_config(move |config| {
             config.tool_output_token_limit = Some(200);
-            configure_shell_command_model(output_type, config);
         });
     let test = builder.build(&server).await?;
 
@@ -713,7 +698,6 @@ async fn shell_output_is_structured_for_nonzero_exit(output_type: ShellModelOutp
         .with_model("gpt-5.1-codex")
         .with_config(move |config| {
             config.include_apply_patch_tool = true;
-            configure_shell_command_model(output_type, config);
         });
     let test = builder.build(&server).await?;
 
@@ -749,7 +733,7 @@ async fn shell_command_output_is_freeform() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
-        configure_shell_command_model(ShellModelOutput::ShellCommand, config);
+        config.include_apply_patch_tool = true;
     });
     let test = builder.build(&server).await?;
 

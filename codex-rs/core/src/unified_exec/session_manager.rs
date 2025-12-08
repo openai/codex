@@ -10,12 +10,13 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::bash::extract_bash_command;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
 use crate::exec_env::create_env;
-use crate::exec_policy::create_approval_requirement_for_command;
+use crate::exec_policy::create_exec_approval_requirement_for_command;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandSource;
@@ -108,6 +109,11 @@ impl UnifiedExecSessionManager {
         }
     }
 
+    pub(crate) async fn release_process_id(&self, process_id: &str) {
+        let mut store = self.session_store.lock().await;
+        store.remove(process_id);
+    }
+
     pub(crate) async fn exec_command(
         &self,
         request: ExecCommandRequest,
@@ -126,7 +132,15 @@ impl UnifiedExecSessionManager {
                 request.justification,
                 context,
             )
-            .await?;
+            .await;
+
+        let session = match session {
+            Ok(session) => session,
+            Err(err) => {
+                self.release_process_id(&request.process_id).await;
+                return Err(err);
+            }
+        };
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
@@ -151,10 +165,25 @@ impl UnifiedExecSessionManager {
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let has_exited = session.has_exited();
         let exit_code = session.exit_code();
-        let sandbox_type = session.sandbox_type();
         let chunk_id = generate_chunk_id();
-        let process_id = if has_exited {
-            None
+        let process_id = request.process_id.clone();
+        if has_exited {
+            self.release_process_id(&request.process_id).await;
+            let exit = exit_code.unwrap_or(-1);
+            Self::emit_exec_end_from_context(
+                context,
+                &request.command,
+                cwd,
+                output.clone(),
+                exit,
+                wall_time,
+                // We always emit the process ID in order to keep consistency between the Begin
+                // event and the End event.
+                Some(process_id),
+            )
+            .await;
+
+            session.check_for_sandbox_denial_with_text(&text).await?;
         } else {
             // Only store session if not exited.
             self.store_session(
@@ -163,47 +192,28 @@ impl UnifiedExecSessionManager {
                 &request.command,
                 cwd.clone(),
                 start,
-                request.process_id.clone(),
+                process_id,
             )
             .await;
-            Some(request.process_id.clone())
-        };
-        let original_token_count = approx_token_count(&text);
 
+            Self::emit_waiting_status(&context.session, &context.turn, &request.command).await;
+        };
+
+        let original_token_count = approx_token_count(&text);
         let response = UnifiedExecResponse {
             event_call_id: context.call_id.clone(),
             chunk_id,
             wall_time,
             output,
-            process_id: process_id.clone(),
+            process_id: if has_exited {
+                None
+            } else {
+                Some(request.process_id.clone())
+            },
             exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
         };
-
-        if !has_exited {
-            Self::emit_waiting_status(&context.session, &context.turn, &request.command).await;
-        }
-
-        // If the command completed during this call, emit an ExecCommandEnd via the emitter.
-        if has_exited {
-            let exit = response.exit_code.unwrap_or(-1);
-            Self::emit_exec_end_from_context(
-                context,
-                &request.command,
-                cwd,
-                response.output.clone(),
-                exit,
-                response.wall_time,
-                // We always emit the process ID in order to keep consistency between the Begin
-                // event and the End event.
-                Some(request.process_id),
-            )
-            .await;
-
-            // Exit code should always be Some
-            sandboxing::check_sandboxing(sandbox_type, &text, exit_code.unwrap_or_default())?;
-        }
 
         Ok(response)
     }
@@ -469,7 +479,11 @@ impl UnifiedExecSessionManager {
         turn: &Arc<TurnContext>,
         command: &[String],
     ) {
-        let command_display = command.join(" ");
+        let command_display = if let Some((_, script)) = extract_bash_command(command) {
+            script.to_string()
+        } else {
+            command.join(" ")
+        };
         let message = format!("Waiting for `{command_display}`");
         session
             .send_event(
@@ -509,10 +523,12 @@ impl UnifiedExecSessionManager {
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
+        let features = context.session.features();
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
-        let approval_requirement = create_approval_requirement_for_command(
+        let exec_approval_requirement = create_exec_approval_requirement_for_command(
             &context.turn.exec_policy,
+            &features,
             command,
             context.turn.approval_policy,
             &context.turn.sandbox_policy,
@@ -525,7 +541,7 @@ impl UnifiedExecSessionManager {
             env,
             with_escalated_permissions,
             justification,
-            approval_requirement,
+            exec_approval_requirement,
         );
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),
@@ -657,39 +673,6 @@ impl UnifiedExecSessionManager {
     pub(crate) async fn terminate_all_sessions(&self) {
         let mut sessions = self.session_store.lock().await;
         sessions.clear();
-    }
-}
-
-mod sandboxing {
-    use super::*;
-    use crate::exec::SandboxType;
-    use crate::exec::is_likely_sandbox_denied;
-    use crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_TOKENS;
-
-    pub(crate) fn check_sandboxing(
-        sandbox_type: SandboxType,
-        text: &str,
-        exit_code: i32,
-    ) -> Result<(), UnifiedExecError> {
-        let exec_output = ExecToolCallOutput {
-            exit_code,
-            stderr: StreamOutput::new(text.to_string()),
-            aggregated_output: StreamOutput::new(text.to_string()),
-            ..Default::default()
-        };
-        if is_likely_sandbox_denied(sandbox_type, &exec_output) {
-            let snippet = formatted_truncate_text(
-                text,
-                TruncationPolicy::Tokens(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
-            );
-            let message = if snippet.is_empty() {
-                format!("Session exited with code {exit_code}")
-            } else {
-                snippet
-            };
-            return Err(UnifiedExecError::sandbox_denied(message, exec_output));
-        }
-        Ok(())
     }
 }
 

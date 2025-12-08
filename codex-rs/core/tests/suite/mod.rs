@@ -15,7 +15,6 @@ pub static CODEX_ALIASES_TEMP_DIR: TempDir = unsafe {
 
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
-#[cfg(not(target_os = "windows"))]
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
@@ -34,6 +33,7 @@ mod grep_files;
 mod items;
 mod json_result;
 mod list_dir;
+mod list_models;
 mod live_cli;
 mod model_overrides;
 mod model_tools;
@@ -41,11 +41,13 @@ mod otel;
 mod prompt_caching;
 mod quota_exceeded;
 mod read_file;
+mod remote_models;
 mod resume;
 mod review;
 mod rmcp_client;
 mod rollout_list_find;
 mod seatbelt;
+mod shell_command;
 mod shell_serialization;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;

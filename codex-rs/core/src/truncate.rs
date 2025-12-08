@@ -26,10 +26,10 @@ impl TruncationPolicy {
         }
     }
 
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: &Config, truncation_policy: TruncationPolicy) -> Self {
         let config_token_limit = config.tool_output_token_limit;
 
-        match config.model_family.truncation_policy {
+        match truncation_policy {
             TruncationPolicy::Bytes(family_bytes) => {
                 if let Some(token_limit) = config_token_limit {
                     Self::Bytes(approx_bytes_for_tokens(token_limit))

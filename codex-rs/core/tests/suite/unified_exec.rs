@@ -1,4 +1,3 @@
-#![cfg(not(target_os = "windows"))]
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
@@ -24,6 +23,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
+use core_test_support::skip_if_windows;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
@@ -155,6 +155,7 @@ fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, ParsedUnifie
 async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let builder = test_codex().with_config(|config| {
         config.include_apply_patch_tool = true;
@@ -279,6 +280,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
 async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -350,6 +352,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 async fn unified_exec_resolves_relative_workdir() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -427,6 +430,7 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
 async fn unified_exec_respects_workdir_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -505,6 +509,7 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
 async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -591,6 +596,7 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
 async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -662,6 +668,7 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
 async fn unified_exec_emits_output_delta_for_write_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -761,6 +768,7 @@ async fn unified_exec_emits_output_delta_for_write_stdin() -> Result<()> {
 async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -877,6 +885,7 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
 async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -984,6 +993,7 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
 async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1076,6 +1086,7 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
 async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1237,6 +1248,7 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
 async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1341,6 +1353,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
 async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1452,6 +1465,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
 async fn unified_exec_streams_after_lagged_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1583,6 +1597,7 @@ PY
 async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1689,6 +1704,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
 async fn unified_exec_formats_large_output_summary() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1774,6 +1790,7 @@ PY
 async fn unified_exec_runs_under_sandbox() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 
@@ -1842,11 +1859,207 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let python = match which::which("python").or_else(|_| which::which("python3")) {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("python not found in PATH, skipping test.");
+            return Ok(());
+        }
+    };
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let startup_call_id = "uexec-python-seatbelt";
+    let startup_args = serde_json::json!({
+        "cmd": format!("{} -i", python.display()),
+        "yield_time_ms": 750,
+    });
+
+    let exit_call_id = "uexec-python-exit";
+    let exit_args = serde_json::json!({
+        "chars": "exit()\n",
+        "session_id": 1000,
+        "yield_time_ms": 750,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                startup_call_id,
+                "exec_command",
+                &serde_json::to_string(&startup_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_function_call(
+                exit_call_id,
+                "write_stdin",
+                &serde_json::to_string(&exit_args)?,
+            ),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-3"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "start python under seatbelt".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert!(!requests.is_empty(), "expected at least one POST request");
+
+    let bodies = requests
+        .iter()
+        .map(|req| req.body_json::<Value>().expect("request json"))
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let startup_output = outputs
+        .get(startup_call_id)
+        .expect("missing python startup output");
+
+    let output_text = startup_output.output.replace("\r\n", "\n");
+    // This assert that we are in a TTY.
+    assert!(
+        output_text.contains(">>>"),
+        "python prompt missing from seatbelt output: {output_text:?}"
+    );
+
+    assert_eq!(
+        startup_output.process_id.as_deref(),
+        Some("1000"),
+        "python session should stay alive for follow-up input"
+    );
+
+    let exit_output = outputs
+        .get(exit_call_id)
+        .expect("missing python exit output");
+
+    assert_eq!(
+        exit_output.exit_code,
+        Some(0),
+        "python should exit cleanly after exit()"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_runs_on_all_platforms() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "uexec";
+    let args = serde_json::json!({
+        "cmd": "echo 'hello crossplat'",
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "summarize large output".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert!(!requests.is_empty(), "expected at least one POST request");
+
+    let bodies = requests
+        .iter()
+        .map(|req| req.body_json::<Value>().expect("request json"))
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let output = outputs.get(call_id).expect("missing output");
+
+    // TODO: Weaker match because windows produces control characters
+    assert_regex_match(".*hello crossplat.*", &output.output);
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore]
 async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
 

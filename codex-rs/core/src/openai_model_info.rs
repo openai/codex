@@ -1,4 +1,4 @@
-use crate::model_family::ModelFamily;
+use crate::openai_models::model_family::ModelFamily;
 
 // Shared constants for commonly used window/token sizes.
 pub(crate) const CONTEXT_WINDOW_272K: i64 = 272_000;

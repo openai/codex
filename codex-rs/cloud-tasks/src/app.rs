@@ -350,6 +350,7 @@ pub enum AppEvent {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use codex_cloud_tasks_client::CloudTaskError;
 
     struct FakeBackend {
         // maps env key to titles
@@ -383,6 +384,17 @@ mod tests {
                 });
             }
             Ok(out)
+        }
+
+        async fn get_task_summary(
+            &self,
+            id: TaskId,
+        ) -> codex_cloud_tasks_client::Result<TaskSummary> {
+            self.list_tasks(None)
+                .await?
+                .into_iter()
+                .find(|t| t.id == id)
+                .ok_or_else(|| CloudTaskError::Msg(format!("Task {} not found", id.0)))
         }
 
         async fn get_task_diff(

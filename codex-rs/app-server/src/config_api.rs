@@ -109,12 +109,17 @@ impl ConfigApi {
 
     async fn apply_edits(
         &self,
-        file_path: String,
+        file_path: Option<String>,
         expected_version: Option<String>,
         edits: Vec<(String, JsonValue, MergeStrategy)>,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
         let allowed_path = self.codex_home.join(CONFIG_FILE_NAME);
-        if !paths_match(&allowed_path, &file_path) {
+        let provided_path = file_path
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| allowed_path.clone());
+
+        if !paths_match(&allowed_path, &provided_path) {
             return Err(config_write_error(
                 ConfigWriteErrorCode::ConfigLayerReadonly,
                 "Only writes to the user config are allowed",
@@ -190,9 +195,16 @@ impl ConfigApi {
             .map(|_| WriteStatus::OkOverridden)
             .unwrap_or(WriteStatus::Ok);
 
+        let file_path = provided_path
+            .canonicalize()
+            .unwrap_or(provided_path.clone())
+            .display()
+            .to_string();
+
         Ok(ConfigWriteResponse {
             status,
             version: updated_layers.user.version.clone(),
+            file_path,
             overridden_metadata: overridden,
         })
     }
@@ -587,15 +599,14 @@ fn canonical_json(value: &JsonValue) -> JsonValue {
     }
 }
 
-fn paths_match(expected: &Path, provided: &str) -> bool {
-    let provided_path = PathBuf::from(provided);
+fn paths_match(expected: &Path, provided: &Path) -> bool {
     if let (Ok(expanded_expected), Ok(expanded_provided)) =
-        (expected.canonicalize(), provided_path.canonicalize())
+        (expected.canonicalize(), provided.canonicalize())
     {
         return expanded_expected == expanded_provided;
     }
 
-    expected == provided_path
+    expected == provided
 }
 
 fn value_at_path<'a>(root: &'a TomlValue, segments: &[String]) -> Option<&'a TomlValue> {
@@ -795,7 +806,7 @@ mod tests {
 
         let result = api
             .write_value(ConfigValueWriteParams {
-                file_path: tmp.path().join(CONFIG_FILE_NAME).display().to_string(),
+                file_path: Some(tmp.path().join(CONFIG_FILE_NAME).display().to_string()),
                 key_path: "approval_policy".to_string(),
                 value: json!("never"),
                 merge_strategy: MergeStrategy::Replace,
@@ -832,7 +843,7 @@ mod tests {
         let api = ConfigApi::new(tmp.path().to_path_buf(), vec![]);
         let error = api
             .write_value(ConfigValueWriteParams {
-                file_path: tmp.path().join(CONFIG_FILE_NAME).display().to_string(),
+                file_path: Some(tmp.path().join(CONFIG_FILE_NAME).display().to_string()),
                 key_path: "model".to_string(),
                 value: json!("gpt-5"),
                 merge_strategy: MergeStrategy::Replace,
@@ -849,6 +860,30 @@ mod tests {
                 .and_then(|d| d.get("config_write_error_code"))
                 .and_then(serde_json::Value::as_str),
             Some("configVersionConflict")
+        );
+    }
+
+    #[tokio::test]
+    async fn write_value_defaults_to_user_config_path() {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), "").unwrap();
+
+        let api = ConfigApi::new(tmp.path().to_path_buf(), vec![]);
+        api.write_value(ConfigValueWriteParams {
+            file_path: None,
+            key_path: "model".to_string(),
+            value: json!("gpt-new"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("write succeeds");
+
+        let contents =
+            std::fs::read_to_string(tmp.path().join(CONFIG_FILE_NAME)).expect("read config");
+        assert!(
+            contents.contains("model = \"gpt-new\""),
+            "config.toml should be updated even when file_path is omitted"
         );
     }
 
@@ -872,7 +907,7 @@ mod tests {
 
         let error = api
             .write_value(ConfigValueWriteParams {
-                file_path: tmp.path().join(CONFIG_FILE_NAME).display().to_string(),
+                file_path: Some(tmp.path().join(CONFIG_FILE_NAME).display().to_string()),
                 key_path: "approval_policy".to_string(),
                 value: json!("bogus"),
                 merge_strategy: MergeStrategy::Replace,
@@ -957,7 +992,7 @@ mod tests {
 
         let result = api
             .write_value(ConfigValueWriteParams {
-                file_path: tmp.path().join(CONFIG_FILE_NAME).display().to_string(),
+                file_path: Some(tmp.path().join(CONFIG_FILE_NAME).display().to_string()),
                 key_path: "approval_policy".to_string(),
                 value: json!("on-request"),
                 merge_strategy: MergeStrategy::Replace,

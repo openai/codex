@@ -7,6 +7,7 @@ use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::openai_models::models_manager::ModelsManager;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
@@ -14,6 +15,7 @@ use crate::rollout::RolloutRecorder;
 use codex_protocol::ConversationId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -35,6 +37,7 @@ pub struct NewConversation {
 pub struct ConversationManager {
     conversations: Arc<RwLock<HashMap<ConversationId, Arc<CodexConversation>>>>,
     auth_manager: Arc<AuthManager>,
+    models_manager: Arc<ModelsManager>,
     session_source: SessionSource,
 }
 
@@ -42,11 +45,13 @@ impl ConversationManager {
     pub fn new(auth_manager: Arc<AuthManager>, session_source: SessionSource) -> Self {
         Self {
             conversations: Arc::new(RwLock::new(HashMap::new())),
-            auth_manager,
+            auth_manager: auth_manager.clone(),
             session_source,
+            models_manager: Arc::new(ModelsManager::new(auth_manager)),
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Construct with a dummy AuthManager containing the provided CodexAuth.
     /// Used for integration tests: should not be used by ordinary business logic.
     pub fn with_auth(auth: CodexAuth) -> Self {
@@ -61,14 +66,19 @@ impl ConversationManager {
     }
 
     pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
-        self.spawn_conversation(config, self.auth_manager.clone())
-            .await
+        self.spawn_conversation(
+            config,
+            self.auth_manager.clone(),
+            self.models_manager.clone(),
+        )
+        .await
     }
 
     async fn spawn_conversation(
         &self,
         config: Config,
         auth_manager: Arc<AuthManager>,
+        models_manager: Arc<ModelsManager>,
     ) -> CodexResult<NewConversation> {
         let CodexSpawnOk {
             codex,
@@ -76,6 +86,7 @@ impl ConversationManager {
         } = Codex::spawn(
             config,
             auth_manager,
+            models_manager,
             InitialHistory::New,
             self.session_source.clone(),
         )
@@ -152,6 +163,7 @@ impl ConversationManager {
         } = Codex::spawn(
             config,
             auth_manager,
+            self.models_manager.clone(),
             initial_history,
             self.session_source.clone(),
         )
@@ -189,9 +201,24 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             conversation_id,
-        } = Codex::spawn(config, auth_manager, history, self.session_source.clone()).await?;
+        } = Codex::spawn(
+            config,
+            auth_manager,
+            self.models_manager.clone(),
+            history,
+            self.session_source.clone(),
+        )
+        .await?;
 
         self.finalize_spawn(codex, conversation_id).await
+    }
+
+    pub async fn list_models(&self) -> Vec<ModelPreset> {
+        self.models_manager.list_models().await
+    }
+
+    pub fn get_models_manager(&self) -> Arc<ModelsManager> {
+        self.models_manager.clone()
     }
 }
 

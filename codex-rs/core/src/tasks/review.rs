@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_conversation_one_shot;
+use crate::protocol::SandboxPolicy;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
@@ -77,6 +78,7 @@ async fn start_review_conversation(
 ) -> Option<async_channel::Receiver<Event>> {
     let config = ctx.client.config();
     let mut sub_agent_config = config.as_ref().clone();
+    sub_agent_config.sandbox_policy = SandboxPolicy::new_read_only_policy();
     // Run with only reviewer rubric — drop outer user_instructions
     sub_agent_config.user_instructions = None;
     // Avoid loading project docs; reviewer only needs findings
@@ -93,6 +95,7 @@ async fn start_review_conversation(
     (run_codex_conversation_one_shot(
         sub_agent_config,
         session.auth_manager(),
+        session.models_manager(),
         input,
         session.clone_session(),
         ctx.clone(),

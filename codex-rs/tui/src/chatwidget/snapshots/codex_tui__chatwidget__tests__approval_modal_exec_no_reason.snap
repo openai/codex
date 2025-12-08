@@ -7,7 +7,7 @@ expression: terminal.backend().vt100().screen().contents()
   $ echo hello world
 
 › 1. Yes, proceed (y)
-  2. Yes, and don't ask again for this command (a)
+  2. Yes, and don't ask again for commands that start with `echo hello world` (p)
   3. No, and tell Codex what to do differently (esc)
 
   Press enter to confirm or esc to cancel

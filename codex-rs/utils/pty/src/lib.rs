@@ -1,3 +1,4 @@
+use core::fmt;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -9,12 +10,19 @@ use std::time::Duration;
 use anyhow::Result;
 use portable_pty::native_pty_system;
 use portable_pty::CommandBuilder;
+use portable_pty::MasterPty;
 use portable_pty::PtySize;
+use portable_pty::SlavePty;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::task::JoinHandle;
+
+pub struct PtyPairWrapper {
+    pub _slave: Option<Box<dyn SlavePty + Send>>,
+    pub _master: Box<dyn MasterPty + Send>,
+}
 
 #[derive(Debug)]
 pub struct ExecCommandSession {
@@ -26,6 +34,15 @@ pub struct ExecCommandSession {
     wait_handle: StdMutex<Option<JoinHandle<()>>>,
     exit_status: Arc<AtomicBool>,
     exit_code: Arc<StdMutex<Option<i32>>>,
+    // PtyPair must be preserved because the process will receive Control+C if the
+    // slave is closed
+    _pair: StdMutex<PtyPairWrapper>,
+}
+
+impl fmt::Debug for PtyPairWrapper {
+    fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Ok(())
+    }
 }
 
 impl ExecCommandSession {
@@ -39,6 +56,7 @@ impl ExecCommandSession {
         wait_handle: JoinHandle<()>,
         exit_status: Arc<AtomicBool>,
         exit_code: Arc<StdMutex<Option<i32>>>,
+        pair: PtyPairWrapper,
     ) -> (Self, broadcast::Receiver<Vec<u8>>) {
         let initial_output_rx = output_tx.subscribe();
         (
@@ -51,6 +69,7 @@ impl ExecCommandSession {
                 wait_handle: StdMutex::new(Some(wait_handle)),
                 exit_status,
                 exit_code,
+                _pair: StdMutex::new(pair),
             },
             initial_output_rx,
         )
@@ -192,6 +211,16 @@ pub async fn spawn_pty_process(
         let _ = exit_tx.send(code);
     });
 
+    let pair = PtyPairWrapper {
+        _slave: if cfg!(windows) {
+            // Keep the slave handle alive on Windows to prevent the process from receiving Control+C
+            Some(pair.slave)
+        } else {
+            None
+        },
+        _master: pair.master,
+    };
+
     let (session, output_rx) = ExecCommandSession::new(
         writer_tx,
         output_tx,
@@ -201,6 +230,7 @@ pub async fn spawn_pty_process(
         wait_handle,
         exit_status,
         exit_code,
+        pair,
     );
 
     Ok(SpawnedPty {

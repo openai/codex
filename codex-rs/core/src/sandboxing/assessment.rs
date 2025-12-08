@@ -10,13 +10,14 @@ use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
+use crate::openai_models::models_manager::ModelsManager;
 use crate::protocol::SandboxPolicy;
 use askama::Template;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
-use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SandboxCommandAssessment;
 use codex_protocol::protocol::SessionSource;
 use futures::StreamExt;
@@ -46,6 +47,7 @@ pub(crate) async fn assess_command(
     auth_manager: Arc<AuthManager>,
     parent_otel: &OtelEventManager,
     conversation_id: ConversationId,
+    models_manager: Arc<ModelsManager>,
     session_source: SessionSource,
     call_id: &str,
     command: &[String],
@@ -124,12 +126,16 @@ pub(crate) async fn assess_command(
         output_schema: Some(sandbox_assessment_schema()),
     };
 
-    let child_otel =
-        parent_otel.with_model(config.model.as_str(), config.model_family.slug.as_str());
+    let model_family = models_manager
+        .construct_model_family(&config.model, &config)
+        .await;
+
+    let child_otel = parent_otel.with_model(config.model.as_str(), model_family.slug.as_str());
 
     let client = ModelClient::new(
         Arc::clone(&config),
         Some(auth_manager),
+        model_family,
         child_otel,
         provider,
         Some(SANDBOX_ASSESSMENT_REASONING_EFFORT),
