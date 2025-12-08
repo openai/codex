@@ -163,7 +163,7 @@ pub enum ConfigLayerName {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]
@@ -177,17 +177,17 @@ pub struct SandboxWorkspaceWrite {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct Tools {
+pub struct ToolsV2 {
     pub web_search: Option<bool>,
     pub view_image: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct Profile {
+pub struct ProfileV2 {
     pub model: Option<String>,
     pub model_provider: Option<String>,
     #[serde(
@@ -203,7 +203,7 @@ pub struct Profile {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct Config {
     pub model: Option<String>,
@@ -226,10 +226,10 @@ pub struct Config {
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
     pub forced_chatgpt_workspace_id: Option<String>,
     pub forced_login_method: Option<ForcedLoginMethod>,
-    pub tools: Option<Tools>,
+    pub tools: Option<ToolsV2>,
     pub profile: Option<String>,
     #[serde(default)]
-    pub profiles: HashMap<String, Profile>,
+    pub profiles: HashMap<String, ProfileV2>,
     pub instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub compact_prompt: Option<String>,
@@ -1825,6 +1825,25 @@ mod tests {
                 id: "search-1".to_string(),
                 query: "docs".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn config_tools_deserializes_with_snake_case_keys() {
+        let config: Config = serde_json::from_value(json!({
+            "tools": {
+                "web_search": true,
+                "view_image": false
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            config.tools,
+            Some(Tools {
+                web_search: Some(true),
+                view_image: Some(false),
+            })
         );
     }
 
