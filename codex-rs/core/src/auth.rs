@@ -1104,6 +1104,11 @@ impl AuthManager {
         self.inner.read().ok().and_then(|c| c.auth.clone())
     }
 
+    /// Location backing this auth manager. Used for ancillary per-user caches.
+    pub fn codex_home(&self) -> &Path {
+        &self.codex_home
+    }
+
     /// Force a reload of the auth information from auth.json. Returns
     /// whether the auth value changed.
     pub fn reload(&self) -> bool {

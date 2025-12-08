@@ -1,11 +1,18 @@
+use chrono::Utc;
 use codex_api::ModelsClient;
 use codex_api::ReqwestTransport;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
+use tracing::error;
 
+use super::cache;
+use super::cache::ModelsCache;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::AuthManager;
@@ -17,29 +24,44 @@ use crate::openai_models::model_family::ModelFamily;
 use crate::openai_models::model_family::find_family_for_model;
 use crate::openai_models::model_presets::builtin_model_presets;
 
+const MODEL_CACHE_FILE: &str = "models_cache.json";
+const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
+
+/// Coordinates remote model discovery plus cached metadata on disk.
 #[derive(Debug)]
 pub struct ModelsManager {
     // todo(aibrahim) merge available_models and model family creation into one struct
     pub available_models: RwLock<Vec<ModelPreset>>,
     pub remote_models: RwLock<Vec<ModelInfo>>,
-    pub etag: String,
     pub auth_manager: Arc<AuthManager>,
+    etag: RwLock<Option<String>>,
+    codex_home: PathBuf,
+    cache_ttl: Duration,
 }
 
 impl ModelsManager {
+    /// Construct a manager scoped to the provided `AuthManager`.
     pub fn new(auth_manager: Arc<AuthManager>) -> Self {
+        let codex_home = auth_manager.codex_home().to_path_buf();
         Self {
             available_models: RwLock::new(builtin_model_presets(auth_manager.get_auth_mode())),
             remote_models: RwLock::new(Vec::new()),
-            etag: String::new(),
             auth_manager,
+            etag: RwLock::new(None),
+            codex_home,
+            cache_ttl: DEFAULT_MODEL_CACHE_TTL,
         }
     }
 
+    /// Fetch the latest remote models, using the on-disk cache when still fresh.
     pub async fn refresh_available_models(
         &self,
         provider: &ModelProviderInfo,
     ) -> CoreResult<Vec<ModelInfo>> {
+        if let Some(models) = self.try_load_cache(provider).await {
+            return Ok(models);
+        }
+
         let auth = self.auth_manager.auth();
         let api_provider = provider.to_api_provider(auth.as_ref().map(|auth| auth.mode))?;
         let api_auth = auth_provider_from_auth(auth.clone(), provider).await?;
@@ -50,21 +72,18 @@ impl ModelsManager {
         if client_version == "0.0.0" {
             client_version = "99.99.99";
         }
-        let response = client
+        let ModelsResponse { models, etag } = client
             .list_models(client_version, HeaderMap::new())
             .await
             .map_err(map_api_error)?;
 
-        let models = response.models;
-        *self.remote_models.write().await = models.clone();
-        let available_models = self.build_available_models().await;
-        {
-            let mut available_models_guard = self.available_models.write().await;
-            *available_models_guard = available_models;
-        }
+        self.apply_remote_models(models.clone()).await;
+        *self.etag.write().await = etag.clone();
+        self.persist_cache(provider, &models, etag).await;
         Ok(models)
     }
 
+    /// Look up the requested model family while applying remote metadata overrides.
     pub async fn construct_model_family(&self, model: &str, config: &Config) -> ModelFamily {
         find_family_for_model(model)
             .with_config_overrides(config)
@@ -72,10 +91,58 @@ impl ModelsManager {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    /// Offline helper that builds a `ModelFamily` without consulting remote state.
     pub fn construct_model_family_offline(model: &str, config: &Config) -> ModelFamily {
         find_family_for_model(model).with_config_overrides(config)
     }
 
+    /// Replace the cached remote models and rebuild the derived presets list.
+    async fn apply_remote_models(&self, models: Vec<ModelInfo>) {
+        *self.remote_models.write().await = models;
+        let available_models = self.build_available_models().await;
+        let mut available_models_guard = self.available_models.write().await;
+        *available_models_guard = available_models;
+    }
+
+    /// Attempt to satisfy the refresh from the cache when it matches the provider and TTL.
+    async fn try_load_cache(&self, provider: &ModelProviderInfo) -> Option<Vec<ModelInfo>> {
+        let cache_path = self.cache_path();
+        let cache = match cache::load_cache(&cache_path).await {
+            Ok(cache) => cache?,
+            Err(err) => {
+                error!("failed to load models cache: {err}");
+                return None;
+            }
+        };
+        if cache.provider_name != provider.name || !cache.is_fresh(self.cache_ttl) {
+            return None;
+        }
+        let models = cache.models.clone();
+        *self.etag.write().await = cache.etag.clone();
+        self.apply_remote_models(models.clone()).await;
+        Some(models)
+    }
+
+    /// Serialize the latest fetch to disk for reuse across future processes.
+    async fn persist_cache(
+        &self,
+        provider: &ModelProviderInfo,
+        models: &[ModelInfo],
+        etag: Option<String>,
+    ) {
+        let cache = ModelsCache {
+            provider_name: provider.name.clone(),
+            fetched_at: Utc::now(),
+            etag,
+            models: models.to_vec(),
+        };
+        let cache_path = self.cache_path();
+        if let Err(err) = cache::save_cache(&cache_path, &cache).await {
+            error!("failed to write models cache: {err}");
+        }
+    }
+
+    /// Convert remote model metadata into picker-ready presets, marking defaults.
     async fn build_available_models(&self) -> Vec<ModelPreset> {
         let mut available_models = self.remote_models.read().await.clone();
         available_models.sort_by(|a, b| b.priority.cmp(&a.priority));
@@ -89,15 +156,22 @@ impl ModelsManager {
         }
         model_presets
     }
+
+    fn cache_path(&self) -> PathBuf {
+        self.codex_home.join(MODEL_CACHE_FILE)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::cache::ModelsCache;
     use super::*;
     use crate::CodexAuth;
+    use crate::auth::AuthCredentialsStoreMode;
     use crate::model_provider_info::WireApi;
     use codex_protocol::openai_models::ModelsResponse;
     use serde_json::json;
+    use tempfile::tempdir;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -148,6 +222,7 @@ mod tests {
         ];
         let response = ModelsResponse {
             models: remote_models.clone(),
+            etag: None,
         };
         Mock::given(method("GET"))
             .and(path("/models"))
@@ -183,5 +258,102 @@ mod tests {
         );
         assert_eq!(available[1].model, "priority-low");
         assert!(!available[1].is_default);
+    }
+
+    #[tokio::test]
+    async fn refresh_available_models_uses_cache_when_fresh() {
+        let server = MockServer::start().await;
+        let remote_models = vec![remote_model("cached", "Cached", 5)];
+        let response = ModelsResponse {
+            models: remote_models.clone(),
+            etag: None,
+        };
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager = Arc::new(AuthManager::new(
+            codex_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::new(auth_manager);
+        let provider = provider_for(server.uri());
+
+        let fetched = manager
+            .refresh_available_models(&provider)
+            .await
+            .expect("first refresh succeeds");
+        assert_eq!(fetched, remote_models);
+
+        // Second call should read from cache and avoid the network.
+        let cached = manager
+            .refresh_available_models(&provider)
+            .await
+            .expect("cached refresh succeeds");
+        assert_eq!(cached, remote_models);
+    }
+
+    #[tokio::test]
+    async fn refresh_available_models_refetches_when_cache_stale() {
+        let server = MockServer::start().await;
+        let initial_models = vec![remote_model("stale", "Stale", 1)];
+        let first_response = ModelsResponse {
+            models: initial_models.clone(),
+            etag: None,
+        };
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&first_response))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager = Arc::new(AuthManager::new(
+            codex_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+        let manager = ModelsManager::new(auth_manager);
+        let provider = provider_for(server.uri());
+
+        manager
+            .refresh_available_models(&provider)
+            .await
+            .expect("initial refresh succeeds");
+
+        // Rewrite cache with an old timestamp so it is treated as stale.
+        let cache_path = codex_home.path().join(MODEL_CACHE_FILE);
+        let contents =
+            std::fs::read_to_string(&cache_path).expect("cache file should exist after refresh");
+        let mut cache: ModelsCache =
+            serde_json::from_str(&contents).expect("cache should deserialize");
+        cache.fetched_at = Utc::now() - chrono::Duration::hours(1);
+        std::fs::write(&cache_path, serde_json::to_string_pretty(&cache).unwrap())
+            .expect("cache rewrite succeeds");
+
+        let updated_models = vec![remote_model("fresh", "Fresh", 9)];
+        let second_response = ModelsResponse {
+            models: updated_models.clone(),
+            etag: None,
+        };
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&second_response))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let refreshed = manager
+            .refresh_available_models(&provider)
+            .await
+            .expect("second refresh succeeds");
+        assert_eq!(refreshed, updated_models);
     }
 }

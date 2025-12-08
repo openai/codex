@@ -8,6 +8,7 @@ use codex_client::RequestTelemetry;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
 use http::Method;
+use http::header::ETAG;
 use std::sync::Arc;
 
 pub struct ModelsClient<T: HttpTransport, A: AuthProvider> {
@@ -59,11 +60,23 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
         )
         .await?;
 
-        serde_json::from_slice::<ModelsResponse>(&resp.body).map_err(|e| {
-            ApiError::Stream(format!(
-                "failed to decode models response: {e}; body: {}",
-                String::from_utf8_lossy(&resp.body)
-            ))
+        let header_etag = resp
+            .headers
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string);
+
+        let ModelsResponse { models, etag } = serde_json::from_slice::<ModelsResponse>(&resp.body)
+            .map_err(|e| {
+                ApiError::Stream(format!(
+                    "failed to decode models response: {e}; body: {}",
+                    String::from_utf8_lossy(&resp.body)
+                ))
+            })?;
+
+        Ok(ModelsResponse {
+            models,
+            etag: header_etag.or(etag),
         })
     }
 }
@@ -86,10 +99,22 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    #[derive(Clone, Default)]
+    #[derive(Clone)]
     struct CapturingTransport {
         last_request: Arc<Mutex<Option<Request>>>,
         body: Arc<ModelsResponse>,
+    }
+
+    impl Default for CapturingTransport {
+        fn default() -> Self {
+            Self {
+                last_request: Arc::new(Mutex::new(None)),
+                body: Arc::new(ModelsResponse {
+                    models: Vec::new(),
+                    etag: None,
+                }),
+            }
+        }
     }
 
     #[async_trait]
@@ -97,9 +122,13 @@ mod tests {
         async fn execute(&self, req: Request) -> Result<Response, TransportError> {
             *self.last_request.lock().unwrap() = Some(req);
             let body = serde_json::to_vec(&*self.body).unwrap();
+            let mut headers = HeaderMap::new();
+            if let Some(etag) = &self.body.etag {
+                headers.insert(ETAG, etag.parse().unwrap());
+            }
             Ok(Response {
                 status: StatusCode::OK,
-                headers: HeaderMap::new(),
+                headers,
                 body: body.into(),
             })
         }
@@ -138,7 +167,10 @@ mod tests {
 
     #[tokio::test]
     async fn appends_client_version_query() {
-        let response = ModelsResponse { models: Vec::new() };
+        let response = ModelsResponse {
+            models: Vec::new(),
+            etag: None,
+        };
 
         let transport = CapturingTransport {
             last_request: Arc::new(Mutex::new(None)),
@@ -191,6 +223,7 @@ mod tests {
                 }))
                 .unwrap(),
             ],
+            etag: None,
         };
 
         let transport = CapturingTransport {
@@ -213,5 +246,32 @@ mod tests {
         assert_eq!(result.models[0].slug, "gpt-test");
         assert_eq!(result.models[0].supported_in_api, true);
         assert_eq!(result.models[0].priority, 1);
+    }
+
+    #[tokio::test]
+    async fn list_models_includes_etag() {
+        let response = ModelsResponse {
+            models: Vec::new(),
+            etag: Some("\"abc\"".to_string()),
+        };
+
+        let transport = CapturingTransport {
+            last_request: Arc::new(Mutex::new(None)),
+            body: Arc::new(response),
+        };
+
+        let client = ModelsClient::new(
+            transport,
+            provider("https://example.com/api/codex"),
+            DummyAuth,
+        );
+
+        let result = client
+            .list_models("0.1.0", HeaderMap::new())
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(result.models.len(), 0);
+        assert_eq!(result.etag.as_deref(), Some("\"abc\""));
     }
 }
