@@ -55,6 +55,7 @@ use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::LogoutChatGptResponse;
 use codex_app_server_protocol::McpServer;
+use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::ModelListParams;
@@ -1938,7 +1939,11 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let McpServerOauthLoginParams { name, scopes } = params;
+        let McpServerOauthLoginParams {
+            name,
+            scopes,
+            timeout_secs,
+        } = params;
 
         let Some(server) = self.config.mcp_servers.get(&name) else {
             let error = JSONRPCErrorError {
@@ -1976,10 +1981,31 @@ impl CodexMessageProcessor {
             http_headers,
             env_http_headers,
             scopes.as_deref().unwrap_or_default(),
+            timeout_secs,
         )
         .await
         {
-            Ok(authorization_url) => {
+            Ok(handle) => {
+                let authorization_url = handle.authorization_url().to_string();
+                let notification_name = name.clone();
+                let outgoing = Arc::clone(&self.outgoing);
+
+                tokio::spawn(async move {
+                    let (success, error) = match handle.wait().await {
+                        Ok(()) => (true, None),
+                        Err(err) => (false, Some(err.to_string())),
+                    };
+
+                    let notification = ServerNotification::McpServerOauthLoginCompleted(
+                        McpServerOauthLoginCompletedNotification {
+                            name: notification_name,
+                            success,
+                            error,
+                        },
+                    );
+                    outgoing.send_server_notification(notification).await;
+                });
+
                 let response = McpServerOauthLoginResponse { authorization_url };
                 self.outgoing.send_response(request_id, response).await;
             }
