@@ -78,6 +78,7 @@ async fn models_client_hits_models_endpoint() {
             priority: 1,
             upgrade: None,
         }],
+        etag: String::new(),
     };
 
     Mock::given(method("GET"))

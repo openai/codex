@@ -427,7 +427,6 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
         request_id,
         serde_json::to_value(CommandExecutionRequestApprovalResponse {
             decision: ApprovalDecision::Decline,
-            accept_settings: None,
         })?,
     )
     .await?;
