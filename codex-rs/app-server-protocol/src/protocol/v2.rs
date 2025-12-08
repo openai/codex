@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::protocol::common::AuthMode;
 use codex_protocol::account::PlanType;
+use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::approvals::SandboxCommandAssessment as CoreSandboxCommandAssessment;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
@@ -287,6 +288,11 @@ v2_enum_from_core!(
 #[ts(export_to = "v2/")]
 pub enum ApprovalDecision {
     Accept,
+    /// Approve and remember the approval for the session.
+    AcceptForSession,
+    AcceptWithExecpolicyAmendment {
+        execpolicy_amendment: ExecPolicyAmendment,
+    },
     Decline,
     Cancel,
 }
@@ -378,6 +384,27 @@ impl From<CoreSandboxCommandAssessment> for SandboxCommandAssessment {
         Self {
             description: value.description,
             risk_level: CommandRiskLevel::from(value.risk_level),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(transparent)]
+#[ts(type = "Array<string>", export_to = "v2/")]
+pub struct ExecPolicyAmendment {
+    pub command: Vec<String>,
+}
+
+impl ExecPolicyAmendment {
+    pub fn into_core(self) -> CoreExecPolicyAmendment {
+        CoreExecPolicyAmendment::new(self.command)
+    }
+}
+
+impl From<CoreExecPolicyAmendment> for ExecPolicyAmendment {
+    fn from(value: CoreExecPolicyAmendment) -> Self {
+        Self {
+            command: value.command().to_vec(),
         }
     }
 }
@@ -1468,15 +1495,8 @@ pub struct CommandExecutionRequestApprovalParams {
     pub reason: Option<String>,
     /// Optional model-provided risk assessment describing the blocked command.
     pub risk: Option<SandboxCommandAssessment>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct CommandExecutionRequestAcceptSettings {
-    /// If true, automatically approve this command for the duration of the session.
-    #[serde(default)]
-    pub for_session: bool,
+    /// Optional proposed execpolicy amendment to allow similar commands without prompting.
+    pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1484,10 +1504,6 @@ pub struct CommandExecutionRequestAcceptSettings {
 #[ts(export_to = "v2/")]
 pub struct CommandExecutionRequestApprovalResponse {
     pub decision: ApprovalDecision,
-    /// Optional approval settings for when the decision is `accept`.
-    /// Ignored if the decision is `decline` or `cancel`.
-    #[serde(default)]
-    pub accept_settings: Option<CommandExecutionRequestAcceptSettings>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
