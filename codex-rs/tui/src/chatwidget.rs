@@ -606,6 +606,7 @@ impl ChatWidget {
                     mode,
                     include_paths: include_paths_for_retry.clone(),
                     scope_prompt: scope_prompt_for_retry.clone(),
+                    linear_issue: None,
                     force_new: true,
                     resume_from: None,
                 });
@@ -685,6 +686,7 @@ impl ChatWidget {
                     mode,
                     include_paths: include_paths_for_retry.clone(),
                     scope_prompt: scope_prompt_for_retry.clone(),
+                    linear_issue: None,
                     force_new: true,
                     resume_from: None,
                 });
@@ -707,6 +709,7 @@ impl ChatWidget {
                     mode: resume_candidate.checkpoint.mode,
                     include_paths: Vec::new(),
                     scope_prompt: None,
+                    linear_issue: None,
                     force_new: false,
                     resume_from: Some(resume_candidate.output_root.clone()),
                 });
@@ -3635,6 +3638,7 @@ impl ChatWidget {
                     mode: SecurityReviewMode::Full,
                     include_paths: Vec::new(),
                     scope_prompt: None,
+                    linear_issue: None,
                     force_new: false,
                     resume_from: None,
                 });
@@ -3651,19 +3655,10 @@ impl ChatWidget {
                     mode: SecurityReviewMode::Bugs,
                     include_paths: Vec::new(),
                     scope_prompt: None,
+                    linear_issue: None,
                     force_new: false,
                     resume_from: None,
                 });
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
-        });
-
-        items.push(SelectionItem {
-            name: "Set up connectors".to_string(),
-            description: Some("Configure Linear, Notion, Google Workspace, and Secbot MCP.".into()),
-            actions: vec![Box::new(|tx: &AppEventSender| {
-                tx.send(AppEvent::StartSecurityReviewSetup);
             })],
             dismiss_on_select: true,
             ..Default::default()
@@ -3692,6 +3687,16 @@ impl ChatWidget {
             ..Default::default()
         });
 
+        items.push(SelectionItem {
+            name: "Set up connectors".to_string(),
+            description: Some("Configure Linear, Notion, Google Workspace, and Secbot MCP.".into()),
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::StartSecurityReviewSetup);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Security review options".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
@@ -3705,6 +3710,7 @@ impl ChatWidget {
         mut mode: SecurityReviewMode,
         include_paths: Vec<String>,
         scope_prompt: Option<String>,
+        linear_issue: Option<String>,
         force_new: bool,
         resume_from: Option<PathBuf>,
     ) {
@@ -3714,6 +3720,13 @@ impl ChatWidget {
                     .to_string(),
             );
             return;
+        }
+
+        let mut linear_issue = linear_issue;
+        if linear_issue.is_none() {
+            if let Some(prompt) = scope_prompt.as_ref() {
+                linear_issue = crate::security_review::extract_linear_issue_ref(prompt);
+            }
         }
 
         let repo_path = self.config.cwd.clone();
@@ -3870,7 +3883,7 @@ impl ChatWidget {
             return;
         }
 
-        let skip_auto_scope_confirmation = resume_from.is_some();
+        let skip_auto_scope_confirmation = resume_from.is_some() || linear_issue.is_some();
 
         let context_paths = if let Some(cp) = resume_checkpoint.as_ref() {
             if cp.scope_display_paths.is_empty() {
@@ -3979,6 +3992,7 @@ impl ChatWidget {
             skip_auto_scope_confirmation,
             auto_scope_prompt: annotated_scope_prompt,
             resume_checkpoint,
+            linear_issue,
         };
 
         let tx = self.app_event_tx.clone();
@@ -4035,42 +4049,64 @@ impl ChatWidget {
             None,
             Box::new(move |input: String| {
                 let trimmed = input.trim();
-                let (include_paths, scope_prompt_override): (Vec<String>, Option<String>) =
-                    if trimmed.is_empty() {
-                        let prompt = match mode {
+                let (include_paths, scope_prompt_override, linear_issue): (
+                    Vec<String>,
+                    Option<String>,
+                    Option<String>,
+                ) = if trimmed.is_empty() {
+                    let prompt = match mode {
                             SecurityReviewMode::Full => "No user scope provided. Choose the 3-8 directories that best represent the production attack surface (core services, externally exposed APIs, authz/authn flows, critical infrastructure). Skip tests, vendor archives, docs, and generated code.".to_string(),
                             SecurityReviewMode::Bugs => "No user scope provided. Pick the smallest set of directories most likely to contain critical or high-risk code paths (externally reachable services, request parsing, auth, secret handling). Ignore tests, vendor archives, docs, and generated code.".to_string(),
                         };
-                        (Vec::new(), Some(prompt))
-                    } else {
-                        let mut collected: Vec<String> = Vec::new();
-                        let mut all_valid = true;
+                    (Vec::new(), Some(prompt), None)
+                } else {
+                    let mut collected: Vec<String> = Vec::new();
+                    let mut all_valid = true;
+                    let mut linear_issue: Option<String> = None;
 
-                        for segment in trimmed.split_whitespace() {
-                            let candidate = if Path::new(segment).is_absolute() {
-                                PathBuf::from(segment)
-                            } else {
-                                repo_root.join(segment)
-                            };
-                            if candidate.exists() {
-                                collected.push(segment.to_string());
-                            } else {
-                                all_valid = false;
-                                break;
+                    for segment in trimmed.split_whitespace() {
+                        if linear_issue.is_none()
+                            && let Some(rest) = segment.strip_prefix("linear:")
+                        {
+                            if !rest.trim().is_empty() {
+                                linear_issue = Some(rest.trim().to_string());
                             }
+                            continue;
                         }
-
-                        if all_valid && !collected.is_empty() {
-                            (collected, None)
+                        let candidate = if Path::new(segment).is_absolute() {
+                            PathBuf::from(segment)
                         } else {
-                            (Vec::new(), Some(trimmed.to_string()))
+                            repo_root.join(segment)
+                        };
+                        if candidate.exists() {
+                            collected.push(segment.to_string());
+                        } else {
+                            all_valid = false;
+                            break;
                         }
-                    };
+                    }
+
+                    if all_valid && !collected.is_empty() {
+                        (collected, None, linear_issue)
+                    } else {
+                        // Treat the entire input as a scope prompt, but still capture linear: token if present.
+                        let li = if linear_issue.is_some() {
+                            linear_issue
+                        } else {
+                            trimmed.split_whitespace().find_map(|t| {
+                                t.strip_prefix("linear:")
+                                    .map(std::string::ToString::to_string)
+                            })
+                        };
+                        (Vec::new(), Some(trimmed.to_string()), li)
+                    }
+                };
 
                 tx.send(AppEvent::StartSecurityReview {
                     mode,
                     include_paths,
                     scope_prompt: scope_prompt_override,
+                    linear_issue,
                     force_new: false,
                     resume_from: None,
                 });

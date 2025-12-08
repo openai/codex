@@ -67,6 +67,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command as StdCommand;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
@@ -210,6 +211,59 @@ pub fn sanitize_repo_slug(repo_path: &Path) -> String {
     } else {
         trimmed
     }
+}
+
+fn write_scope_file(
+    output_root: &Path,
+    repo_root: &Path,
+    scope_display_paths: &[String],
+    linear_issue: Option<&str>,
+) -> std::io::Result<PathBuf> {
+    let path = output_root.join("scope_paths.txt");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut content = String::new();
+    content.push_str("Paths analyzed:\n");
+    if scope_display_paths.is_empty() {
+        content.push_str("- entire repository\n");
+    } else {
+        for path in scope_display_paths {
+            content.push_str("- ");
+            content.push_str(path);
+            content.push('\n');
+        }
+    }
+    content.push_str("\nRepo root: ");
+    content.push_str(&repo_root.display().to_string());
+    if let Some(issue) = linear_issue {
+        content.push_str("\nLinear issue: ");
+        content.push_str(issue);
+    }
+
+    fs::write(&path, content)?;
+    Ok(path)
+}
+
+pub(crate) fn extract_linear_issue_ref(input: &str) -> Option<String> {
+    for token in input.split_whitespace() {
+        if let Some(rest) = token.strip_prefix("linear:") {
+            let trimmed = rest.trim_matches(|ch| ch == ',' || ch == ';');
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"(?i)linear\.app/[^\s]+/issue/([A-Z0-9]+-[0-9]+)|\b([A-Z][A-Z0-9]+-[0-9]+)\b")
+            .expect("linear regex compiles")
+    });
+    re.captures_iter(input)
+        .find_map(|caps| caps.get(1).or_else(|| caps.get(2)))
+        .map(|m| m.as_str().to_string())
 }
 
 fn build_step_title(step: &SecurityReviewPlanItem) -> String {
@@ -363,6 +417,8 @@ pub struct SecurityReviewRequest {
     pub skip_auto_scope_confirmation: bool,
     pub auto_scope_prompt: Option<String>,
     pub resume_checkpoint: Option<SecurityReviewCheckpoint>,
+    // Optional Linear issue reference to sync status and create child tickets.
+    pub linear_issue: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -408,6 +464,7 @@ pub struct SecurityReviewCheckpoint {
     pub(crate) mode: SecurityReviewMode,
     pub(crate) include_paths: Vec<String>,
     pub(crate) scope_display_paths: Vec<String>,
+    pub(crate) scope_file_path: Option<String>,
     pub(crate) auto_scope_prompt: Option<String>,
     pub(crate) triage_model: String,
     pub(crate) model: String,
@@ -2702,6 +2759,52 @@ pub async fn run_security_review_setup(
         if let Some(entry) = auth_statuses.get(target) {
             match entry.auth_status {
                 McpAuthStatus::NotLoggedIn => {
+                    if target == "linear" {
+                        logs.push(
+                            "Linear is not logged in. Running `codex mcp login linear` for first-time setup..."
+                                .to_string(),
+                        );
+                        match Command::new("codex")
+                            .args(["mcp", "login", "linear"])
+                            .output()
+                            .await
+                        {
+                            Ok(output) => {
+                                if output.status.success() {
+                                    let stdout = String::from_utf8_lossy(&output.stdout);
+                                    let stderr = String::from_utf8_lossy(&output.stderr);
+                                    let combined = format!("{stdout}{stderr}");
+                                    let trimmed = combined.trim();
+                                    if !trimmed.is_empty() {
+                                        logs.push(format!(
+                                            "`codex mcp login linear` output:\n{trimmed}"
+                                        ));
+                                    }
+                                    logs.push("Linear MCP login completed.".to_string());
+                                    continue;
+                                }
+                                let stdout = String::from_utf8_lossy(&output.stdout);
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                logs.push(format!(
+                                    "`codex mcp login linear` failed with status {}.\nstdout:\n{}\nstderr:\n{}",
+                                    output.status, stdout.trim(), stderr.trim()
+                                ));
+                                logs.push(
+                                    "Run `codex mcp login linear` manually and re-run /secreview setup."
+                                        .to_string(),
+                                );
+                                continue;
+                            }
+                            Err(err) => {
+                                logs.push(format!("Failed to run `codex mcp login linear`: {err}"));
+                                logs.push(
+                                    "Run `codex mcp login linear` manually and re-run /secreview setup."
+                                        .to_string(),
+                                );
+                                continue;
+                            }
+                        }
+                    }
                     if let McpServerTransportConfig::StreamableHttp {
                         url,
                         http_headers,
@@ -2817,6 +2920,7 @@ pub async fn run_security_review(
     let mut include_paths = request.include_paths.clone();
     let mut scope_display_paths = request.scope_display_paths.clone();
     let mut auto_scope_prompt = request.auto_scope_prompt.clone();
+    let mut linear_issue = request.linear_issue.clone();
     let mut mode = request.mode;
 
     let mut checkpoint = request
@@ -2849,6 +2953,7 @@ pub async fn run_security_review(
             .map(|path| path.to_string_lossy().to_string())
             .collect(),
         scope_display_paths: scope_display_paths.clone(),
+        scope_file_path: None,
         auto_scope_prompt: auto_scope_prompt.clone(),
         triage_model: request.triage_model.clone(),
         model: request.model.clone(),
@@ -2869,6 +2974,8 @@ pub async fn run_security_review(
         classification_table_path: None,
         last_log: None,
     });
+    let mut scope_file_path: Option<PathBuf> =
+        checkpoint.scope_file_path.as_ref().map(PathBuf::from);
 
     if resuming {
         include_paths = checkpoint.include_paths.iter().map(PathBuf::from).collect();
@@ -2877,6 +2984,12 @@ pub async fn run_security_review(
         mode = checkpoint.mode;
     } else {
         checkpoint.plan_statuses = default_plan_statuses(mode);
+    }
+
+    if linear_issue.is_none() {
+        linear_issue = auto_scope_prompt
+            .as_ref()
+            .and_then(|prompt| extract_linear_issue_ref(prompt.as_str()));
     }
 
     let previous_model = checkpoint.model.clone();
@@ -2971,6 +3084,105 @@ pub async fn run_security_review(
     let git_link_info = build_git_link_info(&repo_path).await;
     persist_checkpoint(&mut checkpoint, &mut logs);
 
+    // Initialize Linear status (classification, context gathering, checklist) when requested.
+    if let Some(linear_issue) = linear_issue.as_ref() {
+        let init_prompt = build_linear_init_prompt(
+            linear_issue,
+            &request.model,
+            &repo_path,
+            &request.output_root,
+            mode,
+            &include_paths,
+            &scope_display_paths,
+            scope_file_path.as_deref(),
+            &checkpoint.plan_statuses,
+        );
+        if let Err(err) = run_linear_status_agent(
+            &request.config,
+            &request.provider,
+            request.auth_manager.clone(),
+            &repo_path,
+            progress_sender.clone(),
+            log_sink.clone(),
+            init_prompt,
+            metrics.clone(),
+        )
+        .await
+        {
+            record(
+                &mut logs,
+                format!(
+                    "Linear MCP init failed (continuing without ticket sync): {}",
+                    err.message
+                ),
+            );
+        }
+    }
+
+    let mut auto_scope_conversation: Option<String> = None;
+    if include_paths.is_empty() {
+        if let Some(linear_issue) = linear_issue.as_ref() {
+            record(
+                &mut logs,
+                format!("Fetching Linear context for auto scope (issue: {linear_issue})..."),
+            );
+            match fetch_linear_context_for_auto_scope(
+                &request.config,
+                &request.provider,
+                request.auth_manager.clone(),
+                &repo_path,
+                linear_issue,
+                progress_sender.clone(),
+                log_sink.clone(),
+                metrics.clone(),
+            )
+            .await
+            {
+                Ok((context, context_logs)) => {
+                    for line in context_logs {
+                        record(&mut logs, line);
+                    }
+                    let trimmed = truncate_text(&context, ANALYSIS_CONTEXT_MAX_CHARS);
+                    if trimmed.len() < context.len() {
+                        record(
+                            &mut logs,
+                            format!(
+                                "Linear context trimmed to {} characters for auto scope.",
+                                trimmed.len()
+                            ),
+                        );
+                    }
+                    auto_scope_conversation = Some(trimmed);
+                }
+                Err(err) => {
+                    for line in err.logs {
+                        record(&mut logs, line);
+                    }
+                    record(
+                        &mut logs,
+                        format!(
+                            "Proceeding without Linear context for auto scope: {message}",
+                            message = err.message
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    if include_paths.is_empty()
+        && auto_scope_prompt.is_none()
+        && let Some(context) = auto_scope_conversation.clone()
+    {
+        record(
+            &mut logs,
+            "No explicit scope provided; using Linear issue context to auto-detect scope."
+                .to_string(),
+        );
+        auto_scope_prompt = Some(format!("Linear issue context:\n{context}"));
+        checkpoint.auto_scope_prompt = auto_scope_prompt.clone();
+    }
+
     if include_paths.is_empty()
         && let Some(prompt) = auto_scope_prompt.as_ref().and_then(|value| {
             let trimmed = value.trim();
@@ -2995,7 +3207,14 @@ pub async fn run_security_review(
             auto_scope_model,
             &repo_path,
             prompt,
+            auto_scope_conversation
+                .as_deref()
+                .unwrap_or("No prior exchanges."),
             metrics.clone(),
+            &request.config,
+            request.auth_manager.clone(),
+            progress_sender.clone(),
+            log_sink.clone(),
         )
         .await
         {
@@ -3143,6 +3362,60 @@ pub async fn run_security_review(
     checkpoint.scope_display_paths = scope_display_paths.clone();
     persist_checkpoint(&mut checkpoint, &mut logs);
 
+    let scope_file_exists = scope_file_path
+        .as_ref()
+        .map(|path| path.exists())
+        .unwrap_or(false);
+    if !scope_file_exists {
+        match write_scope_file(
+            &request.output_root,
+            &repo_path,
+            &scope_display_paths,
+            linear_issue.as_deref(),
+        ) {
+            Ok(path) => {
+                scope_file_path = Some(path);
+            }
+            Err(err) => {
+                record(&mut logs, format!("Failed to write scope file: {err}"));
+            }
+        }
+    }
+    if let Some(path) = scope_file_path.as_ref() {
+        checkpoint.scope_file_path = Some(path.display().to_string());
+        persist_checkpoint(&mut checkpoint, &mut logs);
+    }
+
+    // Pull related docs via a helper sub-agent and update Linear to unblock analysis.
+    if let Some(linear_issue) = linear_issue.as_ref() {
+        let prompt = build_linear_related_docs_prompt(
+            linear_issue,
+            &checkpoint.model,
+            &checkpoint,
+            &request.output_root,
+        );
+        if let Err(err) = run_linear_status_agent(
+            &request.config,
+            &request.provider,
+            request.auth_manager.clone(),
+            &repo_path,
+            progress_sender.clone(),
+            log_sink.clone(),
+            prompt,
+            metrics.clone(),
+        )
+        .await
+        {
+            record(
+                &mut logs,
+                format!(
+                    "Linear related-docs helper failed (continuing without it): {}",
+                    err.message
+                ),
+            );
+        }
+    }
+
     let mut plan_tracker =
         SecurityReviewPlanTracker::new(mode, &include_paths, &repo_path, progress_sender.clone());
     plan_tracker.restore_statuses(&checkpoint.plan_statuses);
@@ -3281,6 +3554,30 @@ pub async fn run_security_review(
         selected_snippets = Some(triage.included);
         checkpoint.selected_snippets = selected_snippets.clone();
         persist_checkpoint(&mut checkpoint, &mut logs);
+
+        // Merge triaged file paths into the displayed scope paths for downstream prompts.
+        if let Some(snippets) = selected_snippets.as_ref() {
+            let mut combined: Vec<String> = scope_display_paths.clone();
+            for snippet in snippets {
+                let abs = repo_path.join(&snippet.relative_path);
+                combined.push(display_path_for(&abs, &repo_path));
+            }
+            combined.sort();
+            combined.dedup();
+            if combined != scope_display_paths {
+                scope_display_paths = combined;
+                checkpoint.scope_display_paths = scope_display_paths.clone();
+                persist_checkpoint(&mut checkpoint, &mut logs);
+                if let Err(err) = write_scope_file(
+                    &request.output_root,
+                    &repo_path,
+                    &scope_display_paths,
+                    linear_issue.as_deref(),
+                ) {
+                    record(&mut logs, format!("Failed to update scope file: {err}"));
+                }
+            }
+        }
     } else {
         let count = selected_snippets
             .as_ref()
@@ -3306,12 +3603,54 @@ pub async fn run_security_review(
         )
     {
         plan_tracker.start_step(SecurityReviewPlanStep::GenerateSpecs);
+        if let Some(linear_issue) = linear_issue.as_ref() {
+            let prompt = build_linear_progress_prompt(
+                linear_issue,
+                &checkpoint.model,
+                "Generate system specifications",
+                &plan_tracker.snapshot_statuses(),
+                &checkpoint,
+                &request.output_root,
+            );
+            let _ = run_linear_status_agent(
+                &request.config,
+                &request.provider,
+                request.auth_manager.clone(),
+                &repo_path,
+                progress_sender.clone(),
+                log_sink.clone(),
+                prompt,
+                metrics.clone(),
+            )
+            .await;
+        }
     }
     if !matches!(
         plan_tracker.status_for(SecurityReviewPlanStep::AnalyzeBugs),
         Some(StepStatus::Completed | StepStatus::InProgress)
     ) {
         plan_tracker.start_step(SecurityReviewPlanStep::AnalyzeBugs);
+        if let Some(linear_issue) = linear_issue.as_ref() {
+            let prompt = build_linear_progress_prompt(
+                linear_issue,
+                &checkpoint.model,
+                "Analyze code for bugs",
+                &plan_tracker.snapshot_statuses(),
+                &checkpoint,
+                &request.output_root,
+            );
+            let _ = run_linear_status_agent(
+                &request.config,
+                &request.provider,
+                request.auth_manager.clone(),
+                &repo_path,
+                progress_sender.clone(),
+                log_sink.clone(),
+                prompt,
+                metrics.clone(),
+            )
+            .await;
+        }
     }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
@@ -3953,6 +4292,27 @@ pub async fn run_security_review(
     );
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
+    if let Some(linear_issue) = linear_issue.as_ref() {
+        let prompt = build_linear_progress_prompt(
+            linear_issue,
+            &checkpoint.model,
+            "Assemble report and artifacts",
+            &checkpoint.plan_statuses,
+            &checkpoint,
+            &request.output_root,
+        );
+        let _ = run_linear_status_agent(
+            &request.config,
+            &request.provider,
+            request.auth_manager.clone(),
+            &repo_path,
+            progress_sender.clone(),
+            log_sink.clone(),
+            prompt,
+            metrics.clone(),
+        )
+        .await;
+    }
 
     let (bugs_for_result, bug_snapshots) = build_bug_records(bug_summaries, bug_details);
     let mut report_sections_prefix: Vec<String> = Vec::new();
@@ -4089,6 +4449,43 @@ pub async fn run_security_review(
     checkpoint.status = SecurityReviewCheckpointStatus::Complete;
     persist_checkpoint(&mut checkpoint, &mut logs);
 
+    // Final Linear sync and per-bug ticket creation.
+    if let Some(linear_issue) = linear_issue.as_ref() {
+        let final_prompt = build_linear_finalize_prompt(
+            linear_issue,
+            &checkpoint.model,
+            &checkpoint.plan_statuses,
+            &request.output_root,
+            &checkpoint,
+        );
+        let _ = run_linear_status_agent(
+            &request.config,
+            &request.provider,
+            request.auth_manager.clone(),
+            &repo_path,
+            progress_sender.clone(),
+            log_sink.clone(),
+            final_prompt,
+            metrics.clone(),
+        )
+        .await;
+
+        // Create child tickets (unassigned) for each bug and link back to the review issue.
+        let create_prompt =
+            build_linear_create_tickets_prompt(linear_issue, artifacts.bugs_path.as_path());
+        let _ = run_linear_status_agent(
+            &request.config,
+            &request.provider,
+            request.auth_manager.clone(),
+            &repo_path,
+            progress_sender.clone(),
+            log_sink.clone(),
+            create_prompt,
+            metrics.clone(),
+        )
+        .await;
+    }
+
     let elapsed = overall_start.elapsed();
     let elapsed_display = fmt_elapsed_compact(elapsed.as_secs());
     let metrics_snapshot = metrics.snapshot();
@@ -4170,6 +4567,474 @@ pub async fn run_security_review(
     })
 }
 
+fn render_checklist_markdown(statuses: &HashMap<String, StepStatus>) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let order = [
+        ("generate_specs", "Generate system specifications"),
+        ("threat_model", "Draft threat model"),
+        ("analyze_bugs", "Analyze code for bugs"),
+        ("polish_findings", "Polish, dedupe, and rerank findings"),
+        ("assemble_report", "Assemble report and artifacts"),
+    ];
+    for (slug, title) in order {
+        let status = statuses.get(slug);
+        let mark = match status {
+            Some(StepStatus::Completed) => "[x]",
+            Some(StepStatus::InProgress) => "[~]",
+            _ => "[ ]",
+        };
+        lines.push(format!("- {mark} {title}"));
+    }
+    lines.join("\n")
+}
+
+const LINEAR_SCOPE_CONTEXT_SYSTEM_PROMPT: &str = "Gather the full Linear issue context for a security review without modifying the ticket. Use Linear MCP tools only. Do not plan or reason before acting. Your FIRST action must be a Linear MCP call to fetch the issue by key; your SECOND action must fetch all comments/activity for that same issue. If attachments exist, fetch/describe them. Respond with plaintext only (no code fences). Retry failed Linear calls once, otherwise surface the failure succinctly.";
+
+fn build_linear_scope_context_prompt(issue_ref: &str) -> String {
+    format!(
+        "Collect Linear issue context for `{issue}` to inform auto-scoping.\n\nStrict tool order:\n1) Call Linear MCP to fetch this exact issue immediately (no planning).\n2) Call Linear MCP to fetch ALL comments/activity for the same issue.\n3) If attachments exist, fetch/describe them via Linear MCP.\n\nRequirements:\n- Read the full issue description and attachments.\n- Read ALL activity entries and comments, including authors and timestamps.\n- Capture the current issue status/state and assignee.\n- Do not edit the issue.\n\nOutput (plaintext):\n- One-line summary of the issue intent.\n- Current status/state and assignee.\n- Activity timeline (newest first) with key events.\n- Comments section listing each comment with author, timestamp, and body. Do not skip comments.\n- Attachments (if any) with brief notes.",
+        issue = issue_ref
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn fetch_linear_context_for_auto_scope(
+    config: &Config,
+    provider: &ModelProviderInfo,
+    auth_manager: Arc<AuthManager>,
+    repo_root: &Path,
+    issue_ref: &str,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
+    metrics: Arc<ReviewMetrics>,
+) -> Result<(String, Vec<String>), SecurityReviewFailure> {
+    let mut logs: Vec<String> = Vec::new();
+    let mut lin_config = config.clone();
+    lin_config.model = GPT_5_CODEX_MEDIUM_MODEL.to_string();
+    lin_config.model_provider = provider.clone();
+    lin_config.base_instructions = Some(LINEAR_SCOPE_CONTEXT_SYSTEM_PROMPT.to_string());
+    lin_config.user_instructions = None;
+    lin_config.developer_instructions = None;
+    lin_config.compact_prompt = None;
+    lin_config.cwd = repo_root.to_path_buf();
+    lin_config
+        .features
+        .disable(Feature::ApplyPatchFreeform)
+        .disable(Feature::WebSearchRequest)
+        .disable(Feature::ViewImageTool)
+        .disable(Feature::RmcpClient);
+    lin_config.use_experimental_use_rmcp_client = false;
+
+    let manager = ConversationManager::new(
+        auth_manager,
+        SessionSource::SubAgent(SubAgentSource::Other(
+            "security_review_linear_context".to_string(),
+        )),
+    );
+
+    let conversation = match manager.new_conversation(lin_config).await {
+        Ok(new_conversation) => new_conversation.conversation,
+        Err(err) => {
+            let message = format!("Failed to start Linear context agent: {err}");
+            push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+            return Err(SecurityReviewFailure { message, logs });
+        }
+    };
+
+    let prompt = build_linear_scope_context_prompt(issue_ref);
+    if let Err(err) = conversation
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text { text: prompt }],
+        })
+        .await
+    {
+        let message = format!("Failed to submit Linear context prompt: {err}");
+        push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+        return Err(SecurityReviewFailure { message, logs });
+    }
+
+    let mut last_agent_message: Option<String> = None;
+    let mut last_tool_log: Option<String> = None;
+
+    loop {
+        let event = match conversation.next_event().await {
+            Ok(event) => event,
+            Err(err) => {
+                let message = format!("Linear context agent terminated unexpectedly: {err}");
+                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                return Err(SecurityReviewFailure { message, logs });
+            }
+        };
+
+        record_tool_call_from_event(metrics.as_ref(), &event.msg);
+
+        match event.msg {
+            EventMsg::TaskComplete(done) => {
+                if let Some(msg) = done.last_agent_message {
+                    last_agent_message = Some(msg);
+                }
+                break;
+            }
+            EventMsg::AgentMessage(msg) => last_agent_message = Some(msg.message.clone()),
+            EventMsg::McpToolCallBegin(begin) => {
+                let tool = begin.invocation.tool.clone();
+                let message = format!("Linear context: tool → {tool}");
+                if last_tool_log.as_deref() != Some(message.as_str()) {
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                    last_tool_log = Some(message);
+                }
+            }
+            EventMsg::Warning(warn) => {
+                push_progress_log(&progress_sender, &log_sink, &mut logs, warn.message);
+            }
+            EventMsg::Error(err) => {
+                let message = format!(
+                    "Linear context agent error: {message}",
+                    message = err.message
+                );
+                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                return Err(SecurityReviewFailure { message, logs });
+            }
+            EventMsg::TurnAborted(aborted) => {
+                let message = format!("Linear context agent aborted: {:?}", aborted.reason);
+                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                return Err(SecurityReviewFailure { message, logs });
+            }
+            EventMsg::TokenCount(count) => {
+                if let Some(info) = count.info {
+                    metrics.record_model_call();
+                    metrics.record_usage(&info.last_token_usage);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let response = match last_agent_message.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }) {
+        Some(text) => text,
+        None => {
+            let message = "Linear context agent produced an empty response.".to_string();
+            push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+            return Err(SecurityReviewFailure { message, logs });
+        }
+    };
+
+    let _ = conversation.submit(Op::Shutdown).await;
+
+    Ok((response, logs))
+}
+
+fn build_linear_init_prompt(
+    issue_ref: &str,
+    model_name: &str,
+    repo_root: &Path,
+    output_root: &Path,
+    mode: SecurityReviewMode,
+    include_paths: &[PathBuf],
+    scope_display_paths: &[String],
+    scope_file_path: Option<&Path>,
+    statuses: &HashMap<String, StepStatus>,
+) -> String {
+    let scope = if scope_display_paths.is_empty() {
+        "entire repository".to_string()
+    } else {
+        scope_display_paths.join(", ")
+    };
+    let checklist = render_checklist_markdown(statuses);
+    let scope_file_text = scope_file_path
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(not generated)".to_string());
+    let include_text = if include_paths.is_empty() {
+        "(auto-scoped)".to_string()
+    } else {
+        include_paths
+            .iter()
+            .map(|p| display_path_for(p, repo_root))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "You are a workflow assistant that manages a security review using the configured MCP servers (Linear, Notion, Google Workspace, Secbot).\n\nTask: Using the Linear MCP server, open the issue `{issue}` directly (call `get_issue` first; avoid team or project enumeration unless the key fails).\n\nRules:\n- No long planning steps; fetch the issue immediately with `get_issue`, then proceed.\n- Do not post Linear comments until the full security review is finished; keep all interim updates in the description’s “Security Agent ({model}) - Review Status” block.\n- Prepend a header `# Security Agent ({model}) - Review Status` when you add the status section; do not add any extra automation tagline.\n- Preserve existing status content, key insights, and doc summaries—append or merge updates instead of overwriting.\n- Do not paste full findings or reproduction details into the description; use concise bullets and reference attachments/artifacts instead.\n\nSteps:\n1) Classify the issue. If this is NOT a security_review request, prepend a short note in the status block that automation only runs for security review tickets, then stop.\n2) If it IS a security_review: gather all context from the issue description, attachments, and comments. Open every linked doc (including links inside comments) with the appropriate MCP (Notion or Google Workspace) and read them fully; use Google Workspace MCP to open Google Docs links found in comments. Use Secbot MCP to search for prior contexts, tickets, policies, and recommendations relevant to this issue; reason from the issue context, select only relevant hits, and explain why each matters instead of dumping raw results.\n3) From the collected context, check for missing essentials (e.g., code locations/links, critical docs/flows, required policies). If critical items are missing (e.g., no code links), pause the review and capture the requests in the “Follow-ups / Missing Inputs” subsection of the status block; do not continue until inputs arrive. If most information is present, continue.\n4) Update the Linear issue description by PREPENDING a section titled “Security Agent ({model}) - Review Status” (remove any existing section with that heading first) with:\n   - A header line: `# Security Agent ({model}) - Review Status`\n   - Key points summary (brief bullets; no full findings); inline-link any referenced docs so the summaries point to their sources.\n   - Scope paths being analyzed (use `{scope}`) and note the scope file to upload if missing: {scope_file}\n   - Collected docs (including linked docs and any docs found in comments) with 1–2 line summaries and inline hyperlinks\n   - Secbot Results (relevant contexts or policy docs): summarize briefly why each item matters; when Secbot surfaces similar or relevant tickets, include the assignee and date in the summary\n   - A checklist mirroring the AppSec pipeline steps\n   - A “Follow-ups / Missing Inputs” subsection listing any gaps (docs, features/flows, code locations) that need user input\n   - Artifacts: upload files from the local artifacts directory ({art_dir}) and only reference them after uploading; do not include local filesystem paths or create gists. For file/folder triage or scope details, upload the scope file ({scope_file}) instead of pasting paths.\n\nChecklist:\n{checklist}\n\nRepository: {repo}\nMode: {mode}\nScope: {scope}\nIncluded paths: {include_text}\nArtifacts directory (local): {art_dir}\nScope file (upload): {scope_file}\n\nLocal workspace convention:\n- Keep all repositories under `~/code`.\n- If a required repository is missing under `~/code`, use GitHub CLI to clone a shallow copy (depth=1). Example:\n  `gh repo clone owner/repo ~/code/repo -- --depth=1`\n\nNotes:\n- Preserve the existing description content below the new status section.\n- Do not remove any existing details; prepend the status section.\n- Keep local filesystem paths out of Linear updates; reference uploaded attachments (no gists or external pastes).\n- When resuming, download any relevant attachments locally into the artifacts directory before continuing.",
+        issue = issue_ref,
+        model = model_name,
+        repo = repo_root.display(),
+        mode = mode.as_str(),
+        scope = scope,
+        include_text = include_text,
+        art_dir = output_root.display(),
+        scope_file = scope_file_text,
+    )
+}
+
+fn build_linear_progress_prompt(
+    issue_ref: &str,
+    model_name: &str,
+    step_title: &str,
+    statuses: &HashMap<String, StepStatus>,
+    checkpoint: &SecurityReviewCheckpoint,
+    output_root: &Path,
+) -> String {
+    let checklist = render_checklist_markdown(statuses);
+    let mut artifacts: Vec<String> = Vec::new();
+    if let Some(path) = checkpoint.classification_table_path.as_ref() {
+        artifacts.push(format!("classification_table: {}", path.display()));
+    }
+    if let Some(path) = checkpoint.api_overview_path.as_ref() {
+        artifacts.push(format!("api_overview: {}", path.display()));
+    }
+    if let Some(sn) = checkpoint.bug_snapshot_path.as_ref() {
+        artifacts.push(format!("bug_snapshot: {}", sn.display()));
+    }
+    if let Some(bp) = checkpoint.bugs_path.as_ref() {
+        artifacts.push(format!("bugs_markdown: {}", bp.display()));
+    }
+    if let Some(rp) = checkpoint.report_path.as_ref() {
+        artifacts.push(format!("report_markdown: {}", rp.display()));
+    }
+    if let Some(rh) = checkpoint.report_html_path.as_ref() {
+        artifacts.push(format!("report_html: {}", rh.display()));
+    }
+    let scope_paths_text = if checkpoint.scope_display_paths.is_empty() {
+        "entire repository".to_string()
+    } else {
+        checkpoint.scope_display_paths.join(", ")
+    };
+    let scope_file_text = checkpoint
+        .scope_file_path
+        .as_deref()
+        .unwrap_or("(not generated)");
+    let artifacts_section = if artifacts.is_empty() {
+        String::new()
+    } else {
+        let joined = artifacts.join("\n");
+        format!(
+            "\nKnown local artifacts:\n{joined}\nLocal artifacts root: {root}",
+            joined = joined,
+            root = output_root.display(),
+        )
+    };
+    format!(
+        "Use the Linear MCP to update issue `{issue}` progress.\n\nRules:\n- Open the issue directly by key `{issue}` (call `get_issue` first; avoid team/resource enumeration unless lookup fails).\n- No Linear comments until all security review steps are complete; keep updates in the description’s “Security Agent ({model}) - Review Status” block.\n- Prepend a header `# Security Agent ({model}) - Review Status` when you add the status section; do not add any extra automation tagline. Preserve existing status content, key insights, and doc summaries—append/merge instead of overwriting.\n- Do not paste full findings; reference uploaded artifacts instead.\n- Keep artifact references limited to uploaded attachments; do not expose local filesystem paths or create gists. Upload files directly from the local artifacts directory ({art_root}).\n- Before updating, read any newly linked docs in the description or comments via Notion/Google Workspace MCP (use Google Workspace MCP for Google Docs) and summarize; include inline hyperlinks to the docs in your summary.\n- Check Secbot MCP for any new relevant policies/recommendations; reason from the issue context, explain why results matter, and when Secbot surfaces similar or relevant tickets, capture assignee and date in the summary.\n- Upload/attach the scope file if not already present ({scope_file}) and reference the analyzed scope paths: {scope_paths}. For file/folder triage outputs, upload the local text file instead of creating external pastes.\n\nActions:\n- Update the checklist status for the step: {step}\n- Mention the current scope paths in the status block (scope: {scope_paths}).\n- If new artifacts exist, upload/attach them from the local artifacts directory (no gists or external shares) and reference them in the status block without including local paths.\n- Capture any new gaps (docs, flows, code links) in the “Follow-ups / Missing Inputs” subsection instead of posting comments.\n- If critical inputs (e.g., code links) are still missing, pause and keep them in “Follow-ups / Missing Inputs” until they are provided.\n\nChecklist now:\n{checklist}{artifacts_section}\n\nScope file (upload): {scope_file}\nScope paths: {scope_paths}",
+        issue = issue_ref,
+        model = model_name,
+        step = step_title,
+        checklist = checklist,
+        artifacts_section = artifacts_section,
+        scope_file = scope_file_text,
+        scope_paths = scope_paths_text,
+        art_root = output_root.display(),
+    )
+}
+
+fn build_linear_finalize_prompt(
+    issue_ref: &str,
+    model_name: &str,
+    statuses: &HashMap<String, StepStatus>,
+    output_root: &Path,
+    checkpoint: &SecurityReviewCheckpoint,
+) -> String {
+    let checklist = render_checklist_markdown(statuses);
+    let scope_paths_text = if checkpoint.scope_display_paths.is_empty() {
+        "entire repository".to_string()
+    } else {
+        checkpoint.scope_display_paths.join(", ")
+    };
+    let scope_file_text = checkpoint.scope_file_path.as_deref().unwrap_or("(missing)");
+    let html_path = checkpoint
+        .report_html_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(missing)".to_string());
+    let md_path = checkpoint
+        .report_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(missing)".to_string());
+    format!(
+        "Finalize Linear sync for `{issue}`.\n\nRules:\n- Open the issue directly by key `{issue}` (call `get_issue` first; avoid team/resource enumeration unless lookup fails).\n- Keep the description’s “Security Agent ({model}) - Review Status” block intact with the header `# Security Agent ({model}) - Review Status`; remove any prior instance of this section before writing the new one; do not add any extra automation tagline. Preserve earlier summaries and doc context—append final updates instead of overwriting.\n- Do not paste full findings; reference artifacts and reports instead.\n- Keep artifact references limited to uploaded attachments; do not expose local filesystem paths or create gists. Upload from the local artifacts directory ({root}) first, then reference.\n- Include the analyzed scope paths (scope: {scope_paths}) and ensure the scope file is attached ({scope_file}).\n- If any new docs are referenced (including in comments), read them via Notion/Google Workspace MCP (use Google Workspace MCP for Google Docs) and capture brief summaries with inline hyperlinks to the sources; check Secbot MCP for final policies/recommendations and, when similar or relevant tickets are found, include their assignee and date in the summary.\n\nActions:\n- Ensure the status block reflects the final checklist below and the final scope paths while keeping previous insights.\n- Use this checklist:\n{checklist}\n- Add a final comment containing the full HTML report (inline) and a link to the markdown report; this is the only comment because the review is complete.\n- Upload/attach any remaining artifacts (e.g., snapshot, API overview, classification table, scope file) from the local artifacts directory, then reference them (no gists or local paths).\n\nArtifacts:\n- report_html: {html}\n- report_markdown: {md}\n- scope_file: {scope_file}\n- scope_paths: {scope_paths}\n- artifacts_root: {root}",
+        issue = issue_ref,
+        model = model_name,
+        checklist = checklist,
+        scope_paths = scope_paths_text,
+        scope_file = scope_file_text,
+        html = html_path,
+        md = md_path,
+        root = output_root.display(),
+    )
+}
+
+fn build_linear_create_tickets_prompt(issue_ref: &str, bugs_markdown_path: &Path) -> String {
+    format!(
+        "Create one unassigned Linear ticket per bug finding and link each as a sub-issue (or related issue) to the review ticket `{issue}`.\n\nSource findings: {bugs}\n\nInstructions:\n- Parse the bugs markdown and create concise titles (include severity and component/file).\n- Include reproduction/verification details and recommendations in each ticket body.\n- Do NOT assign anyone.\n- Add links back to the artifacts directory and the review ticket.\n- After creation, add a comment on the review ticket summarizing how many child issues were created and list their keys.\n- Keep everything within the Linear MCP; do not use external network calls.",
+        issue = issue_ref,
+        bugs = bugs_markdown_path.display(),
+    )
+}
+
+fn build_linear_related_docs_prompt(
+    issue_ref: &str,
+    model_name: &str,
+    checkpoint: &SecurityReviewCheckpoint,
+    output_root: &Path,
+) -> String {
+    let scope_paths_text = if checkpoint.scope_display_paths.is_empty() {
+        "entire repository".to_string()
+    } else {
+        checkpoint.scope_display_paths.join(", ")
+    };
+    let scope_file_text = checkpoint
+        .scope_file_path
+        .as_deref()
+        .unwrap_or("(not generated)");
+    format!(
+        "Unblock analysis by gathering related docs and updating the Linear status block for `{issue}`.\n\nSteps:\n- Use Linear MCP to open the issue immediately.\n- Collect all doc links (description + comments), then read them via Notion/Google Workspace MCP; include inline hyperlinks.\n- Use Secbot MCP to find prior contexts/policies related to this issue; reason from the issue context, select only relevant hits, and explain why each matters.\n- Summarize briefly in the description’s “Security Agent ({model}) - Review Status” block under a \"Related Docs / Secbot Results\" section; keep bullets concise.\n- Do not post comments; update only the status block. Keep artifact references to uploaded attachments only (local artifacts root: {art_root}).\n\nReminders:\n- Scope paths: {scope_paths}\n- Scope file: {scope_file}\n- Keep local filesystem paths out of Linear; link uploaded files or remote docs only.",
+        issue = issue_ref,
+        model = model_name,
+        scope_paths = scope_paths_text,
+        scope_file = scope_file_text,
+        art_root = output_root.display(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_linear_status_agent(
+    config: &Config,
+    provider: &ModelProviderInfo,
+    auth_manager: Arc<AuthManager>,
+    repo_root: &Path,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
+    prompt: String,
+    metrics: Arc<ReviewMetrics>,
+) -> Result<(), SecurityReviewFailure> {
+    let mut logs: Vec<String> = Vec::new();
+    let mut lin_config = config.clone();
+    lin_config.model = GPT_5_CODEX_MEDIUM_MODEL.to_string();
+    lin_config.model_provider = provider.clone();
+    lin_config.base_instructions = Some(
+        "Use Linear, Notion, and Google Workspace via MCP tools. Prefer MCP tools for reading/updating issues and documents. When an issue key is provided, open it directly with Linear MCP `get_issue` before any searches; avoid enumerating teams/projects/resources unless direct lookup fails. Keep repositories under ~/code; if a repository is missing under ~/code, use GitHub CLI to clone a shallow copy (depth=1), e.g., `gh repo clone owner/repo ~/code/repo -- --depth=1`."
+            .to_string(),
+    );
+    lin_config.user_instructions = None;
+    lin_config.developer_instructions = None;
+    lin_config.compact_prompt = None;
+    lin_config.cwd = repo_root.to_path_buf();
+    // Keep MCP servers as configured by the user. Avoid risky tools here.
+    lin_config
+        .features
+        .disable(Feature::ApplyPatchFreeform)
+        .disable(Feature::WebSearchRequest)
+        .disable(Feature::ViewImageTool)
+        .disable(Feature::RmcpClient);
+    lin_config.use_experimental_use_rmcp_client = false;
+
+    let manager = ConversationManager::new(
+        auth_manager,
+        SessionSource::SubAgent(SubAgentSource::Other("security_review_linear".to_string())),
+    );
+
+    let conversation = match manager.new_conversation(lin_config).await {
+        Ok(new_conversation) => new_conversation.conversation,
+        Err(err) => {
+            let message = format!("Failed to start Linear status agent: {err}");
+            push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+            return Err(SecurityReviewFailure { message, logs });
+        }
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text { text: prompt }],
+        })
+        .await
+    {
+        let message = format!("Failed to submit Linear status prompt: {err}");
+        push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+        return Err(SecurityReviewFailure { message, logs });
+    }
+
+    let mut last_agent_message: Option<String> = None;
+    let mut last_tool_log: Option<String> = None;
+
+    loop {
+        let event = match conversation.next_event().await {
+            Ok(event) => event,
+            Err(err) => {
+                let message = format!("Linear status agent terminated unexpectedly: {err}");
+                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                return Err(SecurityReviewFailure { message, logs });
+            }
+        };
+
+        record_tool_call_from_event(metrics.as_ref(), &event.msg);
+
+        match event.msg {
+            EventMsg::TaskComplete(done) => {
+                if let Some(msg) = done.last_agent_message {
+                    last_agent_message = Some(msg);
+                }
+                break;
+            }
+            EventMsg::AgentMessage(msg) => {
+                last_agent_message = Some(msg.message.clone());
+            }
+            EventMsg::AgentReasoning(reason) => {
+                log_model_reasoning(&reason.text, &progress_sender, &log_sink, &mut logs);
+            }
+            EventMsg::McpToolCallBegin(begin) => {
+                let tool = begin.invocation.tool.clone();
+                let message = format!("Linear status: tool → {tool}");
+                if last_tool_log.as_deref() != Some(message.as_str()) {
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                    last_tool_log = Some(message);
+                }
+            }
+            EventMsg::TokenCount(count) => {
+                if let Some(info) = count.info {
+                    metrics.record_model_call();
+                    metrics.record_usage(&info.last_token_usage);
+                }
+            }
+            EventMsg::Warning(warn) => {
+                push_progress_log(&progress_sender, &log_sink, &mut logs, warn.message);
+            }
+            EventMsg::Error(err) => {
+                let message = format!("Linear status agent error: {}", err.message);
+                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                return Err(SecurityReviewFailure { message, logs });
+            }
+            EventMsg::TurnAborted(aborted) => {
+                let message = format!("Linear status agent aborted: {:?}", aborted.reason);
+                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                return Err(SecurityReviewFailure { message, logs });
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(msg) = last_agent_message {
+        let trimmed = msg.trim();
+        if !trimmed.is_empty() {
+            push_progress_log(
+                &progress_sender,
+                &log_sink,
+                &mut logs,
+                format!("Linear status response: {trimmed}"),
+            );
+        }
+    }
+
+    let _ = conversation.submit(Op::Shutdown).await;
+    Ok(())
+}
+
 async fn await_with_heartbeat<F, T, E>(
     progress_sender: Option<AppEventSender>,
     stage: &str,
@@ -4233,6 +5098,55 @@ fn append_log(
 ) {
     write_log_sink(log_sink, message.as_str());
     logs.push(message);
+}
+
+fn sanitize_reasoning_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for segment in trimmed
+        .split(" - ")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if parts
+            .last()
+            .map(|last| last.eq_ignore_ascii_case(segment))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        parts.push(segment);
+    }
+    if parts.is_empty() {
+        Some(trimmed.to_string())
+    } else {
+        Some(parts.join(" - "))
+    }
+}
+
+fn log_model_reasoning(
+    reasoning: &str,
+    progress_sender: &Option<AppEventSender>,
+    log_sink: &Option<Arc<SecurityReviewLogSink>>,
+    logs: &mut Vec<String>,
+) {
+    for line in reasoning
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if let Some(sanitized) = sanitize_reasoning_line(line) {
+            if sanitized.is_empty() {
+                continue;
+            }
+            let truncated = truncate_text(&sanitized, MODEL_REASONING_LOG_MAX_GRAPHEMES);
+            let message = format!("Model reasoning: {truncated}");
+            push_progress_log(progress_sender, log_sink, logs, message);
+        }
+    }
 }
 
 fn collect_snippets_blocking(
@@ -4576,18 +5490,7 @@ async fn triage_chunk(
     };
     let mut chunk_logs = Vec::new();
     if let Some(reasoning) = response_output.reasoning.as_ref() {
-        for line in reasoning
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            let truncated = truncate_text(line, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-            let msg = format!("Model reasoning: {truncated}");
-            if let Some(tx) = progress_sender.as_ref() {
-                tx.send(AppEvent::SecurityReviewLog(msg.clone()));
-            }
-            chunk_logs.push(msg);
-        }
+        log_model_reasoning(reasoning, &progress_sender, &log_sink, &mut chunk_logs);
     }
     let text = response_output.text;
     let mut include_ids: Vec<usize> = Vec::new();
@@ -5370,6 +6273,150 @@ fn parse_auto_scope_response(raw: &str) -> AutoScopeParseResult {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn run_auto_scope_agent(
+    config: &Config,
+    provider: &ModelProviderInfo,
+    auth_manager: Arc<AuthManager>,
+    repo_root: &Path,
+    prompt: String,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
+    metrics: Arc<ReviewMetrics>,
+    model: &str,
+) -> Result<(String, Vec<String>), SecurityReviewFailure> {
+    let mut logs: Vec<String> = Vec::new();
+
+    let mut auto_config = config.clone();
+    auto_config.model = model.to_string();
+    auto_config.model_provider = provider.clone();
+    auto_config.base_instructions = Some(AUTO_SCOPE_SYSTEM_PROMPT.to_string());
+    auto_config.user_instructions = None;
+    auto_config.developer_instructions = None;
+    auto_config.compact_prompt = None;
+    auto_config.cwd = repo_root.to_path_buf();
+    auto_config
+        .features
+        .disable(Feature::ApplyPatchFreeform)
+        .disable(Feature::WebSearchRequest)
+        .disable(Feature::ViewImageTool)
+        .disable(Feature::RmcpClient);
+    for tool in ["grep_files", "list_dir", "read_file"] {
+        if !auto_config
+            .model_family
+            .experimental_supported_tools
+            .iter()
+            .any(|existing| existing == tool)
+        {
+            auto_config
+                .model_family
+                .experimental_supported_tools
+                .push(tool.to_string());
+        }
+    }
+    auto_config.mcp_servers.clear();
+    auto_config.use_experimental_use_rmcp_client = false;
+    auto_config.model_family.apply_patch_tool_type = None;
+
+    let manager = ConversationManager::new(
+        auth_manager,
+        SessionSource::SubAgent(SubAgentSource::Other(
+            "security_review_auto_scope".to_string(),
+        )),
+    );
+
+    let conversation = match manager.new_conversation(auto_config).await {
+        Ok(new_conversation) => new_conversation.conversation,
+        Err(err) => {
+            let message = format!("Failed to start auto-scope agent: {err}");
+            push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+            return Err(SecurityReviewFailure { message, logs });
+        }
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text { text: prompt }],
+        })
+        .await
+    {
+        let message = format!("Failed to submit auto-scope prompt: {err}");
+        push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+        return Err(SecurityReviewFailure { message, logs });
+    }
+
+    let mut last_agent_message: Option<String> = None;
+
+    loop {
+        let event = match conversation.next_event().await {
+            Ok(event) => event,
+            Err(err) => {
+                let message = format!("Auto-scope agent terminated unexpectedly: {err}");
+                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                return Err(SecurityReviewFailure { message, logs });
+            }
+        };
+
+        record_tool_call_from_event(metrics.as_ref(), &event.msg);
+
+        match event.msg {
+            EventMsg::TaskComplete(done) => {
+                if let Some(msg) = done.last_agent_message {
+                    last_agent_message = Some(msg);
+                }
+                break;
+            }
+            EventMsg::AgentMessage(msg) => {
+                last_agent_message = Some(msg.message.clone());
+            }
+            EventMsg::AgentReasoning(reason) => {
+                log_model_reasoning(&reason.text, &progress_sender, &log_sink, &mut logs);
+            }
+            EventMsg::Warning(warn) => {
+                push_progress_log(&progress_sender, &log_sink, &mut logs, warn.message);
+            }
+            EventMsg::Error(err) => {
+                let message = format!("Auto-scope agent error: {}", err.message);
+                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                return Err(SecurityReviewFailure { message, logs });
+            }
+            EventMsg::TurnAborted(aborted) => {
+                let message = format!("Auto-scope agent aborted: {:?}", aborted.reason);
+                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                return Err(SecurityReviewFailure { message, logs });
+            }
+            EventMsg::TokenCount(count) => {
+                if let Some(info) = count.info {
+                    metrics.record_model_call();
+                    metrics.record_usage(&info.last_token_usage);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let response = match last_agent_message.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }) {
+        Some(text) => text,
+        None => {
+            let message = "Auto-scope agent produced an empty response.".to_string();
+            push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+            return Err(SecurityReviewFailure { message, logs });
+        }
+    };
+
+    let _ = conversation.submit(Op::Shutdown).await;
+
+    Ok((response, logs))
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn auto_detect_scope(
     client: &CodexHttpClient,
     provider: &ModelProviderInfo,
@@ -5377,7 +6424,12 @@ async fn auto_detect_scope(
     model: &str,
     repo_root: &Path,
     user_query: &str,
+    conversation: &str,
     metrics: Arc<ReviewMetrics>,
+    config: &Config,
+    auth_manager: Arc<AuthManager>,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
 ) -> Result<(Vec<AutoScopeSelection>, Vec<String>), SecurityReviewFailure> {
     let mut logs: Vec<String> = Vec::new();
 
@@ -5420,305 +6472,98 @@ async fn auto_detect_scope(
         }
     }
 
-    let mut conversation: Vec<String> = Vec::new();
-    let mut tool_rounds = 0usize;
-
-    if !keywords.is_empty() {
-        let mut initial_search_count = 0usize;
-        for keyword in keywords.iter().take(AUTO_SCOPE_INITIAL_KEYWORD_PROBES) {
-            let trimmed = keyword.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let term = trimmed.to_string();
-            initial_search_count += 1;
-            logs.push(format!(
-                "Auto scope executing initial SEARCH literal:{term}."
-            ));
-            conversation.push(format!("Assistant:\nSEARCH: literal:{term}"));
-            let (log_line, output) =
-                execute_auto_scope_search_content(repo_root, &term, SearchMode::Literal, &metrics)
-                    .await;
-            logs.push(log_line);
-            conversation.push(format!("Tool SEARCH `{term}`:\n{output}"));
-            let preview = command_preview_snippets(&output);
-            if !preview.is_empty() {
-                logs.push(format!(
-                    "Auto scope SEARCH literal:{term} preview:\n{}",
-                    preview.join("\n")
-                ));
-            }
-
-            let pattern_str = term.clone();
-            let grep_limit = Some(200usize);
-            let grep_args = GrepFilesArgs {
-                pattern: pattern_str.clone(),
-                include: None,
-                path: None,
-                limit: grep_limit,
-            };
-            let mut shown = serde_json::json!({ "pattern": pattern_str });
-            if let Some(limit) = grep_limit {
-                shown["limit"] = serde_json::Value::Number(serde_json::Number::from(limit as u64));
-            }
-            let shown_text = shown.to_string();
-            logs.push(format!(
-                "Auto scope executing initial GREP_FILES {shown_text}."
-            ));
-            conversation.push(format!("Assistant:\nGREP_FILES: {shown_text}"));
-            let (grep_log, grep_output) =
-                match run_grep_files(repo_root, &grep_args, &metrics).await {
-                    SearchResult::Matches(out) => (
-                        format!("Auto scope file search `{term}` returned matching files."),
-                        out,
-                    ),
-                    SearchResult::NoMatches => (
-                        format!("Auto scope file search `{term}` returned no matches."),
-                        "No matches found.".to_string(),
-                    ),
-                    SearchResult::Error(err) => (
-                        format!("Auto scope file search `{term}` failed: {err}"),
-                        format!("Search error: {err}"),
-                    ),
-                };
-            logs.push(grep_log);
-            conversation.push(format!("Tool GREP_FILES {shown_text}:\n{grep_output}"));
-            let preview = command_preview_snippets(&grep_output);
-            if !preview.is_empty() {
-                logs.push(format!(
-                    "Auto scope GREP_FILES {shown_text} preview:\n{}",
-                    preview.join("\n")
-                ));
-            }
-        }
-        if initial_search_count > 0 {
-            let label = if initial_search_count == 1 {
-                "search"
-            } else {
-                "searches"
-            };
-            logs.push(format!(
-                "Auto scope seeded the agent loop with {initial_search_count} initial keyword {label} (content + file matches)."
-            ));
-        }
-    }
-
     let repo_overview = summarize_top_level(repo_root);
+    let prompt = build_auto_scope_prompt(&repo_overview, user_query, &keywords, conversation);
 
-    loop {
-        if tool_rounds >= AUTO_SCOPE_MAX_AGENT_STEPS {
-            return Err(SecurityReviewFailure {
-                message: format!(
-                    "Auto scope exceeded the maximum number ({AUTO_SCOPE_MAX_AGENT_STEPS}) of tool interactions."
-                ),
+    let (assistant_reply, mut agent_logs) = run_auto_scope_agent(
+        config,
+        provider,
+        auth_manager,
+        repo_root,
+        prompt,
+        progress_sender,
+        log_sink,
+        metrics,
+        model,
+    )
+    .await?;
+    logs.append(&mut agent_logs);
+
+    let assistant_reply = assistant_reply.trim();
+    let parse_result = parse_auto_scope_response(assistant_reply);
+    match parse_result {
+        AutoScopeParseResult::All => {
+            let canonical = repo_root
+                .canonicalize()
+                .unwrap_or_else(|_| repo_root.to_path_buf());
+            logs.push("Auto scope model requested the entire repository.".to_string());
+            Ok((
+                vec![AutoScopeSelection {
+                    display_path: display_path_for(&canonical, repo_root),
+                    abs_path: canonical,
+                    reason: Some("LLM requested full repository".to_string()),
+                    is_dir: true,
+                }],
                 logs,
-            });
+            ))
         }
-
-        let conversation_text = conversation.join("\n\n");
-        let prompt =
-            build_auto_scope_prompt(&repo_overview, user_query, &keywords, &conversation_text);
-        let response = match call_model(
-            client,
-            provider,
-            auth,
-            model,
-            AUTO_SCOPE_SYSTEM_PROMPT,
-            &prompt,
-            metrics.clone(),
-            0.0,
-        )
-        .await
-        {
-            Ok(output) => {
-                if let Some(reasoning) = output.reasoning.as_ref() {
-                    for line in reasoning
-                        .lines()
-                        .map(str::trim)
-                        .filter(|line| !line.is_empty())
-                    {
-                        let truncated = truncate_text(line, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-                        logs.push(format!("Model reasoning: {truncated}"));
-                    }
-                }
-                output.text
-            }
-            Err(err) => {
-                logs.push(format!("Auto scope model request failed: {err}"));
+        AutoScopeParseResult::Selections(raw_selections) => {
+            if raw_selections.is_empty() {
+                logs.push(
+                    "Auto scope model returned no included directories in the final response."
+                        .to_string(),
+                );
                 return Err(SecurityReviewFailure {
-                    message: format!("Failed to auto-detect scope: {err}"),
+                    message: "Auto scope returned no directories.".to_string(),
                     logs,
                 });
             }
-        };
 
-        let assistant_reply = response.trim();
-        if assistant_reply.is_empty() {
-            return Err(SecurityReviewFailure {
-                message: "Auto scope model returned an empty response.".to_string(),
-                logs,
-            });
-        }
-        conversation.push(format!("Assistant:\n{assistant_reply}"));
+            let mut seen: HashSet<PathBuf> = HashSet::new();
+            let mut selections: Vec<AutoScopeSelection> = Vec::new();
 
-        let commands = extract_auto_scope_commands(assistant_reply);
-        if !commands.is_empty() {
-            tool_rounds += 1;
-            for command in commands {
-                match command {
-                    AutoScopeToolCommand::SearchContent { pattern, mode } => {
-                        let (log_line, output) =
-                            execute_auto_scope_search_content(repo_root, &pattern, mode, &metrics)
-                                .await;
-                        logs.push(log_line);
-                        conversation.push(format!("Tool SEARCH `{pattern}`:\n{output}"));
-                    }
-                    AutoScopeToolCommand::GrepFiles(args) => {
-                        let (log_line, output) =
-                            match run_grep_files(repo_root, &args, &metrics).await {
-                                SearchResult::Matches(out) => (
-                                    "Auto scope grep_files search returned results.".to_string(),
-                                    out,
-                                ),
-                                SearchResult::NoMatches => (
-                                    "Auto scope grep_files search returned no matches.".to_string(),
-                                    "No matches found.".to_string(),
-                                ),
-                                SearchResult::Error(err) => (
-                                    format!("Auto scope grep_files search failed: {err}"),
-                                    format!("Search error: {err}"),
-                                ),
-                            };
-                        logs.push(log_line);
-                        // Show the tool line with compact JSON for reproducibility
-                        let mut shown = serde_json::json!({
-                            "pattern": args.pattern,
-                        });
-                        if let Some(ref inc) = args.include {
-                            shown["include"] = serde_json::Value::String(inc.clone());
-                        }
-                        if let Some(ref p) = args.path {
-                            shown["path"] = serde_json::Value::String(p.clone());
-                        }
-                        if let Some(l) = args.limit {
-                            shown["limit"] =
-                                serde_json::Value::Number(serde_json::Number::from(l as u64));
-                        }
-                        conversation.push(format!("Tool GREP_FILES {shown}:\n{output}"));
-                    }
-                    AutoScopeToolCommand::ReadFile { path, start, end } => {
-                        match execute_auto_scope_read(
-                            repo_root,
-                            &path,
-                            ReadCommand::Read,
-                            start,
-                            end,
-                            metrics.as_ref(),
-                        )
-                        .await
-                        {
-                            Ok(output) => {
-                                logs.push(format!(
-                                    "Auto scope read `{}` returned content.",
-                                    path.display()
-                                ));
-                                conversation.push(format!(
-                                    "Tool READ `{}`:\n{}",
-                                    path.display(),
-                                    output
-                                ));
-                            }
-                            Err(err) => {
-                                logs.push(err.clone());
-                                conversation.push(format!(
-                                    "Tool READ `{}` error: {}",
-                                    path.display(),
-                                    err
-                                ));
-                            }
-                        }
-                    }
+            for raw in raw_selections {
+                let mut candidate = PathBuf::from(&raw.path);
+                if !candidate.is_absolute() {
+                    candidate = repo_root.join(&candidate);
                 }
+                let canonical = match candidate.canonicalize() {
+                    Ok(path) => path,
+                    Err(_) => continue,
+                };
+                if !canonical.starts_with(repo_root) {
+                    continue;
+                }
+                let metadata = match fs::metadata(&canonical) {
+                    Ok(metadata) => metadata,
+                    Err(_) => continue,
+                };
+                if !(metadata.is_dir() || metadata.is_file()) {
+                    continue;
+                }
+                let is_dir = metadata.is_dir();
+                if !seen.insert(canonical.clone()) {
+                    continue;
+                }
+                selections.push(AutoScopeSelection {
+                    display_path: display_path_for(&canonical, repo_root),
+                    abs_path: canonical,
+                    reason: raw.reason,
+                    is_dir,
+                });
             }
-            continue;
-        }
 
-        let parse_result = parse_auto_scope_response(assistant_reply);
-        match parse_result {
-            AutoScopeParseResult::All => {
-                let canonical = repo_root
-                    .canonicalize()
-                    .unwrap_or_else(|_| repo_root.to_path_buf());
-                logs.push("Auto scope model requested the entire repository.".to_string());
-                return Ok((
-                    vec![AutoScopeSelection {
-                        display_path: display_path_for(&canonical, repo_root),
-                        abs_path: canonical,
-                        reason: Some("LLM requested full repository".to_string()),
-                        is_dir: true,
-                    }],
+            if selections.is_empty() {
+                return Err(SecurityReviewFailure {
+                    message: "Auto scope returned no directories.".to_string(),
                     logs,
-                ));
+                });
             }
-            AutoScopeParseResult::Selections(raw_selections) => {
-                if raw_selections.is_empty() {
-                    logs.push(
-                        "Auto scope model returned no included directories in the final response."
-                            .to_string(),
-                    );
-                    return Err(SecurityReviewFailure {
-                        message: "Auto scope returned no directories.".to_string(),
-                        logs,
-                    });
-                }
 
-                let mut seen: HashSet<PathBuf> = HashSet::new();
-                let mut selections: Vec<AutoScopeSelection> = Vec::new();
+            prune_auto_scope_parent_child_overlaps(&mut selections, &mut logs);
+            truncate_auto_scope_selections(&mut selections, &mut logs);
 
-                for raw in raw_selections {
-                    let mut candidate = PathBuf::from(&raw.path);
-                    if !candidate.is_absolute() {
-                        candidate = repo_root.join(&candidate);
-                    }
-                    let canonical = match candidate.canonicalize() {
-                        Ok(path) => path,
-                        Err(_) => continue,
-                    };
-                    if !canonical.starts_with(repo_root) {
-                        continue;
-                    }
-                    let metadata = match fs::metadata(&canonical) {
-                        Ok(metadata) => metadata,
-                        Err(_) => continue,
-                    };
-                    if !(metadata.is_dir() || metadata.is_file()) {
-                        continue;
-                    }
-                    let is_dir = metadata.is_dir();
-                    if !seen.insert(canonical.clone()) {
-                        continue;
-                    }
-                    selections.push(AutoScopeSelection {
-                        display_path: display_path_for(&canonical, repo_root),
-                        abs_path: canonical,
-                        reason: raw.reason,
-                        is_dir,
-                    });
-                }
-
-                if selections.is_empty() {
-                    return Err(SecurityReviewFailure {
-                        message: "Auto scope returned no directories.".to_string(),
-                        logs,
-                    });
-                }
-
-                // Prefer specific children over broad parents, then cap to max.
-                prune_auto_scope_parent_child_overlaps(&mut selections, &mut logs);
-                truncate_auto_scope_selections(&mut selections, &mut logs);
-
-                return Ok((selections, logs));
-            }
+            Ok((selections, logs))
         }
     }
 }
@@ -6154,9 +6999,7 @@ async fn run_spec_agent(
                 last_agent_message = Some(msg.message.clone());
             }
             EventMsg::AgentReasoning(reason) => {
-                let truncated = truncate_text(&reason.text, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-                let log_line = format!("Model reasoning: {truncated}");
-                push_progress_log(&progress_sender, &log_sink, &mut logs, log_line);
+                log_model_reasoning(&reason.text, &progress_sender, &log_sink, &mut logs);
             }
             EventMsg::Warning(warn) => {
                 push_progress_log(&progress_sender, &log_sink, &mut logs, warn.message);
@@ -6302,9 +7145,7 @@ async fn run_bug_agent(
                 last_agent_message = Some(msg.message.clone());
             }
             EventMsg::AgentReasoning(reason) => {
-                let truncated = truncate_text(&reason.text, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-                let log_line = format!("Model reasoning: {truncated}");
-                push_progress_log(&progress_sender, &log_sink, &mut logs, log_line);
+                log_model_reasoning(&reason.text, &progress_sender, &log_sink, &mut logs);
             }
             EventMsg::Warning(warn) => {
                 push_progress_log(&progress_sender, &log_sink, &mut logs, warn.message);
@@ -6702,18 +7543,7 @@ async fn generate_threat_model(
         }
     })?;
     if let Some(reasoning) = response_output.reasoning.as_ref() {
-        for line in reasoning
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            let truncated = truncate_text(line, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-            let msg = format!("Model reasoning: {truncated}");
-            if let Some(tx) = progress_sender.as_ref() {
-                tx.send(AppEvent::SecurityReviewLog(msg.clone()));
-            }
-            logs.push(msg);
-        }
+        log_model_reasoning(reasoning, &progress_sender, &None, &mut logs);
     }
     let mut response_text = response_output.text;
     let mut sanitized_response = fix_mermaid_blocks(&response_text);
@@ -6755,18 +7585,7 @@ async fn generate_threat_model(
             }
         })?;
         if let Some(reasoning) = response_output.reasoning.as_ref() {
-            for line in reasoning
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-            {
-                let truncated = truncate_text(line, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-                let msg = format!("Model reasoning: {truncated}");
-                if let Some(tx) = progress_sender.as_ref() {
-                    tx.send(AppEvent::SecurityReviewLog(msg.clone()));
-                }
-                logs.push(msg);
-            }
+            log_model_reasoning(reasoning, &progress_sender, &None, &mut logs);
         }
         response_text = response_output.text;
         sanitized_response = fix_mermaid_blocks(&response_text);
@@ -6904,19 +7723,7 @@ async fn compact_analysis_context(
     })?;
 
     if let Some(reasoning) = response.reasoning.as_ref() {
-        for line in reasoning
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            let truncated = truncate_text(line, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-            push_progress_log(
-                &progress_sender,
-                &log_sink,
-                &mut logs,
-                format!("Model reasoning: {truncated}"),
-            );
-        }
+        log_model_reasoning(reasoning, &progress_sender, &log_sink, &mut logs);
     }
 
     let compacted = trim_prompt_context(response.text.trim(), ANALYSIS_CONTEXT_MAX_CHARS);
@@ -7682,14 +8489,7 @@ async fn extract_data_classification(
 
     let mut reasoning_logs: Vec<String> = Vec::new();
     if let Some(reasoning) = output.reasoning.as_ref() {
-        for line in reasoning
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            let truncated = truncate_text(line, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-            reasoning_logs.push(format!("Model reasoning: {truncated}"));
-        }
+        log_model_reasoning(reasoning, &None, &None, &mut reasoning_logs);
     }
 
     let mut rows: Vec<DataClassificationRow> = Vec::new();
@@ -7768,14 +8568,7 @@ async fn polish_markdown_block(
 
     let mut reasoning_logs: Vec<String> = Vec::new();
     if let Some(reasoning) = output.reasoning.as_ref() {
-        for line in reasoning
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            let truncated = truncate_text(line, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-            reasoning_logs.push(format!("Model reasoning: {truncated}"));
-        }
+        log_model_reasoning(reasoning, &None, &None, &mut reasoning_logs);
     }
 
     Ok(MarkdownPolishOutcome {
@@ -11671,18 +12464,7 @@ pub(crate) async fn run_web_validation(
 
     let mut logs: Vec<String> = Vec::new();
     if let Some(reasoning) = response.reasoning.as_ref() {
-        for line in reasoning
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            let truncated = truncate_text(line, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-            let msg = format!("Model reasoning: {truncated}");
-            if let Some(tx) = progress_sender.as_ref() {
-                tx.send(AppEvent::SecurityReviewLog(msg.clone()));
-            }
-            logs.push(msg);
-        }
+        log_model_reasoning(reasoning, &progress_sender, &None, &mut logs);
     }
 
     let mut requests: Vec<BugVerificationRequest> = Vec::new();

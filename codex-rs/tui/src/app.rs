@@ -820,13 +820,16 @@ impl App {
                 mode,
                 include_paths,
                 scope_prompt,
+                linear_issue,
                 force_new,
                 resume_from,
+                ..
             } => {
                 self.chat_widget.start_security_review(
                     mode,
                     include_paths,
                     scope_prompt,
+                    linear_issue,
                     force_new,
                     resume_from,
                 );

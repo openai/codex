@@ -193,6 +193,8 @@ pub(crate) enum AppEvent {
         mode: SecurityReviewMode,
         include_paths: Vec<String>,
         scope_prompt: Option<String>,
+        /// Optional Linear ticket reference (URL or ISSUE-123 key) to sync status.
+        linear_issue: Option<String>,
         force_new: bool,
         resume_from: Option<PathBuf>,
     },

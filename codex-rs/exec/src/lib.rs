@@ -397,6 +397,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             skip_auto_scope_confirmation: true,
             auto_scope_prompt: review_args.auto_scope_prompt,
             resume_checkpoint,
+            linear_issue: None,
         };
 
         match run_security_review(request).await {
