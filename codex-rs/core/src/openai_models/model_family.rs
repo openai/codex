@@ -317,7 +317,7 @@ fn derive_default_model_family(model: &str) -> ModelFamily {
         slug: model.to_string(),
         family: model.to_string(),
         needs_special_apply_patch_instructions: false,
-        context_window: Some(CONTEXT_WINDOW_272K),
+        context_window: None,
         auto_compact_token_limit: None,
         supports_reasoning_summaries: false,
         reasoning_summary_format: ReasoningSummaryFormat::None,
