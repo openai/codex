@@ -47,7 +47,7 @@ impl ModelsManager {
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
-        let client_version = format_client_version_to_whole(env!("CARGO_PKG_VERSION"));
+        let client_version = format_client_version_to_whole();
         let response = client
             .list_models(&client_version, HeaderMap::new())
             .await
@@ -90,37 +90,15 @@ impl ModelsManager {
 }
 
 /// Convert a client version string to a whole version string (e.g. "1.2.3-alpha.4" -> "1.2.3")
-fn format_client_version_to_whole(raw_version: &str) -> String {
-    const ZERO_VERSION: &str = "0.0.0";
-    const FALLBACK_VERSION: &str = "99.99.99";
+fn format_client_version_to_whole() -> String {
+    let major = env!("CARGO_PKG_VERSION_MAJOR");
+    let minor = env!("CARGO_PKG_VERSION_MINOR");
+    let patch = env!("CARGO_PKG_VERSION_PATCH");
 
-    let trimmed = raw_version.trim();
-    let normalized = Version::parse(trimmed)
-        .map(|version| {
-            let major = version.major;
-            let minor = version.minor;
-            let patch = version.patch;
-            format!("{major}.{minor}.{patch}")
-        })
-        .unwrap_or_else(|_| {
-            let mut numbers = [0i64; 3];
-            let mut parts = trimmed
-                .split(['-', '+'])
-                .next()
-                .unwrap_or(ZERO_VERSION)
-                .split('.');
-            for slot in &mut numbers {
-                *slot = parts
-                    .next()
-                    .and_then(|segment| segment.parse::<i64>().ok())
-                    .unwrap_or(0)
-                    .max(0);
-            }
-            format!("{}.{}.{}", numbers[0], numbers[1], numbers[2])
-        });
+    let normalized = format!("{major}.{minor}.{patch}");
 
-    if normalized == ZERO_VERSION {
-        FALLBACK_VERSION.to_string()
+    if normalized == "0.0.0" {
+        "99.99.99".to_string()
     } else {
         normalized
     }
