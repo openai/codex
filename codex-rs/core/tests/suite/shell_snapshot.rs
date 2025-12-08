@@ -42,7 +42,7 @@ async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
     let harness = TestCodexHarness::with_builder(builder).await?;
     let args = json!({
         "cmd": command,
-        "yield_time_ms": 50,
+        "yield_time_ms": 1000,
     });
     let call_id = "shell-snapshot-exec";
     let responses = vec![
