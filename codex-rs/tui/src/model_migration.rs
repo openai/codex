@@ -292,7 +292,9 @@ fn gpt_5_1_codex_max_migration_copy() -> ModelMigrationCopy {
             ),
             Line::from(vec![
                 "Learn more at ".into(),
-                "https://openai.com/index/gpt-5-1-codex-max/".cyan().underlined(),
+                "https://openai.com/index/gpt-5-1-codex-max/"
+                    .cyan()
+                    .underlined(),
                 ".".into(),
             ]),
         ],
