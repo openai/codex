@@ -341,30 +341,28 @@ environment = "dev"
 exporter = "none"
 
 # Example OTLP/HTTP exporter configuration
-# [otel]
-# exporter = { otlp-http = {
-#   endpoint = "https://otel.example.com/v1/logs",
-#   protocol = "binary",                      # "binary" | "json"
-#   headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" }
-# }}
+# [otel.exporter."otlp-http"]
+# endpoint = "https://otel.example.com/v1/logs"
+# protocol = "binary"                         # "binary" | "json"
+
+# [otel.exporter."otlp-http".headers]
+# "x-otlp-api-key" = "${OTLP_TOKEN}"
 
 # Example OTLP/gRPC exporter configuration
-# [otel]
-# exporter = { otlp-grpc = {
-#   endpoint = "https://otel.example.com:4317",
-#   headers = { "x-otlp-meta" = "abc123" }
-# }}
+# [otel.exporter."otlp-grpc"]
+# endpoint = "https://otel.example.com:4317",
+# headers = { "x-otlp-meta" = "abc123" }
 
 # Example OTLP exporter with mutual TLS
-# [otel]
-# exporter = { otlp-http = {
-#   endpoint = "https://otel.example.com/v1/logs",
-#   protocol = "binary",
-#   headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" },
-#   tls = {
-#     ca-certificate = "certs/otel-ca.pem",
-#     client-certificate = "/etc/codex/certs/client.pem",
-#     client-private-key = "/etc/codex/certs/client-key.pem",
-#   }
-# }}
+# [otel.exporter."otlp-http"]
+# endpoint = "https://otel.example.com/v1/logs"
+# protocol = "binary"
+
+# [otel.exporter."otlp-http".headers]
+# "x-otlp-api-key" = "${OTLP_TOKEN}"
+
+# [otel.exporter."otlp-http".tls]
+# ca-certificate = "certs/otel-ca.pem"
+# client-certificate = "/etc/codex/certs/client.pem"
+# client-private-key = "/etc/codex/certs/client-key.pem"
 ```

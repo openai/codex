@@ -54,6 +54,8 @@ pub enum Feature {
     WindowsSandbox,
     /// Remote compaction enabled (only for ChatGPT auth)
     RemoteCompaction,
+    /// Refresh remote models and emit AppReady once the list is available.
+    RemoteModels,
     /// Allow model to call multiple tools in parallel (only for models supporting it).
     ParallelToolCalls,
     /// Experimental skills injection (CLI flag-driven).
@@ -332,6 +334,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "remote_compaction",
         stage: Stage::Experimental,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::RemoteModels,
+        key: "remote_models",
+        stage: Stage::Experimental,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ParallelToolCalls,
