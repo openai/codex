@@ -93,54 +93,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         config_overrides,
     } = cli;
 
-    // Determine the prompt source (parent or subcommand) and read from stdin if needed.
-    let prompt_arg = match &command {
-        // Allow prompt before the subcommand by falling back to the parent-level prompt
-        // when the Resume subcommand did not provide its own prompt.
-        Some(ExecCommand::Resume(args)) => {
-            let resume_prompt = args
-                .prompt
-                .clone()
-                .or_else(|| args.last_prompt().map(str::to_owned));
-            resume_prompt.or(prompt)
-        }
-        Some(ExecCommand::Review(_)) => prompt,
-        None => prompt,
-    };
-
-    let prompt = match prompt_arg {
-        Some(p) if p != "-" => p,
-        // Either `-` was passed or no positional arg.
-        maybe_dash => {
-            // When no arg (None) **and** stdin is a TTY, bail out early – unless the
-            // user explicitly forced reading via `-`.
-            let force_stdin = matches!(maybe_dash.as_deref(), Some("-"));
-
-            if std::io::stdin().is_terminal() && !force_stdin {
-                eprintln!(
-                    "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."
-                );
-                std::process::exit(1);
-            }
-
-            // Ensure the user knows we are waiting on stdin, as they may
-            // have gotten into this state by mistake. If so, and they are not
-            // writing to stdin, Codex will hang indefinitely, so this should
-            // help them debug in that case.
-            if !force_stdin {
-                eprintln!("Reading prompt from stdin...");
-            }
-            let mut buffer = String::new();
-            if let Err(e) = std::io::stdin().read_to_string(&mut buffer) {
-                eprintln!("Failed to read prompt from stdin: {e}");
-                std::process::exit(1);
-            } else if buffer.trim().is_empty() {
-                eprintln!("No prompt provided via stdin.");
-                std::process::exit(1);
-            }
-            buffer
-        }
-    };
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -362,7 +314,13 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
             (InitialOperation::Review { review_request }, summary)
         }
-        (Some(ExecCommand::Resume(_args)), prompt_text, imgs) => {
+        (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
+            let prompt_arg = args
+                .prompt
+                .clone()
+                .or_else(|| args.last_prompt().map(str::to_owned))
+                .or(root_prompt);
+            let prompt_text = resolve_prompt(prompt_arg);
             let mut items: Vec<UserInput> = imgs
                 .into_iter()
                 .map(|path| UserInput::LocalImage { path })
@@ -379,7 +337,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 prompt_text,
             )
         }
-        (None, prompt_text, imgs) => {
+        (None, root_prompt, imgs) => {
+            let prompt_text = resolve_prompt(root_prompt);
             let mut items: Vec<UserInput> = imgs
                 .into_iter()
                 .map(|path| UserInput::LocalImage { path })
