@@ -73,6 +73,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         &server,
         ModelsResponse {
             models: vec![remote_model],
+            etag: String::new(),
         },
     )
     .await;
@@ -170,7 +171,7 @@ async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) -> M
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if let Some(model) = {
-            let guard = manager.available_models.read().await;
+            let guard = manager.list_models().await;
             guard.iter().find(|model| model.model == slug).cloned()
         } {
             return model;
