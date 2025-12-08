@@ -33,8 +33,8 @@ const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 pub struct ModelsManager {
     // todo(aibrahim) merge available_models and model family creation into one struct
     available_models: RwLock<Vec<ModelPreset>>,
-    pub remote_models: RwLock<Vec<ModelInfo>>,
-    pub auth_manager: Arc<AuthManager>,
+    remote_models: RwLock<Vec<ModelInfo>>,
+    auth_manager: Arc<AuthManager>,
     etag: RwLock<Option<String>>,
     codex_home: PathBuf,
     cache_ttl: Duration,
