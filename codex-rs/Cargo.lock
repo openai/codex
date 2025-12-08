@@ -1213,6 +1213,7 @@ dependencies = [
  "tree-sitter-bash",
  "url",
  "uuid",
+ "vt100",
  "walkdir",
  "which",
  "wildmatch",

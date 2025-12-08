@@ -62,10 +62,18 @@ const UNIFIED_EXEC_ENV: [(&str, &str); 8] = [
     ("GIT_PAGER", "cat"),
 ];
 
+#[cfg(target_os = "windows")]
 fn normalize_unified_exec_text(raw: &str) -> String {
-    let with_unix_newlines = raw.replace("\r\n", "\n");
-    let with_unix_newlines = with_unix_newlines.replace('\r', "\n");
-    strip_ansi_escape_sequences(&with_unix_newlines)
+    let rows: u16 = 40;
+    let cols: u16 = 120;
+    let mut parser = vt100::Parser::new(rows, cols, 0);
+    parser.process(raw.as_bytes());
+    parser.screen().contents()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn normalize_unified_exec_text(raw: &str) -> String {
+    raw.to_string()
 }
 
 fn strip_ansi_escape_sequences(input: &str) -> String {

@@ -59,6 +59,7 @@ shlex = { workspace = true }
 similar = { workspace = true }
 strum_macros = { workspace = true }
 url = { workspace = true }
+vt100 = { workspace = true }
 once_cell = { workspace = true }
 regex = { workspace = true }
 tempfile = { workspace = true }
