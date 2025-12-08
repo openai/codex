@@ -126,9 +126,10 @@ impl ToolHandler for UnifiedExecHandler {
                 })?;
                 let process_id = manager.allocate_process_id().await;
 
-                let command = get_command(&args, session.user_shell());
+                let command_for_intercept = get_command(&args, session.user_shell());
                 let ExecCommandArgs {
                     workdir,
+                    login,
                     yield_time_ms,
                     max_output_tokens,
                     with_escalated_permissions,
@@ -155,7 +156,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
 
                 if let Some(output) = intercept_apply_patch(
-                    &command,
+                    &command_for_intercept,
                     &cwd,
                     Some(yield_time_ms),
                     context.session.as_ref(),
@@ -176,6 +177,14 @@ impl ToolHandler for UnifiedExecHandler {
                     &context.call_id,
                     None,
                 );
+                let command = if login.is_none() {
+                    context
+                        .session
+                        .user_shell()
+                        .wrap_command_with_snapshot(&command_for_intercept)
+                } else {
+                    command_for_intercept
+                };
                 let emitter = ToolEmitter::unified_exec(
                     &command,
                     cwd.clone(),
@@ -259,8 +268,7 @@ fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String>
     }
 
     let use_login_shell = args.login.unwrap_or(session_shell.shell_snapshot.is_none());
-    let command = session_shell.derive_exec_args(&args.cmd, use_login_shell);
-    session_shell.wrap_command_with_snapshot(&command)
+    session_shell.derive_exec_args(&args.cmd, use_login_shell)
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {
