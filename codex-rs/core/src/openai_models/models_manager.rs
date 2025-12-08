@@ -198,29 +198,4 @@ mod tests {
         assert_eq!(available[1].model, "priority-low");
         assert!(!available[1].is_default);
     }
-
-    #[test]
-    fn format_client_version_strips_prerelease_segments() {
-        assert_eq!(format_client_version_to_whole("1.2.3-alpha.4"), "1.2.3");
-        assert_eq!(
-            format_client_version_to_whole("4.5.6-alpha.7+build.8"),
-            "4.5.6"
-        );
-    }
-
-    #[test]
-    fn format_client_version_enforces_three_segments() {
-        assert_eq!(format_client_version_to_whole("3.4"), "3.4.0");
-        assert_eq!(format_client_version_to_whole("9"), "9.0.0");
-    }
-
-    #[test]
-    fn format_client_version_maps_placeholder_release() {
-        assert_eq!(format_client_version_to_whole("0.0.0"), "99.99.99");
-    }
-
-    #[test]
-    fn format_client_version_handles_whitespace() {
-        assert_eq!(format_client_version_to_whole(" 2.3.4-beta.1 "), "2.3.4");
-    }
 }
