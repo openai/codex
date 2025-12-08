@@ -80,7 +80,6 @@ use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
-use crate::openai_model_info::get_model_info;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
@@ -420,8 +419,8 @@ impl Session {
         conversation_id: ConversationId,
         sub_id: String,
     ) -> TurnContext {
-        if let Some(model_info) = get_model_info(&model_family) {
-            per_turn_config.model_context_window = Some(model_info.context_window);
+        if let Some(context_window) = model_family.context_window {
+            per_turn_config.model_context_window = Some(context_window);
         }
 
         let otel_event_manager = otel_event_manager.clone().with_model(
@@ -1955,8 +1954,8 @@ async fn spawn_review_thread(
     per_turn_config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
     per_turn_config.model_reasoning_summary = ReasoningSummaryConfig::Detailed;
     per_turn_config.features = review_features.clone();
-    if let Some(model_info) = get_model_info(&model_family) {
-        per_turn_config.model_context_window = Some(model_info.context_window);
+    if let Some(context_window) = model_family.context_window {
+        per_turn_config.model_context_window = Some(context_window);
     }
 
     let otel_event_manager = parent_turn_context
