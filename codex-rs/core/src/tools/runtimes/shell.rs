@@ -5,6 +5,7 @@ Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
 use crate::exec::ExecToolCallOutput;
+use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
@@ -30,7 +31,7 @@ pub struct ShellRequest {
     pub cwd: PathBuf,
     pub timeout_ms: Option<u64>,
     pub env: std::collections::HashMap<String, String>,
-    pub with_escalated_permissions: Option<bool>,
+    pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
 }
@@ -51,7 +52,7 @@ pub struct ShellRuntime;
 pub(crate) struct ApprovalKey {
     command: Vec<String>,
     cwd: PathBuf,
-    escalated: bool,
+    sandbox_permissions: SandboxPermissions,
 }
 
 impl ShellRuntime {
@@ -84,7 +85,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         ApprovalKey {
             command: req.command.clone(),
             cwd: req.cwd.clone(),
-            escalated: req.with_escalated_permissions.unwrap_or(false),
+            sandbox_permissions: req.sandbox_permissions,
         }
     }
 
@@ -129,7 +130,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {
-        if req.with_escalated_permissions.unwrap_or(false)
+        if req.sandbox_permissions.requires_escalated_permissions()
             || matches!(
                 req.exec_approval_requirement,
                 ExecApprovalRequirement::Skip {
@@ -157,7 +158,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             &req.cwd,
             &req.env,
             req.timeout_ms.into(),
-            req.with_escalated_permissions,
+            req.sandbox_permissions,
             req.justification.clone(),
         )?;
         let env = attempt

@@ -126,7 +126,7 @@ impl UnifiedExecSessionManager {
             .open_session_with_sandbox(
                 &request.command,
                 cwd.clone(),
-                request.with_escalated_permissions,
+                request.sandbox_permissions,
                 request.justification,
                 context,
             )
@@ -476,7 +476,7 @@ impl UnifiedExecSessionManager {
         &self,
         command: &[String],
         cwd: PathBuf,
-        with_escalated_permissions: Option<bool>,
+        sandbox_permissions: SandboxPermissions,
         justification: Option<String>,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
@@ -490,14 +490,14 @@ impl UnifiedExecSessionManager {
             command,
             context.turn.approval_policy,
             &context.turn.sandbox_policy,
-            SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
+            sandbox_permissions,
         )
         .await;
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,
             env,
-            with_escalated_permissions,
+            sandbox_permissions,
             justification,
             exec_approval_requirement,
         );
