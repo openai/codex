@@ -1092,6 +1092,8 @@ impl AuthManager {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    #[expect(clippy::expect_used)]
     /// Create an AuthManager with a specific CodexAuth, for testing only.
     pub fn from_auth_for_testing(auth: CodexAuth) -> Arc<Self> {
         let cached = CachedAuth { auth: Some(auth) };
