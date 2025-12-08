@@ -105,7 +105,6 @@ pub(crate) struct ChatComposer {
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
     large_paste_counters: HashMap<usize, usize>,
-    image_placeholder_counters: HashMap<String, usize>,
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
@@ -156,7 +155,6 @@ impl ChatComposer {
             current_file_query: None,
             pending_pastes: Vec::new(),
             large_paste_counters: HashMap::new(),
-            image_placeholder_counters: HashMap::new(),
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
@@ -467,15 +465,18 @@ impl ChatComposer {
     }
 
     fn next_image_placeholder(&mut self, base: &str) -> String {
-        let counter = self
-            .image_placeholder_counters
-            .entry(base.to_string())
-            .or_insert(0);
-        *counter += 1;
-        if *counter == 1 {
-            format!("[{base}]")
-        } else {
-            format!("[{base} #{counter}]")
+        let text = self.textarea.text();
+        let mut suffix = 1;
+        loop {
+            let placeholder = if suffix == 1 {
+                format!("[{base}]")
+            } else {
+                format!("[{base} #{suffix}]")
+            };
+            if !text.contains(&placeholder) {
+                return placeholder;
+            }
+            suffix += 1;
         }
     }
 
