@@ -41,7 +41,10 @@ impl Shell {
                 ]
             }
             ShellType::PowerShell => {
-                let mut args = vec![self.shell_path.to_string_lossy().to_string()];
+                let mut args = vec![
+                    self.shell_path.to_string_lossy().to_string(),
+                    "-NoLogo".to_string(),
+                ];
                 if !use_login_shell {
                     args.push("-NoProfile".to_string());
                 }
