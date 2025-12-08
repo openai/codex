@@ -182,12 +182,27 @@ fn build_grpc_tls_config(
     Ok(config)
 }
 
+/// Build a blocking HTTP client with TLS configuration for the OTLP HTTP exporter.
+///
+/// We use `reqwest::blocking::Client` instead of the async client because the
+/// `opentelemetry_sdk` `BatchLogProcessor` spawns a dedicated OS thread that uses
+/// `futures_executor::block_on()` rather than tokio. When the async reqwest client's
+/// timeout calls `tokio::time::sleep()`, it panics with "no reactor running".
 fn build_http_client(
     tls: &OtelTlsConfig,
     codex_home: &Path,
-) -> Result<reqwest::Client, Box<dyn Error>> {
-    let mut builder =
-        reqwest::Client::builder().timeout(resolve_otlp_timeout(OTEL_EXPORTER_OTLP_LOGS_TIMEOUT));
+) -> Result<reqwest::blocking::Client, Box<dyn Error>> {
+    // Wrap in block_in_place because reqwest::blocking::Client creates its own
+    // internal tokio runtime, which would panic if built directly from an async context.
+    tokio::task::block_in_place(|| build_http_client_inner(tls, codex_home))
+}
+
+fn build_http_client_inner(
+    tls: &OtelTlsConfig,
+    codex_home: &Path,
+) -> Result<reqwest::blocking::Client, Box<dyn Error>> {
+    let mut builder = reqwest::blocking::Client::builder()
+        .timeout(resolve_otlp_timeout(OTEL_EXPORTER_OTLP_LOGS_TIMEOUT));
 
     if let Some(path) = tls.ca_certificate.as_ref() {
         let (pem, location) = read_bytes(codex_home, path)?;
@@ -197,7 +212,10 @@ fn build_http_client(
                 location.display()
             ))
         })?;
-        builder = builder.add_root_certificate(certificate);
+        // Disable built-in root certificates and use only our custom CA
+        builder = builder
+            .tls_built_in_root_certs(false)
+            .add_root_certificate(certificate);
     }
 
     match (&tls.client_certificate, &tls.client_private_key) {
@@ -212,7 +230,7 @@ fn build_http_client(
                     key_location.display()
                 ))
             })?;
-            builder = builder.identity(identity);
+            builder = builder.identity(identity).https_only(true);
         }
         (Some(_), None) | (None, Some(_)) => {
             return Err(config_error(

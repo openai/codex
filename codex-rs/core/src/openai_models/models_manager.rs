@@ -36,7 +36,6 @@ impl ModelsManager {
         }
     }
 
-    // do not use this function yet. It's work in progress.
     pub async fn refresh_available_models(
         &self,
         provider: &ModelProviderInfo,
@@ -47,29 +46,44 @@ impl ModelsManager {
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
+        let mut client_version = env!("CARGO_PKG_VERSION");
+        if client_version == "0.0.0" {
+            client_version = "99.99.99";
+        }
         let response = client
-            .list_models(env!("CARGO_PKG_VERSION"), HeaderMap::new())
+            .list_models(client_version, HeaderMap::new())
             .await
             .map_err(map_api_error)?;
 
         let models = response.models;
         *self.remote_models.write().await = models.clone();
+        let available_models = self.build_available_models().await;
         {
             let mut available_models_guard = self.available_models.write().await;
-            *available_models_guard = self.build_available_models().await;
+            *available_models_guard = available_models;
         }
         Ok(models)
     }
 
-    pub fn construct_model_family(&self, model: &str, config: &Config) -> ModelFamily {
+    pub async fn construct_model_family(&self, model: &str, config: &Config) -> ModelFamily {
+        find_family_for_model(model)
+            .with_config_overrides(config)
+            .with_remote_overrides(self.remote_models.read().await.clone())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn construct_model_family_offline(model: &str, config: &Config) -> ModelFamily {
         find_family_for_model(model).with_config_overrides(config)
     }
 
     async fn build_available_models(&self) -> Vec<ModelPreset> {
         let mut available_models = self.remote_models.read().await.clone();
         available_models.sort_by(|a, b| b.priority.cmp(&a.priority));
-        let mut model_presets: Vec<ModelPreset> =
-            available_models.into_iter().map(Into::into).collect();
+        let mut model_presets: Vec<ModelPreset> = available_models
+            .into_iter()
+            .map(Into::into)
+            .filter(|preset: &ModelPreset| preset.show_in_picker)
+            .collect();
         if let Some(default) = model_presets.first_mut() {
             default.is_default = true;
         }
@@ -96,12 +110,13 @@ mod tests {
             "display_name": display,
             "description": format!("{display} desc"),
             "default_reasoning_level": "medium",
-            "supported_reasoning_levels": ["low", "medium"],
+            "supported_reasoning_levels": [{"effort": "low", "description": "low"}, {"effort": "medium", "description": "medium"}],
             "shell_type": "shell_command",
             "visibility": "list",
             "minimal_client_version": [0, 1, 0],
             "supported_in_api": true,
-            "priority": priority
+            "priority": priority,
+            "upgrade": null,
         }))
         .expect("valid model")
     }

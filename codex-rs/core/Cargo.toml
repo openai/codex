@@ -90,6 +90,7 @@ wildmatch = { workspace = true }
 
 [features]
 deterministic_process_ids = []
+test-support = []
 
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -369,6 +369,57 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      # We have been running out of space when running this job on Linux for
+      # x86_64-unknown-linux-gnu, so remove some unnecessary dependencies.
+      - name: Remove unnecessary dependencies to save space
+        if: ${{ startsWith(matrix.runner, 'ubuntu') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /usr/local/lib/node_modules \
+            /opt/ghc
+          sudo apt-get remove -y docker.io docker-compose podman buildah
+
+      # Ensure brew includes this fix so that brew's shellenv.sh loads
+      # cleanly in the Codex sandbox (it is frequently eval'd via .zprofile
+      # for Brew users, including the macOS runners on GitHub):
+      #
+      # https://github.com/Homebrew/brew/pull/21157
+      #
+      # Once brew 5.0.5 is released and is the default on macOS runners, this
+      # step can be removed.
+      - name: Upgrade brew
+        if: ${{ startsWith(matrix.runner, 'macos') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew --version
+          git -C "$(brew --repo)" fetch origin
+          git -C "$(brew --repo)" checkout main
+          git -C "$(brew --repo)" reset --hard origin/main
+          export HOMEBREW_UPDATE_TO_TAG=0
+          brew update
+          brew upgrade
+          brew --version
+
+      # Some integration tests rely on DotSlash being installed.
+      # See https://github.com/openai/codex/pull/7617.
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@v2
+
+      - name: Pre-fetch DotSlash artifacts
+        # The Bash wrapper is not available on Windows.
+        if: ${{ !startsWith(matrix.runner, 'windows') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotslash -- fetch exec-server/tests/suite/bash
+
       - uses: dtolnay/rust-toolchain@1.90
         with:
           targets: ${{ matrix.target }}

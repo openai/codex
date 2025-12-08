@@ -126,7 +126,9 @@ pub(crate) async fn assess_command(
         output_schema: Some(sandbox_assessment_schema()),
     };
 
-    let model_family = models_manager.construct_model_family(&config.model, &config);
+    let model_family = models_manager
+        .construct_model_family(&config.model, &config)
+        .await;
 
     let child_otel = parent_otel.with_model(config.model.as_str(), model_family.slug.as_str());
 
