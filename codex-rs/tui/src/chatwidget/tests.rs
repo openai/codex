@@ -2912,7 +2912,7 @@ fn warning_event_adds_warning_history_cell() {
 
 #[test]
 fn stream_recovery_restores_previous_status_header() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
     chat.handle_codex_event(Event {
         id: "task".into(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
