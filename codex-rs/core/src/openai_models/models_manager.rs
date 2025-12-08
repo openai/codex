@@ -172,13 +172,10 @@ mod tests {
     use crate::auth::AuthCredentialsStoreMode;
     use crate::model_provider_info::WireApi;
     use codex_protocol::openai_models::ModelsResponse;
+    use core_test_support::responses::mount_models_once;
     use serde_json::json;
     use tempfile::tempdir;
-    use wiremock::Mock;
     use wiremock::MockServer;
-    use wiremock::ResponseTemplate;
-    use wiremock::matchers::method;
-    use wiremock::matchers::path;
 
     fn remote_model(slug: &str, display: &str, priority: i32) -> ModelInfo {
         serde_json::from_value(json!({
@@ -222,20 +219,14 @@ mod tests {
             remote_model("priority-low", "Low", 1),
             remote_model("priority-high", "High", 10),
         ];
-        let response = ModelsResponse {
-            models: remote_models.clone(),
-            etag: String::new(),
-        };
-        Mock::given(method("GET"))
-            .and(path("/models"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("content-type", "application/json")
-                    .set_body_json(&response),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
+        let models_mock = mount_models_once(
+            &server,
+            ModelsResponse {
+                models: remote_models.clone(),
+                etag: String::new(),
+            },
+        )
+        .await;
 
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
@@ -260,22 +251,25 @@ mod tests {
         );
         assert_eq!(available[1].model, "priority-low");
         assert!(!available[1].is_default);
+        assert_eq!(
+            models_mock.requests().len(),
+            1,
+            "expected a single /models request"
+        );
     }
 
     #[tokio::test]
     async fn refresh_available_models_uses_cache_when_fresh() {
         let server = MockServer::start().await;
         let remote_models = vec![remote_model("cached", "Cached", 5)];
-        let response = ModelsResponse {
-            models: remote_models.clone(),
-            etag: String::new(),
-        };
-        Mock::given(method("GET"))
-            .and(path("/models"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&response))
-            .expect(1)
-            .mount(&server)
-            .await;
+        let models_mock = mount_models_once(
+            &server,
+            ModelsResponse {
+                models: remote_models.clone(),
+                etag: String::new(),
+            },
+        )
+        .await;
 
         let codex_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
@@ -298,22 +292,25 @@ mod tests {
             .await
             .expect("cached refresh succeeds");
         assert_eq!(cached, remote_models);
+        assert_eq!(
+            models_mock.requests().len(),
+            1,
+            "cache hit should avoid a second /models request"
+        );
     }
 
     #[tokio::test]
     async fn refresh_available_models_refetches_when_cache_stale() {
         let server = MockServer::start().await;
         let initial_models = vec![remote_model("stale", "Stale", 1)];
-        let first_response = ModelsResponse {
-            models: initial_models.clone(),
-            etag: String::new(),
-        };
-        Mock::given(method("GET"))
-            .and(path("/models"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&first_response))
-            .expect(1)
-            .mount(&server)
-            .await;
+        let initial_mock = mount_models_once(
+            &server,
+            ModelsResponse {
+                models: initial_models.clone(),
+                etag: String::new(),
+            },
+        )
+        .await;
 
         let codex_home = tempdir().expect("temp dir");
         let auth_manager = Arc::new(AuthManager::new(
@@ -340,22 +337,30 @@ mod tests {
             .expect("cache rewrite succeeds");
 
         let updated_models = vec![remote_model("fresh", "Fresh", 9)];
-        let second_response = ModelsResponse {
-            models: updated_models.clone(),
-            etag: String::new(),
-        };
         server.reset().await;
-        Mock::given(method("GET"))
-            .and(path("/models"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&second_response))
-            .expect(1)
-            .mount(&server)
-            .await;
+        let refreshed_mock = mount_models_once(
+            &server,
+            ModelsResponse {
+                models: updated_models.clone(),
+                etag: String::new(),
+            },
+        )
+        .await;
 
         let refreshed = manager
             .refresh_available_models(&provider)
             .await
             .expect("second refresh succeeds");
         assert_eq!(refreshed, updated_models);
+        assert_eq!(
+            initial_mock.requests().len(),
+            1,
+            "initial refresh should only hit /models once"
+        );
+        assert_eq!(
+            refreshed_mock.requests().len(),
+            1,
+            "stale cache refresh should fetch /models once"
+        );
     }
 }

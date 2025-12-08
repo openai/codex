@@ -1104,7 +1104,6 @@ impl AuthManager {
         self.inner.read().ok().and_then(|c| c.auth.clone())
     }
 
-    /// Location backing this auth manager. Used for ancillary per-user caches.
     pub fn codex_home(&self) -> &Path {
         &self.codex_home
     }
