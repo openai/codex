@@ -536,7 +536,7 @@ impl Session {
 
         for (alias, feature) in config.features.legacy_feature_usages() {
             let canonical = feature.key();
-            let summary = format!("`{alias}` is deprecated. Use `{canonical}` instead.");
+            let summary = format!("`{alias}` is deprecated. Use `[features].{canonical}` instead.");
             let details = if alias == canonical {
                 None
             } else {
@@ -1469,6 +1469,16 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
     // Seed with context in case there is an OverrideTurnContext first.
     let mut previous_context: Option<Arc<TurnContext>> =
         Some(sess.new_turn(SessionSettingsUpdate::default()).await);
+
+    if config.features.enabled(Feature::RemoteModels)
+        && let Err(err) = sess
+            .services
+            .models_manager
+            .refresh_available_models(&config.model_provider)
+            .await
+    {
+        error!("failed to refresh available models: {err}");
+    }
 
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {

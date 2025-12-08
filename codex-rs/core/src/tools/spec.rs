@@ -804,10 +804,16 @@ pub(crate) fn create_tools_json_for_chat_completions_api(
             }
 
             if let Some(map) = tool.as_object_mut() {
+                let name = map
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
                 // Remove "type" field as it is not needed in chat completions.
                 map.remove("type");
                 Some(json!({
                     "type": "function",
+                    "name": name,
                     "function": map,
                 }))
             } else {
@@ -2081,6 +2087,60 @@ Examples of valid command strings:
                 description: "Do something cool".to_string(),
                 strict: false,
             })
+        );
+    }
+
+    #[test]
+    fn chat_tools_include_top_level_name() {
+        let mut properties = BTreeMap::new();
+        properties.insert("foo".to_string(), JsonSchema::String { description: None });
+        let tools = vec![ToolSpec::Function(ResponsesApiTool {
+            name: "demo".to_string(),
+            description: "A demo tool".to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties,
+                required: None,
+                additional_properties: None,
+            },
+        })];
+
+        let responses_json = create_tools_json_for_responses_api(&tools).unwrap();
+        assert_eq!(
+            responses_json,
+            vec![json!({
+                "type": "function",
+                "name": "demo",
+                "description": "A demo tool",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "foo": { "type": "string" }
+                    },
+                },
+            })]
+        );
+
+        let tools_json = create_tools_json_for_chat_completions_api(&tools).unwrap();
+
+        assert_eq!(
+            tools_json,
+            vec![json!({
+                "type": "function",
+                "name": "demo",
+                "function": {
+                    "name": "demo",
+                    "description": "A demo tool",
+                    "strict": false,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "foo": { "type": "string" }
+                        },
+                    },
+                }
+            })]
         );
     }
 }
