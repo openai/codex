@@ -59,7 +59,7 @@ impl ModelsManager {
         &self,
         provider: &ModelProviderInfo,
     ) -> CoreResult<Vec<ModelInfo>> {
-        if let Some(models) = self.try_load_cache(provider).await {
+        if let Some(models) = self.try_load_cache().await {
             return Ok(models);
         }
 
@@ -82,7 +82,7 @@ impl ModelsManager {
 
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
-        self.persist_cache(provider, &models, etag).await;
+        self.persist_cache(&models, etag).await;
         Ok(models)
     }
 
@@ -118,7 +118,7 @@ impl ModelsManager {
     }
 
     /// Attempt to satisfy the refresh from the cache when it matches the provider and TTL.
-    async fn try_load_cache(&self, provider: &ModelProviderInfo) -> Option<Vec<ModelInfo>> {
+    async fn try_load_cache(&self) -> Option<Vec<ModelInfo>> {
         let cache_path = self.cache_path();
         let cache = match cache::load_cache(&cache_path).await {
             Ok(cache) => cache?,
@@ -127,7 +127,7 @@ impl ModelsManager {
                 return None;
             }
         };
-        if cache.provider_name != provider.name || !cache.is_fresh(self.cache_ttl) {
+        if !cache.is_fresh(self.cache_ttl) {
             return None;
         }
         let models = cache.models.clone();
@@ -137,14 +137,8 @@ impl ModelsManager {
     }
 
     /// Serialize the latest fetch to disk for reuse across future processes.
-    async fn persist_cache(
-        &self,
-        provider: &ModelProviderInfo,
-        models: &[ModelInfo],
-        etag: Option<String>,
-    ) {
+    async fn persist_cache(&self, models: &[ModelInfo], etag: Option<String>) {
         let cache = ModelsCache {
-            provider_name: provider.name.clone(),
             fetched_at: Utc::now(),
             etag,
             models: models.to_vec(),
