@@ -55,12 +55,9 @@ impl ModelsManager {
     }
 
     /// Fetch the latest remote models, using the on-disk cache when still fresh.
-    pub async fn refresh_available_models(
-        &self,
-        provider: &ModelProviderInfo,
-    ) -> CoreResult<Vec<ModelInfo>> {
-        if let Some(models) = self.try_load_cache().await {
-            return Ok(models);
+    pub async fn refresh_available_models(&self, provider: &ModelProviderInfo) -> CoreResult<()> {
+        if self.try_load_cache().await {
+            return Ok(());
         }
 
         let auth = self.auth_manager.auth();
@@ -83,7 +80,7 @@ impl ModelsManager {
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
         self.persist_cache(&models, etag).await;
-        Ok(models)
+        Ok(())
     }
 
     pub async fn list_models(&self) -> Vec<ModelPreset> {
@@ -112,28 +109,30 @@ impl ModelsManager {
     /// Replace the cached remote models and rebuild the derived presets list.
     async fn apply_remote_models(&self, models: Vec<ModelInfo>) {
         *self.remote_models.write().await = models;
-        let available_models = self.build_available_models().await;
-        let mut available_models_guard = self.available_models.write().await;
-        *available_models_guard = available_models;
+        self.build_available_models().await;
     }
 
     /// Attempt to satisfy the refresh from the cache when it matches the provider and TTL.
-    async fn try_load_cache(&self) -> Option<Vec<ModelInfo>> {
+    async fn try_load_cache(&self) -> bool {
         let cache_path = self.cache_path();
         let cache = match cache::load_cache(&cache_path).await {
-            Ok(cache) => cache?,
+            Ok(cache) => cache,
             Err(err) => {
                 error!("failed to load models cache: {err}");
-                return None;
+                return false;
             }
         };
+        let cache = match cache {
+            Some(cache) => cache,
+            None => return false,
+        };
         if !cache.is_fresh(self.cache_ttl) {
-            return None;
+            return false;
         }
         let models = cache.models.clone();
         *self.etag.write().await = cache.etag.clone();
         self.apply_remote_models(models.clone()).await;
-        Some(models)
+        true
     }
 
     /// Serialize the latest fetch to disk for reuse across future processes.
@@ -150,7 +149,7 @@ impl ModelsManager {
     }
 
     /// Convert remote model metadata into picker-ready presets, marking defaults.
-    async fn build_available_models(&self) -> Vec<ModelPreset> {
+    async fn build_available_models(&self) {
         let mut available_models = self.remote_models.read().await.clone();
         available_models.sort_by(|a, b| b.priority.cmp(&a.priority));
         let mut model_presets: Vec<ModelPreset> = available_models
@@ -161,7 +160,10 @@ impl ModelsManager {
         if let Some(default) = model_presets.first_mut() {
             default.is_default = true;
         }
-        model_presets
+        {
+            let mut available_models_guard = self.available_models.write().await;
+            *available_models_guard = model_presets;
+        }
     }
 
     fn cache_path(&self) -> PathBuf {
@@ -238,12 +240,10 @@ mod tests {
         let manager = ModelsManager::new(auth_manager);
         let provider = provider_for(server.uri());
 
-        let returned = manager
+        manager
             .refresh_available_models(&provider)
             .await
             .expect("refresh succeeds");
-
-        assert_eq!(returned, remote_models);
         let cached_remote = manager.remote_models.read().await.clone();
         assert_eq!(cached_remote, remote_models);
 
@@ -285,18 +285,26 @@ mod tests {
         let manager = ModelsManager::new(auth_manager);
         let provider = provider_for(server.uri());
 
-        let fetched = manager
+        manager
             .refresh_available_models(&provider)
             .await
             .expect("first refresh succeeds");
-        assert_eq!(fetched, remote_models);
+        assert_eq!(
+            *manager.remote_models.read().await,
+            remote_models,
+            "remote cache should store fetched models"
+        );
 
         // Second call should read from cache and avoid the network.
-        let cached = manager
+        manager
             .refresh_available_models(&provider)
             .await
             .expect("cached refresh succeeds");
-        assert_eq!(cached, remote_models);
+        assert_eq!(
+            *manager.remote_models.read().await,
+            remote_models,
+            "cache path should not mutate stored models"
+        );
         assert_eq!(
             models_mock.requests().len(),
             1,
@@ -352,11 +360,15 @@ mod tests {
         )
         .await;
 
-        let refreshed = manager
+        manager
             .refresh_available_models(&provider)
             .await
             .expect("second refresh succeeds");
-        assert_eq!(refreshed, updated_models);
+        assert_eq!(
+            *manager.remote_models.read().await,
+            updated_models,
+            "stale cache should trigger refetch"
+        );
         assert_eq!(
             initial_mock.requests().len(),
             1,

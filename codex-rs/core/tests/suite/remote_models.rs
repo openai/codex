@@ -177,7 +177,11 @@ async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) -> M
             return model;
         }
         if Instant::now() >= deadline {
-            panic!("timed out waiting for the remote model {slug} to appear");
+            let available = manager.list_models().await;
+            panic!(
+                "timed out waiting for the remote model {slug} to appear; available: {:?}",
+                available.iter().map(|m| &m.model).collect::<Vec<_>>()
+            );
         }
         sleep(Duration::from_millis(25)).await;
     }
