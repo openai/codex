@@ -3,7 +3,6 @@ use codex_api::ReqwestTransport;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use http::HeaderMap;
-use semver::Version;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
