@@ -2390,6 +2390,15 @@ async fn windows_unified_exec_escape_output_snapshot() -> Result<()> {
 
     let raw_output = parsed.output.as_str();
 
+    // assert!(
+    //     raw_output.contains("UEXEC-WINDOWS-ESCAPES"),
+    //     "expected marker string in unified_exec output, got {raw_output:?}"
+    // );
+    // assert!(
+    //     !raw_output.contains('\u{1b}'),
+    //     "expected unified_exec output to be stripped of ANSI escape sequences on Windows, got {raw_output:?}"
+    // );
+
     // Intentionally failing assertion so CI logs show the raw PTY output,
     // including any escape sequences produced by ConPTY / PowerShell.
     let expected = "UEXEC-WINDOWS-ESCAPES\n";
@@ -2397,6 +2406,7 @@ async fn windows_unified_exec_escape_output_snapshot() -> Result<()> {
         raw_output, expected,
         "raw unified_exec PTY output on Windows (expected simple marker, got full stream)"
     );
+    assert!(false);
 
     Ok(())
 }

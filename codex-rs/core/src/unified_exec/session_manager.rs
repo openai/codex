@@ -62,6 +62,53 @@ const UNIFIED_EXEC_ENV: [(&str, &str); 8] = [
     ("GIT_PAGER", "cat"),
 ];
 
+fn normalize_unified_exec_text(raw: &str) -> String {
+    let with_unix_newlines = raw.replace("\r\n", "\n");
+    let with_unix_newlines = with_unix_newlines.replace('\r', "\n");
+    strip_ansi_escape_sequences(&with_unix_newlines)
+}
+
+fn strip_ansi_escape_sequences(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut iter = input.chars().peekable();
+
+    while let Some(ch) = iter.next() {
+        if ch == '\u{1b}' {
+            match iter.peek().copied() {
+                Some('[') => {
+                    let _ = iter.next();
+                    for c in iter.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    let _ = iter.next();
+                    while let Some(c) = iter.next() {
+                        if c == '\u{7}' {
+                            break;
+                        }
+                        if c == '\u{1b}'
+                            && let Some('\\') = iter.peek().copied() {
+                                let _ = iter.next();
+                                break;
+                            }
+                    }
+                }
+                Some(_) => {
+                    let _ = iter.next();
+                }
+                None => {}
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
 fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, String> {
     for (key, value) in UNIFIED_EXEC_ENV {
         env.insert(key.to_string(), value.to_string());
@@ -163,7 +210,8 @@ impl UnifiedExecSessionManager {
         .await;
         let wall_time = Instant::now().saturating_duration_since(start);
 
-        let text = String::from_utf8_lossy(&collected).to_string();
+        let raw_text = String::from_utf8_lossy(&collected).to_string();
+        let text = normalize_unified_exec_text(&raw_text);
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let has_exited = session.has_exited();
         let exit_code = session.exit_code();
@@ -285,7 +333,8 @@ impl UnifiedExecSessionManager {
         .await;
         let wall_time = Instant::now().saturating_duration_since(start);
 
-        let text = String::from_utf8_lossy(&collected).to_string();
+        let raw_text = String::from_utf8_lossy(&collected).to_string();
+        let text = normalize_unified_exec_text(&raw_text);
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let original_token_count = approx_token_count(&text);
         let chunk_id = generate_chunk_id();
