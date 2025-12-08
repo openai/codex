@@ -60,7 +60,10 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     // Build a conversation configured to require approvals so the delegate
     // routes ExecApprovalRequest via the parent.
     let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
-        config.approval_policy = AskForApproval::OnRequest;
+        config
+            .approval_policy
+            .set(AskForApproval::OnRequest)
+            .expect("set approval policy");
         config.sandbox_policy = SandboxPolicy::ReadOnly;
     });
     let test = builder.build(&server).await.expect("build test codex");
@@ -136,7 +139,10 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     mount_sse_sequence(&server, vec![sse1, sse2]).await;
 
     let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
-        config.approval_policy = AskForApproval::OnRequest;
+        config
+            .approval_policy
+            .set(AskForApproval::OnRequest)
+            .expect("set approval policy");
         // Use a restricted sandbox so patch approval is required
         config.sandbox_policy = SandboxPolicy::ReadOnly;
         config.include_apply_patch_tool = true;

@@ -573,7 +573,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
         .await?;
 
     let default_cwd = config.cwd.clone();
-    let default_approval_policy = config.approval_policy;
+    let default_approval_policy = *config.approval_policy;
     let default_sandbox_policy = config.sandbox_policy.clone();
     let default_model = config.model.clone();
     let default_effort = config.model_reasoning_effort;
@@ -660,7 +660,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         .await?;
 
     let default_cwd = config.cwd.clone();
-    let default_approval_policy = config.approval_policy;
+    let default_approval_policy = *config.approval_policy;
     let default_sandbox_policy = config.sandbox_policy.clone();
     let default_model = config.model.clone();
     let default_effort = config.model_reasoning_effort;

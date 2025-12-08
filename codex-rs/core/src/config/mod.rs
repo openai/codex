@@ -50,9 +50,11 @@ use serde::Deserialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::fmt;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
@@ -72,6 +74,75 @@ pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5.1-codex";
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+
+type ConstraintValidator<T> = dyn Fn(&T) -> std::io::Result<()> + Send + Sync;
+
+#[derive(Clone)]
+pub struct Constrained<T> {
+    value: T,
+    validator: Arc<ConstraintValidator<T>>,
+}
+
+impl<T> Constrained<T> {
+    pub fn new(
+        initial_value: T,
+        validator: impl Fn(&T) -> std::io::Result<()> + Send + Sync + 'static,
+    ) -> std::io::Result<Self> {
+        let validator: Arc<ConstraintValidator<T>> = Arc::new(validator);
+        validator(&initial_value)?;
+        Ok(Self {
+            value: initial_value,
+            validator,
+        })
+    }
+
+    pub fn allow_any(initial_value: T) -> Self {
+        Self {
+            value: initial_value,
+            validator: Arc::new(|_| Ok(())),
+        }
+    }
+
+    pub fn can_set(&self, candidate: &T) -> std::io::Result<()> {
+        (self.validator)(candidate)
+    }
+
+    pub fn set(&mut self, value: T) -> std::io::Result<()> {
+        (self.validator)(&value)?;
+        self.value = value;
+        Ok(())
+    }
+
+    pub fn as_ref(&self) -> &T {
+        &self.value
+    }
+
+    pub fn into_inner(self) -> T {
+        self.value
+    }
+}
+
+impl<T> std::ops::Deref for Constrained<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for Constrained<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Constrained")
+            .field("value", &self.value)
+            .finish()
+    }
+}
+
+impl<T: PartialEq> PartialEq for Constrained<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -97,7 +168,7 @@ pub struct Config {
     pub model_provider: ModelProviderInfo,
 
     /// Approval policy for executing commands.
-    pub approval_policy: AskForApproval,
+    pub approval_policy: Constrained<AskForApproval>,
 
     pub sandbox_policy: SandboxPolicy,
 
@@ -1053,6 +1124,7 @@ impl Config {
                     AskForApproval::default()
                 }
             });
+        let approval_policy = Constrained::allow_any(approval_policy);
         let did_user_set_custom_approval_policy_or_sandbox_mode = approval_policy_override
             .is_some()
             || config_profile.approval_policy.is_some()
@@ -1386,6 +1458,74 @@ mod tests {
 
     use std::time::Duration;
     use tempfile::TempDir;
+
+    #[test]
+    fn constrained_allow_any_accepts_any_value() {
+        let mut constrained = Constrained::allow_any(5);
+        constrained.set(-10).expect("allow any accepts all values");
+        assert_eq!(*constrained, -10);
+    }
+
+    #[test]
+    fn constrained_new_rejects_invalid_initial_value() {
+        let result = Constrained::new(0, |value| {
+            if *value > 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "must be positive",
+                ))
+            }
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn constrained_set_rejects_invalid_value_and_leaves_previous() {
+        let mut constrained = Constrained::new(1, |value| {
+            if *value > 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "must be positive",
+                ))
+            }
+        })
+        .expect("initial value should be accepted");
+
+        let err = constrained
+            .set(-5)
+            .expect_err("negative values should be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(*constrained, 1);
+    }
+
+    #[test]
+    fn constrained_can_set_allows_probe_without_setting() {
+        let mut constrained = Constrained::new(1, |value| {
+            if *value > 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "must be positive",
+                ))
+            }
+        })
+        .expect("initial value should be accepted");
+
+        constrained
+            .can_set(&2)
+            .expect("can_set should accept positive value");
+        let err = constrained
+            .can_set(&-1)
+            .expect_err("can_set should reject negative value");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(*constrained, 1);
+    }
 
     #[test]
     fn test_toml_parsing() {
@@ -2960,7 +3100,7 @@ model_verbosity = "high"
                 model_auto_compact_token_limit: Some(180_000),
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
-                approval_policy: AskForApproval::Never,
+                approval_policy: Constrained::allow_any(AskForApproval::Never),
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
@@ -3034,7 +3174,7 @@ model_verbosity = "high"
             model_auto_compact_token_limit: Some(14_746),
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
-            approval_policy: AskForApproval::UnlessTrusted,
+            approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
@@ -3123,7 +3263,7 @@ model_verbosity = "high"
             model_auto_compact_token_limit: Some(180_000),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
-            approval_policy: AskForApproval::OnFailure,
+            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
@@ -3198,7 +3338,7 @@ model_verbosity = "high"
             model_auto_compact_token_limit: Some(244_800),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
-            approval_policy: AskForApproval::OnFailure,
+            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
@@ -3539,7 +3679,7 @@ trust_level = "untrusted"
 
         // Verify that untrusted projects get UnlessTrusted approval policy
         assert_eq!(
-            config.approval_policy,
+            *config.approval_policy,
             AskForApproval::UnlessTrusted,
             "Expected UnlessTrusted approval policy for untrusted project"
         );

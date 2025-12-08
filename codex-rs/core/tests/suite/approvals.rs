@@ -1460,7 +1460,10 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     let model = model_override.unwrap_or("gpt-5.1");
 
     let mut builder = test_codex().with_model(model).with_config(move |config| {
-        config.approval_policy = approval_policy;
+        config
+            .approval_policy
+            .set(approval_policy)
+            .expect("set approval policy");
         config.sandbox_policy = sandbox_policy.clone();
         for feature in features {
             config.features.enable(feature);
