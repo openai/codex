@@ -143,7 +143,7 @@ async fn linux_unified_exec_uses_shell_snapshot() -> Result<()> {
     assert_eq!(run.begin.command.get(1).map(String::as_str), Some("-c"));
     assert_eq!(
         run.begin.command.get(2).map(String::as_str),
-        Some(". \"$1\" && shift && exec \"$@\"")
+        Some(". \"$0\" && exec \"$@\"")
     );
     assert_eq!(run.begin.command.get(4), Some(&shell_path));
     assert_eq!(run.begin.command.get(5).map(String::as_str), Some("-c"));
@@ -172,7 +172,7 @@ async fn macos_unified_exec_uses_shell_snapshot() -> Result<()> {
     assert_eq!(run.begin.command.get(1).map(String::as_str), Some("-c"));
     assert_eq!(
         run.begin.command.get(2).map(String::as_str),
-        Some(". \"$1\" && shift && exec \"$@\"")
+        Some(". \"$0\" && exec \"$@\"")
     );
     assert_eq!(run.begin.command.get(4), Some(&shell_path));
     assert_eq!(run.begin.command.get(5).map(String::as_str), Some("-c"));

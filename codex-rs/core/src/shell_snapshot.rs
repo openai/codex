@@ -9,8 +9,6 @@ use anyhow::bail;
 use tokio::fs;
 use tokio::process::Command;
 use tokio::time::timeout;
-use tracing::debug;
-use tracing::warn;
 use uuid::Uuid;
 
 use crate::shell::Shell;
@@ -33,9 +31,12 @@ impl ShellSnapshot {
                 .join("shell_snapshots")
                 .join(format!("{}.{}", Uuid::new_v4(), extension));
         match write_shell_snapshot(shell.shell_type.clone(), &path).await {
-            Ok(path) => Some(Self { path }),
+            Ok(path) => {
+                tracing::info!("Shell snapshot successfully created: {}", path.display());
+                Some(Self { path })
+            }
             Err(err) => {
-                warn!(
+                tracing::warn!(
                     "Failed to create shell snapshot for {}: {err:?}",
                     shell.name()
                 );
@@ -48,7 +49,7 @@ impl ShellSnapshot {
 impl Drop for ShellSnapshot {
     fn drop(&mut self) {
         if let Err(err) = std::fs::remove_file(&self.path) {
-            debug!(
+            tracing::warn!(
                 "Failed to delete shell snapshot at {:?}: {err:?}",
                 self.path
             );
@@ -60,7 +61,8 @@ pub async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> 
     let shell = get_shell(shell_type.clone(), None)
         .with_context(|| format!("No available shell for {shell_type:?}"))?;
 
-    let snapshot = capture_snapshot(&shell).await?;
+    let raw_snapshot = capture_snapshot(&shell).await?;
+    let snapshot = strip_snapshot_preamble(&raw_snapshot)?;
 
     if let Some(parent) = output_path.parent() {
         let parent_display = parent.display();
@@ -86,6 +88,15 @@ async fn capture_snapshot(shell: &Shell) -> Result<String> {
         ShellType::PowerShell => run_shell_script(shell, powershell_snapshot_script()).await,
         ShellType::Cmd => bail!("Shell snapshotting is not yet supported for {shell_type:?}"),
     }
+}
+
+fn strip_snapshot_preamble(snapshot: &str) -> Result<String> {
+    let marker = "# Snapshot file";
+    let Some(start) = snapshot.find(marker) else {
+        bail!("Snapshot output missing marker {marker}");
+    };
+
+    Ok(snapshot[start..].to_string())
 }
 
 async fn run_shell_script(shell: &Shell, script: &str) -> Result<String> {
@@ -250,6 +261,19 @@ mod tests {
         Ok(content)
     }
 
+    #[test]
+    fn strip_snapshot_preamble_removes_leading_output() {
+        let snapshot = "noise\n# Snapshot file\nexport PATH=/bin\n";
+        let cleaned = strip_snapshot_preamble(snapshot).expect("snapshot marker exists");
+        assert_eq!(cleaned, "# Snapshot file\nexport PATH=/bin\n");
+    }
+
+    #[test]
+    fn strip_snapshot_preamble_requires_marker() {
+        let result = strip_snapshot_preamble("missing header");
+        assert!(result.is_err());
+    }
+
     #[cfg(unix)]
     #[test]
     fn wrap_command_with_snapshot_wraps_bash_shell() {
@@ -269,7 +293,7 @@ mod tests {
 
         let wrapped = shell.wrap_command_with_snapshot(&original_command);
 
-        let mut expected = shell.derive_exec_args(". \"$1\" && shift && exec \"$@\"", false);
+        let mut expected = shell.derive_exec_args(". \"$0\" && exec \"$@\"", false);
         expected.push(snapshot_path.to_string_lossy().to_string());
         expected.extend_from_slice(&original_command);
 
