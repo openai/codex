@@ -350,6 +350,8 @@ Though using this option may also be necessary if you try to use Codex in enviro
 
 ### tools.\*
 
+These `[tools]` configuration options are deprecated. Use `[features]` instead (see [Feature flags](#feature-flags)).
+
 Use the optional `[tools]` table to toggle built-in tools that the agent may call. `web_search` stays off unless you opt in, while `view_image` is now enabled by default:
 
 ```toml
@@ -357,8 +359,6 @@ Use the optional `[tools]` table to toggle built-in tools that the agent may cal
 web_search = true   # allow Codex to issue first-party web searches without prompting you (deprecated)
 view_image = false  # disable image uploads (they're enabled by default)
 ```
-
-`web_search` is deprecated; use the `web_search_request` feature flag instead.
 
 The `view_image` toggle is useful when you want to include screenshots or diagrams from your repo without pasting them manually. Codex still respects sandboxing: it can only attach files inside the workspace roots you allow.
 
@@ -615,12 +615,12 @@ Set `otel.exporter` to control where events go:
   endpoint, protocol, and headers your collector expects:
 
   ```toml
-  [otel]
-  exporter = { otlp-http = {
-    endpoint = "https://otel.example.com/v1/logs",
-    protocol = "binary",
-    headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" }
-  }}
+  [otel.exporter."otlp-http"]
+  endpoint = "https://otel.example.com/v1/logs"
+  protocol = "binary"
+
+  [otel.exporter."otlp-http".headers]
+  "x-otlp-api-key" = "${OTLP_TOKEN}"
   ```
 
 - `otlp-grpc` – streams OTLP log records over gRPC. Provide the endpoint and any
@@ -628,27 +628,24 @@ Set `otel.exporter` to control where events go:
 
   ```toml
   [otel]
-  exporter = { otlp-grpc = {
-    endpoint = "https://otel.example.com:4317",
-    headers = { "x-otlp-meta" = "abc123" }
-  }}
+  exporter = { otlp-grpc = {endpoint = "https://otel.example.com:4317",headers = { "x-otlp-meta" = "abc123" }}}
   ```
 
 Both OTLP exporters accept an optional `tls` block so you can trust a custom CA
 or enable mutual TLS. Relative paths are resolved against `~/.codex/`:
 
 ```toml
-[otel]
-exporter = { otlp-http = {
-  endpoint = "https://otel.example.com/v1/logs",
-  protocol = "binary",
-  headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" },
-  tls = {
-    ca-certificate = "certs/otel-ca.pem",
-    client-certificate = "/etc/codex/certs/client.pem",
-    client-private-key = "/etc/codex/certs/client-key.pem",
-  }
-}}
+[otel.exporter."otlp-http"]
+endpoint = "https://otel.example.com/v1/logs"
+protocol = "binary"
+
+[otel.exporter."otlp-http".headers]
+"x-otlp-api-key" = "${OTLP_TOKEN}"
+
+[otel.exporter."otlp-http".tls]
+ca-certificate = "certs/otel-ca.pem"
+client-certificate = "/etc/codex/certs/client.pem"
+client-private-key = "/etc/codex/certs/client-key.pem"
 ```
 
 If the exporter is `none` nothing is written anywhere; otherwise you must run or point to your
