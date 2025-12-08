@@ -223,7 +223,7 @@ vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "6"
-wildmatch = "2.5.0"
+wildmatch = "2.6.1"
 
 wiremock = "0.6"
 zeroize = "1.8.2"
