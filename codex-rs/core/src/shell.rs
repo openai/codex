@@ -445,11 +445,17 @@ mod tests {
         };
         assert_eq!(
             test_powershell_shell.derive_exec_args("echo hello", false),
-            vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"]
+            vec![
+                "pwsh.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "echo hello"
+            ]
         );
         assert_eq!(
             test_powershell_shell.derive_exec_args("echo hello", true),
-            vec!["pwsh.exe", "-Command", "echo hello"]
+            vec!["pwsh.exe", "-NoLogo", "-Command", "echo hello"]
         );
     }
 
