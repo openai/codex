@@ -2096,7 +2096,8 @@ pub(crate) async fn run_task(
                 } = turn_output;
                 let limit = turn_context
                     .client
-                    .get_auto_compact_token_limit()
+                    .get_model_family()
+                    .auto_compact_token_limit()
                     .unwrap_or(i64::MAX);
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= limit;

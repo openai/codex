@@ -36,7 +36,7 @@ pub struct ModelFamily {
     pub context_window: Option<i64>,
 
     /// Token threshold for automatic compaction if config does not override it.
-    pub auto_compact_token_limit: Option<i64>,
+    auto_compact_token_limit: Option<i64>,
 
     // Whether the `reasoning` field can be set when making a request to this
     // model family. Note it has `effort` and `summary` subfields (though
@@ -89,6 +89,12 @@ impl ModelFamily {
         if let Some(reasoning_summary_format) = config.model_reasoning_summary_format.as_ref() {
             self.reasoning_summary_format = reasoning_summary_format.clone();
         }
+        if let Some(context_window) = config.model_context_window {
+            self.context_window = Some(context_window);
+        }
+        if let Some(auto_compact_token_limit) = config.model_auto_compact_token_limit {
+            self.auto_compact_token_limit = Some(auto_compact_token_limit);
+        }
         self
     }
     pub fn with_remote_overrides(mut self, remote_models: Vec<ModelInfo>) -> Self {
@@ -101,17 +107,13 @@ impl ModelFamily {
         self
     }
 
-    const fn default_auto_compact_limit(context_window: i64) -> i64 {
-        (context_window * 9) / 10
+    pub fn auto_compact_token_limit(&self) -> Option<i64> {
+        self.auto_compact_token_limit
+            .or(self.context_window.map(Self::default_auto_compact_limit))
     }
 
-    fn finalize_auto_compact_default(mut self) -> Self {
-        if self.auto_compact_token_limit.is_none()
-            && let Some(context_window) = self.context_window
-        {
-            self.auto_compact_token_limit = Some(Self::default_auto_compact_limit(context_window));
-        }
-        self
+    const fn default_auto_compact_limit(context_window: i64) -> i64 {
+        (context_window * 9) / 10
     }
 }
 
@@ -145,7 +147,7 @@ macro_rules! model_family {
         $(
             mf.$key = $value;
         )*
-        mf.finalize_auto_compact_default()
+        mf
     }};
 }
 
@@ -330,7 +332,6 @@ fn derive_default_model_family(model: &str) -> ModelFamily {
         default_reasoning_effort: None,
         truncation_policy: TruncationPolicy::Bytes(10_000),
     }
-    .finalize_auto_compact_default()
 }
 
 #[cfg(test)]
