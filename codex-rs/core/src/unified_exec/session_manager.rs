@@ -116,6 +116,25 @@ impl UnifiedExecSessionManager {
         store.remove(process_id);
     }
 
+    pub(crate) async fn register_session_name(
+        &self,
+        session_name: &str,
+        process_id: &str,
+    ) -> Result<(), UnifiedExecError> {
+        let mut store = self.session_store.lock().await;
+        store.insert_session_name(session_name, process_id)
+    }
+
+    pub(crate) async fn process_id_for_session_name(&self, session_name: &str) -> Option<String> {
+        let store = self.session_store.lock().await;
+        store.process_id_for_name(session_name)
+    }
+
+    pub(crate) async fn clear_session_name(&self, session_name: &str) {
+        let mut store = self.session_store.lock().await;
+        store.clear_session_name(session_name);
+    }
+
     pub(crate) async fn exec_command(
         &self,
         request: ExecCommandRequest,

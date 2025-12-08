@@ -58,6 +58,28 @@ struct WriteStdinArgs {
     max_output_tokens: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct NewSessionArgs {
+    session_name: String,
+    #[serde(default)]
+    workdir: Option<String>,
+    #[serde(default = "default_write_stdin_yield_time_ms")]
+    yield_time_ms: u64,
+    #[serde(default)]
+    max_output_tokens: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeedCharsArgs {
+    session_name: String,
+    #[serde(default)]
+    chars: String,
+    #[serde(default = "default_write_stdin_yield_time_ms")]
+    yield_time_ms: u64,
+    #[serde(default)]
+    max_output_tokens: Option<usize>,
+}
+
 fn default_exec_yield_time_ms() -> u64 {
     10000
 }
@@ -205,6 +227,87 @@ impl ToolHandler for UnifiedExecHandler {
                     .await
                     .map_err(|err| {
                         FunctionCallError::RespondToModel(format!("exec_command failed: {err:?}"))
+                    })?
+            }
+            "new_session" => {
+                let args: NewSessionArgs = serde_json::from_str(&arguments).map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to parse new_session arguments: {err:?}"
+                    ))
+                })?;
+
+                if args.session_name.trim().is_empty() {
+                    return Err(FunctionCallError::RespondToModel(
+                        "session_name must not be empty".to_string(),
+                    ));
+                }
+
+                let process_id = manager.allocate_process_id().await;
+                if let Err(err) = manager
+                    .register_session_name(&args.session_name, &process_id)
+                    .await
+                {
+                    manager.release_process_id(&process_id).await;
+                    return Err(FunctionCallError::RespondToModel(err.to_string()));
+                }
+
+                let workdir = args
+                    .workdir
+                    .filter(|value| !value.is_empty())
+                    .map(|dir| context.turn.resolve_path(Some(dir)));
+
+                let response = manager
+                    .exec_command(
+                        ExecCommandRequest {
+                            command: session.user_shell().login_command(),
+                            process_id,
+                            yield_time_ms: args.yield_time_ms,
+                            max_output_tokens: args.max_output_tokens,
+                            workdir,
+                            with_escalated_permissions: None,
+                            justification: None,
+                        },
+                        &context,
+                    )
+                    .await
+                    .map_err(|err| {
+                        FunctionCallError::RespondToModel(format!("exec_command failed: {err:?}"))
+                    })?;
+
+                if response.process_id.is_none() {
+                    manager.clear_session_name(&args.session_name).await;
+                }
+
+                response
+            }
+            "feed_chars" => {
+                let args: FeedCharsArgs = serde_json::from_str(&arguments).map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to parse feed_chars arguments: {err:?}"
+                    ))
+                })?;
+
+                let Some(process_id) = manager
+                    .process_id_for_session_name(&args.session_name)
+                    .await
+                else {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "Session '{}' not found",
+                        args.session_name
+                    )));
+                };
+
+                manager
+                    .write_stdin(WriteStdinRequest {
+                        call_id: &call_id,
+                        process_id: &process_id,
+                        input: &args.chars,
+                        yield_time_ms: args.yield_time_ms,
+                        max_output_tokens: args.max_output_tokens,
+                    })
+                    .await
+                    .map_err(|err| {
+                        FunctionCallError::RespondToModel(format!("write_stdin failed: {err:?}"))
                     })?
             }
             "write_stdin" => {

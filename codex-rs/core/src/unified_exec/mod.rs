@@ -109,17 +109,43 @@ pub(crate) struct UnifiedExecSessionManager {
 pub(crate) struct SessionStore {
     sessions: HashMap<String, SessionEntry>,
     reserved_sessions_id: HashSet<String>,
+    session_names: HashMap<String, String>,
 }
 
 impl SessionStore {
     fn remove(&mut self, session_id: &str) -> Option<SessionEntry> {
         self.reserved_sessions_id.remove(session_id);
+        self.session_names.retain(|_, id| id != session_id);
         self.sessions.remove(session_id)
     }
 
     pub(crate) fn clear(&mut self) {
         self.reserved_sessions_id.clear();
         self.sessions.clear();
+        self.session_names.clear();
+    }
+
+    fn process_id_for_name(&self, session_name: &str) -> Option<String> {
+        self.session_names.get(session_name).cloned()
+    }
+
+    fn insert_session_name(
+        &mut self,
+        session_name: &str,
+        process_id: &str,
+    ) -> Result<(), UnifiedExecError> {
+        if self.session_names.contains_key(session_name) {
+            return Err(UnifiedExecError::create_session(format!(
+                "Session '{session_name}' already in use"
+            )));
+        }
+        self.session_names
+            .insert(session_name.to_string(), process_id.to_string());
+        Ok(())
+    }
+
+    fn clear_session_name(&mut self, session_name: &str) {
+        self.session_names.remove(session_name);
     }
 }
 
@@ -455,5 +481,46 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn session_names_track_process_ids() {
+        let (session, _turn) = test_session_and_turn();
+        let process_id = session
+            .services
+            .unified_exec_manager
+            .allocate_process_id()
+            .await;
+
+        session
+            .services
+            .unified_exec_manager
+            .register_session_name("default", &process_id)
+            .await
+            .expect("session name reserved");
+
+        pretty_assertions::assert_eq!(
+            session
+                .services
+                .unified_exec_manager
+                .process_id_for_session_name("default")
+                .await,
+            Some(process_id.clone())
+        );
+
+        session
+            .services
+            .unified_exec_manager
+            .release_process_id(&process_id)
+            .await;
+
+        assert!(
+            session
+                .services
+                .unified_exec_manager
+                .process_id_for_session_name("default")
+                .await
+                .is_none()
+        );
     }
 }
