@@ -98,12 +98,12 @@ fn format_client_version_to_whole() -> String {
 }
 
 fn format_client_version_from_parts(major: &str, minor: &str, patch: &str) -> String {
-    const PLACEHOLDER_VERSION: &str = "0.0.0";
+    const DEV_VERSION: &str = "0.0.0";
     const FALLBACK_VERSION: &str = "99.99.99";
 
     let normalized = format!("{major}.{minor}.{patch}");
 
-    if normalized == PLACEHOLDER_VERSION {
+    if normalized == DEV_VERSION {
         FALLBACK_VERSION.to_string()
     } else {
         normalized
