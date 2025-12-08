@@ -452,6 +452,7 @@ mod tests {
         let test_bash_shell = Shell {
             shell_type: ShellType::Bash,
             shell_path: PathBuf::from("/bin/bash"),
+            shell_snapshot: None,
         };
         assert_eq!(
             test_bash_shell.derive_exec_args("echo hello", false),
@@ -465,6 +466,7 @@ mod tests {
         let test_zsh_shell = Shell {
             shell_type: ShellType::Zsh,
             shell_path: PathBuf::from("/bin/zsh"),
+            shell_snapshot: None,
         };
         assert_eq!(
             test_zsh_shell.derive_exec_args("echo hello", false),
@@ -478,6 +480,7 @@ mod tests {
         let test_powershell_shell = Shell {
             shell_type: ShellType::PowerShell,
             shell_path: PathBuf::from("pwsh.exe"),
+            shell_snapshot: None,
         };
         assert_eq!(
             test_powershell_shell.derive_exec_args("echo hello", false),
