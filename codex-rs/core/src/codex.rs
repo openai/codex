@@ -419,10 +419,6 @@ impl Session {
         conversation_id: ConversationId,
         sub_id: String,
     ) -> TurnContext {
-        if let Some(context_window) = model_family.context_window {
-            per_turn_config.model_context_window = Some(context_window);
-        }
-
         let otel_event_manager = otel_event_manager.clone().with_model(
             session_configuration.model.as_str(),
             model_family.slug.as_str(),
@@ -1954,9 +1950,6 @@ async fn spawn_review_thread(
     per_turn_config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
     per_turn_config.model_reasoning_summary = ReasoningSummaryConfig::Detailed;
     per_turn_config.features = review_features.clone();
-    if let Some(context_window) = model_family.context_window {
-        per_turn_config.model_context_window = Some(context_window);
-    }
 
     let otel_event_manager = parent_turn_context
         .client
