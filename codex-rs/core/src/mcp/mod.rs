@@ -1,5 +1,7 @@
 pub mod auth;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
 
 use async_channel::unbounded;
 use codex_protocol::protocol::McpListToolsResponseEvent;
@@ -29,7 +31,8 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
     )
     .await;
 
-    let mut mcp_connection_manager = McpConnectionManager::default();
+    let mcp_oauth_refresh_clock = Arc::new(AtomicI64::new(0));
+    let mut mcp_connection_manager = McpConnectionManager::new(mcp_oauth_refresh_clock);
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
     let cancel_token = CancellationToken::new();

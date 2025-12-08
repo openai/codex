@@ -2011,12 +2011,17 @@ impl CodexMessageProcessor {
                 let authorization_url = handle.authorization_url().to_string();
                 let notification_name = name.clone();
                 let outgoing = Arc::clone(&self.outgoing);
+                let conversation_manager = Arc::clone(&self.conversation_manager);
 
                 tokio::spawn(async move {
                     let (success, error) = match handle.wait().await {
                         Ok(()) => (true, None),
                         Err(err) => (false, Some(err.to_string())),
                     };
+
+                    if success {
+                        conversation_manager.mark_mcp_oauth_success(Utc::now().timestamp());
+                    }
 
                     let notification = ServerNotification::McpServerOauthLoginCompleted(
                         McpServerOauthLoginCompletedNotification {
