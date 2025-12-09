@@ -257,7 +257,6 @@ mod tests {
     use std::sync::Arc;
     use tempfile::tempdir;
 
-    #[cfg(not(target_os = "windows"))]
     fn assert_posix_snapshot_sections(snapshot: &str) {
         assert!(snapshot.contains("# Snapshot file"));
         assert!(snapshot.contains("aliases "));
@@ -290,7 +289,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[cfg(unix)]
+    #[cfg_attr(not(target_os = "unix"), ignore)]
     #[test]
     fn wrap_command_with_snapshot_wraps_bash_shell() {
         let snapshot_path = PathBuf::from("/tmp/snapshot.sh");
@@ -337,7 +336,7 @@ mod tests {
         assert_eq!(wrapped, original_command);
     }
 
-    #[cfg(unix)]
+    #[cfg_attr(not(target_os = "unix"), ignore)]
     #[tokio::test]
     async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
         let dir = tempdir()?;
@@ -360,7 +359,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(unix)]
+    #[cfg_attr(not(target_os = "unix"), ignore)]
     #[tokio::test]
     async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
         use std::process::Stdio;
@@ -413,7 +412,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg_attr(not(target_os = "macos"), ignore)]
     #[tokio::test]
     async fn macos_zsh_snapshot_includes_sections() -> Result<()> {
         let snapshot = get_snapshot(ShellType::Zsh).await?;
@@ -421,7 +420,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(target_os = "linux"), ignore)]
     #[tokio::test]
     async fn linux_bash_snapshot_includes_sections() -> Result<()> {
         let snapshot = get_snapshot(ShellType::Bash).await?;
@@ -429,7 +428,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(target_os = "linux"), ignore)]
     #[tokio::test]
     async fn linux_sh_snapshot_includes_sections() -> Result<()> {
         let snapshot = get_snapshot(ShellType::Sh).await?;
@@ -437,7 +436,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg_attr(not(target_os = "windows"), ignore)]
     #[tokio::test]
     async fn windows_powershell_snapshot_includes_sections() -> Result<()> {
         let snapshot = get_snapshot(ShellType::PowerShell).await?;
