@@ -2,6 +2,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::shell::Shell;
+use crate::shell::ShellType;
+use crate::shell::get_shell;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -11,14 +14,12 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use crate::shell::Shell;
-use crate::shell::ShellType;
-use crate::shell::get_shell;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShellSnapshot {
     pub path: PathBuf,
 }
+
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl ShellSnapshot {
     pub async fn try_new(codex_home: &Path, shell: &Shell) -> Option<Self> {
@@ -100,15 +101,26 @@ fn strip_snapshot_preamble(snapshot: &str) -> Result<String> {
 }
 
 async fn run_shell_script(shell: &Shell, script: &str) -> Result<String> {
+    run_shell_script_with_timeout(shell, script, SNAPSHOT_TIMEOUT).await
+}
+
+async fn run_shell_script_with_timeout(
+    shell: &Shell,
+    script: &str,
+    snapshot_timeout: Duration,
+) -> Result<String> {
     let args = shell.derive_exec_args(script, true);
     let shell_name = shell.name();
-    let output = timeout(
-        Duration::from_secs(10),
-        Command::new(&args[0]).args(&args[1..]).output(),
-    )
-    .await
-    .map_err(|_| anyhow!("Snapshot command timed out for {shell_name}"))?
-    .with_context(|| format!("Failed to execute {shell_name}"))?;
+
+    // Handler is kept as guard to control the drop. The `mut` pattern is required because .args()
+    // returns a ref of handler.
+    let mut handler = Command::new(&args[0]);
+    handler.args(&args[1..]);
+    handler.kill_on_drop(true);
+    let output = timeout(snapshot_timeout, handler.output())
+        .await
+        .map_err(|_| anyhow!("Snapshot command timed out for {shell_name}"))?
+        .with_context(|| format!("Failed to execute {shell_name}"))?;
 
     if !output.status.success() {
         let status = output.status;
@@ -238,6 +250,10 @@ $envVars | ForEach-Object {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::process::Command as StdCommand;
     use std::sync::Arc;
     use tempfile::tempdir;
 
@@ -340,6 +356,59 @@ mod tests {
         drop(snapshot);
 
         assert!(!path.exists());
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
+        use std::process::Stdio;
+        let dir = tempdir()?;
+        let shell_path = dir.path().join("hanging-shell.sh");
+        let pid_path = dir.path().join("pid");
+
+        let script = format!(
+            "#!/bin/sh\n\
+             echo $$ > {}\n\
+             sleep 30\n",
+            pid_path.display()
+        );
+        fs::write(&shell_path, script).await?;
+        let mut permissions = std::fs::metadata(&shell_path)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&shell_path, permissions)?;
+
+        let shell = Shell {
+            shell_type: ShellType::Sh,
+            shell_path,
+            shell_snapshot: None,
+        };
+
+        let err = run_shell_script_with_timeout(&shell, "ignored", Duration::from_millis(500))
+            .await
+            .expect_err("snapshot shell should time out");
+        assert!(
+            err.to_string().contains("timed out"),
+            "expected timeout error, got {err:?}"
+        );
+
+        let pid = fs::read_to_string(&pid_path)
+            .await
+            .expect("snapshot shell writes its pid before timing out")
+            .trim()
+            .parse::<i32>()?;
+
+        let kill_status = StdCommand::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stderr(Stdio::null())
+            .stdout(Stdio::null())
+            .status()?;
+        assert!(
+            !kill_status.success(),
+            "timed out snapshot shell should be terminated"
+        );
 
         Ok(())
     }
