@@ -481,11 +481,10 @@ impl App {
                     )?;
                 }
                 TuiEvent::Resized(size) => {
-                    // iTerm2 scrollback clear.
                     use std::io::Write;
                     write!(
                         tui.terminal.backend_mut(),
-                        "\x1b]1337;ClearScrollback=yes\x07"
+                        "\x1b]1337;ClearScrollback=yes\x07\x1b[2J\x1b[H\x1b[3J"
                     )?;
                     tui.terminal.clear()?;
                     self.has_emitted_history_lines = false;
