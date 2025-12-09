@@ -413,6 +413,13 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
     if code != ERROR_SUCCESS {
         return Err(anyhow!("GetNamedSecurityInfoW failed: {}", code));
     }
+    // Already has write? Skip costly DACL rewrite.
+    if dacl_has_write_allow_for_sid(p_dacl, psid) {
+        if !p_sd.is_null() {
+            LocalFree(p_sd as HLOCAL);
+        }
+        return Ok(false);
+    }
     let mut added = false;
     // Always ensure write is present: if an allow ACE exists without write, add one with write+RX.
     let trustee = TRUSTEE_W {
