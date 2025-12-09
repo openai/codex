@@ -234,13 +234,12 @@ mod tests {
 
         assert_eq!(buffer.total_bytes, UNIFIED_EXEC_OUTPUT_MAX_BYTES);
         let snapshot = buffer.snapshot();
-        assert_eq!(snapshot.len(), 3);
+        assert_eq!(snapshot.len(), 2);
         assert_eq!(
             snapshot.first().unwrap().len(),
             UNIFIED_EXEC_OUTPUT_MAX_BYTES - 2
         );
-        assert_eq!(snapshot.get(2).unwrap(), &vec![b'c']);
-        assert_eq!(snapshot.get(1).unwrap(), &vec![b'b']);
+        assert_eq!(snapshot.get(1).unwrap(), &vec![b'b', b'c']);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

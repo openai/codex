@@ -189,7 +189,11 @@ pub async fn spawn_pty_process(
                 let mut guard = writer.lock().await;
                 use std::io::Write;
                 let _ = guard.write_all(&bytes);
-                let _ = guard.flush();
+                // On Windows, flushing ConPTY input pipes can hang indefinitely in some cases.
+                // Writing is sufficient to deliver input to the PTY.
+                if !cfg!(windows) {
+                    let _ = guard.flush();
+                }
             }
         }
     });
