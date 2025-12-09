@@ -50,11 +50,11 @@ pub use windows_impl::CaptureResult;
 pub use winutil::string_from_sid_bytes;
 
 #[cfg(not(target_os = "windows"))]
-pub use stub::apply_world_writable_scan_and_denies;
-#[cfg(not(target_os = "windows"))]
-pub use stub::run_windows_sandbox_capture;
-#[cfg(not(target_os = "windows"))]
-pub use stub::CaptureResult;
+pub use {
+    stub::apply_world_writable_scan_and_denies,
+    stub::run_windows_sandbox_capture,
+    stub::CaptureResult,
+};
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
