@@ -51,6 +51,9 @@ const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
 const DENY_ACCESS: i32 = 3;
 
 /// Fetch DACL via handle-based query; caller must LocalFree the returned SD.
+///
+/// # Safety
+/// Caller must free the returned security descriptor with `LocalFree` and pass an existing path.
 pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void)> {
     let wpath = to_wide(path);
     let h = CreateFileW(
@@ -330,6 +333,9 @@ const WRITE_ALLOW_MASK: u32 = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENE
 
 /// Ensure all provided SIDs have a write-capable allow ACE on the path.
 /// Returns true if any ACE was added.
+///
+/// # Safety
+/// Caller must pass valid SID pointers and an existing path; free the returned security descriptor with `LocalFree`.
 #[allow(dead_code)]
 pub unsafe fn ensure_allow_write_aces(path: &Path, sids: &[*mut c_void]) -> Result<bool> {
     let (p_dacl, p_sd) = fetch_dacl_handle(path)?;

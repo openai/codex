@@ -38,7 +38,7 @@ fn load_marker(codex_home: &Path) -> Result<Option<SetupMarker>> {
             Ok(m) => Some(m),
             Err(err) => {
                 debug_log(
-                    &format!("sandbox setup marker parse failed: {}", err),
+                    &format!("sandbox setup marker parse failed: {err}"),
                     Some(codex_home),
                 );
                 None
@@ -47,7 +47,7 @@ fn load_marker(codex_home: &Path) -> Result<Option<SetupMarker>> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
         Err(err) => {
             debug_log(
-                &format!("sandbox setup marker read failed: {}", err),
+                &format!("sandbox setup marker read failed: {err}"),
                 Some(codex_home),
             );
             None
@@ -63,7 +63,7 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
             debug_log(
-                &format!("sandbox users read failed: {}", err),
+                &format!("sandbox users read failed: {err}"),
                 Some(codex_home),
             );
             return Ok(None);
@@ -73,7 +73,7 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
         Ok(users) => Ok(Some(users)),
         Err(err) => {
             debug_log(
-                &format!("sandbox users parse failed: {}", err),
+                &format!("sandbox users parse failed: {err}"),
                 Some(codex_home),
             );
             Ok(None)
@@ -146,7 +146,7 @@ pub fn require_logon_sandbox_creds(
 
     if identity.is_none() {
         if let Some(reason) = &setup_reason {
-            crate::logging::log_note(&format!("sandbox setup required: {}", reason), Some(&sandbox_dir));
+            crate::logging::log_note(&format!("sandbox setup required: {reason}"), Some(&sandbox_dir));
         } else {
             crate::logging::log_note("sandbox setup required", Some(&sandbox_dir));
         }

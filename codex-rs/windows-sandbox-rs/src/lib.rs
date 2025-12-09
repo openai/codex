@@ -13,9 +13,18 @@ pub use {
     audit::apply_world_writable_scan_and_denies,
     dpapi::protect as dpapi_protect,
     dpapi::unprotect as dpapi_unprotect,
+    logging::log_note,
+    logging::LOG_FILE_NAME,
     identity::require_logon_sandbox_creds,
+    setup::run_setup_refresh,
     setup::{run_elevated_setup, sandbox_dir, SETUP_VERSION},
+    token::convert_string_sid_to_sid,
     windows_impl::{run_windows_sandbox_capture, CaptureResult},
+    {
+        acl::{ensure_allow_write_aces, fetch_dacl_handle, path_quick_mask_allows},
+        cap::load_or_create_cap_sids,
+        winutil::string_from_sid_bytes,
+    },
 };
 
 #[cfg(not(target_os = "windows"))]
