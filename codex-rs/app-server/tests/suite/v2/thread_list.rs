@@ -42,6 +42,46 @@ async fn list_threads(
     to_response::<ThreadListResponse>(resp)
 }
 
+fn create_fake_rollouts<F, G>(
+    codex_home: &Path,
+    count: usize,
+    provider_for_index: F,
+    timestamp_for_index: G,
+    preview: &str,
+) -> Result<Vec<String>>
+where
+    F: Fn(usize) -> &'static str,
+    G: Fn(usize) -> (String, String),
+{
+    let mut ids = Vec::with_capacity(count);
+    for i in 0..count {
+        let (ts_file, ts_rfc) = timestamp_for_index(i);
+        ids.push(create_fake_rollout(
+            codex_home,
+            &ts_file,
+            &ts_rfc,
+            preview,
+            Some(provider_for_index(i)),
+            None,
+        )?);
+    }
+    Ok(ids)
+}
+
+fn timestamp_at(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> (String, String) {
+    (
+        format!("{year:04}-{month:02}-{day:02}T{hour:02}-{minute:02}-{second:02}"),
+        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"),
+    )
+}
+
 #[tokio::test]
 async fn thread_list_basic_empty() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -212,24 +252,19 @@ async fn thread_list_fetches_until_limit_or_exhausted() -> Result<()> {
     // Newest 16 conversations belong to a different provider; the older 8 are the
     // only ones that match the filter. We request 8 so the server must keep
     // paging past the first two pages to reach the desired count.
-    for i in 0..24 {
-        let day = 30 - i;
-        let ts_file = format!("2025-03-{day:02}T12-00-00");
-        let ts_rfc = format!("2025-03-{day:02}T12:00:00Z");
-        let provider = if i < 16 {
-            "skip_provider"
-        } else {
-            "target_provider"
-        };
-        create_fake_rollout(
-            codex_home.path(),
-            &ts_file,
-            &ts_rfc,
-            "Hello",
-            Some(provider),
-            None,
-        )?;
-    }
+    create_fake_rollouts(
+        codex_home.path(),
+        24,
+        |i| {
+            if i < 16 {
+                "skip_provider"
+            } else {
+                "target_provider"
+            }
+        },
+        |i| timestamp_at(2025, 3, 30 - i as u32, 12, 0, 0),
+        "Hello",
+    )?;
 
     let mut mcp = init_mcp(codex_home.path()).await?;
 
@@ -261,30 +296,64 @@ async fn thread_list_fetches_until_limit_or_exhausted() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_list_enforces_max_limit() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    create_fake_rollouts(
+        codex_home.path(),
+        105,
+        |_| "mock_provider",
+        |i| {
+            let month = 5 + (i / 28);
+            let day = (i % 28) + 1;
+            timestamp_at(2025, month as u32, day as u32, 0, 0, 0)
+        },
+        "Hello",
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    let ThreadListResponse { data, next_cursor } = list_threads(
+        &mut mcp,
+        None,
+        Some(200),
+        Some(vec!["mock_provider".to_string()]),
+    )
+    .await?;
+    assert_eq!(
+        data.len(),
+        100,
+        "limit should be clamped to the maximum page size"
+    );
+    assert!(
+        next_cursor.is_some(),
+        "when more than the maximum exist, nextCursor should continue pagination"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_stops_when_not_enough_filtered_results_exist() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;
 
     // Only the last 7 conversations match the provider filter; we ask for 10 to
     // ensure the server exhausts pagination without looping forever.
-    for i in 0..22 {
-        let day = 28 - i;
-        let ts_file = format!("2025-04-{day:02}T08-00-00");
-        let ts_rfc = format!("2025-04-{day:02}T08:00:00Z");
-        let provider = if i < 15 {
-            "skip_provider"
-        } else {
-            "target_provider"
-        };
-        create_fake_rollout(
-            codex_home.path(),
-            &ts_file,
-            &ts_rfc,
-            "Hello",
-            Some(provider),
-            None,
-        )?;
-    }
+    create_fake_rollouts(
+        codex_home.path(),
+        22,
+        |i| {
+            if i < 15 {
+                "skip_provider"
+            } else {
+                "target_provider"
+            }
+        },
+        |i| timestamp_at(2025, 4, 28 - i as u32, 8, 0, 0),
+        "Hello",
+    )?;
 
     let mut mcp = init_mcp(codex_home.path()).await?;
 

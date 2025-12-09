@@ -185,6 +185,9 @@ pub(crate) struct TurnSummary {
 
 pub(crate) type TurnSummaryStore = Arc<Mutex<HashMap<ConversationId, TurnSummary>>>;
 
+const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
+const THREAD_LIST_MAX_LIMIT: usize = 100;
+
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 struct ActiveLogin {
@@ -1508,15 +1511,18 @@ impl CodexMessageProcessor {
             model_providers,
         } = params;
 
-        let requested = limit.unwrap_or(25).max(1) as usize;
+        let requested = limit
+            .map(|value| usize::try_from(value).unwrap_or(THREAD_LIST_MAX_LIMIT))
+            .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
+            .clamp(1, THREAD_LIST_MAX_LIMIT);
         let mut remaining = requested;
         let mut cursor = cursor;
         let mut last_cursor = cursor.clone();
-        let mut data: Vec<_> = Vec::with_capacity(requested);
+        let mut data: Vec<_> = Vec::new();
         let mut next_cursor: Option<String> = None;
 
         while remaining > 0 {
-            let page_size = remaining.min(100);
+            let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
             let (summaries, page_cursor) = match self
                 .list_conversations_common(page_size, cursor.clone(), model_providers.clone())
                 .await
