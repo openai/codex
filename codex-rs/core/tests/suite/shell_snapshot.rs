@@ -116,7 +116,6 @@ fn normalize_newlines(text: &str) -> String {
     text.replace("\r\n", "\n")
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_posix_snapshot_sections(snapshot: &str) {
     assert!(snapshot.contains("# Snapshot file"));
     assert!(snapshot.contains("aliases "));
@@ -128,7 +127,7 @@ fn assert_posix_snapshot_sections(snapshot: &str) {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg_attr(not(target_os = "linux"), ignore)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn linux_unified_exec_uses_shell_snapshot() -> Result<()> {
     let command = "echo snapshot-linux";
@@ -157,7 +156,7 @@ async fn linux_unified_exec_uses_shell_snapshot() -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg_attr(not(target_os = "macos"), ignore)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn macos_unified_exec_uses_shell_snapshot() -> Result<()> {
     let command = "echo snapshot-macos";
@@ -186,7 +185,7 @@ async fn macos_unified_exec_uses_shell_snapshot() -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
+#[cfg_attr(not(target_os = "windows"), ignore)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn windows_unified_exec_uses_shell_snapshot() -> Result<()> {
     let command = "Write-Output snapshot-windows";
