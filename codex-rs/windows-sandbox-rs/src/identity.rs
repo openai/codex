@@ -21,6 +21,8 @@ use std::path::Path;
 struct SandboxIdentity {
     username: String,
     password: String,
+    #[allow(dead_code)]
+    offline: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -36,7 +38,7 @@ fn load_marker(codex_home: &Path) -> Result<Option<SetupMarker>> {
             Ok(m) => Some(m),
             Err(err) => {
                 debug_log(
-                    &format!("sandbox setup marker parse failed: {err}"),
+                    &format!("sandbox setup marker parse failed: {}", err),
                     Some(codex_home),
                 );
                 None
@@ -45,7 +47,7 @@ fn load_marker(codex_home: &Path) -> Result<Option<SetupMarker>> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
         Err(err) => {
             debug_log(
-                &format!("sandbox setup marker read failed: {err}"),
+                &format!("sandbox setup marker read failed: {}", err),
                 Some(codex_home),
             );
             None
@@ -61,7 +63,7 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
             debug_log(
-                &format!("sandbox users read failed: {err}"),
+                &format!("sandbox users read failed: {}", err),
                 Some(codex_home),
             );
             return Ok(None);
@@ -71,7 +73,7 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
         Ok(users) => Ok(Some(users)),
         Err(err) => {
             debug_log(
-                &format!("sandbox users parse failed: {err}"),
+                &format!("sandbox users parse failed: {}", err),
                 Some(codex_home),
             );
             Ok(None)
@@ -97,7 +99,8 @@ fn select_identity(policy: &SandboxPolicy, codex_home: &Path) -> Result<Option<S
         Some(u) if u.version_matches() => u,
         _ => return Ok(None),
     };
-    let chosen = if !policy.has_full_network_access() {
+    let offline = !policy.has_full_network_access();
+    let chosen = if offline {
         users.offline
     } else {
         users.online
@@ -106,6 +109,7 @@ fn select_identity(policy: &SandboxPolicy, codex_home: &Path) -> Result<Option<S
     Ok(Some(SandboxIdentity {
         username: chosen.username.clone(),
         password,
+        offline,
     }))
 }
 
@@ -142,7 +146,7 @@ pub fn require_logon_sandbox_creds(
 
     if identity.is_none() {
         if let Some(reason) = &setup_reason {
-            crate::logging::log_note(&format!("sandbox setup required: {reason}"), Some(&sandbox_dir));
+            crate::logging::log_note(&format!("sandbox setup required: {}", reason), Some(&sandbox_dir));
         } else {
             crate::logging::log_note("sandbox setup required", Some(&sandbox_dir));
         }
