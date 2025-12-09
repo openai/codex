@@ -648,16 +648,16 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
         })
         .await?;
 
-    let delta = wait_for_event_match(&codex, |msg| match msg {
-        EventMsg::ExecCommandOutputDelta(ev) if ev.call_id == call_id => Some(ev.clone()),
+    let event = wait_for_event_match(&codex, |msg| match msg {
+        EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => Some(ev.clone()),
         _ => None,
     })
     .await;
 
-    let text = String::from_utf8_lossy(&delta.chunk).to_string();
+    let text = event.stdout;
     assert!(
         text.contains("HELLO-UEXEC"),
-        "delta chunk missing expected text: {text:?}"
+        "delta chunk missing expected text: {text:?}",
     );
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
