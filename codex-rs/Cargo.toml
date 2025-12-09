@@ -289,7 +289,6 @@ opt-level = 0
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
-portable-pty = { git = "https://github.com/pakrym/wezterm", branch = "PSUEDOCONSOLE_INHERIT_CURSOR" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
 
 # Uncomment to debug local changes.

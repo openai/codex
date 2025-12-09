@@ -1491,7 +1491,6 @@ name = "codex-protocol"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "base64",
  "codex-git",
  "codex-utils-image",
  "icu_decimal",
@@ -1673,8 +1672,13 @@ name = "codex-utils-pty"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "filedescriptor",
+ "lazy_static",
+ "log",
  "portable-pty",
+ "shared_library",
  "tokio",
+ "winapi",
 ]
 
 [[package]]
@@ -2578,7 +2582,8 @@ dependencies = [
 [[package]]
 name = "filedescriptor"
 version = "0.8.3"
-source = "git+https://github.com/pakrym/wezterm?branch=PSUEDOCONSOLE_INHERIT_CURSOR#fe38df8409545a696909aa9a09e63438630f217d"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e40758ed24c9b2eeb76c35fb0aebc66c626084edd827e07e1552279814c6682d"
 dependencies = [
  "libc",
  "thiserror 1.0.69",
@@ -4656,7 +4661,8 @@ dependencies = [
 [[package]]
 name = "portable-pty"
 version = "0.9.0"
-source = "git+https://github.com/pakrym/wezterm?branch=PSUEDOCONSOLE_INHERIT_CURSOR#fe38df8409545a696909aa9a09e63438630f217d"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4a596a2b3d2752d94f51fac2d4a96737b8705dddd311a32b9af47211f08671e"
 dependencies = [
  "anyhow",
  "bitflags 1.3.2",
@@ -4665,7 +4671,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
- "nix 0.29.0",
+ "nix 0.28.0",
  "serial2",
  "shared_library",
  "shell-words",

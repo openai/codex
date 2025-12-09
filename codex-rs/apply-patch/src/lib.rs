@@ -112,7 +112,7 @@ fn classify_shell_name(shell: &str) -> Option<String> {
 
 fn classify_shell(shell: &str, flag: &str) -> Option<ApplyPatchShell> {
     classify_shell_name(shell).and_then(|name| match name.as_str() {
-        "bash" | "zsh" | "sh" if flag == "-lc" => Some(ApplyPatchShell::Unix),
+        "bash" | "zsh" | "sh" if matches!(flag, "-lc" | "-c") => Some(ApplyPatchShell::Unix),
         "pwsh" | "powershell" if flag.eq_ignore_ascii_case("-command") => {
             Some(ApplyPatchShell::PowerShell)
         }
@@ -1095,6 +1095,13 @@ mod tests {
     #[test]
     fn test_heredoc() {
         assert_match(&heredoc_script(""), None);
+    }
+
+    #[test]
+    fn test_heredoc_non_login_shell() {
+        let script = heredoc_script("");
+        let args = strs_to_strings(&["bash", "-c", &script]);
+        assert_match_args(args, None);
     }
 
     #[test]

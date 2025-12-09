@@ -66,11 +66,18 @@ impl Overlay {
 
 const KEY_UP: KeyBinding = key_hint::plain(KeyCode::Up);
 const KEY_DOWN: KeyBinding = key_hint::plain(KeyCode::Down);
+const KEY_K: KeyBinding = key_hint::plain(KeyCode::Char('k'));
+const KEY_J: KeyBinding = key_hint::plain(KeyCode::Char('j'));
 const KEY_PAGE_UP: KeyBinding = key_hint::plain(KeyCode::PageUp);
 const KEY_PAGE_DOWN: KeyBinding = key_hint::plain(KeyCode::PageDown);
 const KEY_SPACE: KeyBinding = key_hint::plain(KeyCode::Char(' '));
+const KEY_SHIFT_SPACE: KeyBinding = key_hint::shift(KeyCode::Char(' '));
 const KEY_HOME: KeyBinding = key_hint::plain(KeyCode::Home);
 const KEY_END: KeyBinding = key_hint::plain(KeyCode::End);
+const KEY_CTRL_F: KeyBinding = key_hint::ctrl(KeyCode::Char('f'));
+const KEY_CTRL_D: KeyBinding = key_hint::ctrl(KeyCode::Char('d'));
+const KEY_CTRL_B: KeyBinding = key_hint::ctrl(KeyCode::Char('b'));
+const KEY_CTRL_U: KeyBinding = key_hint::ctrl(KeyCode::Char('u'));
 const KEY_Q: KeyBinding = key_hint::plain(KeyCode::Char('q'));
 const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
 const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
@@ -234,19 +241,32 @@ impl PagerView {
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
         match key_event {
-            e if KEY_UP.is_press(e) => {
+            e if KEY_UP.is_press(e) || KEY_K.is_press(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
             }
-            e if KEY_DOWN.is_press(e) => {
+            e if KEY_DOWN.is_press(e) || KEY_J.is_press(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
             }
-            e if KEY_PAGE_UP.is_press(e) => {
+            e if KEY_PAGE_UP.is_press(e)
+                || KEY_SHIFT_SPACE.is_press(e)
+                || KEY_CTRL_B.is_press(e) =>
+            {
                 let page_height = self.page_height(tui.terminal.viewport_area);
                 self.scroll_offset = self.scroll_offset.saturating_sub(page_height);
             }
-            e if KEY_PAGE_DOWN.is_press(e) || KEY_SPACE.is_press(e) => {
+            e if KEY_PAGE_DOWN.is_press(e) || KEY_SPACE.is_press(e) || KEY_CTRL_F.is_press(e) => {
                 let page_height = self.page_height(tui.terminal.viewport_area);
                 self.scroll_offset = self.scroll_offset.saturating_add(page_height);
+            }
+            e if KEY_CTRL_D.is_press(e) => {
+                let area = self.content_area(tui.terminal.viewport_area);
+                let half_page = (area.height as usize).saturating_add(1) / 2;
+                self.scroll_offset = self.scroll_offset.saturating_add(half_page);
+            }
+            e if KEY_CTRL_U.is_press(e) => {
+                let area = self.content_area(tui.terminal.viewport_area);
+                let half_page = (area.height as usize).saturating_add(1) / 2;
+                self.scroll_offset = self.scroll_offset.saturating_sub(half_page);
             }
             e if KEY_HOME.is_press(e) => {
                 self.scroll_offset = 0;
