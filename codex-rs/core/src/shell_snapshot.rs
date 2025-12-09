@@ -257,6 +257,7 @@ mod tests {
     use std::sync::Arc;
     use tempfile::tempdir;
 
+    #[cfg(not(target_os = "windows"))]
     fn assert_posix_snapshot_sections(snapshot: &str) {
         assert!(snapshot.contains("# Snapshot file"));
         assert!(snapshot.contains("aliases "));
@@ -289,7 +290,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[cfg_attr(not(target_os = "unix"), ignore)]
+    #[cfg(unix), ignore]
     #[test]
     fn wrap_command_with_snapshot_wraps_bash_shell() {
         let snapshot_path = PathBuf::from("/tmp/snapshot.sh");
@@ -336,7 +337,7 @@ mod tests {
         assert_eq!(wrapped, original_command);
     }
 
-    #[cfg_attr(not(target_os = "unix"), ignore)]
+    #[cfg(unix), ignore]
     #[tokio::test]
     async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
         let dir = tempdir()?;
@@ -359,7 +360,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg_attr(not(target_os = "unix"), ignore)]
+    #[cfg(unix), ignore]
     #[tokio::test]
     async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
         use std::process::Stdio;
