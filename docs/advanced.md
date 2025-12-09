@@ -2,11 +2,11 @@
 
 If you already lean on Codex every day and just need a little more control, this page collects the knobs you are most likely to reach for: tweak defaults in [Config](./config.md), add extra tools through [Model Context Protocol support](#model-context-protocol), and script full runs with [`codex exec`](./exec.md). Jump to the section you need and keep building.
 
-## Config quickstart {#config-quickstart}
+## Config quickstart
 
 Most day-to-day tuning lives in `config.toml`: set approval + sandbox presets, pin model defaults, and add MCP server launchers. The [Config guide](./config.md) walks through every option and provides copy-paste examples for common setups.
 
-## Tracing / verbose logging {#tracing-verbose-logging}
+## Tracing / verbose logging
 
 Because Codex is written in Rust, it honors the `RUST_LOG` environment variable to configure its logging behavior.
 
@@ -20,15 +20,15 @@ By comparison, the non-interactive mode (`codex exec`) defaults to `RUST_LOG=err
 
 See the Rust documentation on [`RUST_LOG`](https://docs.rs/env_logger/latest/env_logger/#enabling-logging) for more information on the configuration options.
 
-## Model Context Protocol (MCP) {#model-context-protocol}
+## Model Context Protocol (MCP)
 
 The Codex CLI and IDE extension is a MCP client which means that it can be configured to connect to MCP servers. For more information, refer to the [`config docs`](./config.md#mcp-integration).
 
-## Using Codex as an MCP Server {#mcp-server}
+## Using Codex as an MCP Server
 
 The Codex CLI can also be run as an MCP _server_ via `codex mcp-server`. For example, you can use `codex mcp-server` to make Codex available as a tool inside of a multi-agent framework like the OpenAI [Agents SDK](https://platform.openai.com/docs/guides/agents). Use `codex mcp` separately to add/list/get/remove MCP server launchers in your configuration.
 
-### Codex MCP Server Quickstart {#mcp-server-quickstart}
+### Codex MCP Server Quickstart
 
 You can launch a Codex MCP server with the [Model Context Protocol Inspector](https://modelcontextprotocol.io/legacy/tools/inspector):
 
@@ -58,7 +58,7 @@ Send a `tools/list` request and you will see that there are two tools available:
 | **`prompt`** (required)         | string | The next user prompt to continue the Codex conversation. |
 | **`conversationId`** (required) | string | The id of the conversation to continue.                  |
 
-### Trying it Out {#mcp-server-trying-it-out}
+### Trying it Out
 
 > [!TIP]
 > Codex often takes a few minutes to run. To accommodate this, adjust the MCP inspector's Request and Total timeouts to 600000ms (10 minutes) under ⛭ Configuration.

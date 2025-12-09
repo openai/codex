@@ -8,13 +8,15 @@ use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::openai_models::model_family::ModelFamily;
+use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
-use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::openai_models::ReasoningEffort;
 use insta::assert_snapshot;
 use ratatui::prelude::*;
 use std::path::PathBuf;
@@ -35,6 +37,10 @@ fn test_auth_manager(config: &Config) -> AuthManager {
         false,
         config.cli_auth_credentials_store_mode,
     )
+}
+
+fn test_model_family(config: &Config) -> ModelFamily {
+    ModelsManager::construct_model_family_offline(config.model.as_str(), config)
 }
 
 fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -120,16 +126,21 @@ fn status_snapshot_includes_reasoning_details() {
             resets_at: Some(reset_at_from(&captured_at, 1_200)),
         }),
         credits: None,
+        plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+
+    let model_family = test_model_family(&config);
 
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         captured_at,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
@@ -171,16 +182,20 @@ fn status_snapshot_includes_monthly_limit() {
         }),
         secondary: None,
         credits: None,
+        plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         captured_at,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
@@ -211,15 +226,19 @@ fn status_snapshot_shows_unlimited_credits() {
             unlimited: true,
             balance: None,
         }),
+        plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         captured_at,
     );
     let rendered = render_lines(&composite.display_lines(120));
@@ -249,15 +268,19 @@ fn status_snapshot_shows_positive_credits() {
             unlimited: false,
             balance: Some("12.5".to_string()),
         }),
+        plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         captured_at,
     );
     let rendered = render_lines(&composite.display_lines(120));
@@ -287,15 +310,19 @@ fn status_snapshot_hides_zero_credits() {
             unlimited: false,
             balance: Some("0".to_string()),
         }),
+        plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         captured_at,
     );
     let rendered = render_lines(&composite.display_lines(120));
@@ -323,15 +350,19 @@ fn status_snapshot_hides_when_has_no_credits_flag() {
             unlimited: true,
             balance: None,
         }),
+        plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         captured_at,
     );
     let rendered = render_lines(&composite.display_lines(120));
@@ -362,12 +393,15 @@ fn status_card_token_usage_excludes_cached_tokens() {
         .single()
         .expect("timestamp");
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
+        None,
         None,
         now,
     );
@@ -410,16 +444,20 @@ fn status_snapshot_truncates_in_narrow_terminal() {
         }),
         secondary: None,
         credits: None,
+        plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         captured_at,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(70));
@@ -454,12 +492,15 @@ fn status_snapshot_shows_missing_limits_message() {
         .single()
         .expect("timestamp");
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
+        None,
         None,
         now,
     );
@@ -509,16 +550,20 @@ fn status_snapshot_includes_credits_and_limits() {
             unlimited: false,
             balance: Some("37.5".to_string()),
         }),
+        plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         captured_at,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
@@ -551,6 +596,7 @@ fn status_snapshot_shows_empty_limits_message() {
         primary: None,
         secondary: None,
         credits: None,
+        plan_type: None,
     };
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 6, 7, 8, 9, 10)
@@ -558,13 +604,16 @@ fn status_snapshot_shows_empty_limits_message() {
         .expect("timestamp");
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         captured_at,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
@@ -609,17 +658,21 @@ fn status_snapshot_shows_stale_limits_message() {
             resets_at: Some(reset_at_from(&captured_at, 1_800)),
         }),
         credits: None,
+        plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let now = captured_at + ChronoDuration::minutes(20);
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         now,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
@@ -668,17 +721,21 @@ fn status_snapshot_cached_limits_hide_credits_without_flag() {
             unlimited: false,
             balance: Some("80".to_string()),
         }),
+        plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let now = captured_at + ChronoDuration::minutes(20);
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
         Some(&rate_display),
+        None,
         now,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
@@ -718,12 +775,15 @@ fn status_context_window_uses_last_usage() {
         .single()
         .expect("timestamp");
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &total_usage,
         Some(&last_usage),
         &None,
+        None,
         None,
         now,
     );

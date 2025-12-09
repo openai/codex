@@ -27,16 +27,23 @@ pub enum Stage {
 /// Unique features toggled via configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Feature {
+    // Stable.
     /// Create a ghost commit at each turn.
     GhostCommit,
+    /// Include the view_image tool.
+    ViewImageTool,
+    /// Send warnings to the model to correct it on the tool usage.
+    ModelWarnings,
+    /// Enable the default shell tool.
+    ShellTool,
+
+    // Experimental
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
     /// Enable experimental RMCP features such as OAuth login.
     RmcpClient,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
-    /// Include the view_image tool.
-    ViewImageTool,
     /// Allow the model to request web searches.
     WebSearchRequest,
     /// Gate the execpolicy enforcement for shell/unified exec.
@@ -47,10 +54,14 @@ pub enum Feature {
     WindowsSandbox,
     /// Remote compaction enabled (only for ChatGPT auth)
     RemoteCompaction,
-    /// Enable the default shell tool.
-    ShellTool,
+    /// Refresh remote models and emit AppReady once the list is available.
+    RemoteModels,
     /// Allow model to call multiple tools in parallel (only for models supporting it).
     ParallelToolCalls,
+    /// Experimental skills injection (CLI flag-driven).
+    Skills,
+    /// Experimental shell snapshotting.
+    ShellSnapshot,
 }
 
 impl Feature {
@@ -260,8 +271,26 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::ParallelToolCalls,
+        key: "parallel",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
         id: Feature::ViewImageTool,
         key: "view_image_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ShellTool,
+        key: "shell_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ModelWarnings,
+        key: "warnings",
         stage: Stage::Stable,
         default_enabled: true,
     },
@@ -315,15 +344,27 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::RemoteModels,
+        key: "remote_models",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ParallelToolCalls,
         key: "parallel",
         stage: Stage::Experimental,
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ShellTool,
-        key: "shell_tool",
-        stage: Stage::Stable,
-        default_enabled: true,
+        id: Feature::Skills,
+        key: "skills",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ShellSnapshot,
+        key: "shell_snapshot",
+        stage: Stage::Experimental,
+        default_enabled: false,
     },
 ];

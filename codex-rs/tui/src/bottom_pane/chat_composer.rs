@@ -29,6 +29,7 @@ use super::footer::reset_mode_after_activity;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+use super::skill_popup::SkillPopup;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::expand_custom_prompt;
 use crate::bottom_pane::prompt_args::expand_if_numeric_with_positional_args;
@@ -53,6 +54,7 @@ use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
+use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -101,6 +103,7 @@ pub(crate) struct ChatComposer {
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
+    large_paste_counters: HashMap<usize, usize>,
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
@@ -113,6 +116,9 @@ pub(crate) struct ChatComposer {
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<i64>,
+    context_window_used_tokens: Option<i64>,
+    skills: Option<Vec<SkillMetadata>>,
+    dismissed_skill_popup_token: Option<String>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -120,6 +126,7 @@ enum ActivePopup {
     None,
     Command(CommandPopup),
     File(FileSearchPopup),
+    Skill(SkillPopup),
 }
 
 const FOOTER_SPACING_HEIGHT: u16 = 0;
@@ -146,6 +153,7 @@ impl ChatComposer {
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
+            large_paste_counters: HashMap::new(),
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
@@ -156,10 +164,17 @@ impl ChatComposer {
             footer_mode: FooterMode::ShortcutSummary,
             footer_hint_override: None,
             context_window_percent: None,
+            context_window_used_tokens: None,
+            skills: None,
+            dismissed_skill_popup_token: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
         this
+    }
+
+    pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
+        self.skills = skills;
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -174,6 +189,9 @@ impl ChatComposer {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
+            ActivePopup::Skill(popup) => {
+                Constraint::Max(popup.calculate_required_height(area.width))
+            }
             ActivePopup::None => Constraint::Max(footer_total_height),
         };
         let [composer_rect, popup_rect] =
@@ -220,7 +238,7 @@ impl ChatComposer {
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
-            let placeholder = format!("[Pasted Content {char_count} chars]");
+            let placeholder = self.next_large_paste_placeholder(char_count);
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
         } else if char_count > 1 && self.handle_paste_image_path(pasted.clone()) {
@@ -230,14 +248,7 @@ impl ChatComposer {
         }
         // Explicit paste events should not trigger Enter suppression.
         self.paste_burst.clear_after_explicit_paste();
-        // Keep popup sync consistent with key handling: prefer slash popup; only
-        // sync file popup when slash popup is NOT active.
-        self.sync_command_popup();
-        if matches!(self.active_popup, ActivePopup::Command(_)) {
-            self.dismissed_file_popup_token = None;
-        } else {
-            self.sync_file_search_popup();
-        }
+        self.sync_popups();
         true
     }
 
@@ -246,6 +257,8 @@ impl ChatComposer {
             return false;
         };
 
+        // normalize_pasted_path already handles Windows → WSL path conversion,
+        // so we can directly try to read the image dimensions.
         match image::image_dimensions(&path_buf) {
             Ok((w, h)) => {
                 tracing::info!("OK: {pasted}");
@@ -282,8 +295,7 @@ impl ChatComposer {
         self.attached_images.clear();
         self.textarea.set_text(&text);
         self.textarea.set_cursor(0);
-        self.sync_command_popup();
-        self.sync_file_search_popup();
+        self.sync_popups();
     }
 
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
@@ -360,10 +372,20 @@ impl ChatComposer {
         self.set_has_focus(has_focus);
     }
 
+    fn next_large_paste_placeholder(&mut self, char_count: usize) -> String {
+        let base = format!("[Pasted Content {char_count} chars]");
+        let next_suffix = self.large_paste_counters.entry(char_count).or_insert(0);
+        *next_suffix += 1;
+        if *next_suffix == 1 {
+            base
+        } else {
+            format!("{base} #{next_suffix}")
+        }
+    }
+
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.textarea.insert_str(text);
-        self.sync_command_popup();
-        self.sync_file_search_popup();
+        self.sync_popups();
     }
 
     /// Handle a key event coming from the main UI.
@@ -371,16 +393,12 @@ impl ChatComposer {
         let result = match &mut self.active_popup {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
+            ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
 
         // Update (or hide/show) popup after processing the key.
-        self.sync_command_popup();
-        if matches!(self.active_popup, ActivePopup::Command(_)) {
-            self.dismissed_file_popup_token = None;
-        } else {
-            self.sync_file_search_popup();
-        }
+        self.sync_popups();
 
         result
     }
@@ -450,6 +468,11 @@ impl ChatComposer {
                     let mut cursor_target: Option<usize> = None;
                     match sel {
                         CommandItem::Builtin(cmd) => {
+                            if cmd == SlashCommand::Skills {
+                                self.textarea.set_text("");
+                                return (InputResult::Command(cmd), true);
+                            }
+
                             let starts_with_cmd = first_line
                                 .trim_start()
                                 .starts_with(&format!("/{}", cmd.command()));
@@ -699,23 +722,101 @@ impl ChatComposer {
         }
     }
 
+    fn handle_key_event_with_skill_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if self.handle_shortcut_overlay_key(&key_event) {
+            return (InputResult::None, true);
+        }
+        if key_event.code == KeyCode::Esc {
+            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
+            if next_mode != self.footer_mode {
+                self.footer_mode = next_mode;
+                return (InputResult::None, true);
+            }
+        } else {
+            self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        }
+
+        let ActivePopup::Skill(popup) = &mut self.active_popup else {
+            unreachable!();
+        };
+
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Up, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                popup.move_up();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                popup.move_down();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                if let Some(tok) = self.current_skill_token() {
+                    self.dismissed_skill_popup_token = Some(tok);
+                }
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                let selected = popup.selected_skill().map(|skill| skill.name.clone());
+                if let Some(name) = selected {
+                    self.insert_selected_skill(&name);
+                }
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
+            }
+            input => self.handle_input_basic(input),
+        }
+    }
+
     fn is_image_path(path: &str) -> bool {
         let lower = path.to_ascii_lowercase();
         lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")
     }
 
-    /// Extract the `@token` that the cursor is currently positioned on, if any.
+    fn skills_enabled(&self) -> bool {
+        self.skills.as_ref().is_some_and(|s| !s.is_empty())
+    }
+
+    /// Extract a token prefixed with `prefix` under the cursor, if any.
     ///
-    /// The returned string **does not** include the leading `@`.
+    /// The returned string **does not** include the prefix.
     ///
     /// Behavior:
     /// - The cursor may be anywhere *inside* the token (including on the
-    ///   leading `@`). It does **not** need to be at the end of the line.
+    ///   leading prefix). It does **not** need to be at the end of the line.
     /// - A token is delimited by ASCII whitespace (space, tab, newline).
-    /// - If the token under the cursor starts with `@`, that token is
-    ///   returned without the leading `@`. This includes the case where the
-    ///   token is just "@" (empty query), which is used to trigger a UI hint
-    fn current_at_token(textarea: &TextArea) -> Option<String> {
+    /// - If the token under the cursor starts with `prefix`, that token is
+    ///   returned without the leading prefix. When `allow_empty` is true, a
+    ///   lone prefix character yields `Some(String::new())` to surface hints.
+    fn current_prefixed_token(
+        textarea: &TextArea,
+        prefix: char,
+        allow_empty: bool,
+    ) -> Option<String> {
         let cursor_offset = textarea.cursor();
         let text = textarea.text();
 
@@ -784,26 +885,40 @@ impl ChatComposer {
             None
         };
 
-        let left_at = token_left
-            .filter(|t| t.starts_with('@'))
-            .map(|t| t[1..].to_string());
-        let right_at = token_right
-            .filter(|t| t.starts_with('@'))
-            .map(|t| t[1..].to_string());
+        let prefix_str = prefix.to_string();
+        let left_match = token_left.filter(|t| t.starts_with(prefix));
+        let right_match = token_right.filter(|t| t.starts_with(prefix));
+
+        let left_prefixed = left_match.map(|t| t[prefix.len_utf8()..].to_string());
+        let right_prefixed = right_match.map(|t| t[prefix.len_utf8()..].to_string());
 
         if at_whitespace {
-            if right_at.is_some() {
-                return right_at;
+            if right_prefixed.is_some() {
+                return right_prefixed;
             }
-            if token_left.is_some_and(|t| t == "@") {
-                return None;
+            if token_left.is_some_and(|t| t == prefix_str) {
+                return allow_empty.then(String::new);
             }
-            return left_at;
+            return left_prefixed;
         }
-        if after_cursor.starts_with('@') {
-            return right_at.or(left_at);
+        if after_cursor.starts_with(prefix) {
+            return right_prefixed.or(left_prefixed);
         }
-        left_at.or(right_at)
+        left_prefixed.or(right_prefixed)
+    }
+
+    /// Extract the `@token` that the cursor is currently positioned on, if any.
+    ///
+    /// The returned string **does not** include the leading `@`.
+    fn current_at_token(textarea: &TextArea) -> Option<String> {
+        Self::current_prefixed_token(textarea, '@', false)
+    }
+
+    fn current_skill_token(&self) -> Option<String> {
+        if !self.skills_enabled() {
+            return None;
+        }
+        Self::current_prefixed_token(&self.textarea, '$', true)
     }
 
     /// Replace the active `@token` (the one under the cursor) with `path`.
@@ -845,6 +960,41 @@ impl ChatComposer {
         };
 
         // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
+        let mut new_text =
+            String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
+        new_text.push_str(&text[..start_idx]);
+        new_text.push_str(&inserted);
+        new_text.push(' ');
+        new_text.push_str(&text[end_idx..]);
+
+        self.textarea.set_text(&new_text);
+        let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
+        self.textarea.set_cursor(new_cursor);
+    }
+
+    fn insert_selected_skill(&mut self, skill_name: &str) {
+        let cursor_offset = self.textarea.cursor();
+        let text = self.textarea.text();
+        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+
+        let before_cursor = &text[..safe_cursor];
+        let after_cursor = &text[safe_cursor..];
+
+        let start_idx = before_cursor
+            .char_indices()
+            .rfind(|(_, c)| c.is_whitespace())
+            .map(|(idx, c)| idx + c.len_utf8())
+            .unwrap_or(0);
+
+        let end_rel_idx = after_cursor
+            .char_indices()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(after_cursor.len());
+        let end_idx = safe_cursor + end_rel_idx;
+
+        let inserted = format!("${skill_name}");
+
         let mut new_text =
             String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
         new_text.push_str(&text[..start_idx]);
@@ -954,21 +1104,17 @@ impl ChatComposer {
                         return (InputResult::None, true);
                     }
                 }
-                // If we have pending placeholder pastes, submit immediately to expand them.
+                // If we have pending placeholder pastes, replace them in the textarea text
+                // and continue to the normal submission flow to handle slash commands.
                 if !self.pending_pastes.is_empty() {
                     let mut text = self.textarea.text().to_string();
-                    self.textarea.set_text("");
                     for (placeholder, actual) in &self.pending_pastes {
                         if text.contains(placeholder) {
                             text = text.replace(placeholder, actual);
                         }
                     }
+                    self.textarea.set_text(&text);
                     self.pending_pastes.clear();
-                    if text.is_empty() {
-                        return (InputResult::None, true);
-                    }
-                    self.history.record_local_submission(&text);
-                    return (InputResult::Submitted(text), true);
                 }
 
                 // During a paste-like burst, treat Enter as a newline instead of submit.
@@ -1064,14 +1210,7 @@ impl ChatComposer {
                 // Mirror insert_str() behavior so popups stay in sync when a
                 // pending fast char flushes as normal typed input.
                 self.textarea.insert_str(ch.to_string().as_str());
-                // Keep popup sync consistent with key handling: prefer slash popup; only
-                // sync file popup when slash popup is NOT active.
-                self.sync_command_popup();
-                if matches!(self.active_popup, ActivePopup::Command(_)) {
-                    self.dismissed_file_popup_token = None;
-                } else {
-                    self.sync_file_search_popup();
-                }
+                self.sync_popups();
                 true
             }
             FlushResult::None => false,
@@ -1365,14 +1504,9 @@ impl ChatComposer {
             return false;
         }
 
-        let toggles = matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char('?'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } if self.is_empty()
-        );
+        let toggles = matches!(key_event.code, KeyCode::Char('?'))
+            && !has_ctrl_or_alt(key_event.modifiers)
+            && self.is_empty();
 
         if !toggles {
             return false;
@@ -1391,6 +1525,7 @@ impl ChatComposer {
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
             context_window_percent: self.context_window_percent,
+            context_window_used_tokens: self.context_window_used_tokens,
         }
     }
 
@@ -1411,10 +1546,49 @@ impl ChatComposer {
             .map(|items| if items.is_empty() { 0 } else { 1 })
     }
 
+    fn sync_popups(&mut self) {
+        let file_token = Self::current_at_token(&self.textarea);
+        let skill_token = self.current_skill_token();
+
+        let allow_command_popup = file_token.is_none() && skill_token.is_none();
+        self.sync_command_popup(allow_command_popup);
+
+        if matches!(self.active_popup, ActivePopup::Command(_)) {
+            self.dismissed_file_popup_token = None;
+            self.dismissed_skill_popup_token = None;
+            return;
+        }
+
+        if let Some(token) = skill_token {
+            self.sync_skill_popup(token);
+            return;
+        }
+        self.dismissed_skill_popup_token = None;
+
+        if let Some(token) = file_token {
+            self.sync_file_search_popup(token);
+            return;
+        }
+
+        self.dismissed_file_popup_token = None;
+        if matches!(
+            self.active_popup,
+            ActivePopup::File(_) | ActivePopup::Skill(_)
+        ) {
+            self.active_popup = ActivePopup::None;
+        }
+    }
+
     /// Synchronize `self.command_popup` with the current text in the
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
-    fn sync_command_popup(&mut self) {
+    fn sync_command_popup(&mut self, allow: bool) {
+        if !allow {
+            if matches!(self.active_popup, ActivePopup::Command(_)) {
+                self.active_popup = ActivePopup::None;
+            }
+            return;
+        }
         // Determine whether the caret is inside the initial '/name' token on the first line.
         let text = self.textarea.text();
         let first_line_end = text.find('\n').unwrap_or(text.len());
@@ -1452,7 +1626,9 @@ impl ChatComposer {
             }
             _ => {
                 if is_editing_slash_command_name {
-                    let mut command_popup = CommandPopup::new(self.custom_prompts.clone());
+                    let skills_enabled = self.skills_enabled();
+                    let mut command_popup =
+                        CommandPopup::new(self.custom_prompts.clone(), skills_enabled);
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
@@ -1469,17 +1645,7 @@ impl ChatComposer {
 
     /// Synchronize `self.file_search_popup` with the current text in the textarea.
     /// Note this is only called when self.active_popup is NOT Command.
-    fn sync_file_search_popup(&mut self) {
-        // Determine if there is an @token underneath the cursor.
-        let query = match Self::current_at_token(&self.textarea) {
-            Some(token) => token,
-            None => {
-                self.active_popup = ActivePopup::None;
-                self.dismissed_file_popup_token = None;
-                return;
-            }
-        };
-
+    fn sync_file_search_popup(&mut self, query: String) {
         // If user dismissed popup for this exact query, don't reopen until text changes.
         if self.dismissed_file_popup_token.as_ref() == Some(&query) {
             return;
@@ -1513,6 +1679,32 @@ impl ChatComposer {
         self.dismissed_file_popup_token = None;
     }
 
+    fn sync_skill_popup(&mut self, query: String) {
+        if self.dismissed_skill_popup_token.as_ref() == Some(&query) {
+            return;
+        }
+
+        let skills = match self.skills.as_ref() {
+            Some(skills) if !skills.is_empty() => skills.clone(),
+            _ => {
+                self.active_popup = ActivePopup::None;
+                return;
+            }
+        };
+
+        match &mut self.active_popup {
+            ActivePopup::Skill(popup) => {
+                popup.set_query(&query);
+                popup.set_skills(skills);
+            }
+            _ => {
+                let mut popup = SkillPopup::new(skills);
+                popup.set_query(&query);
+                self.active_popup = ActivePopup::Skill(popup);
+            }
+        }
+    }
+
     fn set_has_focus(&mut self, has_focus: bool) {
         self.has_focus = has_focus;
     }
@@ -1525,10 +1717,13 @@ impl ChatComposer {
         self.placeholder_text = placeholder;
     }
 
-    pub(crate) fn set_context_window_percent(&mut self, percent: Option<i64>) {
-        if self.context_window_percent != percent {
-            self.context_window_percent = percent;
+    pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
+        if self.context_window_percent == percent && self.context_window_used_tokens == used_tokens
+        {
+            return;
         }
+        self.context_window_percent = percent;
+        self.context_window_used_tokens = used_tokens;
     }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
@@ -1563,6 +1758,7 @@ impl Renderable for ChatComposer {
                 ActivePopup::None => footer_total_height,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
+                ActivePopup::Skill(c) => c.calculate_required_height(width),
             }
     }
 
@@ -1573,6 +1769,9 @@ impl Renderable for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::File(popup) => {
+                popup.render_ref(popup_rect, buf);
+            }
+            ActivePopup::Skill(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
@@ -2365,6 +2564,62 @@ mod tests {
         }
     }
 
+    #[test]
+    fn slash_popup_resume_for_res_ui() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Type "/res" humanlike so paste-burst doesn’t interfere.
+        type_chars_humanlike(&mut composer, &['/', 'r', 'e', 's']);
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 6)).expect("terminal");
+        terminal
+            .draw(|f| composer.render(f.area(), f.buffer_mut()))
+            .expect("draw composer");
+
+        // Snapshot should show /resume as the first entry for /res.
+        insta::assert_snapshot!("slash_popup_res", terminal.backend());
+    }
+
+    #[test]
+    fn slash_popup_resume_for_res_logic() {
+        use super::super::command_popup::CommandItem;
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        type_chars_humanlike(&mut composer, &['/', 'r', 'e', 's']);
+
+        match &composer.active_popup {
+            ActivePopup::Command(popup) => match popup.selected_item() {
+                Some(CommandItem::Builtin(cmd)) => {
+                    assert_eq!(cmd.command(), "resume")
+                }
+                Some(CommandItem::UserPrompt(_)) => {
+                    panic!("unexpected prompt selected for '/res'")
+                }
+                None => panic!("no selected command for '/res'"),
+            },
+            _ => panic!("slash popup not active after typing '/res'"),
+        }
+    }
+
     // Test helper: simulate human typing with a brief delay and flush the paste-burst buffer
     fn type_chars_humanlike(composer: &mut ChatComposer, chars: &[char]) {
         use crossterm::event::KeyCode;
@@ -2671,6 +2926,83 @@ mod tests {
                 (" and ".to_string(), 0),
             ]
         );
+    }
+
+    #[test]
+    fn deleting_duplicate_length_pastes_removes_only_target() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let paste = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
+        let placeholder_base = format!("[Pasted Content {} chars]", paste.chars().count());
+        let placeholder_second = format!("{placeholder_base} #2");
+
+        composer.handle_paste(paste.clone());
+        composer.handle_paste(paste.clone());
+        assert_eq!(
+            composer.textarea.text(),
+            format!("{placeholder_base}{placeholder_second}")
+        );
+        assert_eq!(composer.pending_pastes.len(), 2);
+
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        assert_eq!(composer.textarea.text(), placeholder_base);
+        assert_eq!(composer.pending_pastes.len(), 1);
+        assert_eq!(composer.pending_pastes[0].0, placeholder_base);
+        assert_eq!(composer.pending_pastes[0].1, paste);
+    }
+
+    #[test]
+    fn large_paste_numbering_does_not_reuse_after_deletion() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let paste = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 4);
+        let base = format!("[Pasted Content {} chars]", paste.chars().count());
+        let second = format!("{base} #2");
+        let third = format!("{base} #3");
+
+        composer.handle_paste(paste.clone());
+        composer.handle_paste(paste.clone());
+        assert_eq!(composer.textarea.text(), format!("{base}{second}"));
+
+        composer.textarea.set_cursor(base.len());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), second);
+        assert_eq!(composer.pending_pastes.len(), 1);
+        assert_eq!(composer.pending_pastes[0].0, second);
+
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        composer.handle_paste(paste);
+
+        assert_eq!(composer.textarea.text(), format!("{second}{third}"));
+        assert_eq!(composer.pending_pastes.len(), 2);
+        assert_eq!(composer.pending_pastes[0].0, second);
+        assert_eq!(composer.pending_pastes[1].0, third);
     }
 
     #[test]
@@ -3032,6 +3364,70 @@ mod tests {
             result
         );
         assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn custom_prompt_with_large_paste_expands_correctly() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Create a custom prompt with positional args (no named args like $USER)
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "code-review".to_string(),
+            path: "/tmp/code-review.md".to_string().into(),
+            content: "Please review the following code:\n\n$1".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        // Type the slash command
+        let command_text = "/prompts:code-review ";
+        composer.textarea.set_text(command_text);
+        composer.textarea.set_cursor(command_text.len());
+
+        // Paste large content (>3000 chars) to trigger placeholder
+        let large_content = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 3000);
+        composer.handle_paste(large_content.clone());
+
+        // Verify placeholder was created
+        let placeholder = format!("[Pasted Content {} chars]", large_content.chars().count());
+        assert_eq!(
+            composer.textarea.text(),
+            format!("/prompts:code-review {}", placeholder)
+        );
+        assert_eq!(composer.pending_pastes.len(), 1);
+        assert_eq!(composer.pending_pastes[0].0, placeholder);
+        assert_eq!(composer.pending_pastes[0].1, large_content);
+
+        // Submit by pressing Enter
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        // Verify the custom prompt was expanded with the large content as positional arg
+        match result {
+            InputResult::Submitted(text) => {
+                // The prompt should be expanded, with the large content replacing $1
+                assert_eq!(
+                    text,
+                    format!("Please review the following code:\n\n{}", large_content),
+                    "Expected prompt expansion with large content as $1"
+                );
+            }
+            _ => panic!("expected Submitted, got: {result:?}"),
+        }
+        assert!(composer.textarea.is_empty());
+        assert!(composer.pending_pastes.is_empty());
     }
 
     #[test]

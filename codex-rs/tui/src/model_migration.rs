@@ -7,8 +7,8 @@ use crate::selection_list::selection_option_row;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use codex_common::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
-use codex_common::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use codex_core::openai_models::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
+use codex_core::openai_models::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -292,7 +292,9 @@ fn gpt_5_1_codex_max_migration_copy() -> ModelMigrationCopy {
             ),
             Line::from(vec![
                 "Learn more at ".into(),
-                "www.openai.com/index/gpt-5-1-codex-max".cyan().underlined(),
+                "https://openai.com/index/gpt-5-1-codex-max/"
+                    .cyan()
+                    .underlined(),
                 ".".into(),
             ]),
         ],
@@ -312,7 +314,7 @@ fn gpt5_migration_copy() -> ModelMigrationCopy {
             ),
             Line::from(vec![
                 "Learn more at ".into(),
-                "www.openai.com/index/gpt-5-1".cyan().underlined(),
+                "https://openai.com/index/gpt-5-1/".cyan().underlined(),
                 ".".into(),
             ]),
             Line::from(vec!["Press enter to continue".dim()]),
@@ -329,7 +331,7 @@ mod tests {
     use crate::custom_terminal::Terminal;
     use crate::test_backend::VT100Backend;
     use crate::tui::FrameRequester;
-    use codex_common::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+    use codex_core::openai_models::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use insta::assert_snapshot;

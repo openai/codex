@@ -2,6 +2,7 @@
 name = "codex-lmstudio"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [lib]
 name = "codex_lmstudio"
@@ -13,7 +14,7 @@ codex-core = { path = "../core" }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt"] }
-tracing = { version = "0.1.41", features = ["log"] }
+tracing = { version = "0.1.43", features = ["log"] }
 which = "6.0"
 
 [dev-dependencies]

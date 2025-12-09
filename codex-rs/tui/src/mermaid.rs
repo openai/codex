@@ -598,6 +598,117 @@ lazy_static! {
     static ref HEADER_TITLE_SAME_LINE_RE: Regex = must_compile(
         r"(?im)^(?P<indent>\s*)(?P<keyword>flowchart|graph)\s+(?P<dir>TB|TD|LR|RL|BT)\s+title\s+(?P<title>.+)$",
     );
+    static ref INLINE_ARROW_LABEL_RE: Regex =
+        must_compile(r#"--[ \t]*(?P<label>[^\n-]*[()"]+[^\n-]*)[ \t]*-->"#);
+}
+
+fn quote_labels_with_regex(line: &str, re: &Regex) -> String {
+    let mut out = String::new();
+    let mut last_end = 0usize;
+    let mut found = false;
+
+    for caps in re.captures_iter(line) {
+        let Some(mat) = caps.get(1) else {
+            continue;
+        };
+        let raw = mat.as_str();
+        out.push_str(&line[last_end..mat.start()]);
+        if is_within_double_quotes(line, mat.start(), mat.end()) || is_already_quoted(raw) {
+            out.push_str(raw);
+        } else {
+            let replacement = format!("\"{}\"", raw.replace('"', "'"));
+            out.push_str(&replacement);
+        }
+        last_end = mat.end();
+        found = true;
+    }
+
+    if !found {
+        return line.to_string();
+    }
+
+    out.push_str(&line[last_end..]);
+    out
+}
+
+fn sanitize_labeled_edge(line: &str) -> String {
+    if !line.contains("--|") || !line.contains('|') {
+        return line.to_string();
+    }
+    if line.contains("-->|") {
+        return line.to_string();
+    }
+    let Some((lhs, rest)) = line.split_once("--|") else {
+        return line.to_string();
+    };
+    let Some((label_part, rhs)) = rest.split_once('|') else {
+        return line.to_string();
+    };
+    let sanitized_label = sanitize_label_text(label_part);
+    let normalized_label = if sanitized_label.is_empty() {
+        label_part.trim().to_string()
+    } else {
+        sanitized_label
+    };
+    let mut out = String::new();
+    out.push_str(lhs.trim_end());
+    out.push_str(" -->|");
+    out.push_str(&normalized_label);
+    out.push_str("| ");
+    out.push_str(rhs.trim());
+    out
+}
+
+fn lint_flowchart_or_graph(code: &str) -> String {
+    let ensured = ensure_mermaid_header(code);
+    let normalized = normalize_header_titles(&ensured);
+    let mut out_lines: Vec<String> = Vec::new();
+    let mut in_diagram = false;
+
+    for line in normalized.lines() {
+        let trimmed = line.trim();
+        let lowered = trimmed.to_lowercase();
+        if HEADER_RE.is_match(trimmed) {
+            in_diagram = true;
+        }
+        if !in_diagram {
+            out_lines.push(line.to_string());
+            continue;
+        }
+
+        if STYLE_RE.is_match(line) {
+            continue;
+        }
+        if lowered.starts_with("title ") || lowered == "title" || lowered.starts_with("title:") {
+            continue;
+        }
+
+        let mut current = line.replace('\t', "  ");
+        current = current.trim_end().to_string();
+        current = sanitize_labeled_edge(&current);
+        current = quote_labels_with_regex(&current, &SQUARE_LABEL_RE);
+        current = quote_labels_with_regex(&current, &PAR2_LABEL_RE);
+        current = quote_labels_with_regex(&current, &PAR1_LABEL_RE);
+        out_lines.push(current);
+    }
+
+    out_lines.join("\n")
+}
+
+fn pre_sanitize_edge_labels(source: &str) -> String {
+    INLINE_ARROW_LABEL_RE
+        .replace_all(source, |caps: &Captures| {
+            let label = caps.name("label").map(|m| m.as_str()).unwrap_or("");
+            if label.trim().is_empty() {
+                return caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string();
+            }
+            let sanitized = sanitize_label_text(label);
+            if sanitized == label {
+                return caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string();
+            }
+            format!("-- {sanitized} -->")
+        })
+        .into_owned()
 }
 
 fn wrap_node_if_plain(raw: &str) -> String {
@@ -732,17 +843,26 @@ fn ensure_mermaid_header(source: &str) -> String {
 }
 
 fn lint_and_wrap(code: &str) -> String {
-    let ensured = ensure_mermaid_header(code);
-    let normalized = normalize_header_titles(&ensured);
-    let mut linter = MermaidLinter::new(&normalized);
-    let issues = linter.lint();
-    linter.apply_fixes(issues);
-    let fixed = if linter.lines.is_empty() {
-        String::new()
+    let trimmed = code.trim_start();
+    let first_line = trimmed.lines().next().unwrap_or("").trim();
+    let first_lower = first_line.to_lowercase();
+    let body = if first_lower.starts_with("flowchart") || first_lower.starts_with("graph") {
+        let pre_sanitized = pre_sanitize_edge_labels(code);
+        lint_flowchart_or_graph(&pre_sanitized)
     } else {
-        linter.lines.join("\n")
+        let pre_sanitized = pre_sanitize_edge_labels(code);
+        let ensured = ensure_mermaid_header(&pre_sanitized);
+        let normalized = normalize_header_titles(&ensured);
+        let mut linter = MermaidLinter::new(&normalized);
+        let issues = linter.lint();
+        linter.apply_fixes(issues);
+        if linter.lines.is_empty() {
+            String::new()
+        } else {
+            linter.lines.join("\n")
+        }
     };
-    format!("```mermaid\n{fixed}\n```")
+    format!("```mermaid\n{body}\n```")
 }
 
 pub(crate) fn fix_mermaid_blocks(input: &str) -> String {
@@ -1004,6 +1124,14 @@ sequenceDiagram
         let raw = "```mermaid\nflowchart TD\n  B --|HTTP(\"S\") + cookies/CSRF| W\n```";
         let fixed = fix_mermaid_blocks(raw);
         assert!(fixed.contains(r#"B -->|HTTP S + cookies/CSRF| W"#));
+    }
+
+    #[test]
+    fn inline_arrow_labels_with_parens_and_quotes_are_sanitized() {
+        let raw = "```mermaid\nflowchart TD\n  Client -- HTTPS payload (\"Bearer OPENAI_API_KEY\" JSON) --> Server\n```";
+        let fixed = fix_mermaid_blocks(raw);
+        assert!(fixed.contains(r#"Client -- HTTPS payload Bearer OPENAI_API_KEY JSON --> Server"#));
+        assert!(!fixed.contains("Bearer OPENAI_API_KEY\" JSON)"));
     }
 
     #[test]

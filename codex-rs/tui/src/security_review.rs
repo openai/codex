@@ -11,23 +11,25 @@ use crate::security_prompts::*;
 use crate::security_report_viewer::build_report_html;
 use crate::status_indicator_widget::fmt_elapsed_compact;
 use crate::text_formatting::truncate_text;
+use base64::Engine;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::WireApi;
 use codex_core::config::Config;
-use codex_core::config::GPT_5_CODEX_MEDIUM_MODEL;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::load_global_mcp_servers;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::default_client::CodexHttpClient;
+use codex_core::default_client::CodexRequestBuilder;
 use codex_core::default_client::create_client;
 use codex_core::default_retry_backoff;
 use codex_core::features::Feature;
 use codex_core::git_info::collect_git_info;
 use codex_core::git_info::get_git_repo_root;
+use codex_core::git_info::recent_commits;
 use codex_core::mcp::auth::compute_auth_statuses;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
@@ -48,6 +50,8 @@ use futures::stream::StreamExt;
 use pathdiff::diff_paths;
 use regex::Regex;
 use reqwest::header::ACCEPT;
+use reqwest::header::HeaderName;
+use reqwest::header::HeaderValue;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;
@@ -211,6 +215,20 @@ pub fn sanitize_repo_slug(repo_path: &Path) -> String {
     } else {
         trimmed
     }
+}
+
+fn encode_workspace_hint(repo_path: &Path) -> Option<String> {
+    let canonical = repo_path
+        .canonicalize()
+        .unwrap_or_else(|_| repo_path.to_path_buf());
+    let hostname = env::var("HOSTNAME").unwrap_or_else(|_| "unknown-host".to_string());
+    let payload = json!({
+        "hostname": hostname,
+        "repo_root": canonical.to_string_lossy(),
+    })
+    .to_string();
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.as_bytes());
+    Some(format!("[codex-workspace:{encoded}]"))
 }
 
 fn write_scope_file(
@@ -552,6 +570,14 @@ pub struct SecurityReviewMetadata {
     pub mode: SecurityReviewMode,
     #[serde(default)]
     pub scope_paths: Vec<String>,
+    #[serde(default)]
+    pub git_commit: Option<String>,
+    #[serde(default)]
+    pub git_branch: Option<String>,
+    #[serde(default)]
+    pub git_commit_timestamp: Option<i64>,
+    #[serde(default)]
+    pub linear_issue: Option<String>,
 }
 
 fn summarize_scope(scope_paths: &[PathBuf], repo_root: &Path) -> String {
@@ -567,6 +593,25 @@ fn summarize_scope(scope_paths: &[PathBuf], repo_root: &Path) -> String {
     display_paths.dedup();
     let joined = display_paths.join(", ");
     truncate_text(joined.as_str(), 120)
+}
+
+fn is_open_source_review(prompt: &Option<String>) -> bool {
+    let Some(text) = prompt.as_ref() else {
+        return false;
+    };
+    let lower = text.to_ascii_lowercase();
+    const KEYWORDS: &[&str] = &[
+        "open source",
+        "open-source",
+        "open sourcing",
+        "open-sourcing",
+        "oss review",
+        "oss drop",
+        "open source this repo",
+        "open source this project",
+        "make this repo public",
+    ];
+    KEYWORDS.iter().any(|keyword| lower.contains(keyword))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2103,10 +2148,11 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
                 if lower.starts_with("assignee:")
                     || lower.starts_with("author:")
                     || lower.starts_with("owner:")
+                    || lower.starts_with("suggested owner:")
                 {
                     let indent_len = line.len().saturating_sub(trimmed.len());
                     let indent = &line[..indent_len];
-                    adjusted.push(format!("{indent}Assignee: {handle}"));
+                    adjusted.push(format!("{indent}Suggested owner: {handle}"));
                     replaced = true;
                 } else {
                     adjusted.push(line.to_string());
@@ -2117,7 +2163,7 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
                 if !composed.trim_end().is_empty() {
                     composed.push_str("\n\n");
                 }
-                composed.push_str(&format!("Assignee: {handle}\n"));
+                composed.push_str(&format!("Suggested owner: {handle}\n"));
             }
         }
         if !matches!(snapshot.bug.validation.status, BugValidationStatus::Pending) {
@@ -2917,6 +2963,7 @@ pub async fn run_security_review(
 
     let repo_path = request.repo_path.clone();
     let repo_slug = sanitize_repo_slug(&repo_path);
+    let git_revision = collect_git_revision(&repo_path).await;
     let mut include_paths = request.include_paths.clone();
     let mut scope_display_paths = request.scope_display_paths.clone();
     let mut auto_scope_prompt = request.auto_scope_prompt.clone();
@@ -2985,6 +3032,8 @@ pub async fn run_security_review(
     } else {
         checkpoint.plan_statuses = default_plan_statuses(mode);
     }
+
+    let is_open_source = is_open_source_review(&auto_scope_prompt);
 
     if linear_issue.is_none() {
         linear_issue = auto_scope_prompt
@@ -3097,75 +3146,77 @@ pub async fn run_security_review(
             scope_file_path.as_deref(),
             &checkpoint.plan_statuses,
         );
-        if let Err(err) = run_linear_status_agent(
-            &request.config,
-            &request.provider,
-            request.auth_manager.clone(),
-            &repo_path,
-            progress_sender.clone(),
-            log_sink.clone(),
-            init_prompt,
-            metrics.clone(),
-        )
-        .await
         {
-            record(
-                &mut logs,
-                format!(
-                    "Linear MCP init failed (continuing without ticket sync): {}",
-                    err.message
-                ),
-            );
+            let config = request.config.clone();
+            let provider = request.provider.clone();
+            let auth_manager = request.auth_manager.clone();
+            let repo_for_task = repo_path.clone();
+            let progress_for_task = progress_sender.clone();
+            let log_sink_for_task = log_sink.clone();
+            let metrics_for_task = metrics.clone();
+            tokio::spawn(async move {
+                let _ = run_linear_status_agent(
+                    &config,
+                    &provider,
+                    auth_manager,
+                    &repo_for_task,
+                    progress_for_task,
+                    log_sink_for_task,
+                    init_prompt,
+                    metrics_for_task,
+                )
+                .await;
+            });
         }
     }
 
     let mut auto_scope_conversation: Option<String> = None;
-    if include_paths.is_empty() {
-        if let Some(linear_issue) = linear_issue.as_ref() {
-            record(
-                &mut logs,
-                format!("Fetching Linear context for auto scope (issue: {linear_issue})..."),
-            );
-            match fetch_linear_context_for_auto_scope(
-                &request.config,
-                &request.provider,
-                request.auth_manager.clone(),
-                &repo_path,
-                linear_issue,
-                progress_sender.clone(),
-                log_sink.clone(),
-                metrics.clone(),
-            )
-            .await
-            {
-                Ok((context, context_logs)) => {
-                    for line in context_logs {
-                        record(&mut logs, line);
-                    }
-                    let trimmed = truncate_text(&context, ANALYSIS_CONTEXT_MAX_CHARS);
-                    if trimmed.len() < context.len() {
-                        record(
-                            &mut logs,
-                            format!(
-                                "Linear context trimmed to {} characters for auto scope.",
-                                trimmed.len()
-                            ),
-                        );
-                    }
-                    auto_scope_conversation = Some(trimmed);
+    if include_paths.is_empty()
+        && let Some(linear_issue) = linear_issue.as_ref()
+    {
+        record(
+            &mut logs,
+            format!("Fetching Linear context for auto scope (issue: {linear_issue})..."),
+        );
+        match fetch_linear_context_for_auto_scope(
+            &request.config,
+            &request.provider,
+            request.auth_manager.clone(),
+            &repo_path,
+            linear_issue,
+            progress_sender.clone(),
+            log_sink.clone(),
+            metrics.clone(),
+        )
+        .await
+        {
+            Ok((context, context_logs)) => {
+                for line in context_logs {
+                    record(&mut logs, line);
                 }
-                Err(err) => {
-                    for line in err.logs {
-                        record(&mut logs, line);
-                    }
+                let trimmed = truncate_text(&context, ANALYSIS_CONTEXT_MAX_CHARS);
+                if trimmed.len() < context.len() {
                     record(
                         &mut logs,
                         format!(
-                            "Proceeding without Linear context for auto scope: {message}",
-                            message = err.message
+                            "Linear context trimmed to {} characters for auto scope.",
+                            trimmed.len()
                         ),
                     );
                 }
+                auto_scope_conversation = Some(trimmed);
+            }
+            Err(err) => {
+                for line in err.logs {
+                    record(&mut logs, line);
+                }
+                record(
+                    &mut logs,
+                    format!(
+                        "Proceeding without Linear context for auto scope: {message}",
+                        message = err.message
+                    ),
+                );
             }
         }
     }
@@ -3394,26 +3445,26 @@ pub async fn run_security_review(
             &checkpoint,
             &request.output_root,
         );
-        if let Err(err) = run_linear_status_agent(
-            &request.config,
-            &request.provider,
-            request.auth_manager.clone(),
-            &repo_path,
-            progress_sender.clone(),
-            log_sink.clone(),
-            prompt,
-            metrics.clone(),
-        )
-        .await
-        {
-            record(
-                &mut logs,
-                format!(
-                    "Linear related-docs helper failed (continuing without it): {}",
-                    err.message
-                ),
-            );
-        }
+        let config = request.config.clone();
+        let provider = request.provider.clone();
+        let auth_manager = request.auth_manager.clone();
+        let repo_for_task = repo_path.clone();
+        let progress_for_task = progress_sender.clone();
+        let log_sink_for_task = log_sink.clone();
+        let metrics_for_task = metrics.clone();
+        tokio::spawn(async move {
+            let _ = run_linear_status_agent(
+                &config,
+                &provider,
+                auth_manager,
+                &repo_for_task,
+                progress_for_task,
+                log_sink_for_task,
+                prompt,
+                metrics_for_task,
+            )
+            .await;
+        });
     }
 
     let mut plan_tracker =
@@ -3612,17 +3663,26 @@ pub async fn run_security_review(
                 &checkpoint,
                 &request.output_root,
             );
-            let _ = run_linear_status_agent(
-                &request.config,
-                &request.provider,
-                request.auth_manager.clone(),
-                &repo_path,
-                progress_sender.clone(),
-                log_sink.clone(),
-                prompt,
-                metrics.clone(),
-            )
-            .await;
+            let config = request.config.clone();
+            let provider = request.provider.clone();
+            let auth_manager = request.auth_manager.clone();
+            let repo_for_task = repo_path.clone();
+            let progress_for_task = progress_sender.clone();
+            let log_sink_for_task = log_sink.clone();
+            let metrics_for_task = metrics.clone();
+            tokio::spawn(async move {
+                let _ = run_linear_status_agent(
+                    &config,
+                    &provider,
+                    auth_manager,
+                    &repo_for_task,
+                    progress_for_task,
+                    log_sink_for_task,
+                    prompt,
+                    metrics_for_task,
+                )
+                .await;
+            });
         }
     }
     if !matches!(
@@ -3639,17 +3699,26 @@ pub async fn run_security_review(
                 &checkpoint,
                 &request.output_root,
             );
-            let _ = run_linear_status_agent(
-                &request.config,
-                &request.provider,
-                request.auth_manager.clone(),
-                &repo_path,
-                progress_sender.clone(),
-                log_sink.clone(),
-                prompt,
-                metrics.clone(),
-            )
-            .await;
+            let config = request.config.clone();
+            let provider = request.provider.clone();
+            let auth_manager = request.auth_manager.clone();
+            let repo_for_task = repo_path.clone();
+            let progress_for_task = progress_sender.clone();
+            let log_sink_for_task = log_sink.clone();
+            let metrics_for_task = metrics.clone();
+            tokio::spawn(async move {
+                let _ = run_linear_status_agent(
+                    &config,
+                    &provider,
+                    auth_manager,
+                    &repo_for_task,
+                    progress_for_task,
+                    log_sink_for_task,
+                    prompt,
+                    metrics_for_task,
+                )
+                .await;
+            });
         }
     }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
@@ -4301,17 +4370,26 @@ pub async fn run_security_review(
             &checkpoint,
             &request.output_root,
         );
-        let _ = run_linear_status_agent(
-            &request.config,
-            &request.provider,
-            request.auth_manager.clone(),
-            &repo_path,
-            progress_sender.clone(),
-            log_sink.clone(),
-            prompt,
-            metrics.clone(),
-        )
-        .await;
+        let config = request.config.clone();
+        let provider = request.provider.clone();
+        let auth_manager = request.auth_manager.clone();
+        let repo_for_task = repo_path.clone();
+        let progress_for_task = progress_sender.clone();
+        let log_sink_for_task = log_sink.clone();
+        let metrics_for_task = metrics.clone();
+        tokio::spawn(async move {
+            let _ = run_linear_status_agent(
+                &config,
+                &provider,
+                auth_manager,
+                &repo_for_task,
+                progress_for_task,
+                log_sink_for_task,
+                prompt,
+                metrics_for_task,
+            )
+            .await;
+        });
     }
 
     let (bugs_for_result, bug_snapshots) = build_bug_records(bug_summaries, bug_details);
@@ -4371,7 +4449,9 @@ pub async fn run_security_review(
                     "Final report assembled from specification, threat model, and findings."
                         .to_string(),
                 );
-                Some(fix_mermaid_blocks(&sections.join("\n\n")))
+                let combined = sections.join("\n\n");
+                let cleaned = strip_operational_considerations_section(&combined);
+                Some(fix_mermaid_blocks(&cleaned))
             }
         }
         SecurityReviewMode::Bugs => {
@@ -4380,7 +4460,8 @@ pub async fn run_security_review(
                     &mut logs,
                     "Generated findings-only report for bug sweep.".to_string(),
                 );
-                Some(fix_mermaid_blocks(&section))
+                let cleaned = strip_operational_considerations_section(&section);
+                Some(fix_mermaid_blocks(&cleaned))
             } else {
                 record(
                     &mut logs,
@@ -4391,10 +4472,29 @@ pub async fn run_security_review(
         }
     };
 
+    if is_open_source {
+        let _ = run_trufflehog_scan(
+            &repo_path,
+            &request.output_root,
+            progress_sender.clone(),
+            log_sink.clone(),
+            &mut logs,
+        )
+        .await;
+    }
+
     // Intentionally avoid logging the output path pre-write to keep logs concise.
+    let (git_commit, git_branch, git_commit_timestamp) = match git_revision.as_ref() {
+        Some((commit, branch, ts)) => (Some(commit.clone()), branch.clone(), *ts),
+        None => (None, None, None),
+    };
     let metadata = SecurityReviewMetadata {
         mode,
         scope_paths: scope_display_paths.clone(),
+        git_commit,
+        git_branch,
+        git_commit_timestamp,
+        linear_issue: linear_issue.clone(),
     };
     let api_entries_for_persist = spec_generation
         .as_ref()
@@ -4449,43 +4549,6 @@ pub async fn run_security_review(
     checkpoint.status = SecurityReviewCheckpointStatus::Complete;
     persist_checkpoint(&mut checkpoint, &mut logs);
 
-    // Final Linear sync and per-bug ticket creation.
-    if let Some(linear_issue) = linear_issue.as_ref() {
-        let final_prompt = build_linear_finalize_prompt(
-            linear_issue,
-            &checkpoint.model,
-            &checkpoint.plan_statuses,
-            &request.output_root,
-            &checkpoint,
-        );
-        let _ = run_linear_status_agent(
-            &request.config,
-            &request.provider,
-            request.auth_manager.clone(),
-            &repo_path,
-            progress_sender.clone(),
-            log_sink.clone(),
-            final_prompt,
-            metrics.clone(),
-        )
-        .await;
-
-        // Create child tickets (unassigned) for each bug and link back to the review issue.
-        let create_prompt =
-            build_linear_create_tickets_prompt(linear_issue, artifacts.bugs_path.as_path());
-        let _ = run_linear_status_agent(
-            &request.config,
-            &request.provider,
-            request.auth_manager.clone(),
-            &repo_path,
-            progress_sender.clone(),
-            log_sink.clone(),
-            create_prompt,
-            metrics.clone(),
-        )
-        .await;
-    }
-
     let elapsed = overall_start.elapsed();
     let elapsed_display = fmt_elapsed_compact(elapsed.as_secs());
     let metrics_snapshot = metrics.snapshot();
@@ -4534,6 +4597,31 @@ pub async fn run_security_review(
         }
     }
 
+    let cost_label = match estimated_cost {
+        Some(cost) => format!("{cost:.4}"),
+        None => "unknown".to_string(),
+    };
+    let runtime_summary = format!(
+        "security analysis completed in {elapsed_display} (rate-limit backoff {wait_display}; model calls {model_calls}; tool calls {tool_summary}; total tokens {total_tokens} = input {input_tokens} + cached_input {cached_input_tokens} + output {output_tokens}; estimated cost {cost_label}).",
+        model_calls = metrics_snapshot.model_calls,
+        tool_summary = tool_summary,
+        total_tokens = token_usage.total_tokens,
+        input_tokens = token_usage.input_tokens,
+        cached_input_tokens = token_usage.cached_input_tokens,
+        output_tokens = token_usage.output_tokens + token_usage.reasoning_output_tokens,
+        cost_label = cost_label,
+    );
+    let revision_summary = git_revision
+        .as_ref()
+        .map(|(commit, branch, ts)| format_revision_label(commit.as_str(), branch.as_ref(), *ts))
+        .unwrap_or_else(|| "unknown".to_string());
+    let trufflehog_path = if is_open_source {
+        let candidate = request.output_root.join("trufflehog.jsonl");
+        candidate.exists().then_some(candidate)
+    } else {
+        None
+    };
+
     if let Some(report_path) = artifacts.report_path.as_ref() {
         record(
             &mut logs,
@@ -4546,6 +4634,76 @@ pub async fn run_security_review(
             format!("Report HTML: {}", report_html_path.display()),
         );
     }
+
+    // Final Linear sync and per-bug ticket creation.
+    if let Some(linear_issue) = linear_issue.as_ref() {
+        // Create child tickets (unassigned) for each bug and link back to the review issue.
+        let create_prompt =
+            build_linear_create_tickets_prompt(linear_issue, artifacts.bugs_path.as_path());
+        {
+            let config = request.config.clone();
+            let provider = request.provider.clone();
+            let auth_manager = request.auth_manager.clone();
+            let repo_for_task = repo_path.clone();
+            let progress_for_task = progress_sender.clone();
+            let log_sink_for_task = log_sink.clone();
+            let metrics_for_task = metrics.clone();
+            tokio::spawn(async move {
+                let _ = run_linear_status_agent(
+                    &config,
+                    &provider,
+                    auth_manager,
+                    &repo_for_task,
+                    progress_for_task,
+                    log_sink_for_task,
+                    create_prompt,
+                    metrics_for_task,
+                )
+                .await;
+            });
+        }
+
+        // Then post a single final summary comment and finalize the status block.
+        {
+            let config = request.config.clone();
+            let provider = request.provider.clone();
+            let auth_manager = request.auth_manager.clone();
+            let repo_for_task = repo_path.clone();
+            let progress_for_task = progress_sender.clone();
+            let log_sink_for_task = log_sink.clone();
+            let metrics_for_task = metrics.clone();
+            let issue_for_task = linear_issue.clone();
+            let checkpoint_for_task = checkpoint.clone();
+            let output_root_for_task = request.output_root.clone();
+            let trufflehog_for_task = trufflehog_path;
+            let runtime_for_task = runtime_summary;
+            let revision_for_task = revision_summary;
+            tokio::spawn(async move {
+                let final_prompt = build_linear_finalize_prompt(
+                    &issue_for_task,
+                    &checkpoint_for_task.model,
+                    &checkpoint_for_task.plan_statuses,
+                    &output_root_for_task,
+                    &checkpoint_for_task,
+                    &runtime_for_task,
+                    &revision_for_task,
+                    trufflehog_for_task.as_deref(),
+                );
+                let _ = run_linear_status_agent(
+                    &config,
+                    &provider,
+                    auth_manager,
+                    &repo_for_task,
+                    progress_for_task,
+                    log_sink_for_task,
+                    final_prompt,
+                    metrics_for_task,
+                )
+                .await;
+            });
+        }
+    }
+
     // Omit redundant completion log; the UI presents a follow-up line.
 
     Ok(SecurityReviewResult {
@@ -4592,8 +4750,7 @@ const LINEAR_SCOPE_CONTEXT_SYSTEM_PROMPT: &str = "Gather the full Linear issue c
 
 fn build_linear_scope_context_prompt(issue_ref: &str) -> String {
     format!(
-        "Collect Linear issue context for `{issue}` to inform auto-scoping.\n\nStrict tool order:\n1) Call Linear MCP to fetch this exact issue immediately (no planning).\n2) Call Linear MCP to fetch ALL comments/activity for the same issue.\n3) If attachments exist, fetch/describe them via Linear MCP.\n\nRequirements:\n- Read the full issue description and attachments.\n- Read ALL activity entries and comments, including authors and timestamps.\n- Capture the current issue status/state and assignee.\n- Do not edit the issue.\n\nOutput (plaintext):\n- One-line summary of the issue intent.\n- Current status/state and assignee.\n- Activity timeline (newest first) with key events.\n- Comments section listing each comment with author, timestamp, and body. Do not skip comments.\n- Attachments (if any) with brief notes.",
-        issue = issue_ref
+        "Collect Linear issue context for `{issue_ref}` to inform auto-scoping.\n\nStrict tool order:\n1) Call Linear MCP to fetch this exact issue immediately (no planning).\n2) Call Linear MCP to fetch ALL comments/activity for the same issue.\n3) If attachments exist, fetch/describe them via Linear MCP.\n\nRequirements:\n- Read the full issue description and attachments.\n- Read ALL activity entries and comments, including authors and timestamps.\n- Capture the current issue status/state and assignee.\n- Do not edit the issue.\n\nOutput (plaintext):\n- One-line summary of the issue intent.\n- Current status/state and assignee.\n- Activity timeline (newest first) with key events.\n- Comments section listing each comment with author, timestamp, and body. Do not skip comments.\n- Attachments (if any) with brief notes."
     )
 }
 
@@ -4610,7 +4767,7 @@ async fn fetch_linear_context_for_auto_scope(
 ) -> Result<(String, Vec<String>), SecurityReviewFailure> {
     let mut logs: Vec<String> = Vec::new();
     let mut lin_config = config.clone();
-    lin_config.model = GPT_5_CODEX_MEDIUM_MODEL.to_string();
+    lin_config.model = "gpt-5.1".to_string();
     lin_config.model_provider = provider.clone();
     lin_config.base_instructions = Some(LINEAR_SCOPE_CONTEXT_SYSTEM_PROMPT.to_string());
     lin_config.user_instructions = None;
@@ -4760,8 +4917,9 @@ fn build_linear_init_prompt(
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let workspace_marker = encode_workspace_hint(repo_root).unwrap_or_default();
     format!(
-        "You are a workflow assistant that manages a security review using the configured MCP servers (Linear, Notion, Google Workspace, Secbot).\n\nTask: Using the Linear MCP server, open the issue `{issue}` directly (call `get_issue` first; avoid team or project enumeration unless the key fails).\n\nRules:\n- No long planning steps; fetch the issue immediately with `get_issue`, then proceed.\n- Do not post Linear comments until the full security review is finished; keep all interim updates in the description’s “Security Agent ({model}) - Review Status” block.\n- Prepend a header `# Security Agent ({model}) - Review Status` when you add the status section; do not add any extra automation tagline.\n- Preserve existing status content, key insights, and doc summaries—append or merge updates instead of overwriting.\n- Do not paste full findings or reproduction details into the description; use concise bullets and reference attachments/artifacts instead.\n\nSteps:\n1) Classify the issue. If this is NOT a security_review request, prepend a short note in the status block that automation only runs for security review tickets, then stop.\n2) If it IS a security_review: gather all context from the issue description, attachments, and comments. Open every linked doc (including links inside comments) with the appropriate MCP (Notion or Google Workspace) and read them fully; use Google Workspace MCP to open Google Docs links found in comments. Use Secbot MCP to search for prior contexts, tickets, policies, and recommendations relevant to this issue; reason from the issue context, select only relevant hits, and explain why each matters instead of dumping raw results.\n3) From the collected context, check for missing essentials (e.g., code locations/links, critical docs/flows, required policies). If critical items are missing (e.g., no code links), pause the review and capture the requests in the “Follow-ups / Missing Inputs” subsection of the status block; do not continue until inputs arrive. If most information is present, continue.\n4) Update the Linear issue description by PREPENDING a section titled “Security Agent ({model}) - Review Status” (remove any existing section with that heading first) with:\n   - A header line: `# Security Agent ({model}) - Review Status`\n   - Key points summary (brief bullets; no full findings); inline-link any referenced docs so the summaries point to their sources.\n   - Scope paths being analyzed (use `{scope}`) and note the scope file to upload if missing: {scope_file}\n   - Collected docs (including linked docs and any docs found in comments) with 1–2 line summaries and inline hyperlinks\n   - Secbot Results (relevant contexts or policy docs): summarize briefly why each item matters; when Secbot surfaces similar or relevant tickets, include the assignee and date in the summary\n   - A checklist mirroring the AppSec pipeline steps\n   - A “Follow-ups / Missing Inputs” subsection listing any gaps (docs, features/flows, code locations) that need user input\n   - Artifacts: upload files from the local artifacts directory ({art_dir}) and only reference them after uploading; do not include local filesystem paths or create gists. For file/folder triage or scope details, upload the scope file ({scope_file}) instead of pasting paths.\n\nChecklist:\n{checklist}\n\nRepository: {repo}\nMode: {mode}\nScope: {scope}\nIncluded paths: {include_text}\nArtifacts directory (local): {art_dir}\nScope file (upload): {scope_file}\n\nLocal workspace convention:\n- Keep all repositories under `~/code`.\n- If a required repository is missing under `~/code`, use GitHub CLI to clone a shallow copy (depth=1). Example:\n  `gh repo clone owner/repo ~/code/repo -- --depth=1`\n\nNotes:\n- Preserve the existing description content below the new status section.\n- Do not remove any existing details; prepend the status section.\n- Keep local filesystem paths out of Linear updates; reference uploaded attachments (no gists or external pastes).\n- When resuming, download any relevant attachments locally into the artifacts directory before continuing.",
+        "You are a workflow assistant that manages a security review using the configured MCP servers (Linear, Notion, Google Workspace, Secbot).\n\nTask: Using the Linear MCP server, open the issue `{issue}` directly (call `get_issue` first; avoid team or project enumeration unless the key fails).\n\nRules:\n- No long planning steps; fetch the issue immediately with `get_issue`, then proceed.\n- Do not post Linear comments until the full security review is finished; keep all interim updates in the description’s “Security Agent ({model}) - Review Status” block.\n- Prepend a header `# Security Agent ({model}) - Review Status` when you add the status section; do not add any extra automation tagline.\n- Preserve existing status content, key insights, and doc summaries—append or merge updates instead of overwriting.\n- Do not paste full findings or reproduction details into the description; use concise bullets and reference attachments/artifacts instead.\n\nSteps:\n1) Classify the issue. If this is NOT a security_review request, prepend a short note in the status block that automation only runs for security review tickets, then stop.\n2) If it IS a security_review: gather all context from the issue description, attachments, and comments. Open every linked doc (including links inside comments) with the appropriate MCP (Notion or Google Workspace) and read them fully; use Google Workspace MCP to open Google Docs links found in comments. Use Secbot MCP to search for prior contexts, tickets, policies, and recommendations relevant to this issue; reason from the issue context, select only relevant hits, and explain why each matters instead of dumping raw results.\n3) From the collected context, check for missing essentials (e.g., code locations/links, critical docs/flows, required policies). If critical items are missing (e.g., no code links), pause the review and capture the requests in the “Follow-ups / Missing Inputs” subsection of the status block; do not continue until inputs arrive. If most information is present, continue.\n4) Update the Linear issue description by PREPENDING a section titled “Security Agent ({model}) - Review Status” (remove any existing section with that heading first) with:\n   - A header line: `# Security Agent ({model}) - Review Status`\n   - Key points summary (3–7 concise bullets highlighting security-relevant conclusions and recommended next steps; integrate insights from docs and Secbot here when they materially change risk, but avoid restating raw observations).\n   - Scope summary: a short description of what was reviewed (for example, key services, directories, or APIs) rather than a full path dump. Do NOT inline every path or add a long `scope: ...` line; instead, ensure the \"Scope paths\" artifact ({scope_file}) is uploaded and reference it once in this bullet.\n   - Design / architecture docs: only include genuine design, architecture, requirements, threat-model, or runbook documents. Summarize each in 1–2 lines with inline hyperlinks and highlight why it matters for security. Skip generic README/env/source files that merely restate code.\n   - Related Secbot / precedent tickets: only when Secbot MCP surfaces clearly related policies or tickets grounded in the same repo, service, or code paths (or explicitly requested in the issue). Summarize why each is relevant and include the assignee and last-updated date. If no strong matches exist, omit this subsection entirely rather than forcing weak content.\n   - A checklist mirroring the AppSec pipeline steps.\n   - A “Follow-ups / Missing Inputs” subsection listing any missing docs, flows, or code locations that block analysis; phrase items as actionable questions for the ticket owner.\n   - Artifacts: reference uploaded attachments only (no local filesystem paths, no gists). For scope details and triage outputs, reference the uploaded scope file or \"Scope paths\" artifact ({scope_file}) instead of pasting lists of directories or files.\n\nChecklist:\n{checklist}\n\nRepository: {repo}\nMode: {mode}\nScope: {scope}\nIncluded paths: {include_text}\nArtifacts directory (local): {art_dir}\nScope file (upload): {scope_file}\nWorkspace marker (embed this exact marker on its own line inside the status block so Codex can resume with the same local workspace later): {workspace_marker}\n\nLocal workspace convention:\n- Keep all repositories under `~/code`.\n- If a required repository is missing under `~/code`, use GitHub CLI to clone a shallow copy (depth=1). Example:\n  `gh repo clone owner/repo ~/code/repo -- --depth=1`\n\nNotes:\n- Preserve the existing description content below the new status section.\n- Do not remove any existing details; prepend the status section.\n- Keep local filesystem paths out of Linear updates; reference uploaded attachments (no gists or external pastes).\n- When resuming, download any relevant attachments locally into the artifacts directory before continuing.",
         issue = issue_ref,
         model = model_name,
         repo = repo_root.display(),
@@ -4770,6 +4928,7 @@ fn build_linear_init_prompt(
         include_text = include_text,
         art_dir = output_root.display(),
         scope_file = scope_file_text,
+        workspace_marker = workspace_marker,
     )
 }
 
@@ -4821,7 +4980,7 @@ fn build_linear_progress_prompt(
         )
     };
     format!(
-        "Use the Linear MCP to update issue `{issue}` progress.\n\nRules:\n- Open the issue directly by key `{issue}` (call `get_issue` first; avoid team/resource enumeration unless lookup fails).\n- No Linear comments until all security review steps are complete; keep updates in the description’s “Security Agent ({model}) - Review Status” block.\n- Prepend a header `# Security Agent ({model}) - Review Status` when you add the status section; do not add any extra automation tagline. Preserve existing status content, key insights, and doc summaries—append/merge instead of overwriting.\n- Do not paste full findings; reference uploaded artifacts instead.\n- Keep artifact references limited to uploaded attachments; do not expose local filesystem paths or create gists. Upload files directly from the local artifacts directory ({art_root}).\n- Before updating, read any newly linked docs in the description or comments via Notion/Google Workspace MCP (use Google Workspace MCP for Google Docs) and summarize; include inline hyperlinks to the docs in your summary.\n- Check Secbot MCP for any new relevant policies/recommendations; reason from the issue context, explain why results matter, and when Secbot surfaces similar or relevant tickets, capture assignee and date in the summary.\n- Upload/attach the scope file if not already present ({scope_file}) and reference the analyzed scope paths: {scope_paths}. For file/folder triage outputs, upload the local text file instead of creating external pastes.\n\nActions:\n- Update the checklist status for the step: {step}\n- Mention the current scope paths in the status block (scope: {scope_paths}).\n- If new artifacts exist, upload/attach them from the local artifacts directory (no gists or external shares) and reference them in the status block without including local paths.\n- Capture any new gaps (docs, flows, code links) in the “Follow-ups / Missing Inputs” subsection instead of posting comments.\n- If critical inputs (e.g., code links) are still missing, pause and keep them in “Follow-ups / Missing Inputs” until they are provided.\n\nChecklist now:\n{checklist}{artifacts_section}\n\nScope file (upload): {scope_file}\nScope paths: {scope_paths}",
+        "Use the Linear MCP to update issue `{issue}` progress.\n\nRules:\n- Open the issue directly by key `{issue}` (call `get_issue` first; avoid team/resource enumeration unless lookup fails).\n- No Linear comments until all security review steps are complete; keep updates in the description’s “Security Agent ({model}) - Review Status” block.\n- Prepend a header `# Security Agent ({model}) - Review Status` when you add the status section; do not add any extra automation tagline. Preserve existing status content, key insights, and doc summaries—append/merge instead of overwriting.\n- Do not paste full findings; reference uploaded artifacts instead.\n- Keep artifact references limited to uploaded attachments; do not expose local filesystem paths or create gists. Upload files directly from the local artifacts directory ({art_root}).\n- Before updating, read any newly linked docs in the description or comments via Notion/Google Workspace MCP (use Google Workspace MCP for Google Docs) and summarize; include inline hyperlinks to the docs in your summary.\n- Check Secbot MCP for any new relevant policies/recommendations; reason from the issue context, explain why results matter, and when Secbot surfaces similar or relevant tickets, capture assignee and date in the summary.\n- Upload/attach the scope file if not already present ({scope_file}) so that readers can inspect the full “Scope paths” artifact; do NOT paste long `scope: ...` lines or raw path dumps into the description.\n\nActions:\n- Update the checklist status for the step: {step}.\n- Maintain a single “Scope summary” bullet in the status block that briefly describes what is in scope and points to the uploaded \"Scope paths\" artifact instead of listing every path.\n- If new artifacts exist, upload/attach them from the local artifacts directory (no gists or external shares) and reference them in the status block without including local paths.\n- Capture any new gaps (docs, flows, code links) in the “Follow-ups / Missing Inputs” subsection instead of posting comments.\n- If critical inputs (e.g., code links) are still missing, pause and keep them in “Follow-ups / Missing Inputs” until they are provided.\n\nChecklist now:\n{checklist}{artifacts_section}\n\nScope file (upload): {scope_file}\nScope paths: {scope_paths}",
         issue = issue_ref,
         model = model_name,
         step = step_title,
@@ -4839,6 +4998,9 @@ fn build_linear_finalize_prompt(
     statuses: &HashMap<String, StepStatus>,
     output_root: &Path,
     checkpoint: &SecurityReviewCheckpoint,
+    runtime_summary: &str,
+    revision_summary: &str,
+    trufflehog_path: Option<&Path>,
 ) -> String {
     let checklist = render_checklist_markdown(statuses);
     let scope_paths_text = if checkpoint.scope_display_paths.is_empty() {
@@ -4857,8 +5019,12 @@ fn build_linear_finalize_prompt(
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "(missing)".to_string());
+    let trufflehog_text = trufflehog_path
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(not run)".to_string());
+
     format!(
-        "Finalize Linear sync for `{issue}`.\n\nRules:\n- Open the issue directly by key `{issue}` (call `get_issue` first; avoid team/resource enumeration unless lookup fails).\n- Keep the description’s “Security Agent ({model}) - Review Status” block intact with the header `# Security Agent ({model}) - Review Status`; remove any prior instance of this section before writing the new one; do not add any extra automation tagline. Preserve earlier summaries and doc context—append final updates instead of overwriting.\n- Do not paste full findings; reference artifacts and reports instead.\n- Keep artifact references limited to uploaded attachments; do not expose local filesystem paths or create gists. Upload from the local artifacts directory ({root}) first, then reference.\n- Include the analyzed scope paths (scope: {scope_paths}) and ensure the scope file is attached ({scope_file}).\n- If any new docs are referenced (including in comments), read them via Notion/Google Workspace MCP (use Google Workspace MCP for Google Docs) and capture brief summaries with inline hyperlinks to the sources; check Secbot MCP for final policies/recommendations and, when similar or relevant tickets are found, include their assignee and date in the summary.\n\nActions:\n- Ensure the status block reflects the final checklist below and the final scope paths while keeping previous insights.\n- Use this checklist:\n{checklist}\n- Add a final comment containing the full HTML report (inline) and a link to the markdown report; this is the only comment because the review is complete.\n- Upload/attach any remaining artifacts (e.g., snapshot, API overview, classification table, scope file) from the local artifacts directory, then reference them (no gists or local paths).\n\nArtifacts:\n- report_html: {html}\n- report_markdown: {md}\n- scope_file: {scope_file}\n- scope_paths: {scope_paths}\n- artifacts_root: {root}",
+        "Finalize Linear sync for `{issue}`.\n\nRules:\n- Open the issue directly by key `{issue}` (call `get_issue` first; avoid team/resource enumeration unless lookup fails).\n- Keep the description’s “Security Agent ({model}) - Review Status” block intact with the header `# Security Agent ({model}) - Review Status`; remove any prior instance of this section before writing the new one; do not add any extra automation tagline. Preserve earlier summaries and doc context—append final updates instead of overwriting.\n- Do not paste full findings; reference artifacts and child tickets instead.\n- Keep artifact references limited to uploaded attachments; do not expose local filesystem paths or create gists. Upload from the local artifacts directory ({root}) first, then reference.\n- Ensure the triaged scope file is attached and clearly labeled as the \"Scope paths\" artifact ({scope_file}); do **not** inline long `scope: ...` lines or raw path dumps into the description.\n- Before writing the final comment, use Linear MCP to list child/sub-issues and related issues for `{issue}`; treat tickets created for this review as the ground truth for findings.\n\nFinal status block:\n- Update the “Security Agent ({model}) - Review Status” section in the description so it reflects the final checklist below and the final scope summary while keeping previous insights and doc summaries.\n- Keep the scope section short (1–2 lines) and refer to the attached \"Scope paths\" artifact rather than listing every path.\n- Fold key insights from design docs, Secbot, and prior comments into the key points and follow-ups instead of listing irrelevant docs.\n\nFinal comment (single comment only):\n- Post exactly one final comment on the issue, prefixed with `Security Agent ({model}) - automated security review` so humans can recognize automation.\n- Structure the comment into three plain-language sections (no angle-bracket tags):\n  - Conclusion — a short paragraph summarizing whether the security analysis is complete and whether any HIGH or MEDIUM risk findings remain. If there are no HIGH or MEDIUM findings, state clearly that no blocking issues were found and that the surface appears ready from an AppSec perspective (subject to other launch gates), and that the review can likely be closed.\n  - Findings — a bullet list focusing on HIGH-severity findings only. For each HIGH finding, name the issue, mention its risk briefly, and link to its child ticket key. Summarize MEDIUM/LOW findings only as counts or short notes without listing each one.\n  - Runtime summary — a single line summarizing the runtime metrics for this review using: {runtime}. Include the analyzed revision line `{revision}` when it is available.\n- Do not include the full HTML report inline in the comment; instead, link to the uploaded markdown/HTML reports and the scope file.\n\nArtifacts to rely on:\n- report_markdown: {md}\n- report_html: {html}\n- scope_file (\"Scope paths\" artifact): {scope_file}\n- analyzed_scope_label: {scope_paths}\n- trufflehog_json (open-source reviews only, if present): {trufflehog}\n- artifacts_root (local, for uploads only): {root}\n\nChecklist:\n{checklist}",
         issue = issue_ref,
         model = model_name,
         checklist = checklist,
@@ -4867,12 +5033,15 @@ fn build_linear_finalize_prompt(
         html = html_path,
         md = md_path,
         root = output_root.display(),
+        runtime = runtime_summary,
+        revision = revision_summary,
+        trufflehog = trufflehog_text,
     )
 }
 
 fn build_linear_create_tickets_prompt(issue_ref: &str, bugs_markdown_path: &Path) -> String {
     format!(
-        "Create one unassigned Linear ticket per bug finding and link each as a sub-issue (or related issue) to the review ticket `{issue}`.\n\nSource findings: {bugs}\n\nInstructions:\n- Parse the bugs markdown and create concise titles (include severity and component/file).\n- Include reproduction/verification details and recommendations in each ticket body.\n- Do NOT assign anyone.\n- Add links back to the artifacts directory and the review ticket.\n- After creation, add a comment on the review ticket summarizing how many child issues were created and list their keys.\n- Keep everything within the Linear MCP; do not use external network calls.",
+        "Create Linear child tickets for validated security findings and link them to the review ticket `{issue}`.\n\nSource findings markdown: {bugs}\n\nInstructions:\n- For each finding in the markdown, first search for existing sub-issues or clearly related tickets (matching severity + component/file + summary) using Linear MCP. If a closely matching ticket already exists, link that ticket to `{issue}` and **do not** create a duplicate.\n- Only create new tickets for findings that have no similar existing ticket.\n- When creating a new ticket, keep it unassigned and in the initial TODO/backlog state; do **not** auto-assign owners or move tickets to triaged/in-progress/done.\n- Parse the bugs markdown to create concise titles that include severity and the most important component/file.\n- Include reproduction/verification details and recommendations in each ticket body.\n- If the finding includes blame information or a suggested owner (for example, a `Suggested owner:` line derived from git blame), copy that line into the ticket body but do **not** set an assignee.\n- Add links back to the artifacts directory and the review ticket `{issue}` so engineers can reach the full report.\n- Do **not** post comments on the review ticket; this step is only for creating/linking child tickets. The final summary comment is handled separately.\n- Keep everything within the Linear MCP; do not use external network calls.",
         issue = issue_ref,
         bugs = bugs_markdown_path.display(),
     )
@@ -4916,7 +5085,7 @@ async fn run_linear_status_agent(
 ) -> Result<(), SecurityReviewFailure> {
     let mut logs: Vec<String> = Vec::new();
     let mut lin_config = config.clone();
-    lin_config.model = GPT_5_CODEX_MEDIUM_MODEL.to_string();
+    lin_config.model = "gpt-5.1".to_string();
     lin_config.model_provider = provider.clone();
     lin_config.base_instructions = Some(
         "Use Linear, Notion, and Google Workspace via MCP tools. Prefer MCP tools for reading/updating issues and documents. When an issue key is provided, open it directly with Linear MCP `get_issue` before any searches; avoid enumerating teams/projects/resources unless direct lookup fails. Keep repositories under ~/code; if a repository is missing under ~/code, use GitHub CLI to clone a shallow copy (depth=1), e.g., `gh repo clone owner/repo ~/code/repo -- --depth=1`."
@@ -6301,22 +6470,8 @@ async fn run_auto_scope_agent(
         .disable(Feature::WebSearchRequest)
         .disable(Feature::ViewImageTool)
         .disable(Feature::RmcpClient);
-    for tool in ["grep_files", "list_dir", "read_file"] {
-        if !auto_config
-            .model_family
-            .experimental_supported_tools
-            .iter()
-            .any(|existing| existing == tool)
-        {
-            auto_config
-                .model_family
-                .experimental_supported_tools
-                .push(tool.to_string());
-        }
-    }
     auto_config.mcp_servers.clear();
     auto_config.use_experimental_use_rmcp_client = false;
-    auto_config.model_family.apply_patch_tool_type = None;
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -6932,22 +7087,8 @@ async fn run_spec_agent(
         .disable(Feature::WebSearchRequest)
         .disable(Feature::ViewImageTool)
         .disable(Feature::RmcpClient);
-    for tool in ["grep_files", "list_dir", "read_file"] {
-        if !spec_config
-            .model_family
-            .experimental_supported_tools
-            .iter()
-            .any(|existing| existing == tool)
-        {
-            spec_config
-                .model_family
-                .experimental_supported_tools
-                .push(tool.to_string());
-        }
-    }
     spec_config.mcp_servers.clear();
     spec_config.use_experimental_use_rmcp_client = false;
-    spec_config.model_family.apply_patch_tool_type = None;
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -7078,22 +7219,8 @@ async fn run_bug_agent(
         .disable(Feature::WebSearchRequest)
         .disable(Feature::ViewImageTool)
         .disable(Feature::RmcpClient);
-    for tool in ["grep_files", "list_dir", "read_file"] {
-        if !bug_config
-            .model_family
-            .experimental_supported_tools
-            .iter()
-            .any(|existing| existing == tool)
-        {
-            bug_config
-                .model_family
-                .experimental_supported_tools
-                .push(tool.to_string());
-        }
-    }
     bug_config.mcp_servers.clear();
     bug_config.use_experimental_use_rmcp_client = false;
-    bug_config.model_family.apply_patch_tool_type = None;
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -7637,6 +7764,8 @@ async fn generate_threat_model(
         sanitized_response = fix_mermaid_blocks(&outcome.text);
     }
 
+    sanitized_response = ensure_threat_model_heading(sanitized_response);
+
     let threat_file = threats_dir.join("threat_model.md");
     tokio_fs::write(&threat_file, sanitized_response.as_bytes())
         .await
@@ -7685,7 +7814,12 @@ async fn compact_analysis_context(
     if let Some(threat) = threat_markdown {
         let trimmed = threat.trim();
         if !trimmed.is_empty() {
-            sections.push(format!("## Threat Model\n{trimmed}"));
+            let lower = trimmed.to_ascii_lowercase();
+            if lower.starts_with("# threat model") || lower.starts_with("## threat model") {
+                sections.push(trimmed.to_string());
+            } else {
+                sections.push(format!("## Threat Model\n{trimmed}"));
+            }
         }
     }
 
@@ -10585,6 +10719,24 @@ async fn build_git_link_info(repo_path: &Path) -> Option<GitLinkInfo> {
     })
 }
 
+async fn collect_git_revision(repo_path: &Path) -> Option<(String, Option<String>, Option<i64>)> {
+    let canonical_repo = repo_path.canonicalize().ok()?;
+    let git_root = get_git_repo_root(&canonical_repo)?;
+    let canonical_root = git_root.canonicalize().unwrap_or(git_root);
+    let git_info = collect_git_info(&canonical_root).await?;
+    let commit = git_info.commit_hash.as_deref()?.trim().to_string();
+    if commit.is_empty() {
+        return None;
+    }
+    let branch = git_info.branch.clone();
+    let timestamp = recent_commits(&canonical_root, 1)
+        .await
+        .into_iter()
+        .next()
+        .map(|entry| entry.timestamp);
+    Some((commit, branch, timestamp))
+}
+
 fn normalize_github_url(remote: &str, commit: &str) -> Option<String> {
     let trimmed_remote = remote.trim();
     let trimmed_commit = commit.trim();
@@ -11563,6 +11715,88 @@ pub(crate) fn parse_follow_up_question(message: &str) -> Option<String> {
     }
 }
 
+async fn run_trufflehog_scan(
+    repo_path: &Path,
+    output_root: &Path,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
+    logs: &mut Vec<String>,
+) -> Option<PathBuf> {
+    let target_path = output_root.join("trufflehog.jsonl");
+    let start_message = format!(
+        "Running trufflehog filesystem scan for open-source review; output: {}",
+        target_path.display()
+    );
+    push_progress_log(&progress_sender, &log_sink, logs, start_message);
+
+    let mut command = Command::new("trufflehog");
+    command
+        .arg("filesystem")
+        .arg("--json")
+        .arg("--no-update")
+        .arg(repo_path)
+        .current_dir(repo_path);
+
+    let output = match command.output().await {
+        Ok(output) => output,
+        Err(err) => {
+            let message = format!(
+                "trufflehog is not available or failed to start: {err}. Skipping secret scan."
+            );
+            push_progress_log(&progress_sender, &log_sink, logs, message);
+            return None;
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let summary = if stderr.is_empty() {
+            format!("trufflehog exited with status {}", output.status)
+        } else {
+            format!("trufflehog exited with status {}: {stderr}", output.status)
+        };
+        push_progress_log(&progress_sender, &log_sink, logs, summary);
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if stdout.trim().is_empty() {
+        push_progress_log(
+            &progress_sender,
+            &log_sink,
+            logs,
+            "trufflehog completed with no findings; no JSON artifact written.".to_string(),
+        );
+        return None;
+    }
+
+    if let Some(parent) = target_path.parent()
+        && let Err(err) = tokio_fs::create_dir_all(parent).await {
+            let message = format!(
+                "Failed to create directory for trufflehog output {}: {err}",
+                parent.display()
+            );
+            push_progress_log(&progress_sender, &log_sink, logs, message);
+            return None;
+        }
+
+    if let Err(err) = tokio_fs::write(&target_path, stdout.as_bytes()).await {
+        let message = format!(
+            "Failed to write trufflehog results to {}: {err}",
+            target_path.display()
+        );
+        push_progress_log(&progress_sender, &log_sink, logs, message);
+        return None;
+    }
+
+    let done_message = format!(
+        "Trufflehog secret scan complete; JSONL results saved to {}.",
+        target_path.display()
+    );
+    push_progress_log(&progress_sender, &log_sink, logs, done_message);
+    Some(target_path)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn persist_artifacts(
     output_root: &Path,
@@ -12530,6 +12764,96 @@ struct ModelCallOutput {
     reasoning: Option<String>,
 }
 
+async fn make_provider_request_builder(
+    client: &CodexHttpClient,
+    provider: &ModelProviderInfo,
+    auth: &Option<CodexAuth>,
+    path: &str,
+) -> Result<CodexRequestBuilder, String> {
+    // Base URL: allow provider overrides, otherwise default to the standard OpenAI-style endpoint.
+    let mut base_url = provider
+        .base_url
+        .clone()
+        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+    base_url = base_url.trim_end_matches('/').to_string();
+
+    let path = path.trim_start_matches('/');
+    let mut url = base_url;
+    if !path.is_empty() {
+        url.push('/');
+        url.push_str(path);
+    }
+
+    if let Some(params) = provider.query_params.as_ref()
+        && !params.is_empty()
+    {
+        let qs = params
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("&");
+        url.push('?');
+        url.push_str(&qs);
+    }
+
+    // All model calls here use POST.
+    let mut builder = client.post(url);
+
+    if let Some(headers) = provider.http_headers.as_ref() {
+        for (name, value) in headers {
+            if let (Ok(header_name), Ok(header_value)) = (
+                HeaderName::try_from(name.as_str()),
+                HeaderValue::try_from(value.as_str()),
+            ) {
+                builder = builder.header(header_name, header_value);
+            }
+        }
+    }
+
+    if let Some(env_headers) = provider.env_http_headers.as_ref() {
+        for (header, env_var) in env_headers {
+            if let Ok(val) = std::env::var(env_var)
+                && !val.trim().is_empty()
+                && let (Ok(header_name), Ok(header_value)) = (
+                    HeaderName::try_from(header.as_str()),
+                    HeaderValue::try_from(val.as_str()),
+                )
+            {
+                builder = builder.header(header_name, header_value);
+            }
+        }
+    }
+
+    // Authorization: prefer provider API key, then experimental token, then user auth.
+    match provider.api_key() {
+        Ok(Some(api_key)) if !api_key.trim().is_empty() => {
+            builder = builder.bearer_auth(api_key);
+            return Ok(builder);
+        }
+        Ok(None) => {}
+        Ok(Some(_)) => {}
+        Err(err) => {
+            return Err(err.to_string());
+        }
+    }
+
+    if let Some(token) = provider.experimental_bearer_token.as_ref()
+        && !token.trim().is_empty()
+    {
+        builder = builder.bearer_auth(token);
+        return Ok(builder);
+    }
+
+    if let Some(auth) = auth.as_ref()
+        && let Ok(token) = auth.get_token().await
+        && !token.trim().is_empty()
+    {
+        builder = builder.bearer_auth(token);
+    }
+
+    Ok(builder)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn call_model(
     client: &CodexHttpClient,
@@ -12627,10 +12951,8 @@ async fn call_model_attempt(
 ) -> Result<ModelCallOutput, String> {
     match provider.wire_api {
         WireApi::Responses => {
-            let builder = provider
-                .create_request_builder(client, auth)
-                .await
-                .map_err(|e| e.to_string())?;
+            let builder =
+                make_provider_request_builder(client, provider, auth, "responses").await?;
 
             let mut payload = json!({
                 "model": model,
@@ -12726,10 +13048,7 @@ async fn send_chat_request(
     temperature: f32,
     metrics: Arc<ReviewMetrics>,
 ) -> Result<ModelCallOutput, String> {
-    let builder = provider
-        .create_request_builder(client, auth)
-        .await
-        .map_err(|e| e.to_string())?;
+    let builder = make_provider_request_builder(client, provider, auth, "chat/completions").await?;
 
     let mut payload = json!({
         "model": model,
@@ -13227,6 +13546,72 @@ fn parse_chat_output(value: serde_json::Value) -> Result<ModelCallOutput, String
     Err("Unable to parse chat completion output".to_string())
 }
 
+fn format_revision_label(commit: &str, branch: Option<&String>, timestamp: Option<i64>) -> String {
+    let short = if commit.len() > 12 {
+        commit[..12].to_string()
+    } else {
+        commit.to_string()
+    };
+    let date_str = timestamp.and_then(|ts| {
+        OffsetDateTime::from_unix_timestamp(ts)
+            .ok()
+            .and_then(|dt| dt.format(&format_description!("[year]-[month]-[day]")).ok())
+    });
+    let mut parts: Vec<String> = Vec::new();
+    parts.push(short);
+    if let Some(date) = date_str {
+        parts.push(date);
+    }
+    if let Some(branch_name) = branch
+        && !branch_name.trim().is_empty() {
+            parts.push(format!("branch {branch_name}"));
+        }
+    format!("Analyzed revision: {}", parts.join(" · "))
+}
+
+fn strip_operational_considerations_section(markdown: &str) -> String {
+    let mut lines_out: Vec<String> = Vec::new();
+    let mut skipping = false;
+
+    for line in markdown.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            let heading_text = trimmed.trim_start_matches('#').trim_start();
+            let is_operational = heading_text
+                .to_ascii_lowercase()
+                .starts_with("operational considerations");
+            if is_operational {
+                skipping = true;
+                continue;
+            }
+            if skipping {
+                skipping = false;
+            }
+        }
+        if !skipping {
+            lines_out.push(line.to_string());
+        }
+    }
+
+    lines_out.join("\n")
+}
+
+fn ensure_threat_model_heading(markdown: String) -> String {
+    let trimmed = markdown.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("# threat model")
+        || lower.starts_with("## threat model")
+        || lower.contains("\n# threat model")
+        || lower.contains("\n## threat model")
+    {
+        return markdown;
+    }
+    let mut out = String::new();
+    out.push_str("## Threat Model\n\n");
+    out.push_str(trimmed);
+    out
+}
+
 fn human_readable_bytes(bytes: usize) -> String {
     if bytes < 1024 {
         format!("{bytes} B")
@@ -13237,4 +13622,4 @@ fn human_readable_bytes(bytes: usize) -> String {
     }
 }
 
-const MARKDOWN_FIX_MODEL: &str = GPT_5_CODEX_MEDIUM_MODEL;
+const MARKDOWN_FIX_MODEL: &str = "gpt-5.1";

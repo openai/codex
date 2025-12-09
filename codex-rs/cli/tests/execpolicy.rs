@@ -40,17 +40,15 @@ prefix_rule(
     assert_eq!(
         result,
         json!({
-            "match": {
-                "decision": "forbidden",
-                "matchedRules": [
-                    {
-                        "prefixRuleMatch": {
-                            "matchedPrefix": ["git", "push"],
-                            "decision": "forbidden"
-                        }
+            "decision": "forbidden",
+            "matchedRules": [
+                {
+                    "prefixRuleMatch": {
+                        "matchedPrefix": ["git", "push"],
+                        "decision": "forbidden"
                     }
-                ]
-            }
+                }
+            ]
         })
     );
 

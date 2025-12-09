@@ -340,13 +340,17 @@ impl App {
         let session_configured = new_conv.session_configured;
         let init = crate::chatwidget::ChatWidgetInit {
             config: cfg,
+            model_family: self.chat_widget.get_model_family(),
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             initial_prompt: None,
             initial_images: Vec::new(),
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
+            models_manager: self.server.get_models_manager(),
             feedback: self.feedback.clone(),
+            skills: self.skills.clone(),
+            is_first_run: false,
         };
         self.chat_widget =
             crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);

@@ -30,7 +30,13 @@ pub use standalone_executable::main;
 pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_tool_instructions.md");
 
 const APPLY_PATCH_COMMANDS: [&str; 2] = ["apply_patch", "applypatch"];
-const APPLY_PATCH_SHELLS: [&str; 3] = ["bash", "zsh", "sh"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApplyPatchShell {
+    Unix,
+    PowerShell,
+    Cmd,
+}
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
@@ -97,11 +103,55 @@ pub struct ApplyPatchArgs {
     pub workdir: Option<String>,
 }
 
-fn shell_supports_apply_patch(shell: &str) -> bool {
+fn classify_shell_name(shell: &str) -> Option<String> {
     std::path::Path::new(shell)
-        .file_name()
+        .file_stem()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| APPLY_PATCH_SHELLS.contains(&name))
+        .map(str::to_ascii_lowercase)
+}
+
+fn classify_shell(shell: &str, flag: &str) -> Option<ApplyPatchShell> {
+    classify_shell_name(shell).and_then(|name| match name.as_str() {
+        "bash" | "zsh" | "sh" if matches!(flag, "-lc" | "-c") => Some(ApplyPatchShell::Unix),
+        "pwsh" | "powershell" if flag.eq_ignore_ascii_case("-command") => {
+            Some(ApplyPatchShell::PowerShell)
+        }
+        "cmd" if flag.eq_ignore_ascii_case("/c") => Some(ApplyPatchShell::Cmd),
+        _ => None,
+    })
+}
+
+fn can_skip_flag(shell: &str, flag: &str) -> bool {
+    classify_shell_name(shell).is_some_and(|name| {
+        matches!(name.as_str(), "pwsh" | "powershell") && flag.eq_ignore_ascii_case("-noprofile")
+    })
+}
+
+fn parse_shell_script(argv: &[String]) -> Option<(ApplyPatchShell, &str)> {
+    match argv {
+        [shell, flag, script] => classify_shell(shell, flag).map(|shell_type| {
+            let script = script.as_str();
+            (shell_type, script)
+        }),
+        [shell, skip_flag, flag, script] if can_skip_flag(shell, skip_flag) => {
+            classify_shell(shell, flag).map(|shell_type| {
+                let script = script.as_str();
+                (shell_type, script)
+            })
+        }
+        _ => None,
+    }
+}
+
+fn extract_apply_patch_from_shell(
+    shell: ApplyPatchShell,
+    script: &str,
+) -> std::result::Result<(String, Option<String>), ExtractHeredocError> {
+    match shell {
+        ApplyPatchShell::Unix | ApplyPatchShell::PowerShell | ApplyPatchShell::Cmd => {
+            extract_apply_patch_from_bash(script)
+        }
+    }
 }
 
 pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
@@ -111,9 +161,9 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
             Ok(source) => MaybeApplyPatch::Body(source),
             Err(e) => MaybeApplyPatch::PatchParseError(e),
         },
-        // Bash heredoc form: (optional `cd <path> &&`) apply_patch <<'EOF' ...
-        [shell, flag, script] if shell_supports_apply_patch(shell) && flag == "-lc" => {
-            match extract_apply_patch_from_bash(script) {
+        // Shell heredoc form: (optional `cd <path> &&`) apply_patch <<'EOF' ...
+        _ => match parse_shell_script(argv) {
+            Some((shell, script)) => match extract_apply_patch_from_shell(shell, script) {
                 Ok((body, workdir)) => match parse_patch(&body) {
                     Ok(mut source) => {
                         source.workdir = workdir;
@@ -125,9 +175,9 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
                     MaybeApplyPatch::NotApplyPatch
                 }
                 Err(e) => MaybeApplyPatch::ShellParseError(e),
-            }
-        }
-        _ => MaybeApplyPatch::NotApplyPatch,
+            },
+            None => MaybeApplyPatch::NotApplyPatch,
+        },
     }
 }
 
@@ -222,24 +272,17 @@ impl ApplyPatchAction {
 /// cwd must be an absolute path so that we can resolve relative paths in the
 /// patch.
 pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApplyPatchVerified {
-    // Detect a raw patch body passed directly as the command or as the body of a bash -lc
+    // Detect a raw patch body passed directly as the command or as the body of a shell
     // script. In these cases, report an explicit error rather than applying the patch.
-    match argv {
-        [body] => {
-            if parse_patch(body).is_ok() {
-                return MaybeApplyPatchVerified::CorrectnessError(
-                    ApplyPatchError::ImplicitInvocation,
-                );
-            }
-        }
-        [shell, flag, script]
-            if shell_supports_apply_patch(shell)
-                && flag == "-lc"
-                && parse_patch(script).is_ok() =>
-        {
-            return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
-        }
-        _ => {}
+    if let [body] = argv
+        && parse_patch(body).is_ok()
+    {
+        return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
+    }
+    if let Some((_, script)) = parse_shell_script(argv)
+        && parse_patch(script).is_ok()
+    {
+        return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
     }
 
     match maybe_parse_apply_patch(argv) {
@@ -656,13 +699,7 @@ fn derive_new_contents_from_chunks(
         }
     };
 
-    let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
-
-    // Drop the trailing empty element that results from the final newline so
-    // that line counts match the behaviour of standard `diff`.
-    if original_lines.last().is_some_and(String::is_empty) {
-        original_lines.pop();
-    }
+    let original_lines: Vec<String> = build_lines_from_contents(&original_contents);
 
     let replacements = compute_replacements(&original_lines, path, chunks)?;
     let new_lines = apply_replacements(original_lines, &replacements);
@@ -670,11 +707,65 @@ fn derive_new_contents_from_chunks(
     if !new_lines.last().is_some_and(String::is_empty) {
         new_lines.push(String::new());
     }
-    let new_contents = new_lines.join("\n");
+    let new_contents = build_contents_from_lines(&original_contents, &new_lines);
     Ok(AppliedPatch {
         original_contents,
         new_contents,
     })
+}
+
+// TODO(dylan-hurd-oai): I think we can migrate to just use `contents.lines()`
+// across all platforms.
+fn build_lines_from_contents(contents: &str) -> Vec<String> {
+    if cfg!(windows) {
+        contents.lines().map(String::from).collect()
+    } else {
+        let mut lines: Vec<String> = contents.split('\n').map(String::from).collect();
+
+        // Drop the trailing empty element that results from the final newline so
+        // that line counts match the behaviour of standard `diff`.
+        if lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+
+        lines
+    }
+}
+
+fn build_contents_from_lines(original_contents: &str, lines: &[String]) -> String {
+    if cfg!(windows) {
+        // for now, only compute this if we're on Windows.
+        let uses_crlf = contents_uses_crlf(original_contents);
+        if uses_crlf {
+            lines.join("\r\n")
+        } else {
+            lines.join("\n")
+        }
+    } else {
+        lines.join("\n")
+    }
+}
+
+/// Detects whether the source file uses Windows CRLF line endings consistently.
+/// We only consider a file CRLF-formatted if every newline is part of a
+/// CRLF sequence. This avoids rewriting an LF-formatted file that merely
+/// contains embedded sequences of "\r\n".
+///
+/// Returns `true` if the file uses CRLF line endings, `false` otherwise.
+fn contents_uses_crlf(contents: &str) -> bool {
+    let bytes = contents.as_bytes();
+    let mut n_newlines = 0usize;
+    let mut n_crlf = 0usize;
+    for i in 0..bytes.len() {
+        if bytes[i] == b'\n' {
+            n_newlines += 1;
+            if i > 0 && bytes[i - 1] == b'\r' {
+                n_crlf += 1;
+            }
+        }
+    }
+
+    n_newlines > 0 && n_crlf == n_newlines
 }
 
 /// Compute a list of replacements needed to transform `original_lines` into the
@@ -871,6 +962,22 @@ mod tests {
         strs_to_strings(&["bash", "-lc", script])
     }
 
+    fn args_powershell(script: &str) -> Vec<String> {
+        strs_to_strings(&["powershell.exe", "-Command", script])
+    }
+
+    fn args_powershell_no_profile(script: &str) -> Vec<String> {
+        strs_to_strings(&["powershell.exe", "-NoProfile", "-Command", script])
+    }
+
+    fn args_pwsh(script: &str) -> Vec<String> {
+        strs_to_strings(&["pwsh", "-NoProfile", "-Command", script])
+    }
+
+    fn args_cmd(script: &str) -> Vec<String> {
+        strs_to_strings(&["cmd.exe", "/c", script])
+    }
+
     fn heredoc_script(prefix: &str) -> String {
         format!(
             "{prefix}apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch\nPATCH"
@@ -890,8 +997,7 @@ mod tests {
         }]
     }
 
-    fn assert_match(script: &str, expected_workdir: Option<&str>) {
-        let args = args_bash(script);
+    fn assert_match_args(args: Vec<String>, expected_workdir: Option<&str>) {
         match maybe_parse_apply_patch(&args) {
             MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
                 assert_eq!(workdir.as_deref(), expected_workdir);
@@ -899,6 +1005,11 @@ mod tests {
             }
             result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
         }
+    }
+
+    fn assert_match(script: &str, expected_workdir: Option<&str>) {
+        let args = args_bash(script);
+        assert_match_args(args, expected_workdir);
     }
 
     fn assert_not_match(script: &str) {
@@ -987,6 +1098,13 @@ mod tests {
     }
 
     #[test]
+    fn test_heredoc_non_login_shell() {
+        let script = heredoc_script("");
+        let args = strs_to_strings(&["bash", "-c", &script]);
+        assert_match_args(args, None);
+    }
+
+    #[test]
     fn test_heredoc_applypatch() {
         let args = strs_to_strings(&[
             "bash",
@@ -1012,6 +1130,28 @@ PATCH"#,
             }
             result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
         }
+    }
+
+    #[test]
+    fn test_powershell_heredoc() {
+        let script = heredoc_script("");
+        assert_match_args(args_powershell(&script), None);
+    }
+    #[test]
+    fn test_powershell_heredoc_no_profile() {
+        let script = heredoc_script("");
+        assert_match_args(args_powershell_no_profile(&script), None);
+    }
+    #[test]
+    fn test_pwsh_heredoc() {
+        let script = heredoc_script("");
+        assert_match_args(args_pwsh(&script), None);
+    }
+
+    #[test]
+    fn test_cmd_heredoc_with_cd() {
+        let script = heredoc_script("cd foo && ");
+        assert_match_args(args_cmd(&script), Some("foo"));
     }
 
     #[test]
@@ -1274,6 +1414,72 @@ PATCH"#,
         assert_eq!(contents, "a\nB\nc\nd\nE\nf\ng\n");
     }
 
+    /// Ensure CRLF line endings are preserved for updated files on Windows‑style inputs.
+    #[cfg(windows)]
+    #[test]
+    fn test_preserve_crlf_line_endings_on_update() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("crlf.txt");
+
+        // Original file uses CRLF (\r\n) endings.
+        std::fs::write(&path, b"a\r\nb\r\nc\r\n").unwrap();
+
+        // Replace `b` -> `B` and append `d`.
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
+ a
+-b
++B
+@@
+ c
++d
+*** End of File"#,
+            path.display()
+        ));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+
+        let out = std::fs::read(&path).unwrap();
+        // Expect all CRLF endings; count occurrences of CRLF and ensure there are 4 lines.
+        let content = String::from_utf8_lossy(&out);
+        assert!(content.contains("\r\n"));
+        // No bare LF occurrences immediately preceding a non-CR: the text should not contain "a\nb".
+        assert!(!content.contains("a\nb"));
+        // Validate exact content sequence with CRLF delimiters.
+        assert_eq!(content, "a\r\nB\r\nc\r\nd\r\n");
+    }
+
+    /// Ensure CRLF inputs with embedded carriage returns in the content are preserved.
+    #[cfg(windows)]
+    #[test]
+    fn test_preserve_crlf_embedded_carriage_returns_on_append() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("crlf_cr_content.txt");
+
+        // Original file: first line has a literal '\r' in the content before the CRLF terminator.
+        std::fs::write(&path, b"foo\r\r\nbar\r\n").unwrap();
+
+        // Append a new line without modifying existing ones.
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
++BAZ
+*** End of File"#,
+            path.display()
+        ));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+
+        let out = std::fs::read(&path).unwrap();
+        // CRLF endings must be preserved and the extra CR in "foo\r\r" must not be collapsed.
+        assert_eq!(out.as_slice(), b"foo\r\r\nbar\r\nBAZ\r\n");
+    }
+
     #[test]
     fn test_pure_addition_chunk_followed_by_removal() {
         let dir = tempdir().unwrap();
@@ -1457,6 +1663,37 @@ PATCH"#,
             content: "foo\nbar\nBAZ\n".to_string(),
         };
         assert_eq!(expected, diff);
+    }
+
+    /// For LF-only inputs with a trailing newline ensure that the helper used
+    /// on Windows-style builds drops the synthetic trailing empty element so
+    /// replacements behave like standard `diff` line numbering.
+    #[test]
+    fn test_derive_new_contents_lf_trailing_newline() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("lf_trailing_newline.txt");
+        fs::write(&path, "foo\nbar\n").unwrap();
+
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
+ foo
+-bar
++BAR
+"#,
+            path.display()
+        ));
+
+        let patch = parse_patch(&patch).unwrap();
+        let chunks = match patch.hunks.as_slice() {
+            [Hunk::UpdateFile { chunks, .. }] => chunks,
+            _ => panic!("Expected a single UpdateFile hunk"),
+        };
+
+        let AppliedPatch { new_contents, .. } =
+            derive_new_contents_from_chunks(&path, chunks).unwrap();
+
+        assert_eq!(new_contents, "foo\nBAR\n");
     }
 
     #[test]

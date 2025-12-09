@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
@@ -13,6 +14,8 @@ use codex_core::config::Config;
 use codex_core::config::types::Notifications;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
+use codex_core::openai_models::model_family::ModelFamily;
+use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -22,6 +25,7 @@ use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
@@ -42,6 +46,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
@@ -55,7 +60,9 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::skills::model::SkillMetadata;
 use codex_protocol::ConversationId;
+use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::user_input::UserInput;
@@ -141,16 +148,15 @@ use crate::streaming::controller::StreamController;
 use chrono::Local;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
-use codex_common::model_presets::ModelPreset;
-use codex_common::model_presets::builtin_model_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::config::log_dir;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
+use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
@@ -166,6 +172,20 @@ struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
     source: ExecCommandSource,
+}
+
+struct UnifiedExecWaitState {
+    command_display: String,
+}
+
+impl UnifiedExecWaitState {
+    fn new(command_display: String) -> Self {
+        Self { command_display }
+    }
+
+    fn is_duplicate(&self, command_display: &str) -> bool {
+        self.command_display == command_display
+    }
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
@@ -266,7 +286,11 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_images: Vec<PathBuf>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
+    pub(crate) skills: Option<Vec<SkillMetadata>>,
+    pub(crate) is_first_run: bool,
+    pub(crate) model_family: ModelFamily,
 }
 
 #[derive(Default)]
@@ -283,17 +307,22 @@ pub(crate) struct ChatWidget {
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
     config: Config,
+    model_family: ModelFamily,
     auth_manager: Arc<AuthManager>,
+    models_manager: Arc<ModelsManager>,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
+    plan_type: Option<PlanType>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     rate_limit_poller: Option<JoinHandle<()>>,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
+    suppressed_exec_calls: HashSet<String>,
+    last_unified_wait: Option<UnifiedExecWaitState>,
     task_complete_pending: bool,
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
@@ -936,6 +965,15 @@ impl ChatWidget {
         shlex::try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "))
     }
 
+    fn restore_retry_status_header_if_present(&mut self) {
+        if let Some(header) = self.retry_status_header.take()
+            && self.current_status_header != header
+        {
+            self.set_status_header(header);
+            self.push_status_snapshot();
+        }
+    }
+
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
@@ -1027,12 +1065,13 @@ impl ChatWidget {
     }
 
     fn on_agent_reasoning_final(&mut self) {
+        let reasoning_summary_format = self.get_model_family().reasoning_summary_format;
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         if !self.full_reasoning_buffer.is_empty() {
             let cell = history_cell::new_reasoning_summary_block(
                 self.full_reasoning_buffer.clone(),
-                &self.config,
+                reasoning_summary_format,
             );
             self.add_boxed_history(cell);
         }
@@ -1071,6 +1110,8 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
+        self.suppressed_exec_calls.clear();
+        self.last_unified_wait = None;
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -1087,7 +1128,7 @@ impl ChatWidget {
         match info {
             Some(info) => self.apply_token_info(info),
             None => {
-                self.bottom_pane.set_context_window_percent(None);
+                self.bottom_pane.set_context_window(None, None);
                 self.token_info = None;
             }
         }
@@ -1095,17 +1136,26 @@ impl ChatWidget {
 
     fn apply_token_info(&mut self, info: TokenUsageInfo) {
         let percent = self.context_remaining_percent(&info);
-        self.bottom_pane.set_context_window_percent(percent);
+        let used_tokens = self.context_used_tokens(&info, percent.is_some());
+        self.bottom_pane.set_context_window(percent, used_tokens);
         self.token_info = Some(info);
     }
 
     fn context_remaining_percent(&self, info: &TokenUsageInfo) -> Option<i64> {
         info.model_context_window
-            .or(self.config.model_context_window)
+            .or(self.model_family.context_window)
             .map(|window| {
                 info.last_token_usage
                     .percent_of_context_window_remaining(window)
             })
+    }
+
+    fn context_used_tokens(&self, info: &TokenUsageInfo, percent_known: bool) -> Option<i64> {
+        if percent_known {
+            return None;
+        }
+
+        Some(info.total_token_usage.tokens_in_context_window())
     }
 
     fn restore_pre_review_token_info(&mut self) {
@@ -1113,7 +1163,7 @@ impl ChatWidget {
             match saved {
                 Some(info) => self.apply_token_info(info),
                 None => {
-                    self.bottom_pane.set_context_window_percent(None);
+                    self.bottom_pane.set_context_window(None, None);
                     self.token_info = None;
                 }
             }
@@ -1121,7 +1171,21 @@ impl ChatWidget {
     }
 
     pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
-        if let Some(snapshot) = snapshot {
+        if let Some(mut snapshot) = snapshot {
+            if snapshot.credits.is_none() {
+                snapshot.credits = self
+                    .rate_limit_snapshot
+                    .as_ref()
+                    .and_then(|display| display.credits.as_ref())
+                    .map(|credits| CreditsSnapshot {
+                        has_credits: credits.has_credits,
+                        unlimited: credits.unlimited,
+                        balance: credits.balance.clone(),
+                    });
+            }
+
+            self.plan_type = snapshot.plan_type.or(self.plan_type);
+
             let warnings = self.rate_limit_warnings.take_warnings(
                 snapshot
                     .secondary
@@ -1180,8 +1244,13 @@ impl ChatWidget {
         // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
+        self.suppressed_exec_calls.clear();
+        self.last_unified_wait = None;
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
+    }
+    pub(crate) fn get_model_family(&self) -> ModelFamily {
+        self.model_family.clone()
     }
 
     fn on_error(&mut self, message: String) {
@@ -1564,6 +1633,9 @@ impl ChatWidget {
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         self.remove_tool_call(&format!("exec:{}", ev.call_id.as_str()));
         let running = self.running_commands.remove(&ev.call_id);
+        if self.suppressed_exec_calls.remove(&ev.call_id) {
+            return;
+        }
         let (command, parsed, source) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd, rc.source),
             None => (
@@ -1639,8 +1711,10 @@ impl ChatWidget {
             command: ev.command,
             reason: ev.reason,
             risk: ev.risk,
+            proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
         };
-        self.bottom_pane.push_approval_request(request);
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
         self.request_redraw();
     }
 
@@ -1657,7 +1731,8 @@ impl ChatWidget {
             changes: ev.changes.clone(),
             cwd: self.config.cwd.clone(),
         };
-        self.bottom_pane.push_approval_request(request);
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
         self.request_redraw();
         self.notify(Notification::EditApprovalRequested {
             cwd: self.config.cwd.clone(),
@@ -1677,7 +1752,8 @@ impl ChatWidget {
             request_id: ev.id,
             message: ev.message,
         };
-        self.bottom_pane.push_approval_request(request);
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
         self.request_redraw();
     }
 
@@ -1696,6 +1772,27 @@ impl ChatWidget {
                 source: ev.source,
             },
         );
+        let is_wait_interaction = matches!(ev.source, ExecCommandSource::UnifiedExecInteraction)
+            && ev
+                .interaction_input
+                .as_deref()
+                .map(str::is_empty)
+                .unwrap_or(true);
+        let command_display = ev.command.join(" ");
+        let should_suppress_unified_wait = is_wait_interaction
+            && self
+                .last_unified_wait
+                .as_ref()
+                .is_some_and(|wait| wait.is_duplicate(&command_display));
+        if is_wait_interaction {
+            self.last_unified_wait = Some(UnifiedExecWaitState::new(command_display));
+        } else {
+            self.last_unified_wait = None;
+        }
+        if should_suppress_unified_wait {
+            self.suppressed_exec_calls.insert(ev.call_id);
+            return;
+        }
         let interaction_input = ev.interaction_input.clone();
         if let Some(cell) = self
             .active_cell
@@ -1791,7 +1888,11 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            models_manager,
             feedback,
+            skills,
+            is_first_run,
+            model_family,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1810,10 +1911,13 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
+                skills,
             }),
             active_cell: None,
             config: config.clone(),
+            model_family,
             auth_manager,
+            models_manager,
             session_header: SessionHeader::new(config.model),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
@@ -1821,11 +1925,14 @@ impl ChatWidget {
             ),
             token_info: None,
             rate_limit_snapshot: None,
+            plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
             stream_controller: None,
             running_commands: HashMap::new(),
+            suppressed_exec_calls: HashSet::new(),
+            last_unified_wait: None,
             task_complete_pending: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
@@ -1838,7 +1945,7 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
-            show_welcome_banner: true,
+            show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
@@ -1873,7 +1980,11 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            models_manager,
             feedback,
+            skills,
+            model_family,
+            ..
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1894,10 +2005,13 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
+                skills,
             }),
             active_cell: None,
             config: config.clone(),
+            model_family,
             auth_manager,
+            models_manager,
             session_header: SessionHeader::new(config.model),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
@@ -1905,11 +2019,14 @@ impl ChatWidget {
             ),
             token_info: None,
             rate_limit_snapshot: None,
+            plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
             stream_controller: None,
             running_commands: HashMap::new(),
+            suppressed_exec_calls: HashSet::new(),
+            last_unified_wait: None,
             task_complete_pending: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
@@ -1922,7 +2039,7 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
-            show_welcome_banner: true,
+            show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
@@ -1959,7 +2076,9 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'v') => {
+            } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && c.eq_ignore_ascii_case(&'v') =>
+            {
                 match paste_image_to_temp_png() {
                     Ok((path, info)) => {
                         self.attach_image(
@@ -2052,6 +2171,9 @@ impl ChatWidget {
             }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
+            }
+            SlashCommand::Resume => {
+                self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
@@ -2190,6 +2312,9 @@ impl ChatWidget {
             }
             SlashCommand::Mention => {
                 self.insert_str("@");
+            }
+            SlashCommand::Skills => {
+                self.insert_str("$");
             }
             SlashCommand::Status => {
                 self.add_status_output();
@@ -2385,6 +2510,11 @@ impl ChatWidget {
     /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
     /// that must not be used to correlate follow-up actions.
     fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, from_replay: bool) {
+        let is_stream_error = matches!(&msg, EventMsg::StreamError(_));
+        if !is_stream_error {
+            self.restore_retry_status_header_if_present();
+        }
+
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
@@ -2407,7 +2537,7 @@ impl ChatWidget {
             EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => self.on_agent_reasoning_final(),
             EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
                 self.on_agent_reasoning_delta(text);
-                self.on_agent_reasoning_final()
+                self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TaskStarted(_) => self.on_task_started(),
@@ -2477,6 +2607,7 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
+            EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)
@@ -2492,7 +2623,10 @@ impl ChatWidget {
             self.pre_review_token_info = Some(self.token_info.clone());
         }
         self.is_review_mode = true;
-        let banner = format!(">> Code review started: {} <<", review.user_facing_hint);
+        let hint = review
+            .user_facing_hint
+            .unwrap_or_else(|| codex_core::review_prompts::user_facing_hint(&review.target));
+        let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
         self.request_redraw();
     }
@@ -2621,10 +2755,12 @@ impl ChatWidget {
         self.add_to_history(crate::status::new_status_output(
             &self.config,
             self.auth_manager.as_ref(),
+            &self.model_family,
             total_usage,
             context_usage,
             &self.conversation_id,
             self.rate_limit_snapshot.as_ref(),
+            self.plan_type,
             Local::now(),
         ));
     }
@@ -2662,10 +2798,11 @@ impl ChatWidget {
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
-        builtin_model_presets(auth_mode)
-            .into_iter()
+        let models = self.models_manager.try_list_models().ok()?;
+        models
+            .iter()
             .find(|preset| preset.model == NUDGE_MODEL_SLUG)
+            .cloned()
     }
 
     fn rate_limit_switch_prompt_hidden(&self) -> bool {
@@ -2720,7 +2857,7 @@ impl ChatWidget {
         let description = if preset.description.is_empty() {
             Some("Uses fewer credits for upcoming turns.".to_string())
         } else {
-            Some(preset.description.to_string())
+            Some(preset.description)
         };
 
         let items = vec![
@@ -2764,20 +2901,121 @@ impl ChatWidget {
         });
     }
 
-    /// Open a popup to choose the model (stage 1). After selecting a model,
-    /// a second popup is shown to choose the reasoning effort.
+    /// Open a popup to choose a quick auto model. Selecting "All models"
+    /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
         let current_model = self.config.model.clone();
-        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
-        let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
+        let presets: Vec<ModelPreset> =
+            // todo(aibrahim): make this async function
+            match self.models_manager.try_list_models() {
+                Ok(models) => models,
+                Err(_) => {
+                    self.add_info_message(
+                        "Models are being updated; please try /model again in a moment."
+                            .to_string(),
+                        None,
+                    );
+                    return;
+                }
+            };
 
+        let current_label = presets
+            .iter()
+            .find(|preset| preset.model == current_model)
+            .map(|preset| preset.display_name.to_string())
+            .unwrap_or_else(|| current_model.clone());
+
+        let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
+            .into_iter()
+            .partition(|preset| Self::is_auto_model(&preset.model));
+
+        if auto_presets.is_empty() {
+            self.open_all_models_popup(other_presets);
+            return;
+        }
+
+        auto_presets.sort_by_key(|preset| Self::auto_model_order(&preset.model));
+
+        let mut items: Vec<SelectionItem> = auto_presets
+            .into_iter()
+            .map(|preset| {
+                let description =
+                    (!preset.description.is_empty()).then_some(preset.description.clone());
+                let model = preset.model.clone();
+                let actions = Self::model_selection_actions(
+                    model.clone(),
+                    Some(preset.default_reasoning_effort),
+                );
+                SelectionItem {
+                    name: preset.display_name,
+                    description,
+                    is_current: model == current_model,
+                    actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        if !other_presets.is_empty() {
+            let all_models = other_presets;
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenAllModelsPopup {
+                    models: all_models.clone(),
+                });
+            })];
+
+            let is_current = !items.iter().any(|item| item.is_current);
+            let description = Some(format!(
+                "Choose a specific model and reasoning level (current: {current_label})"
+            ));
+
+            items.push(SelectionItem {
+                name: "All models".to_string(),
+                description,
+                is_current,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Select Model".to_string()),
+            subtitle: Some("Pick a quick auto mode or browse all models.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn is_auto_model(model: &str) -> bool {
+        model.starts_with("codex-auto-")
+    }
+
+    fn auto_model_order(model: &str) -> usize {
+        match model {
+            "codex-auto-fast" => 0,
+            "codex-auto-balanced" => 1,
+            "codex-auto-thorough" => 2,
+            _ => 3,
+        }
+    }
+
+    pub(crate) fn open_all_models_popup(&mut self, presets: Vec<ModelPreset>) {
+        if presets.is_empty() {
+            self.add_info_message(
+                "No additional models are available right now.".to_string(),
+                None,
+            );
+            return;
+        }
+
+        let current_model = self.config.model.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {
-            let description = if preset.description.is_empty() {
-                None
-            } else {
-                Some(preset.description.to_string())
-            };
+            let description =
+                (!preset.description.is_empty()).then_some(preset.description.to_string());
             let is_current = preset.model == current_model;
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
@@ -2807,6 +3045,36 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+    }
+
+    fn model_selection_actions(
+        model_for_action: String,
+        effort_for_action: Option<ReasoningEffortConfig>,
+    ) -> Vec<SelectionAction> {
+        vec![Box::new(move |tx| {
+            let effort_label = effort_for_action
+                .map(|effort| effort.to_string())
+                .unwrap_or_else(|| "default".to_string());
+            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model: Some(model_for_action.clone()),
+                effort: Some(effort_for_action),
+                summary: None,
+            }));
+            tx.send(AppEvent::UpdateModel(model_for_action.clone()));
+            tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
+            tx.send(AppEvent::PersistModelSelection {
+                model: model_for_action.clone(),
+                effort: effort_for_action,
+            });
+            tracing::info!(
+                "Selected model: {}, Selected effort: {}",
+                model_for_action,
+                effort_label
+            );
+        })]
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
@@ -2856,9 +3124,9 @@ impl ChatWidget {
 
         if choices.len() == 1 {
             if let Some(effort) = choices.first().and_then(|c| c.stored) {
-                self.apply_model_and_effort(preset.model.to_string(), Some(effort));
+                self.apply_model_and_effort(preset.model, Some(effort));
             } else {
-                self.apply_model_and_effort(preset.model.to_string(), None);
+                self.apply_model_and_effort(preset.model, None);
             }
             return;
         }
@@ -2917,30 +3185,7 @@ impl ChatWidget {
             };
 
             let model_for_action = model_slug.clone();
-            let effort_for_action = choice.stored;
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                    cwd: None,
-                    approval_policy: None,
-                    sandbox_policy: None,
-                    model: Some(model_for_action.clone()),
-                    effort: Some(effort_for_action),
-                    summary: None,
-                }));
-                tx.send(AppEvent::UpdateModel(model_for_action.clone()));
-                tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
-                tx.send(AppEvent::PersistModelSelection {
-                    model: model_for_action.clone(),
-                    effort: effort_for_action,
-                });
-                tracing::info!(
-                    "Selected model: {}, Selected effort: {}",
-                    model_for_action,
-                    effort_for_action
-                        .map(|e| e.to_string())
-                        .unwrap_or_else(|| "default".to_string())
-                );
-            })];
+            let actions = Self::model_selection_actions(model_for_action, choice.stored);
 
             items.push(SelectionItem {
                 name: effort_label,
@@ -3012,7 +3257,7 @@ impl ChatWidget {
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
         for preset in presets.into_iter() {
             let is_current =
-                current_approval == preset.approval && current_sandbox == preset.sandbox;
+                Self::preset_matches_current(current_approval, &current_sandbox, &preset);
             let name = preset.label.to_string();
             let description_text = preset.description;
             let description = Some(description_text.to_string());
@@ -3100,6 +3345,28 @@ impl ChatWidget {
         })]
     }
 
+    fn preset_matches_current(
+        current_approval: AskForApproval,
+        current_sandbox: &SandboxPolicy,
+        preset: &ApprovalPreset,
+    ) -> bool {
+        if current_approval != preset.approval {
+            return false;
+        }
+        matches!(
+            (&preset.sandbox, current_sandbox),
+            (SandboxPolicy::ReadOnly, SandboxPolicy::ReadOnly)
+                | (
+                    SandboxPolicy::DangerFullAccess,
+                    SandboxPolicy::DangerFullAccess
+                )
+                | (
+                    SandboxPolicy::WorkspaceWrite { .. },
+                    SandboxPolicy::WorkspaceWrite { .. }
+                )
+        )
+    }
+
     #[cfg(target_os = "windows")]
     pub(crate) fn world_writable_warning_details(&self) -> Option<(Vec<String>, usize, bool)> {
         if self
@@ -3110,11 +3377,18 @@ impl ChatWidget {
         {
             return None;
         }
-        let cwd = match std::env::current_dir() {
-            Ok(cwd) => cwd,
-            Err(_) => return Some((Vec::new(), 0, true)),
-        };
-        codex_windows_sandbox::world_writable_warning_details(self.config.codex_home.as_path(), cwd)
+        let cwd = self.config.cwd.clone();
+        let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
+        match codex_windows_sandbox::apply_world_writable_scan_and_denies(
+            self.config.codex_home.as_path(),
+            cwd.as_path(),
+            &env_map,
+            &self.config.sandbox_policy,
+            Some(self.config.codex_home.as_path()),
+        ) {
+            Ok(_) => None,
+            Err(_) => Some((Vec::new(), 0, true)),
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -3421,9 +3695,10 @@ impl ChatWidget {
     }
 
     /// Set the model in the widget's config copy.
-    pub(crate) fn set_model(&mut self, model: &str) {
+    pub(crate) fn set_model(&mut self, model: &str, model_family: ModelFamily) {
         self.session_header.set_model(model);
         self.config.model = model.to_string();
+        self.model_family = model_family;
     }
 
     fn clear_security_review_follow_up(&mut self) {
@@ -3582,17 +3857,14 @@ impl ChatWidget {
 
         items.push(SelectionItem {
             name: "Review uncommitted changes".to_string(),
-            actions: vec![Box::new(
-                move |tx: &AppEventSender| {
-                    tx.send(AppEvent::CodexOp(Op::Review {
-                        review_request: ReviewRequest {
-                            prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
-                            user_facing_hint: "current changes".to_string(),
-                            append_to_original_thread: true,
-                        },
-                    }));
-                },
-            )],
+            actions: vec![Box::new(move |tx: &AppEventSender| {
+                tx.send(AppEvent::CodexOp(Op::Review {
+                    review_request: ReviewRequest {
+                        target: ReviewTarget::UncommittedChanges,
+                        user_facing_hint: None,
+                    },
+                }));
+            })],
             dismiss_on_select: true,
             ..Default::default()
         });
@@ -3723,10 +3995,10 @@ impl ChatWidget {
         }
 
         let mut linear_issue = linear_issue;
-        if linear_issue.is_none() {
-            if let Some(prompt) = scope_prompt.as_ref() {
-                linear_issue = crate::security_review::extract_linear_issue_ref(prompt);
-            }
+        if linear_issue.is_none()
+            && let Some(prompt) = scope_prompt.as_ref()
+        {
+            linear_issue = crate::security_review::extract_linear_issue_ref(prompt);
         }
 
         let repo_path = self.config.cwd.clone();
@@ -4671,11 +4943,10 @@ impl ChatWidget {
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
                     tx3.send(AppEvent::CodexOp(Op::Review {
                         review_request: ReviewRequest {
-                            prompt: format!(
-                                "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
-                            ),
-                            user_facing_hint: format!("changes against '{branch}'"),
-                            append_to_original_thread: true,
+                            target: ReviewTarget::BaseBranch {
+                                branch: branch.clone(),
+                            },
+                            user_facing_hint: None,
                         },
                     }));
                 })],
@@ -4702,21 +4973,18 @@ impl ChatWidget {
         for entry in commits {
             let subject = entry.subject.clone();
             let sha = entry.sha.clone();
-            let short = sha.chars().take(7).collect::<String>();
             let search_val = format!("{subject} {sha}");
 
             items.push(SelectionItem {
                 name: subject.clone(),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    let hint = format!("commit {short}");
-                    let prompt = format!(
-                        "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
-                    );
                     tx3.send(AppEvent::CodexOp(Op::Review {
                         review_request: ReviewRequest {
-                            prompt,
-                            user_facing_hint: hint,
-                            append_to_original_thread: true,
+                            target: ReviewTarget::Commit {
+                                sha: sha.clone(),
+                                title: Some(subject.clone()),
+                            },
+                            user_facing_hint: None,
                         },
                     }));
                 })],
@@ -4749,9 +5017,10 @@ impl ChatWidget {
                 }
                 tx.send(AppEvent::CodexOp(Op::Review {
                     review_request: ReviewRequest {
-                        prompt: trimmed.clone(),
-                        user_facing_hint: trimmed,
-                        append_to_original_thread: true,
+                        target: ReviewTarget::Custom {
+                            instructions: trimmed,
+                        },
+                        user_facing_hint: None,
                     },
                 }));
             }),
@@ -4953,21 +5222,18 @@ pub(crate) fn show_review_commit_picker_with_entries(
     for entry in entries {
         let subject = entry.subject.clone();
         let sha = entry.sha.clone();
-        let short = sha.chars().take(7).collect::<String>();
         let search_val = format!("{subject} {sha}");
 
         items.push(SelectionItem {
             name: subject.clone(),
             actions: vec![Box::new(move |tx3: &AppEventSender| {
-                let hint = format!("commit {short}");
-                let prompt = format!(
-                    "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
-                );
                 tx3.send(AppEvent::CodexOp(Op::Review {
                     review_request: ReviewRequest {
-                        prompt,
-                        user_facing_hint: hint,
-                        append_to_original_thread: true,
+                        target: ReviewTarget::Commit {
+                            sha: sha.clone(),
+                            title: Some(subject.clone()),
+                        },
+                        user_facing_hint: None,
                     },
                 }));
             })],

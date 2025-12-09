@@ -5,6 +5,8 @@ use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
@@ -84,9 +86,20 @@ impl ContextManager {
                 .unwrap_or(i64::MAX);
 
         let items_tokens = self.items.iter().fold(0i64, |acc, item| {
-            let serialized = serde_json::to_string(item).unwrap_or_default();
-            let item_tokens = i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX);
-            acc.saturating_add(item_tokens)
+            acc + match item {
+                ResponseItem::GhostSnapshot { .. } => 0,
+                ResponseItem::Reasoning {
+                    encrypted_content: Some(content),
+                    ..
+                }
+                | ResponseItem::CompactionSummary {
+                    encrypted_content: content,
+                } => estimate_reasoning_length(content.len()) as i64,
+                item => {
+                    let serialized = serde_json::to_string(item).unwrap_or_default();
+                    i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX)
+                }
+            }
         });
 
         Some(base_tokens.saturating_add(items_tokens))
@@ -106,6 +119,37 @@ impl ContextManager {
 
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
+    }
+
+    pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) {
+        let Some(last_item) = self.items.last_mut() else {
+            return;
+        };
+
+        match last_item {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                for item in content.iter_mut() {
+                    if matches!(item, ContentItem::InputImage { .. }) {
+                        *item = ContentItem::InputText {
+                            text: placeholder.to_string(),
+                        };
+                    }
+                }
+            }
+            ResponseItem::FunctionCallOutput { output, .. } => {
+                let Some(content_items) = output.content_items.as_mut() else {
+                    return;
+                };
+                for item in content_items.iter_mut() {
+                    if matches!(item, FunctionCallOutputContentItem::InputImage { .. }) {
+                        *item = FunctionCallOutputContentItem::InputText {
+                            text: placeholder.to_string(),
+                        };
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     pub(crate) fn update_token_info(
@@ -145,19 +189,11 @@ impl ContextManager {
                     None
                 }
             })
-            .map(Self::estimate_reasoning_length)
+            .map(estimate_reasoning_length)
             .fold(0usize, usize::saturating_add);
 
         let token_estimate = approx_tokens_from_byte_count(total_reasoning_bytes);
         token_estimate as usize
-    }
-
-    fn estimate_reasoning_length(encoded_len: usize) -> usize {
-        encoded_len
-            .saturating_mul(3)
-            .checked_div(4)
-            .unwrap_or(0)
-            .saturating_sub(650)
     }
 
     pub(crate) fn get_total_token_usage(&self) -> i64 {
@@ -245,6 +281,14 @@ fn is_api_message(message: &ResponseItem) -> bool {
         ResponseItem::GhostSnapshot { .. } => false,
         ResponseItem::Other => false,
     }
+}
+
+fn estimate_reasoning_length(encoded_len: usize) -> usize {
+    encoded_len
+        .saturating_mul(3)
+        .checked_div(4)
+        .unwrap_or(0)
+        .saturating_sub(650)
 }
 
 #[cfg(test)]

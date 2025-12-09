@@ -66,11 +66,18 @@ impl Overlay {
 
 const KEY_UP: KeyBinding = key_hint::plain(KeyCode::Up);
 const KEY_DOWN: KeyBinding = key_hint::plain(KeyCode::Down);
+const KEY_K: KeyBinding = key_hint::plain(KeyCode::Char('k'));
+const KEY_J: KeyBinding = key_hint::plain(KeyCode::Char('j'));
 const KEY_PAGE_UP: KeyBinding = key_hint::plain(KeyCode::PageUp);
 const KEY_PAGE_DOWN: KeyBinding = key_hint::plain(KeyCode::PageDown);
 const KEY_SPACE: KeyBinding = key_hint::plain(KeyCode::Char(' '));
+const KEY_SHIFT_SPACE: KeyBinding = key_hint::shift(KeyCode::Char(' '));
 const KEY_HOME: KeyBinding = key_hint::plain(KeyCode::Home);
 const KEY_END: KeyBinding = key_hint::plain(KeyCode::End);
+const KEY_CTRL_F: KeyBinding = key_hint::ctrl(KeyCode::Char('f'));
+const KEY_CTRL_D: KeyBinding = key_hint::ctrl(KeyCode::Char('d'));
+const KEY_CTRL_B: KeyBinding = key_hint::ctrl(KeyCode::Char('b'));
+const KEY_CTRL_U: KeyBinding = key_hint::ctrl(KeyCode::Char('u'));
 const KEY_Q: KeyBinding = key_hint::plain(KeyCode::Char('q'));
 const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
 const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
@@ -234,19 +241,32 @@ impl PagerView {
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
         match key_event {
-            e if KEY_UP.is_press(e) => {
+            e if KEY_UP.is_press(e) || KEY_K.is_press(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
             }
-            e if KEY_DOWN.is_press(e) => {
+            e if KEY_DOWN.is_press(e) || KEY_J.is_press(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
             }
-            e if KEY_PAGE_UP.is_press(e) => {
-                let area = self.content_area(tui.terminal.viewport_area);
-                self.scroll_offset = self.scroll_offset.saturating_sub(area.height as usize);
+            e if KEY_PAGE_UP.is_press(e)
+                || KEY_SHIFT_SPACE.is_press(e)
+                || KEY_CTRL_B.is_press(e) =>
+            {
+                let page_height = self.page_height(tui.terminal.viewport_area);
+                self.scroll_offset = self.scroll_offset.saturating_sub(page_height);
             }
-            e if KEY_PAGE_DOWN.is_press(e) || KEY_SPACE.is_press(e) => {
+            e if KEY_PAGE_DOWN.is_press(e) || KEY_SPACE.is_press(e) || KEY_CTRL_F.is_press(e) => {
+                let page_height = self.page_height(tui.terminal.viewport_area);
+                self.scroll_offset = self.scroll_offset.saturating_add(page_height);
+            }
+            e if KEY_CTRL_D.is_press(e) => {
                 let area = self.content_area(tui.terminal.viewport_area);
-                self.scroll_offset = self.scroll_offset.saturating_add(area.height as usize);
+                let half_page = (area.height as usize).saturating_add(1) / 2;
+                self.scroll_offset = self.scroll_offset.saturating_add(half_page);
+            }
+            e if KEY_CTRL_U.is_press(e) => {
+                let area = self.content_area(tui.terminal.viewport_area);
+                let half_page = (area.height as usize).saturating_add(1) / 2;
+                self.scroll_offset = self.scroll_offset.saturating_sub(half_page);
             }
             e if KEY_HOME.is_press(e) => {
                 self.scroll_offset = 0;
@@ -261,6 +281,16 @@ impl PagerView {
         tui.frame_requester()
             .schedule_frame_in(Duration::from_millis(16));
         Ok(())
+    }
+
+    /// Returns the height of one page in content rows.
+    ///
+    /// Prefers the last rendered content height (excluding header/footer chrome);
+    /// if no render has occurred yet, falls back to the content area height
+    /// computed from the given viewport.
+    fn page_height(&self, viewport_area: Rect) -> usize {
+        self.last_content_height
+            .unwrap_or_else(|| self.content_area(viewport_area).height as usize)
     }
 
     fn update_last_content_height(&mut self, height: u16) {
@@ -810,6 +840,100 @@ mod tests {
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
+    }
+
+    /// Render transcript overlay and return visible line numbers (`line-NN`) in order.
+    fn transcript_line_numbers(overlay: &mut TranscriptOverlay, area: Rect) -> Vec<usize> {
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        let top_h = area.height.saturating_sub(3);
+        let top = Rect::new(area.x, area.y, area.width, top_h);
+        let content_area = overlay.view.content_area(top);
+
+        let mut nums = Vec::new();
+        for y in content_area.y..content_area.bottom() {
+            let mut line = String::new();
+            for x in content_area.x..content_area.right() {
+                line.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            if let Some(n) = line
+                .split_whitespace()
+                .find_map(|w| w.strip_prefix("line-"))
+                .and_then(|s| s.parse().ok())
+            {
+                nums.push(n);
+            }
+        }
+        nums
+    }
+
+    #[test]
+    fn transcript_overlay_paging_is_continuous_and_round_trips() {
+        let mut overlay = TranscriptOverlay::new(
+            (0..50)
+                .map(|i| {
+                    Arc::new(TestCell {
+                        lines: vec![Line::from(format!("line-{i:02}"))],
+                    }) as Arc<dyn HistoryCell>
+                })
+                .collect(),
+        );
+        let area = Rect::new(0, 0, 40, 15);
+
+        // Prime layout so last_content_height is populated and paging uses the real content height.
+        let mut buf = Buffer::empty(area);
+        overlay.view.scroll_offset = 0;
+        overlay.render(area, &mut buf);
+        let page_height = overlay.view.page_height(area);
+
+        // Scenario 1: starting from the top, PageDown should show the next page of content.
+        overlay.view.scroll_offset = 0;
+        let page1 = transcript_line_numbers(&mut overlay, area);
+        let page1_len = page1.len();
+        let expected_page1: Vec<usize> = (0..page1_len).collect();
+        assert_eq!(
+            page1, expected_page1,
+            "first page should start at line-00 and show a full page of content"
+        );
+
+        overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_add(page_height);
+        let page2 = transcript_line_numbers(&mut overlay, area);
+        assert_eq!(
+            page2.len(),
+            page1_len,
+            "second page should have the same number of visible lines as the first page"
+        );
+        let expected_page2_first = *page1.last().unwrap() + 1;
+        assert_eq!(
+            page2[0], expected_page2_first,
+            "second page after PageDown should immediately follow the first page"
+        );
+
+        // Scenario 2: from an interior offset (start=3), PageDown then PageUp should round-trip.
+        let interior_offset = 3usize;
+        overlay.view.scroll_offset = interior_offset;
+        let before = transcript_line_numbers(&mut overlay, area);
+        overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_add(page_height);
+        let _ = transcript_line_numbers(&mut overlay, area);
+        overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_sub(page_height);
+        let after = transcript_line_numbers(&mut overlay, area);
+        assert_eq!(
+            before, after,
+            "PageDown+PageUp from interior offset ({interior_offset}) should round-trip"
+        );
+
+        // Scenario 3: from the top of the second page, PageUp then PageDown should round-trip.
+        overlay.view.scroll_offset = page_height;
+        let before2 = transcript_line_numbers(&mut overlay, area);
+        overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_sub(page_height);
+        let _ = transcript_line_numbers(&mut overlay, area);
+        overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_add(page_height);
+        let after2 = transcript_line_numbers(&mut overlay, area);
+        assert_eq!(
+            before2, after2,
+            "PageUp+PageDown from the top of the second page should round-trip"
+        );
     }
 
     #[test]

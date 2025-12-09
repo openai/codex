@@ -1,8 +1,9 @@
 use assert_matches::assert_matches;
+use codex_core::AuthManager;
 use std::sync::Arc;
 use tracing_test::traced_test;
 
-use codex_app_server_protocol::AuthMode;
+use codex_core::CodexAuth;
 use codex_core::ContentItem;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
@@ -10,6 +11,7 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
+use codex_core::openai_models::models_manager::ModelsManager;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ReasoningItemContent;
@@ -70,14 +72,16 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
-
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let auth_mode = auth_manager.get_auth_mode();
+    let model_family = ModelsManager::construct_model_family_offline(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
-        config.model_family.slug.as_str(),
+        model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        Some(AuthMode::ChatGPT),
+        auth_mode,
         false,
         "test".to_string(),
     );
@@ -85,6 +89,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
+        model_family,
         otel_event_manager,
         provider,
         effort,
