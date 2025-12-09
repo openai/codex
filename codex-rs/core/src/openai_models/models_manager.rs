@@ -216,6 +216,7 @@ mod tests {
             "supported_in_api": true,
             "priority": priority,
             "upgrade": null,
+            "base_instructions": null,
         }))
         .expect("valid model")
     }

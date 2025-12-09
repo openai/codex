@@ -135,6 +135,8 @@ pub struct ModelInfo {
     pub priority: i32,
     #[serde(default)]
     pub upgrade: Option<String>,
+    #[serde(default)]
+    pub base_instructions: Option<String>,
 }
 
 /// Response wrapper for `/models`.

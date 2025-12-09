@@ -103,6 +103,9 @@ impl ModelFamily {
                 self.default_reasoning_effort = Some(model.default_reasoning_level);
                 self.shell_type = model.shell_type;
             }
+            if let Some(base_instructions) = model.base_instructions {
+                self.base_instructions = base_instructions;
+            }
         }
         self
     }
@@ -357,6 +360,7 @@ mod tests {
             supported_in_api: true,
             priority: 1,
             upgrade: None,
+            base_instructions: None,
         }
     }
 

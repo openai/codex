@@ -77,6 +77,7 @@ async fn models_client_hits_models_endpoint() {
             supported_in_api: true,
             priority: 1,
             upgrade: None,
+            base_instructions: None,
         }],
         etag: String::new(),
     };
