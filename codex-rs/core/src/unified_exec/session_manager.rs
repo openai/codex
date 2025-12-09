@@ -592,7 +592,9 @@ impl UnifiedExecSessionManager {
             .collect();
 
         if let Some(session_id) = Self::session_id_to_prune_from_meta(&meta) {
-            store.remove(&session_id);
+            if let Some(entry) = store.remove(&session_id) {
+                entry.session.terminate();
+            }
             return true;
         }
 
@@ -629,8 +631,17 @@ impl UnifiedExecSessionManager {
     }
 
     pub(crate) async fn terminate_all_sessions(&self) {
-        let mut sessions = self.session_store.lock().await;
-        sessions.clear();
+        let entries: Vec<SessionEntry> = {
+            let mut sessions = self.session_store.lock().await;
+            let entries: Vec<SessionEntry> =
+                sessions.sessions.drain().map(|(_, entry)| entry).collect();
+            sessions.reserved_sessions_id.clear();
+            entries
+        };
+
+        for entry in entries {
+            entry.session.terminate();
+        }
     }
 }
 

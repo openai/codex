@@ -135,11 +135,6 @@ impl SessionStore {
         self.reserved_sessions_id.remove(session_id);
         self.sessions.remove(session_id)
     }
-
-    pub(crate) fn clear(&mut self) {
-        self.reserved_sessions_id.clear();
-        self.sessions.clear();
-    }
 }
 
 pub(crate) struct UnifiedExecSessionManager {
