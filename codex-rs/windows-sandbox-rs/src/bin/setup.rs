@@ -262,6 +262,7 @@ fn resolve_sid(name: &str) -> Result<Vec<u8>> {
 }
 
 /// Evaluate effective rights for a set of SIDs against a path's DACL (single fetch).
+#[allow(dead_code)]
 fn effective_rights_for_psids(
     path: &Path,
     entries: &[(*mut c_void, &str)],
@@ -300,6 +301,7 @@ fn effective_rights_for_psids(
 }
 
 /// Resolve trustee names to SIDs and reuse the single-fetch effective rights check.
+#[allow(dead_code)]
 fn effective_rights_for_trustees(
     path: &Path,
     trustees: &[&str],
@@ -696,8 +698,8 @@ fn write_secrets(
     offline_pwd: &str,
     online_user: &str,
     online_pwd: &str,
-    read_roots: &[PathBuf],
-    write_roots: &[PathBuf],
+    _read_roots: &[PathBuf],
+    _write_roots: &[PathBuf],
 ) -> Result<()> {
     let sandbox_dir = sandbox_dir(codex_home);
     std::fs::create_dir_all(&sandbox_dir)?;
