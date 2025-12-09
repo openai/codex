@@ -12,6 +12,8 @@ use std::env;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::mcp::auth::McpAuthStatusEntry;
@@ -260,13 +262,70 @@ pub struct SandboxState {
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
-#[derive(Default)]
 pub(crate) struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     elicitation_requests: ElicitationRequestManager,
+    mcp_oauth_refresh_clock: Arc<AtomicI64>,
+    last_refresh_seen: AtomicI64,
+    config_snapshot: HashMap<String, McpServerConfig>,
+    store_mode_snapshot: Option<OAuthCredentialsStoreMode>,
+    auth_entries_snapshot: HashMap<String, McpAuthStatusEntry>,
 }
 
 impl McpConnectionManager {
+    pub(crate) fn new(mcp_oauth_refresh_clock: Arc<AtomicI64>) -> Self {
+        Self {
+            clients: HashMap::new(),
+            elicitation_requests: ElicitationRequestManager::default(),
+            mcp_oauth_refresh_clock,
+            last_refresh_seen: AtomicI64::new(0),
+            config_snapshot: HashMap::new(),
+            store_mode_snapshot: None,
+            auth_entries_snapshot: HashMap::new(),
+        }
+    }
+
+    fn update_snapshots(
+        &mut self,
+        mcp_servers: &HashMap<String, McpServerConfig>,
+        store_mode: OAuthCredentialsStoreMode,
+        auth_entries: &HashMap<String, McpAuthStatusEntry>,
+    ) {
+        self.config_snapshot = mcp_servers.clone();
+        self.store_mode_snapshot = Some(store_mode);
+        self.auth_entries_snapshot = auth_entries.clone();
+        let now = self.mcp_oauth_refresh_clock.load(Ordering::SeqCst);
+        self.last_refresh_seen.store(now, Ordering::SeqCst);
+    }
+
+    pub(crate) fn last_refresh_seen(&self) -> i64 {
+        self.last_refresh_seen.load(Ordering::SeqCst)
+    }
+
+    pub(crate) async fn refresh_if_needed(
+        &mut self,
+        config: &HashMap<String, McpServerConfig>,
+        store_mode: OAuthCredentialsStoreMode,
+        auth_entries: HashMap<String, McpAuthStatusEntry>,
+        tx_event: Sender<Event>,
+        cancel_token: CancellationToken,
+    ) {
+        let current = self.mcp_oauth_refresh_clock.load(Ordering::SeqCst);
+        if current <= self.last_refresh_seen() {
+            return;
+        }
+
+        self.initialize(
+            config.clone(),
+            store_mode,
+            auth_entries,
+            tx_event,
+            cancel_token,
+        )
+        .await;
+        self.last_refresh_seen.store(current, Ordering::SeqCst);
+    }
+
     pub async fn initialize(
         &mut self,
         mcp_servers: HashMap<String, McpServerConfig>,
@@ -281,7 +340,9 @@ impl McpConnectionManager {
         let mut clients = HashMap::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::default();
-        for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
+        for (server_name, cfg) in mcp_servers.iter().filter(|(_, cfg)| cfg.enabled) {
+            let server_name = server_name.to_string();
+            let cfg = cfg.clone();
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(
                 &tx_event,
@@ -333,6 +394,7 @@ impl McpConnectionManager {
         }
         self.clients = clients;
         self.elicitation_requests = elicitation_requests.clone();
+        self.update_snapshots(&mcp_servers, store_mode, &auth_entries);
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
             let mut summary = McpStartupCompleteEvent::default();

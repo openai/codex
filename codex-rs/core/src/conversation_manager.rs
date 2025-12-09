@@ -22,6 +22,8 @@ use codex_protocol::protocol::SessionSource;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 use tokio::sync::RwLock;
 
 /// Represents a newly created Codex conversation, including the first event
@@ -39,6 +41,7 @@ pub struct ConversationManager {
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     session_source: SessionSource,
+    mcp_oauth_refresh_clock: Arc<AtomicI64>,
 }
 
 impl ConversationManager {
@@ -48,6 +51,7 @@ impl ConversationManager {
             auth_manager: auth_manager.clone(),
             session_source,
             models_manager: Arc::new(ModelsManager::new(auth_manager)),
+            mcp_oauth_refresh_clock: Arc::new(AtomicI64::new(0)),
         }
     }
 
@@ -63,6 +67,15 @@ impl ConversationManager {
 
     pub fn session_source(&self) -> SessionSource {
         self.session_source.clone()
+    }
+
+    pub fn mcp_oauth_refresh_clock(&self) -> Arc<AtomicI64> {
+        self.mcp_oauth_refresh_clock.clone()
+    }
+
+    pub fn mark_mcp_oauth_success(&self, timestamp_secs: i64) {
+        self.mcp_oauth_refresh_clock
+            .store(timestamp_secs, Ordering::SeqCst);
     }
 
     pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
@@ -89,6 +102,7 @@ impl ConversationManager {
             models_manager,
             InitialHistory::New,
             self.session_source.clone(),
+            self.mcp_oauth_refresh_clock.clone(),
         )
         .await?;
         self.finalize_spawn(codex, conversation_id).await
@@ -166,6 +180,7 @@ impl ConversationManager {
             self.models_manager.clone(),
             initial_history,
             self.session_source.clone(),
+            self.mcp_oauth_refresh_clock.clone(),
         )
         .await?;
         self.finalize_spawn(codex, conversation_id).await
@@ -207,6 +222,7 @@ impl ConversationManager {
             self.models_manager.clone(),
             history,
             self.session_source.clone(),
+            self.mcp_oauth_refresh_clock.clone(),
         )
         .await?;
 

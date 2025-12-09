@@ -55,6 +55,8 @@ use mcp_types::ReadResourceResult;
 use mcp_types::RequestId;
 use serde_json;
 use serde_json::Value;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
@@ -170,6 +172,7 @@ impl Codex {
         models_manager: Arc<ModelsManager>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
+        mcp_oauth_refresh_clock: Arc<AtomicI64>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -210,6 +213,7 @@ impl Codex {
             tx_event.clone(),
             conversation_history,
             session_source_clone,
+            mcp_oauth_refresh_clock.clone(),
         )
         .await
         .map_err(|e| {
@@ -466,6 +470,7 @@ impl Session {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn new(
         session_configuration: SessionConfiguration,
         config: Arc<Config>,
@@ -474,6 +479,7 @@ impl Session {
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
         session_source: SessionSource,
+        mcp_oauth_refresh_clock: Arc<AtomicI64>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -583,8 +589,11 @@ impl Session {
         let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new(
+                mcp_oauth_refresh_clock.clone(),
+            ))),
             mcp_startup_cancellation_token: CancellationToken::new(),
+            mcp_oauth_refresh_clock,
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(config.notify.clone()),
             rollout: Mutex::new(Some(rollout_recorder)),
@@ -1386,6 +1395,7 @@ impl Session {
         server: &str,
         params: Option<ListResourcesRequestParams>,
     ) -> anyhow::Result<ListResourcesResult> {
+        self.refresh_mcp_clients_if_needed().await?;
         self.services
             .mcp_connection_manager
             .read()
@@ -1399,6 +1409,7 @@ impl Session {
         server: &str,
         params: Option<ListResourceTemplatesRequestParams>,
     ) -> anyhow::Result<ListResourceTemplatesResult> {
+        self.refresh_mcp_clients_if_needed().await?;
         self.services
             .mcp_connection_manager
             .read()
@@ -1412,6 +1423,7 @@ impl Session {
         server: &str,
         params: ReadResourceRequestParams,
     ) -> anyhow::Result<ReadResourceResult> {
+        self.refresh_mcp_clients_if_needed().await?;
         self.services
             .mcp_connection_manager
             .read()
@@ -1426,6 +1438,7 @@ impl Session {
         tool: &str,
         arguments: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
+        self.refresh_mcp_clients_if_needed().await?;
         self.services
             .mcp_connection_manager
             .read()
@@ -1435,12 +1448,49 @@ impl Session {
     }
 
     pub(crate) async fn parse_mcp_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
+        self.refresh_mcp_clients_if_needed().await.ok()?;
         self.services
             .mcp_connection_manager
             .read()
             .await
             .parse_tool_name(tool_name)
             .await
+    }
+
+    async fn refresh_mcp_clients_if_needed(&self) -> anyhow::Result<()> {
+        let current_clock = self.services.mcp_oauth_refresh_clock.load(Ordering::SeqCst);
+        let last_seen = {
+            let manager = self.services.mcp_connection_manager.read().await;
+            manager.last_refresh_seen()
+        };
+        if current_clock <= last_seen {
+            return Ok(());
+        }
+
+        let config = {
+            let state = self.state.lock().await;
+            state
+                .session_configuration
+                .original_config_do_not_use
+                .clone()
+        };
+        let store_mode = config.mcp_oauth_credentials_store_mode;
+        let auth_statuses = compute_auth_statuses(config.mcp_servers.iter(), store_mode).await;
+
+        {
+            let mut manager = self.services.mcp_connection_manager.write().await;
+            manager
+                .refresh_if_needed(
+                    &config.mcp_servers,
+                    store_mode,
+                    auth_statuses,
+                    self.tx_event.clone(),
+                    self.services.mcp_startup_cancellation_token.clone(),
+                )
+                .await;
+        }
+
+        Ok(())
     }
 
     pub async fn interrupt_task(self: &Arc<Self>) {
@@ -2882,9 +2932,13 @@ mod tests {
 
         let state = SessionState::new(session_configuration.clone());
 
+        let mcp_oauth_refresh_clock = Arc::new(AtomicI64::new(0));
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new(
+                mcp_oauth_refresh_clock.clone(),
+            ))),
             mcp_startup_cancellation_token: CancellationToken::new(),
+            mcp_oauth_refresh_clock,
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
@@ -2964,9 +3018,13 @@ mod tests {
 
         let state = SessionState::new(session_configuration.clone());
 
+        let mcp_oauth_refresh_clock = Arc::new(AtomicI64::new(0));
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new(
+                mcp_oauth_refresh_clock.clone(),
+            ))),
             mcp_startup_cancellation_token: CancellationToken::new(),
+            mcp_oauth_refresh_clock,
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
             rollout: Mutex::new(None),
