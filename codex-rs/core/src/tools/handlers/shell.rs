@@ -148,7 +148,7 @@ impl ToolHandler for ShellCommandHandler {
         matches!(payload, ToolPayload::Function { .. })
     }
 
-    fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
         let ToolPayload::Function { arguments } = &invocation.payload else {
             return true;
         };
