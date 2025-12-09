@@ -166,6 +166,7 @@ use std::time::Duration;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
+use toml::Value as TomlValue;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -203,6 +204,7 @@ pub(crate) struct CodexMessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     config: Arc<Config>,
+    cli_overrides: Vec<(String, TomlValue)>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
@@ -249,6 +251,7 @@ impl CodexMessageProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         codex_linux_sandbox_exe: Option<PathBuf>,
         config: Arc<Config>,
+        cli_overrides: Vec<(String, TomlValue)>,
         feedback: CodexFeedback,
     ) -> Self {
         Self {
@@ -257,6 +260,7 @@ impl CodexMessageProcessor {
             outgoing,
             codex_linux_sandbox_exe,
             config,
+            cli_overrides,
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
@@ -264,6 +268,16 @@ impl CodexMessageProcessor {
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             feedback,
         }
+    }
+
+    async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
+        Config::load_with_cli_overrides(self.cli_overrides.clone(), ConfigOverrides::default())
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to reload config: {err}"),
+                data: None,
+            })
     }
 
     fn review_request_from_target(
@@ -1929,7 +1943,15 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: McpServerOauthLoginParams,
     ) {
-        if !self.config.features.enabled(Feature::RmcpClient) {
+        let config = match self.load_latest_config().await {
+            Ok(config) => config,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        if !config.features.enabled(Feature::RmcpClient) {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: "OAuth login is only supported when [features].rmcp_client is true in config.toml".to_string(),
@@ -1945,7 +1967,7 @@ impl CodexMessageProcessor {
             timeout_secs,
         } = params;
 
-        let Some(server) = self.config.mcp_servers.get(&name) else {
+        let Some(server) = config.mcp_servers.get(&name) else {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!("No MCP server named '{name}' found."),
@@ -1977,7 +1999,7 @@ impl CodexMessageProcessor {
         match perform_oauth_login_return_url(
             &name,
             &url,
-            self.config.mcp_oauth_credentials_store_mode,
+            config.mcp_oauth_credentials_store_mode,
             http_headers,
             env_http_headers,
             scopes.as_deref().unwrap_or_default(),
