@@ -279,15 +279,15 @@ impl UnifiedExecSessionManager {
         // that through so the handler can tag TerminalInteraction with an
         // appropriate process_id and exit_code.
         let status = self.refresh_session_state(process_id.as_str()).await;
-        let (process_id, exit_code, _completion_entry, event_call_id) = match status {
+        let (process_id, exit_code, event_call_id) = match status {
             SessionStatus::Alive {
                 exit_code,
                 call_id,
                 process_id,
-            } => (Some(process_id), exit_code, None, call_id),
+            } => (Some(process_id), exit_code, call_id),
             SessionStatus::Exited { exit_code, entry } => {
                 let call_id = entry.call_id.clone();
-                (None, exit_code, Some(*entry), call_id)
+                (None, exit_code, call_id)
             }
             SessionStatus::Unknown => {
                 return Err(UnifiedExecError::UnknownSessionId {
@@ -380,6 +380,18 @@ impl UnifiedExecSessionManager {
             .send(data.to_vec())
             .await
             .map_err(|_| UnifiedExecError::WriteToStdin)
+    }
+
+    async fn resolve_output_from_transcript(
+        transcript: &Arc<tokio::sync::Mutex<CommandTranscript>>,
+        fallback: String,
+    ) -> String {
+        let guard = transcript.lock().await;
+        if guard.data.is_empty() {
+            return fallback;
+        }
+
+        String::from_utf8_lossy(&guard.data).to_string()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -525,7 +537,7 @@ impl UnifiedExecSessionManager {
         cancellation_token: &CancellationToken,
         deadline: Instant,
     ) -> Vec<u8> {
-        const POST_EXIT_OUTPUT_GRACE: Duration = Duration::from_millis(25);
+        const POST_EXIT_OUTPUT_GRACE: Duration = Duration::from_millis(50);
 
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
         let mut exit_signal_received = cancellation_token.is_cancelled();
