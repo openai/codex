@@ -14,6 +14,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::ToolsV2;
 use codex_app_server_protocol::WriteStatus;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -65,6 +66,64 @@ sandbox_mode = "workspace-write"
         origins.get("model").expect("origin").name,
         ConfigLayerName::User
     );
+    let layers = layers.expect("layers present");
+    assert_eq!(layers.len(), 2);
+    assert_eq!(layers[0].name, ConfigLayerName::SessionFlags);
+    assert_eq!(layers[1].name, ConfigLayerName::User);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_tools() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+model = "gpt-user"
+
+[tools]
+web_search = true
+view_image = false
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse {
+        config,
+        origins,
+        layers,
+    } = to_response(resp)?;
+
+    let tools = config.tools.expect("tools present");
+    assert_eq!(
+        tools,
+        ToolsV2 {
+            web_search: Some(true),
+            view_image: Some(false),
+        }
+    );
+    assert_eq!(
+        origins.get("tools.web_search").expect("origin").name,
+        ConfigLayerName::User
+    );
+    assert_eq!(
+        origins.get("tools.view_image").expect("origin").name,
+        ConfigLayerName::User
+    );
+
     let layers = layers.expect("layers present");
     assert_eq!(layers.len(), 2);
     assert_eq!(layers[0].name, ConfigLayerName::SessionFlags);
