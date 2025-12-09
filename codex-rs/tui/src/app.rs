@@ -45,7 +45,6 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::cursor::MoveTo;
-use crossterm::event;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -1199,7 +1198,7 @@ impl App {
         }
         // After the editor exits, reset terminal state, flush any buffered keypresses,
         // and clear the area below the bottom pane, as it may have been scribbled over while the external editor was open.
-        Self::discard_pending_terminal_input();
+        Self::flush_terminal_input_buffer();
         self.clear_bottom_pane_rows(tui, cursor_row);
         self.chat_widget.set_footer_hint_override(None);
 
@@ -1224,24 +1223,40 @@ impl App {
         }
     }
 
-    /// Drain any keystrokes the OS delivered while the external editor was running.
-    fn discard_pending_terminal_input() {
-        loop {
-            match event::poll(Duration::from_millis(0)) {
-                Ok(true) => {
-                    if let Err(err) = event::read() {
-                        tracing::warn!("failed to read pending terminal input: {err}");
-                        break;
-                    }
-                }
-                Ok(false) => break,
-                Err(err) => {
-                    tracing::warn!("failed to poll for pending terminal input: {err}");
-                    break;
-                }
-            }
+    #[cfg(unix)]
+    fn flush_terminal_input_buffer() {
+        // Safety: flushing the stdin queue is safe and does not move ownership.
+        let result = unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) };
+        if result != 0 {
+            let err = std::io::Error::last_os_error();
+            tracing::warn!("failed to tcflush stdin: {err}");
         }
     }
+
+    #[cfg(windows)]
+    fn flush_terminal_input_buffer() {
+        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::System::Console::FlushConsoleInputBuffer;
+        use windows_sys::Win32::System::Console::GetStdHandle;
+        use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
+
+        let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+        if handle == INVALID_HANDLE_VALUE || handle == 0 {
+            let err = unsafe { GetLastError() };
+            tracing::warn!("failed to get stdin handle for flush: error {err}");
+            return;
+        }
+
+        let result = unsafe { FlushConsoleInputBuffer(handle) };
+        if result == 0 {
+            let err = unsafe { GetLastError() };
+            tracing::warn!("failed to flush stdin buffer: error {err}");
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn flush_terminal_input_buffer() {}
 
     /// Clear the portion of the screen occupied by the bottom pane (or the provided row).
     fn clear_bottom_pane_rows(&mut self, tui: &mut tui::Tui, from_row: Option<u16>) {
