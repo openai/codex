@@ -163,102 +163,80 @@ pub enum ConfigLayerName {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct SandboxWorkspaceWrite {
-    #[serde(default, alias = "writable_roots")]
+    #[serde(default)]
     pub writable_roots: Vec<PathBuf>,
-    #[serde(default, alias = "network_access")]
+    #[serde(default)]
     pub network_access: bool,
-    #[serde(default, alias = "exclude_tmpdir_env_var")]
+    #[serde(default)]
     pub exclude_tmpdir_env_var: bool,
-    #[serde(default, alias = "exclude_slash_tmp")]
+    #[serde(default)]
     pub exclude_slash_tmp: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct ToolsV2 {
-    #[serde(alias = "web_search")]
     pub web_search: Option<bool>,
-    #[serde(alias = "view_image")]
     pub view_image: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct ProfileV2 {
     pub model: Option<String>,
-    #[serde(alias = "model_provider")]
     pub model_provider: Option<String>,
     #[serde(
         default,
         deserialize_with = "deserialize_approval_policy",
-        serialize_with = "serialize_approval_policy",
-        alias = "approval_policy"
+        serialize_with = "serialize_approval_policy"
     )]
     pub approval_policy: Option<AskForApproval>,
-    #[serde(alias = "model_reasoning_effort")]
     pub model_reasoning_effort: Option<ReasoningEffort>,
-    #[serde(alias = "model_reasoning_summary")]
     pub model_reasoning_summary: Option<ReasoningSummary>,
-    #[serde(alias = "model_verbosity")]
     pub model_verbosity: Option<Verbosity>,
-    #[serde(alias = "chatgpt_base_url")]
     pub chatgpt_base_url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct Config {
     pub model: Option<String>,
-    #[serde(alias = "review_model")]
     pub review_model: Option<String>,
-    #[serde(alias = "model_context_window")]
     pub model_context_window: Option<i64>,
-    #[serde(alias = "model_auto_compact_token_limit")]
     pub model_auto_compact_token_limit: Option<i64>,
-    #[serde(alias = "model_provider")]
     pub model_provider: Option<String>,
     #[serde(
         default,
         deserialize_with = "deserialize_approval_policy",
-        serialize_with = "serialize_approval_policy",
-        alias = "approval_policy"
+        serialize_with = "serialize_approval_policy"
     )]
     pub approval_policy: Option<AskForApproval>,
     #[serde(
         default,
         deserialize_with = "deserialize_sandbox_mode",
-        serialize_with = "serialize_sandbox_mode",
-        alias = "sandbox_mode"
+        serialize_with = "serialize_sandbox_mode"
     )]
     pub sandbox_mode: Option<SandboxMode>,
-    #[serde(alias = "sandbox_workspace_write")]
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
-    #[serde(alias = "forced_chatgpt_workspace_id")]
     pub forced_chatgpt_workspace_id: Option<String>,
-    #[serde(alias = "forced_login_method")]
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub tools: Option<ToolsV2>,
     pub profile: Option<String>,
     #[serde(default)]
     pub profiles: HashMap<String, ProfileV2>,
     pub instructions: Option<String>,
-    #[serde(alias = "developer_instructions")]
     pub developer_instructions: Option<String>,
-    #[serde(alias = "compact_prompt")]
     pub compact_prompt: Option<String>,
-    #[serde(alias = "model_reasoning_effort")]
     pub model_reasoning_effort: Option<ReasoningEffort>,
-    #[serde(alias = "model_reasoning_summary")]
     pub model_reasoning_summary: Option<ReasoningSummary>,
-    #[serde(alias = "model_verbosity")]
     pub model_verbosity: Option<Verbosity>,
-    #[serde(default, flatten, deserialize_with = "deserialize_additional")]
+    #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
 }
 
@@ -299,38 +277,6 @@ where
         .as_ref()
         .map(|mode| mode.to_core())
         .serialize(serializer)
-}
-
-fn deserialize_additional<'de, D>(deserializer: D) -> Result<HashMap<String, JsonValue>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let raw = HashMap::<String, JsonValue>::deserialize(deserializer)?;
-    Ok(raw
-        .into_iter()
-        .map(|(key, value)| (snake_to_camel(&key), value))
-        .collect())
-}
-
-fn snake_to_camel(input: &str) -> String {
-    let mut output = String::with_capacity(input.len());
-    let mut upper_next = false;
-
-    for ch in input.chars() {
-        if ch == '_' {
-            upper_next = true;
-            continue;
-        }
-
-        if upper_next {
-            output.push(ch.to_ascii_uppercase());
-            upper_next = false;
-        } else {
-            output.push(ch);
-        }
-    }
-
-    output
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1879,25 +1825,6 @@ mod tests {
                 id: "search-1".to_string(),
                 query: "docs".to_string(),
             }
-        );
-    }
-
-    #[test]
-    fn config_tools_deserializes_with_snake_case_keys() {
-        let config: Config = serde_json::from_value(json!({
-            "tools": {
-                "web_search": true,
-                "view_image": false
-            }
-        }))
-        .unwrap();
-
-        assert_eq!(
-            config.tools,
-            Some(ToolsV2 {
-                web_search: Some(true),
-                view_image: Some(false),
-            })
         );
     }
 
