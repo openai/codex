@@ -152,6 +152,10 @@ macro_rules! model_family {
     }};
 }
 
+fn is_codex_max_slug(slug: &str) -> bool {
+    slug.starts_with("gpt-5.1-codex-max") || slug.starts_with("exp-codex")
+}
+
 // todo(aibrahim): remove this function
 /// Returns a `ModelFamily` for the given model slug, or `None` if the slug
 /// does not match any known model family.
@@ -255,7 +259,7 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
         )
 
     // Production models.
-    } else if slug.starts_with("gpt-5.1-codex-max") {
+    } else if is_codex_max_slug(slug) {
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,
