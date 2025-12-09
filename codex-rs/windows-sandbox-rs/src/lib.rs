@@ -4,10 +4,24 @@ macro_rules! windows_modules {
     };
 }
 
-windows_modules!(acl, allow, audit, cap, env, logging, policy, token, winutil);
+windows_modules!(
+    acl, allow, audit, cap, dpapi, env, identity, logging, policy, process, setup, token, winutil
+);
 
 #[cfg(target_os = "windows")]
 pub use audit::apply_world_writable_scan_and_denies;
+#[cfg(target_os = "windows")]
+pub use dpapi::protect as dpapi_protect;
+#[cfg(target_os = "windows")]
+pub use dpapi::unprotect as dpapi_unprotect;
+#[cfg(target_os = "windows")]
+pub use identity::require_logon_sandbox_creds;
+#[cfg(target_os = "windows")]
+pub use setup::SETUP_VERSION;
+#[cfg(target_os = "windows")]
+pub use setup::run_elevated_setup;
+#[cfg(target_os = "windows")]
+pub use setup::sandbox_dir;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_capture;
 #[cfg(target_os = "windows")]
