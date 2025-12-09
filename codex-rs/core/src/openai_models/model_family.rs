@@ -102,9 +102,7 @@ impl ModelFamily {
             if model.slug == self.slug {
                 self.default_reasoning_effort = Some(model.default_reasoning_level);
                 self.shell_type = model.shell_type;
-            }
-            if let Some(base_instructions) = model.base_instructions {
-                self.base_instructions = base_instructions;
+                self.base_instructions = model.base_instructions.unwrap_or(self.base_instructions);
             }
         }
         self
