@@ -851,7 +851,9 @@ mod tests {
             "-c".to_string(),
             "sleep 60 & echo $!; sleep 60".to_string(),
         ];
-        let env: HashMap<String, String> = std::env::vars().collect();
+        let env: HashMap<String, String> = std::env::vars_os()
+            .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+            .collect();
         let params = ExecParams {
             command,
             cwd: std::env::current_dir()?,
@@ -894,7 +896,9 @@ mod tests {
     async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
         let command = long_running_command();
         let cwd = std::env::current_dir()?;
-        let env: HashMap<String, String> = std::env::vars().collect();
+        let env: HashMap<String, String> = std::env::vars_os()
+            .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+            .collect();
         let cancel_token = CancellationToken::new();
         let cancel_tx = cancel_token.clone();
         let params = ExecParams {
