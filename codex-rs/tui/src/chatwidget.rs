@@ -46,6 +46,7 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
+use codex_core::protocol::TerminalInteractionEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
 use codex_core::protocol::TurnAbortReason;
@@ -821,6 +822,10 @@ impl ChatWidget {
         _ev: codex_core::protocol::ExecCommandOutputDeltaEvent,
     ) {
         // TODO: Handle streaming exec output if/when implemented
+    }
+
+    fn on_terminal_interaction(&mut self, _ev: TerminalInteractionEvent) {
+        // TODO: Handle once design is ready
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
@@ -1787,6 +1792,7 @@ impl ChatWidget {
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
+            | EventMsg::TerminalInteraction(_)
             | EventMsg::ExecCommandOutputDelta(_) => {}
             _ => {
                 tracing::trace!("handle_codex_event: {:?}", msg);
@@ -1844,6 +1850,7 @@ impl ChatWidget {
                 self.on_elicitation_request(ev);
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
+            EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),

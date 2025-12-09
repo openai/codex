@@ -665,7 +665,116 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unified_exec_emits_output_delta_for_write_stdin() -> Result<()> {
+async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let call_id = "uexec-full-lifecycle";
+    let args = json!({
+        "cmd": "printf 'HELLO-FULL-LIFECYCLE'",
+        "yield_time_ms": 50,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "finished"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "exercise full unified exec lifecycle".into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    let mut begin_event = None;
+    let mut end_event = None;
+    let mut saw_delta_with_marker = 0;
+
+    loop {
+        let msg = wait_for_event(&codex, |_| true).await;
+        match msg {
+            EventMsg::ExecCommandBegin(ev) if ev.call_id == call_id => begin_event = Some(ev),
+            EventMsg::ExecCommandOutputDelta(ev) if ev.call_id == call_id => {
+                let text = String::from_utf8_lossy(&ev.chunk);
+                if text.contains("HELLO-FULL-LIFECYCLE") {
+                    saw_delta_with_marker += 1;
+                }
+            }
+            EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => {
+                assert!(
+                    end_event.is_none(),
+                    "expected a single ExecCommandEnd event for this call id"
+                );
+                end_event = Some(ev);
+            }
+            EventMsg::TaskComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    let begin_event = begin_event.expect("expected ExecCommandBegin event");
+    assert_eq!(begin_event.call_id, call_id);
+    assert!(
+        begin_event.process_id.is_some(),
+        "begin event should include a process_id for a long-lived session"
+    );
+
+    assert_eq!(
+        saw_delta_with_marker, 0,
+        "no ExecCommandOutputDelta should be sent for early exit commands"
+    );
+
+    let end_event = end_event.expect("expected ExecCommandEnd event");
+    assert_eq!(end_event.call_id, call_id);
+    assert_eq!(end_event.exit_code, 0);
+    assert!(
+        end_event.process_id.is_some(),
+        "end event should include process_id emitted by background watcher"
+    );
+    assert!(
+        end_event.aggregated_output.contains("HELLO-FULL-LIFECYCLE"),
+        "aggregated_output should contain the full PTY transcript; got {:?}",
+        end_event.aggregated_output
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_windows!(Ok(()));
@@ -742,8 +851,8 @@ async fn unified_exec_emits_output_delta_for_write_stdin() -> Result<()> {
 
     // Expect a delta event corresponding to the write_stdin call.
     let delta = wait_for_event_match(&codex, |msg| match msg {
-        EventMsg::ExecCommandOutputDelta(ev) if ev.call_id == open_call_id => {
-            let text = String::from_utf8_lossy(&ev.chunk);
+        EventMsg::TerminalInteraction(ev) if ev.call_id == open_call_id => {
+            let text = String::from_utf8_lossy(&ev.stdout);
             if text.contains("WSTDIN-MARK") {
                 Some(ev.clone())
             } else {
@@ -754,7 +863,12 @@ async fn unified_exec_emits_output_delta_for_write_stdin() -> Result<()> {
     })
     .await;
 
-    let text = String::from_utf8_lossy(&delta.chunk).to_string();
+    assert!(
+        delta.process_id.is_some(),
+        "TerminalInteraction event should include process_id for an active session"
+    );
+
+    let text = String::from_utf8_lossy(&delta.stdout).to_string();
     assert!(
         text.contains("WSTDIN-MARK"),
         "stdin delta chunk missing expected text: {text:?}"

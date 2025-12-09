@@ -3,9 +3,8 @@ use std::path::PathBuf;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecCommandSource;
-use crate::protocol::ExecOutputStream;
+use crate::protocol::TerminalInteractionEvent;
 use crate::shell::default_user_shell;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
@@ -121,6 +120,7 @@ impl ToolHandler for UnifiedExecHandler {
         let manager: &UnifiedExecSessionManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
 
+        let mut stdin_sent: Option<String> = None;
         let response = match tool_name.as_str() {
             "exec_command" => {
                 let args: ExecCommandArgs = serde_json::from_str(&arguments).map_err(|err| {
@@ -184,7 +184,6 @@ impl ToolHandler for UnifiedExecHandler {
                     &command,
                     cwd.clone(),
                     ExecCommandSource::UnifiedExecStartup,
-                    None,
                     Some(process_id.clone()),
                 );
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
@@ -213,6 +212,7 @@ impl ToolHandler for UnifiedExecHandler {
                         "failed to parse write_stdin arguments: {err:?}"
                     ))
                 })?;
+                stdin_sent = Some(args.chars.clone());
                 manager
                     .write_stdin(WriteStdinRequest {
                         process_id: &args.session_id.to_string(),
@@ -232,15 +232,15 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
-        // Emit a delta event with the chunk of output we just produced, if any.
-        if !response.output.is_empty() {
-            let delta = ExecCommandOutputDeltaEvent {
+        if let Some(stdin) = stdin_sent {
+            let interaction = TerminalInteractionEvent {
                 call_id: response.event_call_id.clone(),
-                stream: ExecOutputStream::Stdout,
-                chunk: response.output.as_bytes().to_vec(),
+                process_id: response.process_id.clone(),
+                stdin,
+                stdout: response.raw_output.clone(),
             };
             session
-                .send_event(turn.as_ref(), EventMsg::ExecCommandOutputDelta(delta))
+                .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
                 .await;
         }
 

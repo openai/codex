@@ -55,6 +55,8 @@ use serde_json::Value as JsonValue;
 use tracing::error;
 use tracing::warn;
 
+const COMMAND_OUTPUT_AGGREGATE_LIMIT: usize = 1024 * 1024;
+
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
     next_event_id: AtomicU64,
@@ -72,6 +74,7 @@ pub struct EventProcessorWithJsonOutput {
 struct RunningCommand {
     command: String,
     item_id: String,
+    aggregated_output: String,
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +112,10 @@ impl EventProcessorWithJsonOutput {
             EventMsg::AgentReasoning(ev) => self.handle_reasoning_event(ev),
             EventMsg::ExecCommandBegin(ev) => self.handle_exec_command_begin(ev),
             EventMsg::ExecCommandEnd(ev) => self.handle_exec_command_end(ev),
+            EventMsg::TerminalInteraction(ev) => self.handle_output_chunk(&ev.call_id, &ev.stdout),
+            EventMsg::ExecCommandOutputDelta(ev) => {
+                self.handle_output_chunk(&ev.call_id, &ev.chunk)
+            }
             EventMsg::McpToolCallBegin(ev) => self.handle_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.handle_mcp_tool_call_end(ev),
             EventMsg::PatchApplyBegin(ev) => self.handle_patch_apply_begin(ev),
@@ -172,6 +179,35 @@ impl EventProcessorWithJsonOutput {
         vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
 
+    fn handle_output_chunk(&mut self, call_id: &str, chunk: &[u8]) -> Vec<ThreadEvent> {
+        let Some(running) = self.running_commands.get_mut(call_id) else {
+            warn!(
+                call_id = call_id,
+                "TerminalInteraction without matching ExecCommandBegin; skipping item.updated"
+            );
+            return Vec::new();
+        };
+
+        let delta = String::from_utf8_lossy(chunk);
+        running.aggregated_output.push_str(delta.as_ref());
+        if running.aggregated_output.len() > COMMAND_OUTPUT_AGGREGATE_LIMIT {
+            let excess = running.aggregated_output.len() - COMMAND_OUTPUT_AGGREGATE_LIMIT;
+            running.aggregated_output.drain(..excess);
+        }
+
+        let item = ThreadItem {
+            id: running.item_id.clone(),
+            details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                command: running.command.clone(),
+                aggregated_output: running.aggregated_output.clone(),
+                exit_code: None,
+                status: CommandExecutionStatus::InProgress,
+            }),
+        };
+
+        vec![ThreadEvent::ItemUpdated(ItemUpdatedEvent { item })]
+    }
+
     fn handle_agent_message(&self, payload: &AgentMessageEvent) -> Vec<ThreadEvent> {
         let item = ThreadItem {
             id: self.get_next_item_id(),
@@ -214,6 +250,7 @@ impl EventProcessorWithJsonOutput {
             RunningCommand {
                 command: command_string.clone(),
                 item_id: item_id.clone(),
+                aggregated_output: String::new(),
             },
         );
 
@@ -366,7 +403,11 @@ impl EventProcessorWithJsonOutput {
     }
 
     fn handle_exec_command_end(&mut self, ev: &ExecCommandEndEvent) -> Vec<ThreadEvent> {
-        let Some(RunningCommand { command, item_id }) = self.running_commands.remove(&ev.call_id)
+        let Some(RunningCommand {
+            command,
+            item_id,
+            aggregated_output,
+        }) = self.running_commands.remove(&ev.call_id)
         else {
             warn!(
                 call_id = ev.call_id,
@@ -379,12 +420,17 @@ impl EventProcessorWithJsonOutput {
         } else {
             CommandExecutionStatus::Failed
         };
+        let aggregated_output = if ev.aggregated_output.is_empty() {
+            aggregated_output
+        } else {
+            ev.aggregated_output.clone()
+        };
         let item = ThreadItem {
             id: item_id,
 
             details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                 command,
-                aggregated_output: ev.aggregated_output.clone(),
+                aggregated_output,
                 exit_code: Some(ev.exit_code),
                 status,
             }),
@@ -453,6 +499,21 @@ impl EventProcessorWithJsonOutput {
                 }),
             };
             items.push(ThreadEvent::ItemCompleted(ItemCompletedEvent { item }));
+        }
+
+        if !self.running_commands.is_empty() {
+            for (_, running) in self.running_commands.drain() {
+                let item = ThreadItem {
+                    id: running.item_id,
+                    details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                        command: running.command,
+                        aggregated_output: running.aggregated_output,
+                        exit_code: None,
+                        status: CommandExecutionStatus::Completed,
+                    }),
+                };
+                items.push(ThreadEvent::ItemCompleted(ItemCompletedEvent { item }));
+            }
         }
 
         if let Some(error) = self.last_critical_error.take() {

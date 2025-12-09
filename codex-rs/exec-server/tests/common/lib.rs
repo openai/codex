@@ -35,12 +35,15 @@ where
         .join("tests")
         .join("suite")
         .join("bash");
+    let dotslash_cache = codex_home.as_ref().join("dotslash_cache");
+    std::fs::create_dir_all(&dotslash_cache)?;
 
     let transport =
         TokioChildProcess::new(Command::new(mcp_executable.get_program()).configure(|cmd| {
             cmd.arg("--bash").arg(bash);
             cmd.arg("--execve").arg(execve_wrapper.get_program());
             cmd.env("CODEX_HOME", codex_home.as_ref());
+            cmd.env("DOTSLASH_CACHE_DIR", &dotslash_cache);
 
             // Important: pipe stdio so rmcp can speak JSON-RPC over stdin/stdout
             cmd.stdin(Stdio::piped());

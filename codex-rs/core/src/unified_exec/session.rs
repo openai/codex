@@ -136,6 +136,14 @@ impl UnifiedExecSession {
         }
     }
 
+    pub(super) fn output_receiver(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
+        self.session.output_receiver()
+    }
+
+    pub(super) fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation_token.clone()
+    }
+
     pub(super) fn has_exited(&self) -> bool {
         self.session.has_exited()
     }
