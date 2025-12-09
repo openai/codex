@@ -1669,6 +1669,10 @@ impl ChatWidget {
         self.bottom_pane.desired_height(width)
     }
 
+    pub(crate) fn footer_first_line_width(&self, area: Rect) -> Option<u16> {
+        self.bottom_pane.footer_first_line_width(area)
+    }
+
     pub(crate) fn can_launch_external_editor(&self) -> bool {
         self.bottom_pane.can_launch_external_editor()
     }

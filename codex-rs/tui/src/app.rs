@@ -62,7 +62,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
-use unicode_width::UnicodeWidthStr;
 
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
@@ -1175,9 +1174,8 @@ impl App {
             String::new(),
         )]));
         self.force_redraw_now(tui);
-        let hint_width = UnicodeWidthStr::width(EXTERNAL_EDITOR_HINT) as u16;
         // Park the cursor after/below the hint.
-        let cursor_row = self.move_cursor_for_external_editor(tui, hint_width);
+        let cursor_row = self.move_cursor_for_external_editor(tui);
 
         // Leave alt screen if active to avoid conflicts with editor.
         // This is defensive as we gate the external editor launch on there being no overlay.
@@ -1282,7 +1280,7 @@ impl App {
 
     /// Park the cursor after/below the hint.
     /// This prevents keystrokes while the external editor is open from overwriting TUI state.
-    fn move_cursor_for_external_editor(&self, tui: &mut tui::Tui, hint_width: u16) -> Option<u16> {
+    fn move_cursor_for_external_editor(&self, tui: &mut tui::Tui) -> Option<u16> {
         let (pane_start, pane_height) = self.pane_rows(tui)?;
         let area = tui.terminal.size().ok()?;
         let pane_bottom = pane_start.saturating_add(pane_height.saturating_sub(1));
@@ -1290,10 +1288,24 @@ impl App {
             .saturating_add(1)
             .min(area.height.saturating_sub(1));
         let mut col = tui.terminal.viewport_area.x;
+        let pane_area = ratatui::layout::Rect::new(
+            tui.terminal.viewport_area.x,
+            pane_start,
+            tui.terminal.viewport_area.width,
+            pane_height,
+        );
         if row == pane_bottom {
             // When we must reuse the footer row, offset the cursor past the hint so it stays readable.
-            let max_col = area.width.saturating_sub(1);
-            col = col.saturating_add(hint_width.saturating_add(1).min(max_col));
+            let max_col = tui
+                .terminal
+                .viewport_area
+                .x
+                .saturating_add(tui.terminal.viewport_area.width.saturating_sub(1));
+            if let Some(footer_width) = self.chat_widget.footer_first_line_width(pane_area) {
+                let available = max_col.saturating_sub(col);
+                let offset = footer_width.min(available);
+                col = col.saturating_add(offset);
+            }
         }
         if let Err(err) = crossterm::execute!(tui.terminal.backend_mut(), MoveTo(col, row)) {
             tracing::warn!("failed to reposition cursor before launching editor: {err}");

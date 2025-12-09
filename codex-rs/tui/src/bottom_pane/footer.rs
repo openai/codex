@@ -6,13 +6,9 @@ use crate::render::line_utils::prefix_lines;
 use crate::status::format_tokens_compact;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Widget;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FooterProps {
@@ -66,13 +62,12 @@ pub(crate) fn footer_height(props: FooterProps) -> u16 {
     footer_lines(props).len() as u16
 }
 
-pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
-    Paragraph::new(prefix_lines(
+pub(crate) fn prefixed_footer_lines(props: FooterProps) -> Vec<Line<'static>> {
+    prefix_lines(
         footer_lines(props),
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
-    ))
-    .render(area, buf);
+    )
 }
 
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
@@ -429,6 +424,9 @@ mod tests {
     use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::Paragraph;
+    use ratatui::widgets::Widget;
 
     fn snapshot_footer(name: &str, props: FooterProps) {
         let height = footer_height(props).max(1);
@@ -436,7 +434,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = Rect::new(0, 0, f.area().width, height);
-                render_footer(area, f.buffer_mut(), props);
+                Paragraph::new(prefixed_footer_lines(props)).render(area, f.buffer_mut());
             })
             .unwrap();
         assert_snapshot!(name, terminal.backend());

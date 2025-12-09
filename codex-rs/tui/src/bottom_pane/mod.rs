@@ -278,6 +278,10 @@ impl BottomPane {
         self.composer.current_text_with_pending()
     }
 
+    pub(crate) fn footer_first_line_width(&self, area: Rect) -> Option<u16> {
+        self.composer.footer_first_line_width(area)
+    }
+
     pub(crate) fn apply_external_edit(&mut self, text: String) {
         self.composer.apply_external_edit(text);
         self.request_redraw();
