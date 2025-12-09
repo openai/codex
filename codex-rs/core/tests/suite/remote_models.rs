@@ -42,8 +42,6 @@ use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
 
 const REMOTE_MODEL_SLUG: &str = "codex-test";
-const PARALLEL_REMOTE_MODEL_SLUG: &str = "test-gpt-5-remote";
-const PARALLEL_INSTRUCTIONS: &str = include_str!("../../templates/parallel/instructions.md");
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
@@ -181,9 +179,12 @@ async fn remote_models_apply_remote_base_instructions_with_parallel_append() -> 
         .start()
         .await;
 
+    let model = "test-gpt-5-remote";
+    let parallel_instructions_path = format!("../../templates/parallel/instructions.md");
+
     let remote_base = "Use the remote base instructions only.";
     let remote_model = ModelInfo {
-        slug: PARALLEL_REMOTE_MODEL_SLUG.to_string(),
+        slug: model.to_string(),
         display_name: "Parallel Remote".to_string(),
         description: Some("A remote model with custom instructions".to_string()),
         default_reasoning_level: ReasoningEffort::Medium,
@@ -232,14 +233,14 @@ async fn remote_models_apply_remote_base_instructions_with_parallel_append() -> 
     } = builder.build(&server).await?;
 
     let models_manager = conversation_manager.get_models_manager();
-    wait_for_model_available(&models_manager, PARALLEL_REMOTE_MODEL_SLUG).await;
+    wait_for_model_available(&models_manager, model).await;
 
     codex
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
-            model: Some(PARALLEL_REMOTE_MODEL_SLUG.to_string()),
+            model: Some(model.to_string()),
             effort: None,
             summary: None,
         })
@@ -254,7 +255,7 @@ async fn remote_models_apply_remote_base_instructions_with_parallel_append() -> 
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
-            model: PARALLEL_REMOTE_MODEL_SLUG.to_string(),
+            model: model.to_string(),
             effort: None,
             summary: ReasoningSummary::Auto,
         })
@@ -266,7 +267,7 @@ async fn remote_models_apply_remote_base_instructions_with_parallel_append() -> 
     let instructions = body["instructions"].as_str().unwrap();
     assert_eq!(
         instructions,
-        format!("{remote_base}{PARALLEL_INSTRUCTIONS}")
+        format!("{remote_base}{parallel_instructions_path}")
     );
 
     Ok(())
