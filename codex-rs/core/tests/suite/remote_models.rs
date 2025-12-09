@@ -180,7 +180,7 @@ async fn remote_models_apply_remote_base_instructions_with_parallel_append() -> 
         .await;
 
     let model = "test-gpt-5-remote";
-    let parallel_instructions_path = include_str!("../../templates/parallel/instructions.md");
+    let parallel_instructions = include_str!("../../templates/parallel/instructions.md");
 
     let remote_base = "Use the remote base instructions only.";
     let remote_model = ModelInfo {
