@@ -127,7 +127,37 @@ fn can_skip_flag(shell: &str, flag: &str) -> bool {
     })
 }
 
+fn unwrap_shell_snapshot(argv: &[String]) -> &[String] {
+    // Shell snapshot wrapping is implemented in `core::shell::Shell::wrap_command_with_snapshot`.
+    // The resulting argv has the general form:
+    //
+    //   <shell> <flags...> <snapshot_loader> <snapshot_path> <shell> <flags...> <script...>
+    //
+    // where `<snapshot_path>` lives under a `shell_snapshots` directory and the inner `<shell>`
+    // is the same binary as the outer one. For apply_patch detection we want to see the original
+    // inner command, so we strip the wrapper prefix when we detect this pattern.
+    let Some(shell) = argv.first() else {
+        return argv;
+    };
+    if classify_shell_name(shell).is_none() {
+        return argv;
+    }
+
+    let Some(snapshot_idx) = argv.iter().position(|arg| arg.contains("shell_snapshots")) else {
+        return argv;
+    };
+
+    if let Some(inner_shell) = argv.get(snapshot_idx + 1) {
+        if inner_shell == shell {
+            return &argv[snapshot_idx + 1..];
+        }
+    }
+
+    argv
+}
+
 fn parse_shell_script(argv: &[String]) -> Option<(ApplyPatchShell, &str)> {
+    let argv = unwrap_shell_snapshot(argv);
     match argv {
         [shell, flag, script] => classify_shell(shell, flag).map(|shell_type| {
             let script = script.as_str();
@@ -1101,6 +1131,21 @@ mod tests {
     fn test_heredoc_non_login_shell() {
         let script = heredoc_script("");
         let args = strs_to_strings(&["bash", "-c", &script]);
+        assert_match_args(args, None);
+    }
+
+    #[test]
+    fn test_heredoc_wrapped_with_shell_snapshot() {
+        let script = heredoc_script("");
+        let args = strs_to_strings(&[
+            "/bin/bash",
+            "-c",
+            ". \"$0\" && exec \"$@\"",
+            "/tmp/codex/shell_snapshots/123.sh",
+            "/bin/bash",
+            "-c",
+            &script,
+        ]);
         assert_match_args(args, None);
     }
 
