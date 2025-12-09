@@ -112,11 +112,6 @@ pub(crate) struct UnifiedExecResponse {
     pub wall_time: Duration,
     pub output: String,
     /// Raw bytes returned for this unified exec call before any truncation.
-    ///
-    /// This is kept internal to core so that higher layers (e.g. TerminalInteraction
-    /// events) can reference the exact PTY bytes corresponding to this tool call,
-    /// while the `output` field remains the human‑oriented, possibly truncated
-    /// representation used in tool responses.
     pub raw_output: Vec<u8>,
     pub process_id: Option<String>,
     pub exit_code: Option<i32>,

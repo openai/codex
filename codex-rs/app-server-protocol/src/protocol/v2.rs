@@ -1446,7 +1446,6 @@ pub struct TerminalInteractionNotification {
     pub item_id: String,
     pub process_id: String,
     pub stdin: String,
-    pub stdout: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

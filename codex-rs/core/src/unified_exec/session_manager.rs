@@ -382,18 +382,6 @@ impl UnifiedExecSessionManager {
             .map_err(|_| UnifiedExecError::WriteToStdin)
     }
 
-    async fn resolve_output_from_transcript(
-        transcript: &Arc<tokio::sync::Mutex<CommandTranscript>>,
-        fallback: String,
-    ) -> String {
-        let guard = transcript.lock().await;
-        if guard.data.is_empty() {
-            return fallback;
-        }
-
-        String::from_utf8_lossy(&guard.data).to_string()
-    }
-
     #[allow(clippy::too_many_arguments)]
     async fn store_session(
         &self,
