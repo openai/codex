@@ -1463,9 +1463,8 @@ pub struct ExecCommandOutputDeltaEvent {
 pub struct TerminalInteractionEvent {
     /// Identifier for the ExecCommandBegin that produced this chunk.
     pub call_id: String,
-    /// Process id associated with the running command, if any.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub process_id: Option<String>,
+    /// Process id associated with the running command.
+    pub process_id: String,
     /// Stdin sent to the running session.
     pub stdin: String,
     /// Raw bytes from the unified exec stream (may not be valid UTF-8).

@@ -1444,8 +1444,7 @@ pub struct TerminalInteractionNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub process_id: Option<String>,
+    pub process_id: String,
     pub stdin: String,
     pub stdout: String,
 }

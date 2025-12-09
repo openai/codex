@@ -120,7 +120,6 @@ impl ToolHandler for UnifiedExecHandler {
         let manager: &UnifiedExecSessionManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
 
-        let mut stdin_sent: Option<String> = None;
         let response = match tool_name.as_str() {
             "exec_command" => {
                 let args: ExecCommandArgs = serde_json::from_str(&arguments).map_err(|err| {
@@ -212,8 +211,7 @@ impl ToolHandler for UnifiedExecHandler {
                         "failed to parse write_stdin arguments: {err:?}"
                     ))
                 })?;
-                stdin_sent = Some(args.chars.clone());
-                manager
+                let response = manager
                     .write_stdin(WriteStdinRequest {
                         process_id: &args.session_id.to_string(),
                         input: &args.chars,
@@ -223,7 +221,19 @@ impl ToolHandler for UnifiedExecHandler {
                     .await
                     .map_err(|err| {
                         FunctionCallError::RespondToModel(format!("write_stdin failed: {err:?}"))
-                    })?
+                    })?;
+
+                let interaction = TerminalInteractionEvent {
+                    call_id: response.event_call_id.clone(),
+                    process_id: args.session_id.to_string(),
+                    stdin: args.chars.clone(),
+                    stdout: response.raw_output.clone(),
+                };
+                session
+                    .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
+                    .await;
+
+                response
             }
             other => {
                 return Err(FunctionCallError::RespondToModel(format!(
@@ -231,18 +241,6 @@ impl ToolHandler for UnifiedExecHandler {
                 )));
             }
         };
-
-        if let Some(stdin) = stdin_sent {
-            let interaction = TerminalInteractionEvent {
-                call_id: response.event_call_id.clone(),
-                process_id: response.process_id.clone(),
-                stdin,
-                stdout: response.raw_output.clone(),
-            };
-            session
-                .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
-                .await;
-        }
 
         let content = format_response(&response);
 
