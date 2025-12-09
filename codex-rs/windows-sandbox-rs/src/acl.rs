@@ -88,7 +88,7 @@ pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void)> 
     Ok((p_dacl, p_sd))
 }
 
-/// Fast mask-based check: does any ACE for provided SIDs grant desired_mask? Skips inherit-only.
+/// Fast mask-based check: does any ACE for provided SIDs grant at least one desired bit? Skips inherit-only.
 pub unsafe fn dacl_quick_mask_allows(
     p_dacl: *mut ACL,
     psids: &[*mut c_void],
@@ -141,7 +141,7 @@ pub unsafe fn dacl_quick_mask_allows(
         let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
         let mut mask = ace.Mask;
         MapGenericMask(&mut mask, &mapping);
-        if (mask & desired_mask) == desired_mask {
+        if (mask & desired_mask) != 0 {
             return true;
         }
     }
