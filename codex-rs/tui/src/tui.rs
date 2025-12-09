@@ -31,6 +31,7 @@ use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::layout::Offset;
 use ratatui::layout::Rect;
+use ratatui::layout::Size;
 use ratatui::text::Line;
 use tokio::select;
 use tokio::sync::broadcast;
@@ -158,6 +159,7 @@ pub enum TuiEvent {
     Key(KeyEvent),
     Paste(String),
     Draw,
+    Resized(Size),
 }
 
 pub struct Tui {
@@ -248,8 +250,8 @@ impl Tui {
                                 }
                                 yield TuiEvent::Key(key_event);
                             }
-                            Event::Resize(_, _) => {
-                                yield TuiEvent::Draw;
+                            Event::Resize(columns, rows) => {
+                                yield TuiEvent::Resized(Size::new(columns, rows));
                             }
                             Event::Paste(pasted) => {
                                 yield TuiEvent::Paste(pasted);

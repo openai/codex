@@ -480,6 +480,42 @@ impl App {
                         },
                     )?;
                 }
+                TuiEvent::Resized(size) => {
+                    // iTerm2 scrollback clear.
+                    use std::io::Write;
+                    write!(
+                        tui.terminal.backend_mut(),
+                        "\x1b]1337;ClearScrollback=yes\x07"
+                    )?;
+                    tui.terminal.clear()?;
+                    self.has_emitted_history_lines = false;
+                    for cell in &self.transcript_cells {
+                        let mut display = cell.display_lines(size.width);
+                        if !display.is_empty() {
+                            // Only insert a separating blank line for new cells that are not
+                            // part of an ongoing stream. Streaming continuations should not
+                            // accrue extra blank lines between chunks.
+                            if !cell.is_stream_continuation() {
+                                if self.has_emitted_history_lines {
+                                    display.insert(0, Line::from(""));
+                                } else {
+                                    self.has_emitted_history_lines = true;
+                                }
+                            }
+                            if self.overlay.is_some() {
+                                self.deferred_history_lines.extend(display);
+                            } else {
+                                tui.insert_history_lines(display);
+                            }
+                        }
+                    }
+                    tui.draw(self.chat_widget.desired_height(size.width), |frame| {
+                        self.chat_widget.render(frame.area(), frame.buffer);
+                        if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                            frame.set_cursor_position((x, y));
+                        }
+                    })?;
+                }
             }
         }
         Ok(true)
