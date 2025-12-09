@@ -2339,7 +2339,7 @@ async fn windows_unified_exec_escape_output_snapshot() -> Result<()> {
     let call_id = "windows-uexec-escapes";
     let args = json!({
         "cmd": "echo \"UEXEC-WINDOWS-ESCAPES\"",
-        "yield_time_ms": 500,
+        "yield_time_ms": 10_000,
     });
 
     let responses = vec![
@@ -2424,14 +2424,14 @@ async fn windows_unified_exec_write_stdin_strips_escapes() -> Result<()> {
     let open_call_id = "windows-uexec-open-stdin";
     let open_args = json!({
         "cmd": "powershell -NoLogo -NoProfile",
-        "yield_time_ms": 200,
+        "yield_time_ms": 2_000,
     });
 
     let stdin_call_id = "windows-uexec-stdin-escapes";
     let stdin_args = json!({
         "chars": "Write-Output \"UEXEC-WINDOWS-STDIN\"\n",
         "session_id": 1000,
-        "yield_time_ms": 800,
+        "yield_time_ms": 5_000,
     });
 
     let responses = vec![

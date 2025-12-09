@@ -62,48 +62,6 @@ const UNIFIED_EXEC_ENV: [(&str, &str); 8] = [
     ("GIT_PAGER", "cat"),
 ];
 
-fn strip_ansi_escape_sequences(raw: &str) -> String {
-    let mut result = String::with_capacity(raw.len());
-    let mut chars = raw.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' {
-            match chars.peek() {
-                Some('[') => {
-                    chars.next();
-                    for c in chars.by_ref() {
-                        if ('@'..='~').contains(&c) {
-                            break;
-                        }
-                    }
-                }
-                Some(']') => {
-                    chars.next();
-                    let mut prev = '\0';
-                    for c in chars.by_ref() {
-                        if c == '\u{7}' {
-                            break;
-                        }
-                        if prev == '\u{1b}' && c == '\\' {
-                            break;
-                        }
-                        prev = c;
-                    }
-                }
-                Some(_) => {
-                    let _ = chars.next();
-                }
-                None => {}
-            }
-            continue;
-        }
-
-        result.push(ch);
-    }
-
-    result
-}
-
 fn normalize_unified_exec_text(raw: &str) -> String {
     if cfg!(target_os = "windows") {
         let mut parser = vt100::Parser::new(40, 120, 1_024);
