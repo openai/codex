@@ -36,6 +36,7 @@ codex-responses-api-proxy = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
 codex-tui = { workspace = true }
+codex-tui2 = { workspace = true }
 ctor = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }

@@ -1040,6 +1040,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-stdio-to-uds",
  "codex-tui",
+ "codex-tui2",
  "codex-windows-sandbox",
  "ctor 0.5.0",
  "libc",
@@ -1635,6 +1636,18 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
+]
+
+[[package]]
+name = "codex-tui2"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-arg0",
+ "codex-common",
+ "codex-core",
+ "codex-tui",
 ]
 
 [[package]]
