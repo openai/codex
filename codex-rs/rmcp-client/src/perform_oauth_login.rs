@@ -22,6 +22,11 @@ use crate::save_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 
+struct OauthHeaders {
+    http_headers: Option<HashMap<String, String>>,
+    env_http_headers: Option<HashMap<String, String>>,
+}
+
 struct CallbackServerGuard {
     server: Arc<Server>,
 }
@@ -40,12 +45,15 @@ pub async fn perform_oauth_login(
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
 ) -> Result<()> {
+    let headers = OauthHeaders {
+        http_headers,
+        env_http_headers,
+    };
     OauthLoginFlow::new(
         server_name,
         server_url,
         store_mode,
-        http_headers,
-        env_http_headers,
+        headers,
         scopes,
         true,
         None,
@@ -64,12 +72,15 @@ pub async fn perform_oauth_login_return_url(
     scopes: &[String],
     timeout_secs: Option<i64>,
 ) -> Result<OauthLoginHandle> {
+    let headers = OauthHeaders {
+        http_headers,
+        env_http_headers,
+    };
     let flow = OauthLoginFlow::new(
         server_name,
         server_url,
         store_mode,
-        http_headers,
-        env_http_headers,
+        headers,
         scopes,
         false,
         timeout_secs,
@@ -182,8 +193,7 @@ impl OauthLoginFlow {
         server_name: &str,
         server_url: &str,
         store_mode: OAuthCredentialsStoreMode,
-        http_headers: Option<HashMap<String, String>>,
-        env_http_headers: Option<HashMap<String, String>>,
+        headers: OauthHeaders,
         scopes: &[String],
         launch_browser: bool,
         timeout_secs: Option<i64>,
@@ -213,6 +223,10 @@ impl OauthLoginFlow {
         let (tx, rx) = oneshot::channel();
         spawn_callback_server(server, tx);
 
+        let OauthHeaders {
+            http_headers,
+            env_http_headers,
+        } = headers;
         let default_headers = build_default_headers(http_headers, env_http_headers)?;
         let http_client = apply_default_headers(ClientBuilder::new(), &default_headers).build()?;
 

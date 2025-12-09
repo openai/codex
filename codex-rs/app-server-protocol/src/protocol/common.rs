@@ -139,7 +139,7 @@ client_request_definitions! {
         response: v2::ModelListResponse,
     },
 
-    McpServerOauthLogin => "mcpServer/oauthLogin" {
+    McpServerOauthLogin => "mcpServer/oauth/login" {
         params: v2::McpServerOauthLoginParams,
         response: v2::McpServerOauthLoginResponse,
     },
