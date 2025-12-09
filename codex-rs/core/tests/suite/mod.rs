@@ -49,6 +49,7 @@ mod rollout_list_find;
 mod seatbelt;
 mod shell_command;
 mod shell_serialization;
+mod shell_snapshot;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;
 mod text_encoding_fix;

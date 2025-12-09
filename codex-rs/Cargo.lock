@@ -1491,7 +1491,6 @@ name = "codex-protocol"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "base64",
  "codex-git",
  "codex-utils-image",
  "icu_decimal",
