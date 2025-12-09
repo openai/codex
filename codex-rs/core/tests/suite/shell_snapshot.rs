@@ -157,6 +157,10 @@ async fn linux_unified_exec_uses_shell_snapshot() -> Result<()> {
 }
 
 #[cfg_attr(not(target_os = "macos"), ignore)]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "requires unrestricted networking on macOS"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn macos_unified_exec_uses_shell_snapshot() -> Result<()> {
     let command = "echo snapshot-macos";

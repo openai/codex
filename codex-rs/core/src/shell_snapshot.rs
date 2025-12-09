@@ -250,9 +250,9 @@ $envVars | ForEach-Object {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     use std::os::unix::fs::PermissionsExt;
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     use std::process::Command as StdCommand;
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -360,7 +360,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg_attr(unix, ignore)]
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
         use std::process::Stdio;
@@ -413,7 +413,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg_attr(not(target_os = "macos"), ignore)]
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn macos_zsh_snapshot_includes_sections() -> Result<()> {
         let snapshot = get_snapshot(ShellType::Zsh).await?;
@@ -421,7 +421,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg_attr(not(target_os = "linux"), ignore)]
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn linux_bash_snapshot_includes_sections() -> Result<()> {
         let snapshot = get_snapshot(ShellType::Bash).await?;
@@ -429,7 +429,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg_attr(not(target_os = "linux"), ignore)]
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn linux_sh_snapshot_includes_sections() -> Result<()> {
         let snapshot = get_snapshot(ShellType::Sh).await?;
