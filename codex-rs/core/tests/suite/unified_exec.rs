@@ -1060,7 +1060,8 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
         "end event should include the process_id"
     );
     assert!(
-        end_event.aggregated_output.contains("MARKER1") && end_event.aggregated_output.contains("MARKER2"),
+        end_event.aggregated_output.contains("MARKER1")
+            && end_event.aggregated_output.contains("MARKER2"),
         "aggregated output should include both markers in order; got {:?}",
         end_event.aggregated_output
     );
