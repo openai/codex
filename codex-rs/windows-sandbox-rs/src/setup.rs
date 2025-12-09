@@ -35,6 +35,7 @@ pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
 
+#[allow(dead_code)]
 fn resolve_sid(name: &str) -> Result<Vec<u8>> {
     let name_w = crate::winutil::to_wide(name);
     let mut sid_buffer = vec![0u8; 68];
@@ -68,6 +69,7 @@ fn resolve_sid(name: &str) -> Result<Vec<u8>> {
     }
 }
 
+#[allow(dead_code)]
 fn sid_bytes_to_psid(sid: &[u8]) -> Result<*mut c_void> {
     let sid_str = crate::winutil::string_from_sid_bytes(sid).map_err(anyhow::Error::msg)?;
     let sid_w = crate::winutil::to_wide(&sid_str);
@@ -101,8 +103,6 @@ pub fn run_setup_refresh(
     if matches!(policy, SandboxPolicy::DangerFullAccess) {
         return Ok(());
     }
-    let mut roots = AllowDenyPaths::default();
-    roots.allow = compute_allow_paths(policy, policy_cwd, command_cwd, env_map).allow;
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
@@ -137,18 +137,14 @@ pub fn run_setup_refresh(
     );
     let status = cmd.status().map_err(|e| {
         log_note(
-            &format!(
-                "setup refresh: failed to spawn {}: {}",
-                exe.display(),
-                e
-            ),
+            &format!("setup refresh: failed to spawn {}: {e}", exe.display()),
             Some(&sandbox_dir(codex_home)),
         );
         e
     }).context("spawn setup refresh")?;
     if !status.success() {
         log_note(
-            &format!("setup refresh: exited with status {:?}", status),
+            &format!("setup refresh: exited with status {status:?}"),
             Some(&sandbox_dir(codex_home)),
         );
         return Err(anyhow!("setup refresh failed with status {}", status));
