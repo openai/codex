@@ -744,7 +744,7 @@ fn command_execution_output_delta_updates_item_progress() {
         "d2",
         EventMsg::TerminalInteraction(TerminalInteractionEvent {
             call_id: "delta-1".to_string(),
-            process_id: Some("42".to_string()),
+            process_id: "42".to_string(),
             stdin: "partial output\n".to_string(),
             stdout: b"partial output\n".to_vec(),
         }),
