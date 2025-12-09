@@ -296,6 +296,7 @@ async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
         } else {
             config.features.disable(Feature::UnifiedExec);
         }
+        config.features.disable(Feature::UnifiedExecWrapper);
     });
     let test = builder.build(&server).await?;
 

@@ -108,6 +108,7 @@ pub enum ConfigShellToolType {
     Default,
     Local,
     UnifiedExec,
+    UnifiedExecWrapper,
     Disabled,
     ShellCommand,
 }

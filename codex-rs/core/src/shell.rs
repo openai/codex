@@ -58,6 +58,28 @@ impl Shell {
             }
         }
     }
+
+    pub fn login_command(&self) -> Vec<String> {
+        self.command_with_login(true)
+    }
+
+    pub fn non_login_command(&self) -> Vec<String> {
+        self.command_with_login(false)
+    }
+
+    fn command_with_login(&self, login_shell: bool) -> Vec<String> {
+        let shell_path = self.shell_path.to_string_lossy().to_string();
+        match self.shell_type {
+            ShellType::PowerShell | ShellType::Cmd => vec![shell_path],
+            ShellType::Zsh | ShellType::Bash | ShellType::Sh => {
+                if login_shell {
+                    vec![shell_path, "-l".to_string()]
+                } else {
+                    vec![shell_path]
+                }
+            }
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -448,6 +470,17 @@ mod tests {
             test_powershell_shell.derive_exec_args("echo hello", true),
             vec!["pwsh.exe", "-Command", "echo hello"]
         );
+    }
+
+    #[test]
+    fn shell_command_login_variants() {
+        let sh_shell = Shell {
+            shell_type: ShellType::Sh,
+            shell_path: PathBuf::from("/bin/sh"),
+        };
+
+        assert_eq!(sh_shell.login_command(), vec!["/bin/sh", "-l"]);
+        assert_eq!(sh_shell.non_login_command(), vec!["/bin/sh"]);
     }
 
     #[tokio::test]

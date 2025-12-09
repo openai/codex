@@ -42,6 +42,8 @@ impl ToolsConfig {
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
+        } else if features.enabled(Feature::UnifiedExecWrapper) {
+            ConfigShellToolType::UnifiedExecWrapper
         } else if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
         } else {
@@ -246,6 +248,98 @@ fn create_write_stdin_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["session_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_new_session_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "session_name".to_string(),
+        JsonSchema::String {
+            description: Some("Unique name for the session".to_string()),
+        },
+    );
+    properties.insert(
+        "workdir".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional working directory for the session; defaults to the turn cwd.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "yield_time_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "How long to wait (in milliseconds) before returning the initial output."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "max_output_tokens".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Maximum number of tokens to return. Excess output will be truncated.".to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "new_session".to_string(),
+        description: "Open a new interactive exec session in a container. Normally used for launching an interactive shell. Multiple sessions may be running at a time.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["session_name".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_feed_chars_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "session_name".to_string(),
+        JsonSchema::String {
+            description: Some("Session to feed characters to".to_string()),
+        },
+    );
+    properties.insert(
+        "chars".to_string(),
+        JsonSchema::String {
+            description: Some("Characters to feed; may be empty".to_string()),
+        },
+    );
+    properties.insert(
+        "yield_time_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "How long to wait (in milliseconds) for output before flushing STDOUT/STDERR."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "max_output_tokens".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Maximum number of tokens to return. Excess output will be truncated.".to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "feed_chars".to_string(),
+        description:
+            "Feed characters to a session's STDIN, wait briefly, flush STDOUT/STDERR, and return the results."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["session_name".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1013,6 +1107,12 @@ pub(crate) fn build_specs(
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
         }
+        ConfigShellToolType::UnifiedExecWrapper => {
+            builder.push_spec(create_new_session_tool());
+            builder.push_spec(create_feed_chars_tool());
+            builder.register_handler("new_session", unified_exec_handler.clone());
+            builder.register_handler("feed_chars", unified_exec_handler);
+        }
         ConfigShellToolType::Disabled => {
             // Do nothing.
         }
@@ -1163,6 +1263,7 @@ mod tests {
             ConfigShellToolType::Default => Some("shell"),
             ConfigShellToolType::Local => Some("local_shell"),
             ConfigShellToolType::UnifiedExec => None,
+            ConfigShellToolType::UnifiedExecWrapper => Some("unified_exec_wrapper"),
             ConfigShellToolType::Disabled => None,
             ConfigShellToolType::ShellCommand => Some("shell_command"),
         }
