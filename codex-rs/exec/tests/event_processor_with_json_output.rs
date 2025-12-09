@@ -15,7 +15,6 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
-use codex_core::protocol::TerminalInteractionEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
@@ -49,6 +48,8 @@ use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+use codex_protocol::protocol::ExecOutputStream;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::TextContent;
@@ -742,11 +743,10 @@ fn command_execution_output_delta_updates_item_progress() {
 
     let delta = event(
         "d2",
-        EventMsg::TerminalInteraction(TerminalInteractionEvent {
+        EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
             call_id: "delta-1".to_string(),
-            process_id: "42".to_string(),
-            stdin: "partial output\n".to_string(),
-            stdout: b"partial output\n".to_vec(),
+            stream: ExecOutputStream::Stdout,
+            chunk: b"partial output\n".to_vec(),
         }),
     );
     let out_delta = ep.collect_thread_events(&delta);
