@@ -57,8 +57,17 @@
 //!
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use anyhow::Context as _;
 use clap::Parser;
+use codex_core::config::find_codex_home;
+use codex_core::is_dangerous_command::command_might_be_dangerous;
+use codex_execpolicy::Decision;
+use codex_execpolicy::Policy;
+use codex_execpolicy::RuleMatch;
+use rmcp::ErrorData as McpError;
+use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{self};
 
@@ -72,6 +81,8 @@ mod mcp;
 mod mcp_escalation_policy;
 mod socket;
 mod stopwatch;
+
+pub use mcp::ExecResult;
 
 /// Default value of --execve option relative to the current executable.
 /// Note this must match the name of the binary as specified in Cargo.toml.
@@ -87,6 +98,11 @@ struct McpServerCli {
     /// Path to Bash that has been patched to support execve() wrapping.
     #[arg(long = "bash")]
     bash_path: Option<PathBuf>,
+
+    /// Preserve program paths when applying execpolicy (e.g., keep /usr/bin/echo instead of echo).
+    /// Note: this does change the actual program being run.
+    #[arg(long)]
+    preserve_program_paths: bool,
 }
 
 #[tokio::main]
@@ -113,13 +129,19 @@ pub async fn main_mcp_server() -> anyhow::Result<()> {
         Some(path) => path,
         None => mcp::get_bash_path()?,
     };
+    let policy = Arc::new(RwLock::new(load_exec_policy().await?));
 
     tracing::info!("Starting MCP server");
-    let service = mcp::serve(bash_path, execve_wrapper, dummy_exec_policy)
-        .await
-        .inspect_err(|e| {
-            tracing::error!("serving error: {:?}", e);
-        })?;
+    let service = mcp::serve(
+        bash_path,
+        execve_wrapper,
+        policy,
+        cli.preserve_program_paths,
+    )
+    .await
+    .inspect_err(|e| {
+        tracing::error!("serving error: {:?}", e);
+    })?;
 
     service.waiting().await?;
     Ok(())
@@ -146,26 +168,116 @@ pub async fn main_execve_wrapper() -> anyhow::Result<()> {
     std::process::exit(exit_code);
 }
 
-// TODO: replace with execpolicy
+/// Decide how to handle an exec() call for a specific command.
+///
+/// `file` is the absolute, canonical path to the executable to run, i.e. the first arg to exec.
+/// `argv` is the argv, including the program name (`argv[0]`).
+pub(crate) fn evaluate_exec_policy(
+    policy: &Policy,
+    file: &Path,
+    argv: &[String],
+    preserve_program_paths: bool,
+) -> Result<ExecPolicyOutcome, McpError> {
+    let program_name = format_program_name(file, preserve_program_paths).ok_or_else(|| {
+        McpError::internal_error(
+            format!("failed to format program name for `{}`", file.display()),
+            None,
+        )
+    })?;
+    let command: Vec<String> = std::iter::once(program_name)
+        // Use the normalized program name instead of argv[0].
+        .chain(argv.iter().skip(1).cloned())
+        .collect();
+    let evaluation = policy.check(&command, &|cmd| {
+        if command_might_be_dangerous(cmd) {
+            Decision::Prompt
+        } else {
+            Decision::Allow
+        }
+    });
 
-fn dummy_exec_policy(file: &Path, argv: &[String], _workdir: &Path) -> ExecPolicyOutcome {
-    if file.ends_with("rm") {
-        ExecPolicyOutcome::Forbidden
-    } else if file.ends_with("git") {
-        ExecPolicyOutcome::Prompt {
-            run_with_escalated_permissions: false,
-        }
-    } else if file == Path::new("/opt/homebrew/bin/gh")
-        && let [_, arg1, arg2, ..] = argv
-        && arg1 == "issue"
-        && arg2 == "list"
-    {
-        ExecPolicyOutcome::Allow {
-            run_with_escalated_permissions: true,
-        }
+    // decisions driven by policy should run outside sandbox
+    let decision_driven_by_policy = evaluation.matched_rules.iter().any(|rule_match| {
+        !matches!(rule_match, RuleMatch::HeuristicsRuleMatch { .. })
+            && rule_match.decision() == evaluation.decision
+    });
+
+    Ok(match evaluation.decision {
+        Decision::Forbidden => ExecPolicyOutcome::Forbidden,
+        Decision::Prompt => ExecPolicyOutcome::Prompt {
+            run_with_escalated_permissions: decision_driven_by_policy,
+        },
+        Decision::Allow => ExecPolicyOutcome::Allow {
+            run_with_escalated_permissions: decision_driven_by_policy,
+        },
+    })
+}
+
+fn format_program_name(path: &Path, preserve_program_paths: bool) -> Option<String> {
+    if preserve_program_paths {
+        path.to_str().map(str::to_string)
     } else {
-        ExecPolicyOutcome::Allow {
-            run_with_escalated_permissions: false,
-        }
+        path.file_name()?.to_str().map(str::to_string)
+    }
+}
+
+async fn load_exec_policy() -> anyhow::Result<Policy> {
+    let codex_home = find_codex_home().context("failed to resolve codex_home for execpolicy")?;
+    codex_core::load_exec_policy(&codex_home)
+        .await
+        .map_err(anyhow::Error::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_execpolicy::Decision;
+    use codex_execpolicy::Policy;
+    use pretty_assertions::assert_eq;
+    use std::path::Path;
+
+    #[test]
+    fn evaluate_exec_policy_uses_heuristics_for_dangerous_commands() {
+        let policy = Policy::empty();
+        let file = Path::new("/bin/rm");
+        let argv = vec!["rm".to_string(), "-rf".to_string(), "/".to_string()];
+
+        let outcome = evaluate_exec_policy(&policy, file, &argv, false).expect("policy evaluation");
+
+        assert_eq!(
+            outcome,
+            ExecPolicyOutcome::Prompt {
+                run_with_escalated_permissions: false
+            }
+        );
+    }
+
+    #[test]
+    fn evaluate_exec_policy_respects_preserve_program_paths() {
+        let mut policy = Policy::empty();
+        policy
+            .add_prefix_rule(
+                &[
+                    "/usr/local/bin/custom-cmd".to_string(),
+                    "--flag".to_string(),
+                ],
+                Decision::Allow,
+            )
+            .expect("policy rule should be added");
+        let file = Path::new("/usr/local/bin/custom-cmd");
+        let argv = vec![
+            "/usr/local/bin/custom-cmd".to_string(),
+            "--flag".to_string(),
+            "value".to_string(),
+        ];
+
+        let outcome = evaluate_exec_policy(&policy, file, &argv, true).expect("policy evaluation");
+
+        assert_eq!(
+            outcome,
+            ExecPolicyOutcome::Allow {
+                run_with_escalated_permissions: true
+            }
+        );
     }
 }

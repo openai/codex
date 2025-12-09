@@ -8,26 +8,13 @@ use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::registry::ToolRegistryBuilder;
+use codex_protocol::openai_models::ConfigShellToolType;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ConfigShellToolType {
-    Default,
-    Local,
-    UnifiedExec,
-    /// Do not include a shell tool by default. Useful when using Codex
-    /// with tools provided exclusively provided by MCP servers. Often used
-    /// with `--config base_instructions=CUSTOM_INSTRUCTIONS`
-    /// to customize agent behavior.
-    Disabled,
-    /// Takes a command as a single string to be run in the user's default shell.
-    ShellCommand,
-}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
@@ -58,7 +45,7 @@ impl ToolsConfig {
         } else if features.enabled(Feature::UnifiedExec) {
             ConfigShellToolType::UnifiedExec
         } else {
-            model_family.shell_type.clone()
+            model_family.shell_type
         };
 
         let apply_patch_tool_type = match model_family.apply_patch_tool_type {
@@ -342,6 +329,15 @@ fn create_shell_command_tool() -> ToolSpec {
         "workdir".to_string(),
         JsonSchema::String {
             description: Some("The working directory to execute the command in".to_string()),
+        },
+    );
+    properties.insert(
+        "login".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Whether to run the shell with login shell semantics. Defaults to true."
+                    .to_string(),
+            ),
         },
     );
     properties.insert(
@@ -808,10 +804,16 @@ pub(crate) fn create_tools_json_for_chat_completions_api(
             }
 
             if let Some(map) = tool.as_object_mut() {
+                let name = map
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
                 // Remove "type" field as it is not needed in chat completions.
                 map.remove("type");
                 Some(json!({
                     "type": "function",
+                    "name": name,
                     "function": map,
                 }))
             } else {
@@ -2085,6 +2087,60 @@ Examples of valid command strings:
                 description: "Do something cool".to_string(),
                 strict: false,
             })
+        );
+    }
+
+    #[test]
+    fn chat_tools_include_top_level_name() {
+        let mut properties = BTreeMap::new();
+        properties.insert("foo".to_string(), JsonSchema::String { description: None });
+        let tools = vec![ToolSpec::Function(ResponsesApiTool {
+            name: "demo".to_string(),
+            description: "A demo tool".to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties,
+                required: None,
+                additional_properties: None,
+            },
+        })];
+
+        let responses_json = create_tools_json_for_responses_api(&tools).unwrap();
+        assert_eq!(
+            responses_json,
+            vec![json!({
+                "type": "function",
+                "name": "demo",
+                "description": "A demo tool",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "foo": { "type": "string" }
+                    },
+                },
+            })]
+        );
+
+        let tools_json = create_tools_json_for_chat_completions_api(&tools).unwrap();
+
+        assert_eq!(
+            tools_json,
+            vec![json!({
+                "type": "function",
+                "name": "demo",
+                "function": {
+                    "name": "demo",
+                    "description": "A demo tool",
+                    "strict": false,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "foo": { "type": "string" }
+                        },
+                    },
+                }
+            })]
         );
     }
 }

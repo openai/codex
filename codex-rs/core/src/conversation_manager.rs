@@ -47,10 +47,11 @@ impl ConversationManager {
             conversations: Arc::new(RwLock::new(HashMap::new())),
             auth_manager: auth_manager.clone(),
             session_source,
-            models_manager: Arc::new(ModelsManager::new(auth_manager.get_auth_mode())),
+            models_manager: Arc::new(ModelsManager::new(auth_manager)),
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     /// Construct with a dummy AuthManager containing the provided CodexAuth.
     /// Used for integration tests: should not be used by ordinary business logic.
     pub fn with_auth(auth: CodexAuth) -> Self {
@@ -213,7 +214,7 @@ impl ConversationManager {
     }
 
     pub async fn list_models(&self) -> Vec<ModelPreset> {
-        self.models_manager.available_models.read().await.clone()
+        self.models_manager.list_models().await
     }
 
     pub fn get_models_manager(&self) -> Arc<ModelsManager> {

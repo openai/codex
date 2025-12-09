@@ -154,7 +154,8 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             || matches!(
                 req.exec_approval_requirement,
                 ExecApprovalRequirement::Skip {
-                    bypass_sandbox: true
+                    bypass_sandbox: true,
+                    ..
                 }
             )
         {

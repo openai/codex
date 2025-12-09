@@ -22,6 +22,7 @@ pub use crate::common::create_text_param_for_request;
 pub use crate::endpoint::chat::AggregateStreamExt;
 pub use crate::endpoint::chat::ChatClient;
 pub use crate::endpoint::compact::CompactClient;
+pub use crate::endpoint::models::ModelsClient;
 pub use crate::endpoint::responses::ResponsesClient;
 pub use crate::endpoint::responses::ResponsesOptions;
 pub use crate::error::ApiError;

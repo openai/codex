@@ -8,17 +8,24 @@ pub mod util;
 pub use cli::Cli;
 
 use anyhow::anyhow;
+use chrono::Utc;
+use codex_cloud_tasks_client::TaskStatus;
 use codex_login::AuthManager;
+use owo_colors::OwoColorize;
+use owo_colors::Stream;
+use std::cmp::Ordering;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
+use supports_color::Stream as SupportStream;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use util::append_error_log;
+use util::format_relative_time;
 use util::set_user_agent_suffix;
 
 struct ApplyJob {
@@ -101,6 +108,7 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
     let crate::cli::ExecCommand {
         query,
         environment,
+        branch,
         attempts,
     } = args;
     let ctx = init_backend("codex_cloud_tasks_exec").await?;
@@ -110,7 +118,7 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
         &*ctx.backend,
         &env_id,
         &prompt,
-        "main",
+        &branch,
         false,
         attempts,
     )
@@ -190,6 +198,273 @@ fn resolve_query_input(query_arg: Option<String>) -> anyhow::Result<String> {
             Ok(buffer)
         }
     }
+}
+
+fn parse_task_id(raw: &str) -> anyhow::Result<codex_cloud_tasks_client::TaskId> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("task id must not be empty");
+    }
+    let without_fragment = trimmed.split('#').next().unwrap_or(trimmed);
+    let without_query = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment);
+    let id = without_query
+        .rsplit('/')
+        .next()
+        .unwrap_or(without_query)
+        .trim();
+    if id.is_empty() {
+        anyhow::bail!("task id must not be empty");
+    }
+    Ok(codex_cloud_tasks_client::TaskId(id.to_string()))
+}
+
+#[derive(Clone, Debug)]
+struct AttemptDiffData {
+    placement: Option<i64>,
+    created_at: Option<chrono::DateTime<Utc>>,
+    diff: String,
+}
+
+fn cmp_attempt(lhs: &AttemptDiffData, rhs: &AttemptDiffData) -> Ordering {
+    match (lhs.placement, rhs.placement) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => match (lhs.created_at, rhs.created_at) {
+            (Some(a), Some(b)) => a.cmp(&b),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        },
+    }
+}
+
+async fn collect_attempt_diffs(
+    backend: &dyn codex_cloud_tasks_client::CloudBackend,
+    task_id: &codex_cloud_tasks_client::TaskId,
+) -> anyhow::Result<Vec<AttemptDiffData>> {
+    let text =
+        codex_cloud_tasks_client::CloudBackend::get_task_text(backend, task_id.clone()).await?;
+    let mut attempts = Vec::new();
+    if let Some(diff) =
+        codex_cloud_tasks_client::CloudBackend::get_task_diff(backend, task_id.clone()).await?
+    {
+        attempts.push(AttemptDiffData {
+            placement: text.attempt_placement,
+            created_at: None,
+            diff,
+        });
+    }
+    if let Some(turn_id) = text.turn_id {
+        let siblings = codex_cloud_tasks_client::CloudBackend::list_sibling_attempts(
+            backend,
+            task_id.clone(),
+            turn_id,
+        )
+        .await?;
+        for sibling in siblings {
+            if let Some(diff) = sibling.diff {
+                attempts.push(AttemptDiffData {
+                    placement: sibling.attempt_placement,
+                    created_at: sibling.created_at,
+                    diff,
+                });
+            }
+        }
+    }
+    attempts.sort_by(cmp_attempt);
+    if attempts.is_empty() {
+        anyhow::bail!(
+            "No diff available for task {}; it may still be running.",
+            task_id.0
+        );
+    }
+    Ok(attempts)
+}
+
+fn select_attempt(
+    attempts: &[AttemptDiffData],
+    attempt: Option<usize>,
+) -> anyhow::Result<&AttemptDiffData> {
+    if attempts.is_empty() {
+        anyhow::bail!("No attempts available");
+    }
+    let desired = attempt.unwrap_or(1);
+    let idx = desired
+        .checked_sub(1)
+        .ok_or_else(|| anyhow!("attempt must be at least 1"))?;
+    if idx >= attempts.len() {
+        anyhow::bail!(
+            "Attempt {desired} not available; only {} attempt(s) found",
+            attempts.len()
+        );
+    }
+    Ok(&attempts[idx])
+}
+
+fn task_status_label(status: &TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Pending => "PENDING",
+        TaskStatus::Ready => "READY",
+        TaskStatus::Applied => "APPLIED",
+        TaskStatus::Error => "ERROR",
+    }
+}
+
+fn summary_line(summary: &codex_cloud_tasks_client::DiffSummary, colorize: bool) -> String {
+    if summary.files_changed == 0 && summary.lines_added == 0 && summary.lines_removed == 0 {
+        let base = "no diff";
+        return if colorize {
+            base.if_supports_color(Stream::Stdout, |t| t.dimmed())
+                .to_string()
+        } else {
+            base.to_string()
+        };
+    }
+    let adds = summary.lines_added;
+    let dels = summary.lines_removed;
+    let files = summary.files_changed;
+    if colorize {
+        let adds_raw = format!("+{adds}");
+        let adds_str = adds_raw
+            .as_str()
+            .if_supports_color(Stream::Stdout, |t| t.green())
+            .to_string();
+        let dels_raw = format!("-{dels}");
+        let dels_str = dels_raw
+            .as_str()
+            .if_supports_color(Stream::Stdout, |t| t.red())
+            .to_string();
+        let bullet = "•"
+            .if_supports_color(Stream::Stdout, |t| t.dimmed())
+            .to_string();
+        let file_label = "file"
+            .if_supports_color(Stream::Stdout, |t| t.dimmed())
+            .to_string();
+        let plural = if files == 1 { "" } else { "s" };
+        format!("{adds_str}/{dels_str}  {bullet}  {files} {file_label}{plural}")
+    } else {
+        format!(
+            "+{adds}/-{dels} • {files} file{}",
+            if files == 1 { "" } else { "s" }
+        )
+    }
+}
+
+fn format_task_status_lines(
+    task: &codex_cloud_tasks_client::TaskSummary,
+    now: chrono::DateTime<Utc>,
+    colorize: bool,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let status = task_status_label(&task.status);
+    let status = if colorize {
+        match task.status {
+            TaskStatus::Ready => status
+                .if_supports_color(Stream::Stdout, |t| t.green())
+                .to_string(),
+            TaskStatus::Pending => status
+                .if_supports_color(Stream::Stdout, |t| t.magenta())
+                .to_string(),
+            TaskStatus::Applied => status
+                .if_supports_color(Stream::Stdout, |t| t.blue())
+                .to_string(),
+            TaskStatus::Error => status
+                .if_supports_color(Stream::Stdout, |t| t.red())
+                .to_string(),
+        }
+    } else {
+        status.to_string()
+    };
+    lines.push(format!("[{status}] {}", task.title));
+    let mut meta_parts = Vec::new();
+    if let Some(label) = task.environment_label.as_deref().filter(|s| !s.is_empty()) {
+        if colorize {
+            meta_parts.push(
+                label
+                    .if_supports_color(Stream::Stdout, |t| t.dimmed())
+                    .to_string(),
+            );
+        } else {
+            meta_parts.push(label.to_string());
+        }
+    } else if let Some(id) = task.environment_id.as_deref() {
+        if colorize {
+            meta_parts.push(
+                id.if_supports_color(Stream::Stdout, |t| t.dimmed())
+                    .to_string(),
+            );
+        } else {
+            meta_parts.push(id.to_string());
+        }
+    }
+    let when = format_relative_time(now, task.updated_at);
+    meta_parts.push(if colorize {
+        when.as_str()
+            .if_supports_color(Stream::Stdout, |t| t.dimmed())
+            .to_string()
+    } else {
+        when
+    });
+    let sep = if colorize {
+        "  •  "
+            .if_supports_color(Stream::Stdout, |t| t.dimmed())
+            .to_string()
+    } else {
+        "  •  ".to_string()
+    };
+    lines.push(meta_parts.join(&sep));
+    lines.push(summary_line(&task.summary, colorize));
+    lines
+}
+
+async fn run_status_command(args: crate::cli::StatusCommand) -> anyhow::Result<()> {
+    let ctx = init_backend("codex_cloud_tasks_status").await?;
+    let task_id = parse_task_id(&args.task_id)?;
+    let summary =
+        codex_cloud_tasks_client::CloudBackend::get_task_summary(&*ctx.backend, task_id).await?;
+    let now = Utc::now();
+    let colorize = supports_color::on(SupportStream::Stdout).is_some();
+    for line in format_task_status_lines(&summary, now, colorize) {
+        println!("{line}");
+    }
+    if !matches!(summary.status, TaskStatus::Ready) {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+async fn run_diff_command(args: crate::cli::DiffCommand) -> anyhow::Result<()> {
+    let ctx = init_backend("codex_cloud_tasks_diff").await?;
+    let task_id = parse_task_id(&args.task_id)?;
+    let attempts = collect_attempt_diffs(&*ctx.backend, &task_id).await?;
+    let selected = select_attempt(&attempts, args.attempt)?;
+    print!("{}", selected.diff);
+    Ok(())
+}
+
+async fn run_apply_command(args: crate::cli::ApplyCommand) -> anyhow::Result<()> {
+    let ctx = init_backend("codex_cloud_tasks_apply").await?;
+    let task_id = parse_task_id(&args.task_id)?;
+    let attempts = collect_attempt_diffs(&*ctx.backend, &task_id).await?;
+    let selected = select_attempt(&attempts, args.attempt)?;
+    let outcome = codex_cloud_tasks_client::CloudBackend::apply_task(
+        &*ctx.backend,
+        task_id,
+        Some(selected.diff.clone()),
+    )
+    .await?;
+    println!("{}", outcome.message);
+    if !matches!(
+        outcome.status,
+        codex_cloud_tasks_client::ApplyStatus::Success
+    ) {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 fn level_from_status(status: codex_cloud_tasks_client::ApplyStatus) -> app::ApplyResultLevel {
@@ -321,6 +596,9 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     if let Some(command) = cli.command {
         return match command {
             crate::cli::Command::Exec(args) => run_exec_command(args).await,
+            crate::cli::Command::Status(args) => run_status_command(args).await,
+            crate::cli::Command::Apply(args) => run_apply_command(args).await,
+            crate::cli::Command::Diff(args) => run_diff_command(args).await,
         };
     }
     let Cli { .. } = cli;
@@ -1712,13 +1990,110 @@ fn pretty_lines_from_error(raw: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use codex_cloud_tasks_client::DiffSummary;
+    use codex_cloud_tasks_client::MockClient;
+    use codex_cloud_tasks_client::TaskId;
+    use codex_cloud_tasks_client::TaskStatus;
+    use codex_cloud_tasks_client::TaskSummary;
     use codex_tui::ComposerAction;
     use codex_tui::ComposerInput;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
+    use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+
+    #[test]
+    fn format_task_status_lines_with_diff_and_label() {
+        let now = Utc::now();
+        let task = TaskSummary {
+            id: TaskId("task_1".to_string()),
+            title: "Example task".to_string(),
+            status: TaskStatus::Ready,
+            updated_at: now,
+            environment_id: Some("env-1".to_string()),
+            environment_label: Some("Env".to_string()),
+            summary: DiffSummary {
+                files_changed: 3,
+                lines_added: 5,
+                lines_removed: 2,
+            },
+            is_review: false,
+            attempt_total: None,
+        };
+        let lines = format_task_status_lines(&task, now, false);
+        assert_eq!(
+            lines,
+            vec![
+                "[READY] Example task".to_string(),
+                "Env  •  0s ago".to_string(),
+                "+5/-2 • 3 files".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn format_task_status_lines_without_diff_falls_back() {
+        let now = Utc::now();
+        let task = TaskSummary {
+            id: TaskId("task_2".to_string()),
+            title: "No diff task".to_string(),
+            status: TaskStatus::Pending,
+            updated_at: now,
+            environment_id: Some("env-2".to_string()),
+            environment_label: None,
+            summary: DiffSummary::default(),
+            is_review: false,
+            attempt_total: Some(1),
+        };
+        let lines = format_task_status_lines(&task, now, false);
+        assert_eq!(
+            lines,
+            vec![
+                "[PENDING] No diff task".to_string(),
+                "env-2  •  0s ago".to_string(),
+                "no diff".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_attempt_diffs_includes_sibling_attempts() {
+        let backend = MockClient;
+        let task_id = parse_task_id("https://chatgpt.com/codex/tasks/T-1000").expect("id");
+        let attempts = collect_attempt_diffs(&backend, &task_id)
+            .await
+            .expect("attempts");
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(attempts[0].placement, Some(0));
+        assert_eq!(attempts[1].placement, Some(1));
+        assert!(!attempts[0].diff.is_empty());
+        assert!(!attempts[1].diff.is_empty());
+    }
+
+    #[test]
+    fn select_attempt_validates_bounds() {
+        let attempts = vec![AttemptDiffData {
+            placement: Some(0),
+            created_at: None,
+            diff: "diff --git a/file b/file\n".to_string(),
+        }];
+        let first = select_attempt(&attempts, Some(1)).expect("attempt 1");
+        assert_eq!(first.diff, "diff --git a/file b/file\n");
+        assert!(select_attempt(&attempts, Some(2)).is_err());
+    }
+
+    #[test]
+    fn parse_task_id_from_url_and_raw() {
+        let raw = parse_task_id("task_i_abc123").expect("raw id");
+        assert_eq!(raw.0, "task_i_abc123");
+        let url =
+            parse_task_id("https://chatgpt.com/codex/tasks/task_i_123456?foo=bar").expect("url id");
+        assert_eq!(url.0, "task_i_123456");
+        assert!(parse_task_id("   ").is_err());
+    }
 
     #[test]
     #[ignore = "very slow"]

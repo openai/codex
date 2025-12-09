@@ -10,6 +10,6 @@ expression: terminal.backend()
   You can continue using legacy models by specifying them
   directly with the -m option or in your config.toml.
 
-  Learn more at www.openai.com/index/gpt-5-1.
+  Learn more at https://openai.com/index/gpt-5-1/.
 
   Press enter to continue

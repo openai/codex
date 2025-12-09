@@ -18,6 +18,7 @@ use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
+use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -179,7 +180,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             cwd,
             reason,
             risk,
-            proposed_execpolicy_amendment: _,
+            proposed_execpolicy_amendment,
             parsed_cmd,
         }) => match api_version {
             ApiVersion::V1 => {
@@ -207,6 +208,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .map(V2ParsedCommand::from)
                     .collect::<Vec<_>>();
                 let command_string = shlex_join(&command);
+                let proposed_execpolicy_amendment_v2 =
+                    proposed_execpolicy_amendment.map(V2ExecPolicyAmendment::from);
 
                 let params = CommandExecutionRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
@@ -216,6 +219,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     item_id: item_id.clone(),
                     reason,
                     risk: risk.map(V2SandboxCommandAssessment::from),
+                    proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                 };
                 let rx = outgoing
                     .send_request(ServerRequestPayload::CommandExecutionRequestApproval(
@@ -333,6 +337,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
                     error: turn_error,
+                    will_retry: false,
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
                 }))
@@ -348,6 +353,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
                     error: turn_error,
+                    will_retry: true,
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
                 }))
@@ -1045,7 +1051,11 @@ async fn on_file_change_request_approval_response(
                 });
 
             let (decision, completion_status) = match response.decision {
-                ApprovalDecision::Accept => (ReviewDecision::Approved, None),
+                ApprovalDecision::Accept
+                | ApprovalDecision::AcceptForSession
+                | ApprovalDecision::AcceptWithExecpolicyAmendment { .. } => {
+                    (ReviewDecision::Approved, None)
+                }
                 ApprovalDecision::Decline => {
                     (ReviewDecision::Denied, Some(PatchApplyStatus::Declined))
                 }
@@ -1107,25 +1117,27 @@ async fn on_command_execution_request_approval_response(
                     error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
                     CommandExecutionRequestApprovalResponse {
                         decision: ApprovalDecision::Decline,
-                        accept_settings: None,
                     }
                 });
 
-            let CommandExecutionRequestApprovalResponse {
-                decision,
-                accept_settings,
-            } = response;
+            let decision = response.decision;
 
-            let (decision, completion_status) = match (decision, accept_settings) {
-                (ApprovalDecision::Accept, Some(settings)) if settings.for_session => {
-                    (ReviewDecision::ApprovedForSession, None)
-                }
-                (ApprovalDecision::Accept, _) => (ReviewDecision::Approved, None),
-                (ApprovalDecision::Decline, _) => (
+            let (decision, completion_status) = match decision {
+                ApprovalDecision::Accept => (ReviewDecision::Approved, None),
+                ApprovalDecision::AcceptForSession => (ReviewDecision::ApprovedForSession, None),
+                ApprovalDecision::AcceptWithExecpolicyAmendment {
+                    execpolicy_amendment,
+                } => (
+                    ReviewDecision::ApprovedExecpolicyAmendment {
+                        proposed_execpolicy_amendment: execpolicy_amendment.into_core(),
+                    },
+                    None,
+                ),
+                ApprovalDecision::Decline => (
                     ReviewDecision::Denied,
                     Some(CommandExecutionStatus::Declined),
                 ),
-                (ApprovalDecision::Cancel, _) => (
+                ApprovalDecision::Cancel => (
                     ReviewDecision::Abort,
                     Some(CommandExecutionStatus::Declined),
                 ),
@@ -1178,6 +1190,7 @@ async fn construct_mcp_tool_call_notification(
         arguments: begin_event.invocation.arguments.unwrap_or(JsonValue::Null),
         result: None,
         error: None,
+        duration_ms: None,
     };
     ItemStartedNotification {
         thread_id,
@@ -1197,6 +1210,7 @@ async fn construct_mcp_tool_call_end_notification(
     } else {
         McpToolCallStatus::Failed
     };
+    let duration_ms = i64::try_from(end_event.duration.as_millis()).ok();
 
     let (result, error) = match &end_event.result {
         Ok(value) => (
@@ -1222,6 +1236,7 @@ async fn construct_mcp_tool_call_end_notification(
         arguments: end_event.invocation.arguments.unwrap_or(JsonValue::Null),
         result,
         error,
+        duration_ms,
     };
     ItemCompletedNotification {
         thread_id,
@@ -1494,6 +1509,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("5".to_string()),
             }),
+            plan_type: None,
         };
 
         handle_token_count_event(
@@ -1598,6 +1614,7 @@ mod tests {
                 arguments: serde_json::json!({"server": ""}),
                 result: None,
                 error: None,
+                duration_ms: None,
             },
         };
 
@@ -1751,6 +1768,7 @@ mod tests {
                 arguments: JsonValue::Null,
                 result: None,
                 error: None,
+                duration_ms: None,
             },
         };
 
@@ -1804,6 +1822,7 @@ mod tests {
                     structured_content: None,
                 }),
                 error: None,
+                duration_ms: Some(0),
             },
         };
 
@@ -1845,6 +1864,7 @@ mod tests {
                 error: Some(McpToolCallError {
                     message: "boom".to_string(),
                 }),
+                duration_ms: Some(1),
             },
         };
 

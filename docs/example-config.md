@@ -226,12 +226,6 @@ enable_experimental_windows_sandbox = false
 # Experimental toggles (legacy; prefer [features])
 ################################################################################
 
-# Use experimental unified exec tool. Default: false
-experimental_use_unified_exec_tool = false
-
-# Use experimental Rust MCP client (enables OAuth for HTTP MCP). Default: false
-experimental_use_rmcp_client = false
-
 # Include apply_patch via freeform editing path (affects default tool set). Default: false
 experimental_use_freeform_apply_patch = false
 
@@ -319,8 +313,6 @@ experimental_use_freeform_apply_patch = false
 # chatgpt_base_url = "https://chatgpt.com/backend-api/"
 # experimental_compact_prompt_file = "compact_prompt.txt"
 # include_apply_patch_tool = false
-# experimental_use_unified_exec_tool = false
-# experimental_use_rmcp_client = false
 # experimental_use_freeform_apply_patch = false
 # experimental_sandbox_command_assessment = false
 # tools_web_search = false
@@ -349,30 +341,28 @@ environment = "dev"
 exporter = "none"
 
 # Example OTLP/HTTP exporter configuration
-# [otel]
-# exporter = { otlp-http = {
-#   endpoint = "https://otel.example.com/v1/logs",
-#   protocol = "binary",                      # "binary" | "json"
-#   headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" }
-# }}
+# [otel.exporter."otlp-http"]
+# endpoint = "https://otel.example.com/v1/logs"
+# protocol = "binary"                         # "binary" | "json"
+
+# [otel.exporter."otlp-http".headers]
+# "x-otlp-api-key" = "${OTLP_TOKEN}"
 
 # Example OTLP/gRPC exporter configuration
-# [otel]
-# exporter = { otlp-grpc = {
-#   endpoint = "https://otel.example.com:4317",
-#   headers = { "x-otlp-meta" = "abc123" }
-# }}
+# [otel.exporter."otlp-grpc"]
+# endpoint = "https://otel.example.com:4317",
+# headers = { "x-otlp-meta" = "abc123" }
 
 # Example OTLP exporter with mutual TLS
-# [otel]
-# exporter = { otlp-http = {
-#   endpoint = "https://otel.example.com/v1/logs",
-#   protocol = "binary",
-#   headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" },
-#   tls = {
-#     ca-certificate = "certs/otel-ca.pem",
-#     client-certificate = "/etc/codex/certs/client.pem",
-#     client-private-key = "/etc/codex/certs/client-key.pem",
-#   }
-# }}
+# [otel.exporter."otlp-http"]
+# endpoint = "https://otel.example.com/v1/logs"
+# protocol = "binary"
+
+# [otel.exporter."otlp-http".headers]
+# "x-otlp-api-key" = "${OTLP_TOKEN}"
+
+# [otel.exporter."otlp-http".tls]
+# ca-certificate = "certs/otel-ca.pem"
+# client-certificate = "/etc/codex/certs/client.pem"
+# client-private-key = "/etc/codex/certs/client-key.pem"
 ```

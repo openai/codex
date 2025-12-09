@@ -1,10 +1,12 @@
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
 
+use crate::config::Config;
 use crate::config::types::ReasoningSummaryFormat;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;
-use crate::tools::spec::ConfigShellToolType;
 use crate::truncate::TruncationPolicy;
+use codex_protocol::openai_models::ConfigShellToolType;
 
 /// The `instructions` field in the payload sent to a model should always start
 /// with this content.
@@ -13,6 +15,7 @@ const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
 const GPT_5_CODEX_INSTRUCTIONS: &str = include_str!("../../gpt_5_codex_prompt.md");
 const GPT_5_1_INSTRUCTIONS: &str = include_str!("../../gpt_5_1_prompt.md");
 const GPT_5_1_CODEX_MAX_INSTRUCTIONS: &str = include_str!("../../gpt-5.1-codex-max_prompt.md");
+pub(crate) const CONTEXT_WINDOW_272K: i64 = 272_000;
 
 /// A model family is a group of models that share certain characteristics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -21,13 +24,19 @@ pub struct ModelFamily {
     /// "gpt-4.1-2025-04-14".
     pub slug: String,
 
-    /// The model family name, e.g. "gpt-4.1". Note this should able to be used
-    /// with [`crate::openai_model_info::get_model_info`].
+    /// The model family name, e.g. "gpt-4.1". This string is used when deriving
+    /// default metadata for the family, such as context windows.
     pub family: String,
 
     /// True if the model needs additional instructions on how to use the
     /// "virtual" `apply_patch` CLI.
     pub needs_special_apply_patch_instructions: bool,
+
+    /// Maximum supported context window, if known.
+    pub context_window: Option<i64>,
+
+    /// Token threshold for automatic compaction if config does not override it.
+    auto_compact_token_limit: Option<i64>,
 
     // Whether the `reasoning` field can be set when making a request to this
     // model family. Note it has `effort` and `summary` subfields (though
@@ -72,6 +81,43 @@ pub struct ModelFamily {
     pub truncation_policy: TruncationPolicy,
 }
 
+impl ModelFamily {
+    pub fn with_config_overrides(mut self, config: &Config) -> Self {
+        if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries {
+            self.supports_reasoning_summaries = supports_reasoning_summaries;
+        }
+        if let Some(reasoning_summary_format) = config.model_reasoning_summary_format.as_ref() {
+            self.reasoning_summary_format = reasoning_summary_format.clone();
+        }
+        if let Some(context_window) = config.model_context_window {
+            self.context_window = Some(context_window);
+        }
+        if let Some(auto_compact_token_limit) = config.model_auto_compact_token_limit {
+            self.auto_compact_token_limit = Some(auto_compact_token_limit);
+        }
+        self
+    }
+    pub fn with_remote_overrides(mut self, remote_models: Vec<ModelInfo>) -> Self {
+        for model in remote_models {
+            if model.slug == self.slug {
+                self.default_reasoning_effort = Some(model.default_reasoning_level);
+                self.shell_type = model.shell_type;
+                self.base_instructions = model.base_instructions.unwrap_or(self.base_instructions);
+            }
+        }
+        self
+    }
+
+    pub fn auto_compact_token_limit(&self) -> Option<i64> {
+        self.auto_compact_token_limit
+            .or(self.context_window.map(Self::default_auto_compact_limit))
+    }
+
+    const fn default_auto_compact_limit(context_window: i64) -> i64 {
+        (context_window * 9) / 10
+    }
+}
+
 macro_rules! model_family {
     (
         $slug:expr, $family:expr $(, $key:ident : $value:expr )* $(,)?
@@ -82,6 +128,8 @@ macro_rules! model_family {
             slug: $slug.to_string(),
             family: $family.to_string(),
             needs_special_apply_patch_instructions: false,
+            context_window: Some(CONTEXT_WINDOW_272K),
+            auto_compact_token_limit: None,
             supports_reasoning_summaries: false,
             reasoning_summary_format: ReasoningSummaryFormat::None,
             supports_parallel_tool_calls: false,
@@ -113,12 +161,14 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
             slug, "o3",
             supports_reasoning_summaries: true,
             needs_special_apply_patch_instructions: true,
+            context_window: Some(200_000),
         )
     } else if slug.starts_with("o4-mini") {
         model_family!(
             slug, "o4-mini",
             supports_reasoning_summaries: true,
             needs_special_apply_patch_instructions: true,
+            context_window: Some(200_000),
         )
     } else if slug.starts_with("codex-mini-latest") {
         model_family!(
@@ -126,18 +176,32 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
             supports_reasoning_summaries: true,
             needs_special_apply_patch_instructions: true,
             shell_type: ConfigShellToolType::Local,
+            context_window: Some(200_000),
         )
     } else if slug.starts_with("gpt-4.1") {
         model_family!(
             slug, "gpt-4.1",
             needs_special_apply_patch_instructions: true,
+            context_window: Some(1_047_576),
         )
     } else if slug.starts_with("gpt-oss") || slug.starts_with("openai/gpt-oss") {
-        model_family!(slug, "gpt-oss", apply_patch_tool_type: Some(ApplyPatchToolType::Function))
+        model_family!(
+            slug, "gpt-oss",
+            apply_patch_tool_type: Some(ApplyPatchToolType::Function),
+            context_window: Some(96_000),
+        )
     } else if slug.starts_with("gpt-4o") {
-        model_family!(slug, "gpt-4o", needs_special_apply_patch_instructions: true)
+        model_family!(
+            slug, "gpt-4o",
+            needs_special_apply_patch_instructions: true,
+            context_window: Some(128_000),
+        )
     } else if slug.starts_with("gpt-3.5") {
-        model_family!(slug, "gpt-3.5", needs_special_apply_patch_instructions: true)
+        model_family!(
+            slug, "gpt-3.5",
+            needs_special_apply_patch_instructions: true,
+            context_window: Some(16_385),
+        )
     } else if slug.starts_with("test-gpt-5") {
         model_family!(
             slug, slug,
@@ -156,23 +220,20 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
             truncation_policy: TruncationPolicy::Tokens(10_000),
         )
 
-    // Internal models.
-    } else if slug.starts_with("codex-exp-") {
+    // Experimental models.
+    } else if slug.starts_with("exp-codex") {
+        // Same as gpt-5.1-codex-max.
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
-            base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
+            base_instructions: GPT_5_1_CODEX_MAX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
-            experimental_supported_tools: vec![
-                "grep_files".to_string(),
-                "list_dir".to_string(),
-                "read_file".to_string(),
-            ],
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
-            support_verbosity: true,
+            support_verbosity: false,
             truncation_policy: TruncationPolicy::Tokens(10_000),
+            context_window: Some(CONTEXT_WINDOW_272K),
         )
     } else if slug.starts_with("exp-") {
         model_family!(
@@ -186,6 +247,7 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
             truncation_policy: TruncationPolicy::Bytes(10_000),
             shell_type: ConfigShellToolType::UnifiedExec,
             supports_parallel_tool_calls: true,
+            context_window: Some(CONTEXT_WINDOW_272K),
         )
 
     // Production models.
@@ -200,6 +262,7 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
             supports_parallel_tool_calls: false,
             support_verbosity: false,
             truncation_policy: TruncationPolicy::Tokens(10_000),
+            context_window: Some(CONTEXT_WINDOW_272K),
         )
     } else if slug.starts_with("gpt-5-codex")
         || slug.starts_with("gpt-5.1-codex")
@@ -215,6 +278,7 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
             supports_parallel_tool_calls: false,
             support_verbosity: false,
             truncation_policy: TruncationPolicy::Tokens(10_000),
+            context_window: Some(CONTEXT_WINDOW_272K),
         )
     } else if slug.starts_with("gpt-5.1") {
         model_family!(
@@ -228,6 +292,7 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
             truncation_policy: TruncationPolicy::Bytes(10_000),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
+            context_window: Some(CONTEXT_WINDOW_272K),
         )
     } else if slug.starts_with("gpt-5") {
         model_family!(
@@ -237,6 +302,7 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
             shell_type: ConfigShellToolType::Default,
             support_verbosity: true,
             truncation_policy: TruncationPolicy::Bytes(10_000),
+            context_window: Some(CONTEXT_WINDOW_272K),
         )
     } else {
         derive_default_model_family(slug)
@@ -248,6 +314,8 @@ fn derive_default_model_family(model: &str) -> ModelFamily {
         slug: model.to_string(),
         family: model.to_string(),
         needs_special_apply_patch_instructions: false,
+        context_window: None,
+        auto_compact_token_limit: None,
         supports_reasoning_summaries: false,
         reasoning_summary_format: ReasoningSummaryFormat::None,
         supports_parallel_tool_calls: false,
@@ -260,5 +328,79 @@ fn derive_default_model_family(model: &str) -> ModelFamily {
         default_verbosity: None,
         default_reasoning_effort: None,
         truncation_policy: TruncationPolicy::Bytes(10_000),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::openai_models::ClientVersion;
+    use codex_protocol::openai_models::ModelVisibility;
+    use codex_protocol::openai_models::ReasoningEffortPreset;
+
+    fn remote(slug: &str, effort: ReasoningEffort, shell: ConfigShellToolType) -> ModelInfo {
+        ModelInfo {
+            slug: slug.to_string(),
+            display_name: slug.to_string(),
+            description: Some(format!("{slug} desc")),
+            default_reasoning_level: effort,
+            supported_reasoning_levels: vec![ReasoningEffortPreset {
+                effort,
+                description: effort.to_string(),
+            }],
+            shell_type: shell,
+            visibility: ModelVisibility::List,
+            minimal_client_version: ClientVersion(0, 1, 0),
+            supported_in_api: true,
+            priority: 1,
+            upgrade: None,
+            base_instructions: None,
+        }
+    }
+
+    #[test]
+    fn remote_overrides_apply_when_slug_matches() {
+        let family = model_family!("gpt-4o-mini", "gpt-4o-mini");
+        assert_ne!(family.default_reasoning_effort, Some(ReasoningEffort::High));
+
+        let updated = family.with_remote_overrides(vec![
+            remote(
+                "gpt-4o-mini",
+                ReasoningEffort::High,
+                ConfigShellToolType::ShellCommand,
+            ),
+            remote(
+                "other-model",
+                ReasoningEffort::Low,
+                ConfigShellToolType::UnifiedExec,
+            ),
+        ]);
+
+        assert_eq!(
+            updated.default_reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+        assert_eq!(updated.shell_type, ConfigShellToolType::ShellCommand);
+    }
+
+    #[test]
+    fn remote_overrides_skip_non_matching_models() {
+        let family = model_family!(
+            "codex-mini-latest",
+            "codex-mini-latest",
+            shell_type: ConfigShellToolType::Local
+        );
+
+        let updated = family.clone().with_remote_overrides(vec![remote(
+            "other",
+            ReasoningEffort::High,
+            ConfigShellToolType::ShellCommand,
+        )]);
+
+        assert_eq!(
+            updated.default_reasoning_effort,
+            family.default_reasoning_effort
+        );
+        assert_eq!(updated.shell_type, family.shell_type);
     }
 }

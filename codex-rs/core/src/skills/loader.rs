@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::git_info::resolve_root_git_project_for_trust;
 use crate::skills::model::SkillError;
 use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
@@ -20,6 +21,7 @@ struct SkillFrontmatter {
 
 const SKILLS_FILENAME: &str = "SKILL.md";
 const SKILLS_DIR_NAME: &str = "skills";
+const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
 const MAX_NAME_LEN: usize = 100;
 const MAX_DESCRIPTION_LEN: usize = 500;
 
@@ -65,7 +67,17 @@ pub fn load_skills(config: &Config) -> SkillLoadOutcome {
 }
 
 fn skill_roots(config: &Config) -> Vec<PathBuf> {
-    vec![config.codex_home.join(SKILLS_DIR_NAME)]
+    let mut roots = vec![config.codex_home.join(SKILLS_DIR_NAME)];
+
+    if let Some(repo_root) = resolve_root_git_project_for_trust(&config.cwd) {
+        roots.push(
+            repo_root
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
+        );
+    }
+
+    roots
 }
 
 fn discover_skills_under_root(root: &Path, outcome: &mut SkillLoadOutcome) {
@@ -196,6 +208,9 @@ mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
+    use pretty_assertions::assert_eq;
+    use std::path::Path;
+    use std::process::Command;
     use tempfile::TempDir;
 
     fn make_config(codex_home: &TempDir) -> Config {
@@ -211,7 +226,11 @@ mod tests {
     }
 
     fn write_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) -> PathBuf {
-        let skill_dir = codex_home.path().join(format!("skills/{dir}"));
+        write_skill_at(codex_home.path(), dir, name, description)
+    }
+
+    fn write_skill_at(root: &Path, dir: &str, name: &str, description: &str) -> PathBuf {
+        let skill_dir = root.join(format!("skills/{dir}"));
         fs::create_dir_all(&skill_dir).unwrap();
         let indented_description = description.replace('\n', "\n  ");
         let content = format!(
@@ -287,5 +306,38 @@ mod tests {
             outcome.errors[0].message.contains("invalid description"),
             "expected length error"
         );
+    }
+
+    #[test]
+    fn loads_skills_from_repo_root() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let repo_dir = tempfile::tempdir().expect("tempdir");
+
+        let status = Command::new("git")
+            .arg("init")
+            .current_dir(repo_dir.path())
+            .status()
+            .expect("git init");
+        assert!(status.success(), "git init failed");
+
+        let skills_root = repo_dir
+            .path()
+            .join(REPO_ROOT_CONFIG_DIR_NAME)
+            .join(SKILLS_DIR_NAME);
+        write_skill_at(&skills_root, "repo", "repo-skill", "from repo");
+        let mut cfg = make_config(&codex_home);
+        cfg.cwd = repo_dir.path().to_path_buf();
+        let repo_root = normalize_path(&skills_root).unwrap_or_else(|_| skills_root.clone());
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        let skill = &outcome.skills[0];
+        assert_eq!(skill.name, "repo-skill");
+        assert!(skill.path.starts_with(&repo_root));
     }
 }
