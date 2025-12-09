@@ -304,14 +304,14 @@ impl PickerState {
                     return Ok(Some(ResumeSelection::Resume(row.path.clone())));
                 }
             }
-            KeyCode::Up => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected > 0 {
                     self.selected -= 1;
                     self.ensure_selected_visible();
                 }
                 self.request_frame();
             }
-            KeyCode::Down => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 if self.selected + 1 < self.filtered_rows.len() {
                     self.selected += 1;
                     self.ensure_selected_visible();
@@ -746,7 +746,11 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             "    ".dim(),
             key_hint::plain(KeyCode::Up).into(),
             "/".dim(),
+            key_hint::plain(KeyCode::Char('k')).into(),
+            " and ".dim(),
             key_hint::plain(KeyCode::Down).into(),
+            "/".dim(),
+            key_hint::plain(KeyCode::Char('j')).into(),
             " to browse".dim(),
         ]
         .into();
@@ -1413,6 +1417,15 @@ mod tests {
                 "    ".dim(),
                 key_hint::ctrl(KeyCode::Char('c')).into(),
                 " to quit ".dim(),
+                "    ".dim(),
+                key_hint::plain(KeyCode::Up).into(),
+                "/".dim(),
+                key_hint::plain(KeyCode::Char('k')).into(),
+                " and ".dim(),
+                key_hint::plain(KeyCode::Down).into(),
+                "/".dim(),
+                key_hint::plain(KeyCode::Char('j')).into(),
+                " to browse".dim(),
             ]
             .into();
             frame.render_widget_ref(hint_line, hint);
@@ -1570,6 +1583,48 @@ mod tests {
                 .unwrap();
         });
         assert_eq!(state.selected, 5);
+    }
+
+    #[test]
+    fn vim_keys_navigate_resume_list() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+        );
+        state.reset_pagination();
+        state.ingest_page(page(
+            vec![
+                make_item("/tmp/a.jsonl", "2025-01-01T00:00:00Z", "one"),
+                make_item("/tmp/b.jsonl", "2025-01-02T00:00:00Z", "two"),
+                make_item("/tmp/c.jsonl", "2025-01-03T00:00:00Z", "three"),
+            ],
+            None,
+            3,
+            false,
+        ));
+        state.update_view_rows(3);
+        assert_eq!(state.selected, 0);
+
+        block_on_future(async {
+            state
+                .handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE))
+                .await
+                .unwrap();
+        });
+        assert_eq!(state.selected, 1);
+
+        block_on_future(async {
+            state
+                .handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE))
+                .await
+                .unwrap();
+        });
+        assert_eq!(state.selected, 0);
     }
 
     #[test]

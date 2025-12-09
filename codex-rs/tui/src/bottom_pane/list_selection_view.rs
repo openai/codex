@@ -285,6 +285,11 @@ impl BottomPaneView for ListSelectionView {
                 ..
             } /* ^P */ => self.move_up(),
             KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.move_up(),
+            KeyEvent {
                 code: KeyCode::Down,
                 ..
             }
@@ -298,6 +303,11 @@ impl BottomPaneView for ListSelectionView {
                 modifiers: KeyModifiers::NONE,
                 ..
             } /* ^N */ => self.move_down(),
+            KeyEvent {
+                code: KeyCode::Char('j'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.move_down(),
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..
@@ -477,6 +487,9 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
@@ -552,6 +565,16 @@ mod tests {
     fn renders_blank_line_between_subtitle_and_items() {
         let view = make_selection_view(Some("Switch between Codex approval presets"));
         assert_snapshot!("list_selection_spacing_with_subtitle", render_lines(&view));
+    }
+
+    #[test]
+    fn vim_keys_move_selection() {
+        let mut view = make_selection_view(None);
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        assert_eq!(view.state.selected_idx, Some(1));
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert_eq!(view.state.selected_idx, Some(0));
     }
 
     #[test]
