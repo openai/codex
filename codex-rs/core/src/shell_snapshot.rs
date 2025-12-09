@@ -290,7 +290,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[cfg(unix), ignore]
+    #[cfg_attr(unix, ignore)]
     #[test]
     fn wrap_command_with_snapshot_wraps_bash_shell() {
         let snapshot_path = PathBuf::from("/tmp/snapshot.sh");
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(wrapped, original_command);
     }
 
-    #[cfg(unix), ignore]
+    #[cfg_attr(unix, ignore)]
     #[tokio::test]
     async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
         let dir = tempdir()?;
@@ -360,7 +360,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(unix), ignore]
+    #[cfg_attr(unix, ignore)]
     #[tokio::test]
     async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
         use std::process::Stdio;
