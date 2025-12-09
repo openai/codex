@@ -570,9 +570,12 @@ mod tests {
     #[test]
     fn vim_keys_move_selection() {
         let mut view = make_selection_view(None);
+        // Confirm that we start at zero.
+        assert_eq!(view.state.selected_idx, Some(0));
+        // Move down to the second item.
         view.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         assert_eq!(view.state.selected_idx, Some(1));
-
+        // Move up to the first item.
         view.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         assert_eq!(view.state.selected_idx, Some(0));
     }

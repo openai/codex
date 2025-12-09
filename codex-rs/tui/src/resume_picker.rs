@@ -746,11 +746,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             "    ".dim(),
             key_hint::plain(KeyCode::Up).into(),
             "/".dim(),
-            key_hint::plain(KeyCode::Char('k')).into(),
-            " and ".dim(),
             key_hint::plain(KeyCode::Down).into(),
-            "/".dim(),
-            key_hint::plain(KeyCode::Char('j')).into(),
             " to browse".dim(),
         ]
         .into();
@@ -1417,15 +1413,6 @@ mod tests {
                 "    ".dim(),
                 key_hint::ctrl(KeyCode::Char('c')).into(),
                 " to quit ".dim(),
-                "    ".dim(),
-                key_hint::plain(KeyCode::Up).into(),
-                "/".dim(),
-                key_hint::plain(KeyCode::Char('k')).into(),
-                " and ".dim(),
-                key_hint::plain(KeyCode::Down).into(),
-                "/".dim(),
-                key_hint::plain(KeyCode::Char('j')).into(),
-                " to browse".dim(),
             ]
             .into();
             frame.render_widget_ref(hint_line, hint);

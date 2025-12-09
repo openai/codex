@@ -1,6 +1,6 @@
 ---
 source: tui/src/resume_picker.rs
-assertion_line: 1436
+assertion_line: 1438
 expression: snapshot
 ---
 Resume a previous session
@@ -11,4 +11,4 @@ No sessions yet
 
 
 
-enter to resume     esc to start new     ctrl + c to quit     ↑/k and ↓/j to bro
+enter to resume     esc to start new     ctrl + c to quit
