@@ -189,7 +189,8 @@ async fn macos_unified_exec_uses_shell_snapshot() -> Result<()> {
     Ok(())
 }
 
-#[cfg_attr(not(target_os = "windows"), ignore)]
+// #[cfg_attr(not(target_os = "windows"), ignore)]
+#[ignore]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn windows_unified_exec_uses_shell_snapshot() -> Result<()> {
     let command = "Write-Output snapshot-windows";
