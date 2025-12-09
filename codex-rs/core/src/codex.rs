@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -55,6 +56,7 @@ use mcp_types::ReadResourceResult;
 use mcp_types::RequestId;
 use serde_json;
 use serde_json::Value;
+use tokio::fs;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
@@ -109,6 +111,8 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
 use crate::shell;
+use crate::skills::SkillMetadata;
+use crate::skills::load_skills;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
@@ -126,6 +130,7 @@ use crate::tools::spec::ToolsConfigParams;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::DeveloperInstructions;
+use crate::user_instructions::SkillInstructions;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
@@ -174,7 +179,25 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let user_instructions = get_user_instructions(&config).await;
+        let loaded_skills = if config.features.enabled(Feature::Skills) {
+            Some(load_skills(&config))
+        } else {
+            None
+        };
+
+        if let Some(outcome) = &loaded_skills {
+            for err in &outcome.errors {
+                error!(
+                    "failed to load skill {}: {}",
+                    err.path.display(),
+                    err.message
+                );
+            }
+        }
+
+        let user_instructions =
+            get_user_instructions(&config, loaded_skills.as_ref().map(|o| o.skills.as_slice()))
+                .await;
 
         let exec_policy = load_exec_policy_for_features(&config.features, &config.codex_home)
             .await
@@ -202,6 +225,8 @@ impl Codex {
 
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
+        let skills_cache = loaded_skills.as_ref().map(|o| o.skills.clone());
+
         let session = Session::new(
             session_configuration,
             config.clone(),
@@ -210,6 +235,7 @@ impl Codex {
             tx_event.clone(),
             conversation_history,
             session_source_clone,
+            skills_cache,
         )
         .await
         .map_err(|e| {
@@ -466,6 +492,7 @@ impl Session {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn new(
         session_configuration: SessionConfiguration,
         config: Arc<Config>,
@@ -474,6 +501,7 @@ impl Session {
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
         session_source: SessionSource,
+        loaded_skills: Option<Vec<SkillMetadata>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -580,7 +608,7 @@ impl Session {
                     .await
                     .map(Arc::new);
         }
-        let state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(session_configuration.clone(), loaded_skills);
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -1302,6 +1330,50 @@ impl Session {
         }
     }
 
+    async fn inject_skills(
+        &self,
+        turn_context: &TurnContext,
+        user_input: &[UserInput],
+    ) -> Vec<ResponseItem> {
+        if user_input.is_empty() || !self.enabled(Feature::Skills) {
+            return Vec::new();
+        }
+
+        let skills = {
+            let state = self.state.lock().await;
+            state.skills.clone().unwrap_or_default()
+        };
+
+        let mentioned_skills = collect_explicit_skill_mentions(user_input, &skills);
+        if mentioned_skills.is_empty() {
+            return Vec::new();
+        }
+
+        let mut injections: Vec<ResponseItem> = Vec::with_capacity(mentioned_skills.len());
+        for skill in mentioned_skills {
+            match fs::read_to_string(&skill.path).await {
+                Ok(contents) => {
+                    injections.push(ResponseItem::from(SkillInstructions {
+                        name: skill.name,
+                        path: skill.path.to_string_lossy().into_owned(),
+                        contents,
+                    }));
+                }
+                Err(err) => {
+                    let message = format!(
+                        "Failed to load skill {} at {}: {err:#}",
+                        skill.name,
+                        skill.path.display()
+                    );
+                    self.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                        .await;
+                }
+            }
+        }
+
+        injections
+    }
+
     pub(crate) async fn notify_background_event(
         &self,
         turn_context: &TurnContext,
@@ -2017,6 +2089,36 @@ async fn spawn_review_thread(
         .await;
 }
 
+fn collect_explicit_skill_mentions(
+    inputs: &[UserInput],
+    skills: &[SkillMetadata],
+) -> Vec<SkillMetadata> {
+    let mut full_text: Vec<String> = Vec::new();
+    for input in inputs {
+        if let UserInput::Text { text } = input {
+            full_text.push(text.clone());
+        }
+    }
+    let combined = full_text.join(" ");
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut matches: Vec<SkillMetadata> = Vec::new();
+
+    for skill in skills {
+        let name = skill.name.clone();
+        if seen.contains(&name) {
+            continue;
+        }
+        let needle = format!("${name}");
+        let hit = combined.contains(&needle);
+        if hit {
+            seen.insert(name);
+            matches.push(skill.clone());
+        }
+    }
+
+    matches
+}
+
 /// Takes a user message as input and runs a loop where, at each turn, the model
 /// replies with either:
 ///
@@ -2045,10 +2147,17 @@ pub(crate) async fn run_task(
     });
     sess.send_event(&turn_context, event).await;
 
+    let skill_injections = sess.inject_skills(&turn_context, &input).await;
+
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_response_item_and_emit_turn_item(turn_context.as_ref(), response_item)
         .await;
+
+    if !skill_injections.is_empty() {
+        sess.record_conversation_items(&turn_context, &skill_injections)
+            .await;
+    }
 
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
         .await;
@@ -2603,7 +2712,7 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let mut state = SessionState::new(session_configuration);
+        let mut state = SessionState::new(session_configuration, None);
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 10.0,
@@ -2674,7 +2783,7 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let mut state = SessionState::new(session_configuration);
+        let mut state = SessionState::new(session_configuration, None);
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 15.0,
@@ -2880,7 +2989,7 @@ mod tests {
         let otel_event_manager =
             otel_event_manager(conversation_id, config.as_ref(), &model_family);
 
-        let state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(session_configuration.clone(), None);
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -2962,7 +3071,7 @@ mod tests {
         let otel_event_manager =
             otel_event_manager(conversation_id, config.as_ref(), &model_family);
 
-        let state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(session_configuration.clone(), None);
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
