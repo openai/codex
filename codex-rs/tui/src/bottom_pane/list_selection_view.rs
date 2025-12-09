@@ -285,6 +285,11 @@ impl BottomPaneView for ListSelectionView {
                 ..
             } /* ^P */ => self.move_up(),
             KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if !self.is_searchable => self.move_up(),
+            KeyEvent {
                 code: KeyCode::Down,
                 ..
             }
@@ -298,6 +303,11 @@ impl BottomPaneView for ListSelectionView {
                 modifiers: KeyModifiers::NONE,
                 ..
             } /* ^N */ => self.move_down(),
+            KeyEvent {
+                code: KeyCode::Char('j'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if !self.is_searchable => self.move_down(),
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..

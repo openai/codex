@@ -14,10 +14,10 @@ Whitelisted commands will no longer require your permission to run in current an
 
 Under the hood, when you approve and whitelist a command, codex will edit `~/.codex/policy/default.execpolicy`.
 
-### Editing `.codexpolicy` files
+### Editing `.execpolicy` files
 
 1. Create a policy directory: `mkdir -p ~/.codex/policy`.
-2. Add one or more `.codexpolicy` files in that folder. Codex automatically loads every `.codexpolicy` file in there on startup.
+2. Add one or more `.execpolicy` files in that folder. Codex automatically loads every `.execpolicy` file in there on startup.
 3. Write `prefix_rule` entries to describe the commands you want to allow, prompt, or block:
 
 ```starlark
