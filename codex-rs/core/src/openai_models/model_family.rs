@@ -152,10 +152,6 @@ macro_rules! model_family {
     }};
 }
 
-fn is_codex_max_slug(slug: &str) -> bool {
-    slug.starts_with("gpt-5.1-codex-max") || slug.starts_with("exp-codex")
-}
-
 // todo(aibrahim): remove this function
 /// Returns a `ModelFamily` for the given model slug, or `None` if the slug
 /// does not match any known model family.
@@ -224,22 +220,18 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
             truncation_policy: TruncationPolicy::Tokens(10_000),
         )
 
-    // Internal models.
-    } else if slug.starts_with("codex-exp-") {
+    // Experimental models.
+    } else if slug.starts_with("exp-codex") {
+        // Same as gpt-5.1-codex-max.
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
-            base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
+            base_instructions: GPT_5_1_CODEX_MAX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
-            experimental_supported_tools: vec![
-                "grep_files".to_string(),
-                "list_dir".to_string(),
-                "read_file".to_string(),
-            ],
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
-            support_verbosity: true,
+            support_verbosity: false,
             truncation_policy: TruncationPolicy::Tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
         )
@@ -259,7 +251,7 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
         )
 
     // Production models.
-    } else if is_codex_max_slug(slug) {
+    } else if slug.starts_with("gpt-5.1-codex-max") {
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,
