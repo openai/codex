@@ -290,7 +290,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[cfg_attr(unix, ignore)]
+    #[cfg(unix)]
     #[test]
     fn wrap_command_with_snapshot_wraps_bash_shell() {
         let snapshot_path = PathBuf::from("/tmp/snapshot.sh");
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(wrapped, original_command);
     }
 
-    #[cfg_attr(unix, ignore)]
+    #[cfg(unix)]
     #[tokio::test]
     async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
         let dir = tempdir()?;
@@ -437,7 +437,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg_attr(not(target_os = "windows"), ignore)]
+    #[cfg(target_os = "windows")]
     #[tokio::test]
     async fn windows_powershell_snapshot_includes_sections() -> Result<()> {
         let snapshot = get_snapshot(ShellType::PowerShell).await?;
