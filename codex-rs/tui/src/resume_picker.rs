@@ -304,14 +304,14 @@ impl PickerState {
                     return Ok(Some(ResumeSelection::Resume(row.path.clone())));
                 }
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 if self.selected > 0 {
                     self.selected -= 1;
                     self.ensure_selected_visible();
                 }
                 self.request_frame();
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 if self.selected + 1 < self.filtered_rows.len() {
                     self.selected += 1;
                     self.ensure_selected_visible();
@@ -1573,7 +1573,7 @@ mod tests {
     }
 
     #[test]
-    fn vim_keys_navigate_resume_list() {
+    fn arrow_keys_navigate_resume_list() {
         let loader: PageLoader = Arc::new(|_| {});
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
@@ -1599,7 +1599,7 @@ mod tests {
 
         block_on_future(async {
             state
-                .handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE))
+                .handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
                 .await
                 .unwrap();
         });
@@ -1607,10 +1607,53 @@ mod tests {
 
         block_on_future(async {
             state
+                .handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
+                .await
+                .unwrap();
+        });
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn vim_keys_update_query_in_resume_list() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+        );
+        state.reset_pagination();
+        state.ingest_page(page(
+            vec![
+                make_item("/tmp/a.jsonl", "2025-01-01T00:00:00Z", "one"),
+                make_item("/tmp/b.jsonl", "2025-01-02T00:00:00Z", "two"),
+                make_item("/tmp/c.jsonl", "2025-01-03T00:00:00Z", "three"),
+            ],
+            None,
+            3,
+            false,
+        ));
+        state.update_view_rows(3);
+
+        block_on_future(async {
+            state
+                .handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+                .await
+                .unwrap();
+            state
+                .handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE))
+                .await
+                .unwrap();
+            state
                 .handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE))
                 .await
                 .unwrap();
         });
+
+        assert_eq!(state.query, "jk");
         assert_eq!(state.selected, 0);
     }
 

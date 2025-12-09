@@ -288,7 +288,7 @@ impl BottomPaneView for ListSelectionView {
                 code: KeyCode::Char('k'),
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => self.move_up(),
+            } if !self.is_searchable => self.move_up(),
             KeyEvent {
                 code: KeyCode::Down,
                 ..
@@ -307,7 +307,7 @@ impl BottomPaneView for ListSelectionView {
                 code: KeyCode::Char('j'),
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => self.move_down(),
+            } if !self.is_searchable => self.move_down(),
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..
@@ -578,6 +578,41 @@ mod tests {
         // Move up to the first item.
         view.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
         assert_eq!(view.state.selected_idx, Some(0));
+    }
+
+    #[test]
+    fn vim_keys_append_to_search_when_searchable() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Searchable".to_string()),
+                items: vec![
+                    SelectionItem {
+                        name: "First".to_string(),
+                        search_value: Some("jkl".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Second".to_string(),
+                        search_value: Some("jkm".to_string()),
+                        dismiss_on_select: true,
+                        ..Default::default()
+                    },
+                ],
+                is_searchable: true,
+                ..Default::default()
+            },
+            tx,
+        );
+        let initial_selected_idx = view.state.selected_idx;
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+
+        assert_eq!(view.search_query, "jk");
+        assert_eq!(view.state.selected_idx, initial_selected_idx);
     }
 
     #[test]
