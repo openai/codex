@@ -24,7 +24,6 @@ use crate::sandboxing::ExecEnv;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
-use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
@@ -77,7 +76,6 @@ struct PreparedSessionHandles {
     session_ref: Arc<Session>,
     turn_ref: Arc<TurnContext>,
     command: Vec<String>,
-    cwd: PathBuf,
     process_id: String,
 }
 
@@ -234,41 +232,12 @@ impl UnifiedExecSessionManager {
             session_ref,
             turn_ref,
             command: session_command,
-            cwd: session_cwd,
             process_id,
+            ..
         } = self.prepare_session_handles(process_id.as_str()).await?;
 
-        let interaction_emitter = ToolEmitter::unified_exec(
-            &session_command,
-            session_cwd.clone(),
-            ExecCommandSource::UnifiedExecInteraction,
-            (!request.input.is_empty()).then(|| request.input.to_string()),
-            Some(process_id.clone()),
-        );
-        let make_event_ctx = || {
-            ToolEventCtx::new(
-                session_ref.as_ref(),
-                turn_ref.as_ref(),
-                request.call_id,
-                None,
-            )
-        };
-        interaction_emitter
-            .emit(make_event_ctx(), ToolEventStage::Begin)
-            .await;
-
         if !request.input.is_empty() {
-            if let Err(err) = Self::send_input(&writer_tx, request.input.as_bytes()).await {
-                interaction_emitter
-                    .emit(
-                        make_event_ctx(),
-                        ToolEventStage::Failure(ToolEventFailure::Message(format!(
-                            "write_stdin failed: {err:?}"
-                        ))),
-                    )
-                    .await;
-                return Err(err);
-            }
+            Self::send_input(&writer_tx, request.input.as_bytes()).await?;
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
@@ -318,21 +287,6 @@ impl UnifiedExecSessionManager {
             original_token_count: Some(original_token_count),
             session_command: Some(session_command.clone()),
         };
-
-        let interaction_output = ExecToolCallOutput {
-            exit_code: response.exit_code.unwrap_or(0),
-            stdout: StreamOutput::new(response.output.clone()),
-            stderr: StreamOutput::new(String::new()),
-            aggregated_output: StreamOutput::new(response.output.clone()),
-            duration: response.wall_time,
-            timed_out: false,
-        };
-        interaction_emitter
-            .emit(
-                make_event_ctx(),
-                ToolEventStage::Success(interaction_output),
-            )
-            .await;
 
         if response.process_id.is_some() {
             Self::emit_waiting_status(&session_ref, &turn_ref, &session_command).await;
@@ -400,7 +354,6 @@ impl UnifiedExecSessionManager {
             session_ref: Arc::clone(&entry.session_ref),
             turn_ref: Arc::clone(&entry.turn_ref),
             command: entry.command.clone(),
-            cwd: entry.cwd.clone(),
             process_id: entry.process_id.clone(),
         })
     }

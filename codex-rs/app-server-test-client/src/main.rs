@@ -21,7 +21,6 @@ use codex_app_server_protocol::ApprovalDecision;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::CommandExecutionRequestAcceptSettings;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
@@ -754,6 +753,7 @@ impl CodexClient {
             item_id,
             reason,
             risk,
+            proposed_execpolicy_amendment,
         } = params;
 
         println!(
@@ -765,10 +765,12 @@ impl CodexClient {
         if let Some(risk) = risk.as_ref() {
             println!("< risk assessment: {risk:?}");
         }
+        if let Some(execpolicy_amendment) = proposed_execpolicy_amendment.as_ref() {
+            println!("< proposed execpolicy amendment: {execpolicy_amendment:?}");
+        }
 
         let response = CommandExecutionRequestApprovalResponse {
             decision: ApprovalDecision::Accept,
-            accept_settings: Some(CommandExecutionRequestAcceptSettings { for_session: false }),
         };
         self.send_server_request_response(request_id, &response)?;
         println!("< approved commandExecution request for item {item_id}");

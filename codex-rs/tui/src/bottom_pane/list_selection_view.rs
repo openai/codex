@@ -28,6 +28,7 @@ use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
+use unicode_width::UnicodeWidthStr;
 
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
@@ -192,23 +193,26 @@ impl ListSelectionView {
                         item.name.clone()
                     };
                     let n = visible_idx + 1;
-                    let display_name = if self.is_searchable {
+                    let wrap_prefix = if self.is_searchable {
                         // The number keys don't work when search is enabled (since we let the
                         // numbers be used for the search query).
-                        format!("{prefix} {name_with_marker}")
+                        format!("{prefix} ")
                     } else {
-                        format!("{prefix} {n}. {name_with_marker}")
+                        format!("{prefix} {n}. ")
                     };
+                    let wrap_prefix_width = UnicodeWidthStr::width(wrap_prefix.as_str());
+                    let display_name = format!("{wrap_prefix}{name_with_marker}");
                     let description = is_selected
                         .then(|| item.selected_description.clone())
                         .flatten()
                         .or_else(|| item.description.clone());
+                    let wrap_indent = description.is_none().then_some(wrap_prefix_width);
                     GenericDisplayRow {
                         name: display_name,
                         display_shortcut: item.display_shortcut,
                         match_indices: None,
-                        is_current: item.is_current,
                         description,
+                        wrap_indent,
                     }
                 })
             })
@@ -264,13 +268,36 @@ impl ListSelectionView {
 impl BottomPaneView for ListSelectionView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
+            // Some terminals (or configurations) send Control key chords as
+            // C0 control characters without reporting the CONTROL modifier.
+            // Handle fallbacks for Ctrl-P/N here so navigation works everywhere.
             KeyEvent {
                 code: KeyCode::Up, ..
-            } => self.move_up(),
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\u{0010}'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } /* ^P */ => self.move_up(),
             KeyEvent {
                 code: KeyCode::Down,
                 ..
-            } => self.move_down(),
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\u{000e}'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } /* ^N */ => self.move_down(),
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..
@@ -555,6 +582,47 @@ mod tests {
         assert!(
             lines.contains("filters"),
             "expected search query line to include rendered query, got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn wraps_long_option_without_overflowing_columns() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![
+            SelectionItem {
+                name: "Yes, proceed".to_string(),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Yes, and don't ask again for commands that start with `python -mpre_commit run --files eslint-plugin/no-mixed-const-enum-exports.js`".to_string(),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Approval".to_string()),
+                items,
+                ..Default::default()
+            },
+            tx,
+        );
+
+        let rendered = render_lines_with_width(&view, 60);
+        let command_line = rendered
+            .lines()
+            .find(|line| line.contains("python -mpre_commit run"))
+            .expect("rendered lines should include wrapped command");
+        assert!(
+            command_line.starts_with("     `python -mpre_commit run"),
+            "wrapped command line should align under the numbered prefix:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("eslint-plugin/no-")
+                && rendered.contains("mixed-const-enum-exports.js"),
+            "long command should not be truncated even when wrapped:\n{rendered}"
         );
     }
 

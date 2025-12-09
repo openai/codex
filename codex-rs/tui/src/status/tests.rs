@@ -8,6 +8,8 @@ use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::openai_models::model_family::ModelFamily;
+use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::RateLimitWindow;
@@ -35,6 +37,10 @@ fn test_auth_manager(config: &Config) -> AuthManager {
         false,
         config.cli_auth_credentials_store_mode,
     )
+}
+
+fn test_model_family(config: &Config) -> ModelFamily {
+    ModelsManager::construct_model_family_offline(config.model.as_str(), config)
 }
 
 fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -124,9 +130,12 @@ fn status_snapshot_includes_reasoning_details() {
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
+    let model_family = test_model_family(&config);
+
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
@@ -177,9 +186,11 @@ fn status_snapshot_includes_monthly_limit() {
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
@@ -218,9 +229,11 @@ fn status_snapshot_shows_unlimited_credits() {
         plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
@@ -258,9 +271,11 @@ fn status_snapshot_shows_positive_credits() {
         plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
@@ -298,9 +313,11 @@ fn status_snapshot_hides_zero_credits() {
         plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
@@ -336,9 +353,11 @@ fn status_snapshot_hides_when_has_no_credits_flag() {
         plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
@@ -374,9 +393,11 @@ fn status_card_token_usage_excludes_cached_tokens() {
         .single()
         .expect("timestamp");
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
@@ -427,9 +448,11 @@ fn status_snapshot_truncates_in_narrow_terminal() {
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
@@ -469,9 +492,11 @@ fn status_snapshot_shows_missing_limits_message() {
         .single()
         .expect("timestamp");
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
@@ -529,9 +554,11 @@ fn status_snapshot_includes_credits_and_limits() {
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
@@ -577,9 +604,11 @@ fn status_snapshot_shows_empty_limits_message() {
         .expect("timestamp");
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
@@ -634,9 +663,11 @@ fn status_snapshot_shows_stale_limits_message() {
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let now = captured_at + ChronoDuration::minutes(20);
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
@@ -695,9 +726,11 @@ fn status_snapshot_cached_limits_hide_credits_without_flag() {
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let now = captured_at + ChronoDuration::minutes(20);
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &usage,
         Some(&usage),
         &None,
@@ -742,9 +775,11 @@ fn status_context_window_uses_last_usage() {
         .single()
         .expect("timestamp");
 
+    let model_family = test_model_family(&config);
     let composite = new_status_output(
         &config,
         &auth_manager,
+        &model_family,
         &total_usage,
         Some(&last_usage),
         &None,

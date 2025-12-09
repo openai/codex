@@ -135,12 +135,16 @@ pub struct ModelInfo {
     pub priority: i32,
     #[serde(default)]
     pub upgrade: Option<String>,
+    #[serde(default)]
+    pub base_instructions: Option<String>,
 }
 
 /// Response wrapper for `/models`.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema, Default)]
 pub struct ModelsResponse {
     pub models: Vec<ModelInfo>,
+    #[serde(default)]
+    pub etag: String,
 }
 
 fn default_visibility() -> ModelVisibility {

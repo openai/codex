@@ -50,6 +50,9 @@ jobs:
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         working-directory: codex-rs
@@ -99,6 +102,13 @@ jobs:
 
       - name: Cargo build
         run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
+
+      - if: ${{ contains(matrix.target, 'linux') }}
+        name: Cosign Linux artifacts
+        uses: ./.github/actions/linux-code-sign
+        with:
+          target: ${{ matrix.target }}
+          artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
 
       - if: ${{ matrix.runner == 'macos-15-xlarge' }}
         name: Configure Apple code signing
@@ -283,6 +293,11 @@ jobs:
             cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
           fi
 
+          if [[ "${{ matrix.target }}" == *linux* ]]; then
+            cp target/${{ matrix.target }}/release/codex.sigstore "$dest/codex-${{ matrix.target }}.sigstore"
+            cp target/${{ matrix.target }}/release/codex-responses-api-proxy.sigstore "$dest/codex-responses-api-proxy-${{ matrix.target }}.sigstore"
+          fi
+
       - if: ${{ matrix.runner == 'windows-11-arm' }}
         name: Install zstd
         shell: powershell
@@ -318,6 +333,11 @@ jobs:
             # Skip files that are already archives (shouldn't happen, but be
             # safe).
             if [[ "$base" == *.tar.gz || "$base" == *.zip ]]; then
+              continue
+            fi
+
+            # Don't try to compress signature bundles.
+            if [[ "$base" == *.sigstore ]]; then
               continue
             fi
 

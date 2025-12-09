@@ -80,7 +80,6 @@ use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
-use crate::openai_model_info::get_model_info;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
@@ -415,15 +414,11 @@ impl Session {
         otel_event_manager: &OtelEventManager,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
-        mut per_turn_config: Config,
+        per_turn_config: Config,
         model_family: ModelFamily,
         conversation_id: ConversationId,
         sub_id: String,
     ) -> TurnContext {
-        if let Some(model_info) = get_model_info(&model_family) {
-            per_turn_config.model_context_window = Some(model_info.context_window);
-        }
-
         let otel_event_manager = otel_event_manager.clone().with_model(
             session_configuration.model.as_str(),
             model_family.slug.as_str(),
@@ -1955,9 +1950,6 @@ async fn spawn_review_thread(
     per_turn_config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
     per_turn_config.model_reasoning_summary = ReasoningSummaryConfig::Detailed;
     per_turn_config.features = review_features.clone();
-    if let Some(model_info) = get_model_info(&model_family) {
-        per_turn_config.model_context_window = Some(model_info.context_window);
-    }
 
     let otel_event_manager = parent_turn_context
         .client
@@ -2097,7 +2089,8 @@ pub(crate) async fn run_task(
                 } = turn_output;
                 let limit = turn_context
                     .client
-                    .get_auto_compact_token_limit()
+                    .get_model_family()
+                    .auto_compact_token_limit()
                     .unwrap_or(i64::MAX);
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= limit;
