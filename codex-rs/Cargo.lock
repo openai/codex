@@ -239,6 +239,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "askama"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f75363874b771be265f4ffe307ca705ef6f3baa19011c149da8674a87f1b75c4"
+dependencies = [
+ "askama_derive",
+ "itoa",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "askama_derive"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "129397200fe83088e8a68407a8e2b1f826cf0086b21ccdb866a722c8bcd3a94f"
+dependencies = [
+ "askama_parser",
+ "basic-toml",
+ "memchr",
+ "proc-macro2",
+ "quote",
+ "rustc-hash",
+ "serde",
+ "serde_derive",
+ "syn 2.0.104",
+]
+
+[[package]]
+name = "askama_parser"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6ab5630b3d5eaf232620167977f95eb51f3432fc76852328774afbd242d4358"
+dependencies = [
+ "memchr",
+ "serde",
+ "serde_derive",
+ "winnow",
+]
+
+[[package]]
 name = "assert-json-diff"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -514,6 +556,15 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "basic-toml"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba62675e8242a4c4e806d12f11d136e626e6c8361d6b829310732241652a178a"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "beef"
@@ -851,7 +902,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 0.9.5",
- "toml_edit",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -1087,6 +1137,7 @@ name = "codex-core"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "askama",
  "assert_cmd",
  "assert_matches",
  "async-channel",
@@ -1099,7 +1150,6 @@ dependencies = [
  "codex-apply-patch",
  "codex-arg0",
  "codex-async-utils",
- "codex-client",
  "codex-core",
  "codex-execpolicy",
  "codex-file-search",
@@ -1255,7 +1305,7 @@ dependencies = [
  "allocative",
  "anyhow",
  "clap",
- "derive_more 2.1.0",
+ "derive_more 2.0.1",
  "env_logger",
  "log",
  "multimap",
@@ -1547,7 +1597,7 @@ dependencies = [
  "codex-windows-sandbox",
  "color-eyre",
  "crossterm",
- "derive_more 2.1.0",
+ "derive_more 2.0.1",
  "diffy",
  "dirs",
  "dunce",
@@ -1596,68 +1646,11 @@ name = "codex-tui2"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "arboard",
- "assert_matches",
- "async-stream",
- "base64",
- "chrono",
  "clap",
- "codex-ansi-escape",
- "codex-app-server-protocol",
  "codex-arg0",
- "codex-backend-client",
  "codex-common",
  "codex-core",
- "codex-feedback",
- "codex-file-search",
- "codex-login",
- "codex-protocol",
  "codex-tui",
- "codex-windows-sandbox",
- "color-eyre",
- "crossterm",
- "derive_more 2.1.0",
- "diffy",
- "dirs",
- "dunce",
- "image",
- "insta",
- "itertools 0.14.0",
- "lazy_static",
- "libc",
- "mcp-types",
- "opentelemetry-appender-tracing",
- "pathdiff",
- "pretty_assertions",
- "pulldown-cmark",
- "rand 0.9.2",
- "ratatui",
- "ratatui-macros",
- "regex-lite",
- "reqwest",
- "serde",
- "serde_json",
- "serial_test",
- "shlex",
- "strum 0.27.2",
- "strum_macros 0.27.2",
- "supports-color 3.0.2",
- "tempfile",
- "textwrap 0.16.2",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "toml 0.9.5",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "tree-sitter-bash",
- "tree-sitter-highlight",
- "unicode-segmentation",
- "unicode-width 0.2.1",
- "url",
- "uuid",
- "vt100",
 ]
 
 [[package]]
@@ -1837,9 +1830,9 @@ dependencies = [
 
 [[package]]
 name = "convert_case"
-version = "0.10.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+checksum = "bb402b8d4c85569410425650ce3eddc7d698ed96d39a73f941b08fb63082f1e7"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -2178,11 +2171,11 @@ dependencies = [
 
 [[package]]
 name = "derive_more"
-version = "2.1.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10b768e943bed7bf2cab53df09f4bc34bfd217cdb57d971e769874c9a6710618"
+checksum = "093242cf7570c207c83073cf82f79706fe7b8317e98620a47d5be7c3d8497678"
 dependencies = [
- "derive_more-impl 2.1.0",
+ "derive_more-impl 2.0.1",
 ]
 
 [[package]]
@@ -2200,14 +2193,13 @@ dependencies = [
 
 [[package]]
 name = "derive_more-impl"
-version = "2.1.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d286bfdaf75e988b4a78e013ecd79c581e06399ab53fbacd2d916c2f904f30b"
+checksum = "bda628edc44c4bb645fbe0f758797143e4e07926f7ebf4e9bdfbd3d2ce621df3"
 dependencies = [
- "convert_case 0.10.0",
+ "convert_case 0.7.1",
  "proc-macro2",
  "quote",
- "rustc_version",
  "syn 2.0.104",
  "unicode-xid",
 ]
@@ -6991,9 +6983,9 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "ts-rs"
-version = "11.1.0"
+version = "11.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4994acea2522cd2b3b85c1d9529a55991e3ad5e25cdcd3de9d505972c4379424"
+checksum = "6ef1b7a6d914a34127ed8e1fa927eb7088903787bcded4fa3eef8f85ee1568be"
 dependencies = [
  "serde_json",
  "thiserror 2.0.17",
@@ -7003,9 +6995,9 @@ dependencies = [
 
 [[package]]
 name = "ts-rs-macros"
-version = "11.1.0"
+version = "11.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee6ff59666c9cbaec3533964505d39154dc4e0a56151fdea30a09ed0301f62e2"
+checksum = "e9d4ed7b4c18cc150a6a0a1e9ea1ecfa688791220781af6e119f9599a8502a0a"
 dependencies = [
  "proc-macro2",
  "quote",
