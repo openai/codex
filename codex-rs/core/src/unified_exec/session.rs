@@ -31,8 +31,25 @@ pub(crate) struct OutputBufferState {
 
 impl OutputBufferState {
     pub(super) fn push_chunk(&mut self, chunk: Vec<u8>) {
-        self.total_bytes = self.total_bytes.saturating_add(chunk.len());
-        self.chunks.push_back(chunk);
+        if chunk.is_empty() {
+            return;
+        }
+
+        // On Windows (especially with ConPTY) output can arrive in many tiny chunks.
+        // Coalesce them to avoid pathological behavior in drain/collect paths.
+        const MAX_COALESCED_CHUNK_BYTES: usize = 8_192;
+
+        let mut chunk = chunk;
+        let chunk_len = chunk.len();
+        self.total_bytes = self.total_bytes.saturating_add(chunk_len);
+
+        if let Some(tail) = self.chunks.back_mut()
+            && tail.len().saturating_add(chunk_len) <= MAX_COALESCED_CHUNK_BYTES
+        {
+            tail.append(&mut chunk);
+        } else {
+            self.chunks.push_back(chunk);
+        }
 
         let mut excess = self
             .total_bytes

@@ -2427,14 +2427,15 @@ async fn windows_unified_exec_write_stdin_strips_escapes() -> Result<()> {
     } = builder.build(&server).await?;
 
     let open_call_id = "windows-uexec-open-stdin";
+    let script = "$esc=[char]27; while ($true) { $line=[Console]::In.ReadLine(); if ($null -eq $line) { break }; Write-Output ($esc + '[31mUEXEC-WINDOWS-STDIN' + $esc + '[0m') }";
     let open_args = json!({
-        "cmd": "powershell -NoLogo -NoProfile",
+        "cmd": script,
         "yield_time_ms": 2_000,
     });
 
     let stdin_call_id = "windows-uexec-stdin-escapes";
     let stdin_args = json!({
-        "chars": "Write-Output \"UEXEC-WINDOWS-STDIN\"\n",
+        "chars": "trigger\r\n",
         "session_id": 1000,
         "yield_time_ms": 5_000,
     });
