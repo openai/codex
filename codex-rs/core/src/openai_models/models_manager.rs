@@ -1,6 +1,7 @@
 use chrono::Utc;
 use codex_api::ModelsClient;
 use codex_api::ReqwestTransport;
+use codex_app_server_protocol::AuthMode;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
@@ -61,7 +62,7 @@ impl ModelsManager {
         }
 
         let auth = self.auth_manager.auth();
-        let api_provider = provider.to_api_provider(auth.as_ref().map(|auth| auth.mode))?;
+        let api_provider = provider.to_api_provider(Some(AuthMode::ChatGPT))?;
         let api_auth = auth_provider_from_auth(auth.clone(), provider).await?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
