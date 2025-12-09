@@ -95,6 +95,9 @@ pub(crate) enum ExecApprovalRequirement {
         /// The first attempt should skip sandboxing (e.g., when explicitly
         /// greenlit by policy).
         bypass_sandbox: bool,
+        /// Proposed execpolicy amendment to skip future approvals for similar commands
+        /// Only applies if the command fails to run in sandbox and codex prompts the user to run outside the sandbox.
+        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     },
     /// Approval required for this tool call.
     NeedsApproval {
@@ -111,6 +114,10 @@ impl ExecApprovalRequirement {
     pub fn proposed_execpolicy_amendment(&self) -> Option<&ExecPolicyAmendment> {
         match self {
             Self::NeedsApproval {
+                proposed_execpolicy_amendment: Some(prefix),
+                ..
+            } => Some(prefix),
+            Self::Skip {
                 proposed_execpolicy_amendment: Some(prefix),
                 ..
             } => Some(prefix),
@@ -140,6 +147,7 @@ pub(crate) fn default_exec_approval_requirement(
     } else {
         ExecApprovalRequirement::Skip {
             bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
         }
     }
 }

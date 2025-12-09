@@ -26,8 +26,6 @@ use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
-use crate::openai_model_info::get_model_info;
-use crate::openai_models::model_family::find_family_for_model;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
@@ -1106,22 +1104,11 @@ impl Config {
 
         let forced_login_method = cfg.forced_login_method;
 
+        // todo(aibrahim): make model optional
         let model = model
             .or(config_profile.model)
             .or(cfg.model)
             .unwrap_or_else(default_model);
-
-        let model_family = find_family_for_model(&model);
-
-        let openai_model_info = get_model_info(&model_family);
-        let model_context_window = cfg
-            .model_context_window
-            .or_else(|| openai_model_info.as_ref().map(|info| info.context_window));
-        let model_auto_compact_token_limit = cfg.model_auto_compact_token_limit.or_else(|| {
-            openai_model_info
-                .as_ref()
-                .and_then(|info| info.auto_compact_token_limit)
-        });
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();
@@ -1168,8 +1155,8 @@ impl Config {
         let config = Self {
             model,
             review_model,
-            model_context_window,
-            model_auto_compact_token_limit,
+            model_context_window: cfg.model_context_window,
+            model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
@@ -2950,8 +2937,8 @@ model_verbosity = "high"
             Config {
                 model: "o3".to_string(),
                 review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-                model_context_window: Some(200_000),
-                model_auto_compact_token_limit: Some(180_000),
+                model_context_window: None,
+                model_auto_compact_token_limit: None,
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
@@ -3025,8 +3012,8 @@ model_verbosity = "high"
         let expected_gpt3_profile_config = Config {
             model: "gpt-3.5-turbo".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_context_window: Some(16_385),
-            model_auto_compact_token_limit: Some(14_746),
+            model_context_window: None,
+            model_auto_compact_token_limit: None,
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: AskForApproval::UnlessTrusted,
@@ -3115,8 +3102,8 @@ model_verbosity = "high"
         let expected_zdr_profile_config = Config {
             model: "o3".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_context_window: Some(200_000),
-            model_auto_compact_token_limit: Some(180_000),
+            model_context_window: None,
+            model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
@@ -3191,8 +3178,8 @@ model_verbosity = "high"
         let expected_gpt5_profile_config = Config {
             model: "gpt-5.1".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_context_window: Some(272_000),
-            model_auto_compact_token_limit: Some(244_800),
+            model_context_window: None,
+            model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,

@@ -1,3 +1,9 @@
+#[cfg(unix)]
+use std::ffi::OsString;
+
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+
 /// This is designed to be called pre-main() (using `#[ctor::ctor]`) to perform
 /// various process hardening steps, such as
 /// - disabling core dumps
@@ -51,15 +57,7 @@ pub(crate) fn pre_main_hardening_linux() {
 
     // Official Codex releases are MUSL-linked, which means that variables such
     // as LD_PRELOAD are ignored anyway, but just to be sure, clear them here.
-    let ld_keys: Vec<String> = std::env::vars()
-        .filter_map(|(key, _)| {
-            if key.starts_with("LD_") {
-                Some(key)
-            } else {
-                None
-            }
-        })
-        .collect();
+    let ld_keys = env_keys_with_prefix(std::env::vars_os(), b"LD_");
 
     for key in ld_keys {
         unsafe {
@@ -73,15 +71,7 @@ pub(crate) fn pre_main_hardening_bsd() {
     // FreeBSD/OpenBSD: set RLIMIT_CORE to 0 and clear LD_* env vars
     set_core_file_size_limit_to_zero();
 
-    let ld_keys: Vec<String> = std::env::vars()
-        .filter_map(|(key, _)| {
-            if key.starts_with("LD_") {
-                Some(key)
-            } else {
-                None
-            }
-        })
-        .collect();
+    let ld_keys = env_keys_with_prefix(std::env::vars_os(), b"LD_");
     for key in ld_keys {
         unsafe {
             std::env::remove_var(key);
@@ -106,15 +96,7 @@ pub(crate) fn pre_main_hardening_macos() {
 
     // Remove all DYLD_ environment variables, which can be used to subvert
     // library loading.
-    let dyld_keys: Vec<String> = std::env::vars()
-        .filter_map(|(key, _)| {
-            if key.starts_with("DYLD_") {
-                Some(key)
-            } else {
-                None
-            }
-        })
-        .collect();
+    let dyld_keys = env_keys_with_prefix(std::env::vars_os(), b"DYLD_");
 
     for key in dyld_keys {
         unsafe {
@@ -143,4 +125,66 @@ fn set_core_file_size_limit_to_zero() {
 #[cfg(windows)]
 pub(crate) fn pre_main_hardening_windows() {
     // TODO(mbolin): Perform the appropriate configuration for Windows.
+}
+
+#[cfg(unix)]
+fn env_keys_with_prefix<I>(vars: I, prefix: &[u8]) -> Vec<OsString>
+where
+    I: IntoIterator<Item = (OsString, OsString)>,
+{
+    vars.into_iter()
+        .filter_map(|(key, _)| {
+            key.as_os_str()
+                .as_bytes()
+                .starts_with(prefix)
+                .then_some(key)
+        })
+        .collect()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    fn env_keys_with_prefix_handles_non_utf8_entries() {
+        // RÖDBURK
+        let non_utf8_key1 = OsStr::from_bytes(b"R\xD6DBURK").to_os_string();
+        assert!(non_utf8_key1.clone().into_string().is_err());
+        let non_utf8_key2 = OsString::from_vec(vec![b'L', b'D', b'_', 0xF0]);
+        assert!(non_utf8_key2.clone().into_string().is_err());
+
+        let non_utf8_value = OsString::from_vec(vec![0xF0, 0x9F, 0x92, 0xA9]);
+
+        let keys = env_keys_with_prefix(
+            vec![
+                (non_utf8_key1, non_utf8_value.clone()),
+                (non_utf8_key2.clone(), non_utf8_value),
+            ],
+            b"LD_",
+        );
+        assert_eq!(
+            keys,
+            vec![non_utf8_key2],
+            "non-UTF-8 env entries with LD_ prefix should be retained"
+        );
+    }
+
+    #[test]
+    fn env_keys_with_prefix_filters_only_matching_keys() {
+        let ld_test_var = OsStr::from_bytes(b"LD_TEST");
+        let vars = vec![
+            (OsString::from("PATH"), OsString::from("/usr/bin")),
+            (ld_test_var.to_os_string(), OsString::from("1")),
+            (OsString::from("DYLD_FOO"), OsString::from("bar")),
+        ];
+
+        let keys = env_keys_with_prefix(vars, b"LD_");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].as_os_str(), ld_test_var);
+    }
 }

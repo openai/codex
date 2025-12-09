@@ -7,6 +7,7 @@ use chrono::DateTime;
 use chrono::Local;
 use codex_common::create_config_summary_entries;
 use codex_core::config::Config;
+use codex_core::openai_models::model_family::ModelFamily;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
 use codex_protocol::ConversationId;
@@ -70,6 +71,7 @@ struct StatusHistoryCell {
 pub(crate) fn new_status_output(
     config: &Config,
     auth_manager: &AuthManager,
+    model_family: &ModelFamily,
     total_usage: &TokenUsage,
     context_usage: Option<&TokenUsage>,
     session_id: &Option<ConversationId>,
@@ -81,6 +83,7 @@ pub(crate) fn new_status_output(
     let card = StatusHistoryCell::new(
         config,
         auth_manager,
+        model_family,
         total_usage,
         context_usage,
         session_id,
@@ -97,6 +100,7 @@ impl StatusHistoryCell {
     fn new(
         config: &Config,
         auth_manager: &AuthManager,
+        model_family: &ModelFamily,
         total_usage: &TokenUsage,
         context_usage: Option<&TokenUsage>,
         session_id: &Option<ConversationId>,
@@ -119,7 +123,7 @@ impl StatusHistoryCell {
         let agents_summary = compose_agents_summary(config);
         let account = compose_account_display(auth_manager, plan_type);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
-        let context_window = config.model_context_window.and_then(|window| {
+        let context_window = model_family.context_window.and_then(|window| {
             context_usage.map(|usage| StatusContextWindowData {
                 percent_remaining: usage.percent_of_context_window_remaining(window),
                 tokens_in_context: usage.tokens_in_context_window(),
