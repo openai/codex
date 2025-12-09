@@ -170,7 +170,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_models_apply_remote_base_instructions_with_parallel_append() -> Result<()> {
+async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -220,7 +220,6 @@ async fn remote_models_apply_remote_base_instructions_with_parallel_append() -> 
 
     let mut builder = test_codex().with_config(|config| {
         config.features.enable(Feature::RemoteModels);
-        config.features.enable(Feature::ParallelToolCalls);
         config.model = "gpt-5.1".to_string();
     });
 
@@ -264,10 +263,7 @@ async fn remote_models_apply_remote_base_instructions_with_parallel_append() -> 
 
     let body = response_mock.single_request().body_json();
     let instructions = body["instructions"].as_str().unwrap();
-    assert!(
-        instructions.starts_with(remote_base),
-        "expected remote base instructions to be used"
-    );
+    assert_eq!(instructions, remote_base);
 
     Ok(())
 }
