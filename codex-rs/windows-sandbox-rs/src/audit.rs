@@ -2,7 +2,7 @@ use crate::acl::add_deny_write_ace;
 use crate::acl::path_quick_mask_allows;
 use crate::cap::cap_sid_file;
 use crate::cap::load_or_create_cap_sids;
-use crate::logging::log_note;
+use crate::logging::{debug_log, log_note};
 use crate::policy::SandboxPolicy;
 use crate::token::convert_string_sid_to_sid;
 use crate::token::world_sid;
@@ -96,6 +96,21 @@ pub fn audit_everyone_writable(
     let mut flagged: Vec<PathBuf> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut checked = 0usize;
+    let check_world_writable = |path: &Path| -> bool {
+        match unsafe { path_has_world_write_allow(path) } {
+            Ok(has) => has,
+            Err(err) => {
+                debug_log(
+                    &format!(
+                        "AUDIT: treating unreadable ACL as not world-writable: {} ({err})",
+                        path.display()
+                    ),
+                    logs_base_dir,
+                );
+                false
+            }
+        }
+    };
     // Fast path: check CWD immediate children first so workspace issues are caught early.
     if let Ok(read) = std::fs::read_dir(cwd) {
         for ent in read.flatten().take(MAX_ITEMS_PER_DIR as usize) {
@@ -113,7 +128,7 @@ pub fn audit_everyone_writable(
             }
             let p = ent.path();
             checked += 1;
-            let has = unsafe { path_has_world_write_allow(&p)? };
+            let has = check_world_writable(&p);
             if has {
                 let key = normalize_path_key(&p);
                 if seen.insert(key) {
@@ -131,7 +146,7 @@ pub fn audit_everyone_writable(
             break;
         }
         checked += 1;
-        let has_root = unsafe { path_has_world_write_allow(&root)? };
+        let has_root = check_world_writable(&root);
         if has_root {
             let key = normalize_path_key(&root);
             if seen.insert(key) {
@@ -163,7 +178,7 @@ pub fn audit_everyone_writable(
                 }
                 if ft.is_dir() {
                     checked += 1;
-                    let has_child = unsafe { path_has_world_write_allow(&p)? };
+                    let has_child = check_world_writable(&p);
                     if has_child {
                         let key = normalize_path_key(&p);
                         if seen.insert(key) {

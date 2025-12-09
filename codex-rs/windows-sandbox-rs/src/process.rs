@@ -122,29 +122,28 @@ pub unsafe fn create_process_as_user(
     // Point explicitly at the interactive desktop.
     let desktop = to_wide("Winsta0\\Default");
     si.lpDesktop = desktop.as_ptr() as *mut u16;
-    if let Some((stdin_h, stdout_h, stderr_h)) = stdio {
-        si.dwFlags |= STARTF_USESTDHANDLES;
-        si.hStdInput = stdin_h;
-        si.hStdOutput = stdout_h;
-        si.hStdError = stderr_h;
-    } else {
-        ensure_inheritable_stdio(&mut si)?;
-    }
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
     // Ensure handles are inheritable when custom stdio is supplied.
-    let inherit_handles = if let Some((stdin_h, stdout_h, stderr_h)) = stdio {
-        let to_inherit = [stdin_h, stdout_h, stderr_h];
-        for h in to_inherit {
-            if SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
-                return Err(anyhow!(
-                    "SetHandleInformation failed for stdio handle: {}",
-                    GetLastError()
-                ));
+    let inherit_handles = match stdio {
+        Some((stdin_h, stdout_h, stderr_h)) => {
+            si.dwFlags |= STARTF_USESTDHANDLES;
+            si.hStdInput = stdin_h;
+            si.hStdOutput = stdout_h;
+            si.hStdError = stderr_h;
+            for h in [stdin_h, stdout_h, stderr_h] {
+                if SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
+                    return Err(anyhow!(
+                        "SetHandleInformation failed for stdio handle: {}",
+                        GetLastError()
+                    ));
+                }
             }
+            true
         }
-        true
-    } else {
-        false
+        None => {
+            ensure_inheritable_stdio(&mut si)?;
+            true
+        }
     };
 
     let ok = CreateProcessAsUserW(
