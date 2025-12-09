@@ -344,7 +344,12 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 
     assert_eq!(begin_event.cwd, cwd.path());
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::TaskComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
 
     Ok(())
 }
