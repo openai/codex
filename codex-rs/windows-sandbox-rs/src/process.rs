@@ -172,7 +172,7 @@ pub unsafe fn create_process_as_user(
             si.dwFlags,
         );
         logging::debug_log(&msg, logs_base_dir);
-        return Err(anyhow!("CreateProcessWithTokenW failed: {}", err));
+        return Err(anyhow!("CreateProcessAsUserW failed: {}", err));
     }
     Ok((pi, si))
 }

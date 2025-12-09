@@ -284,6 +284,7 @@ pub unsafe fn dacl_effective_allows_write(p_dacl: *mut ACL, psid: *mut c_void) -
     dacl_has_write_allow_for_sid(p_dacl, psid)
 }
 
+#[allow(dead_code)]
 pub unsafe fn dacl_effective_allows_mask(
     p_dacl: *mut ACL,
     psid: *mut c_void,
@@ -324,10 +325,12 @@ pub unsafe fn dacl_effective_allows_mask(
     false
 }
 
+#[allow(dead_code)]
 const WRITE_ALLOW_MASK: u32 = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE;
 
 /// Ensure all provided SIDs have a write-capable allow ACE on the path.
 /// Returns true if any ACE was added.
+#[allow(dead_code)]
 pub unsafe fn ensure_allow_write_aces(path: &Path, sids: &[*mut c_void]) -> Result<bool> {
     let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
     let mut entries: Vec<EXPLICIT_ACCESS_W> = Vec::new();
