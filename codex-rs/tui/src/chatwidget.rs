@@ -2647,7 +2647,7 @@ impl ChatWidget {
             return None;
         }
         let cwd = self.config.cwd.clone();
-        let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
+        let env_map = collect_string_env_map();
         match codex_windows_sandbox::apply_world_writable_scan_and_denies(
             self.config.codex_home.as_path(),
             cwd.as_path(),
@@ -3448,6 +3448,13 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Type to search commits".to_string()),
         ..Default::default()
     });
+}
+
+#[cfg(target_os = "windows")]
+fn collect_string_env_map() -> std::collections::HashMap<String, String> {
+    std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
 }
 
 #[cfg(test)]
