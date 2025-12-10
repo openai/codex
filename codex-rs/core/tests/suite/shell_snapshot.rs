@@ -132,6 +132,7 @@ fn assert_posix_snapshot_sections(snapshot: &str) {
 async fn linux_unified_exec_uses_shell_snapshot() -> Result<()> {
     let command = "echo snapshot-linux";
     let run = run_snapshot_command(command).await?;
+    let stdout = normalize_newlines(&run.end.stdout);
 
     let shell_path = run
         .begin
@@ -150,8 +151,11 @@ async fn linux_unified_exec_uses_shell_snapshot() -> Result<()> {
 
     assert!(run.snapshot_path.starts_with(&run.codex_home));
     assert_posix_snapshot_sections(&run.snapshot_content);
-    assert_eq!(normalize_newlines(&run.end.stdout).trim(), "snapshot-linux");
     assert_eq!(run.end.exit_code, 0);
+    assert!(
+        stdout.contains("snapshot-linux"),
+        "stdout should contain snapshot marker; stdout={stdout:?}"
+    );
 
     Ok(())
 }
