@@ -42,7 +42,9 @@ prefix_rule(
         codex_home.as_ref(),
     )
     .await?;
-    let transport = create_transport(codex_home.as_ref())?;
+    let dotslash_cache_temp_dir = TempDir::new()?;
+    let dotslash_cache = dotslash_cache_temp_dir.path();
+    let transport = create_transport(codex_home.as_ref(), dotslash_cache).await?;
 
     // Create an MCP client that approves expected elicitation messages.
     let project_root = TempDir::new()?;

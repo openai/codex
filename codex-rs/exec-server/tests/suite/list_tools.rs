@@ -22,7 +22,9 @@ async fn list_tools() -> Result<()> {
         policy_dir.join("default.codexpolicy"),
         r#"prefix_rule(pattern=["ls"], decision="prompt")"#,
     )?;
-    let transport = create_transport(codex_home.path())?;
+    let dotslash_cache_temp_dir = TempDir::new()?;
+    let dotslash_cache = dotslash_cache_temp_dir.path();
+    let transport = create_transport(codex_home.path(), dotslash_cache).await?;
 
     let service = ().serve(transport).await?;
     let tools = service.list_tools(Default::default()).await?.tools;
