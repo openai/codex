@@ -354,11 +354,26 @@ enum TranscriptScroll {
         line_in_cell: usize,
     },
 }
-
+/// Content-relative selection within the inline transcript viewport.
+///
+/// Selection endpoints are expressed in terms of flattened, wrapped transcript
+/// line indices and columns, so the highlight tracks logical conversation
+/// content even when the viewport scrolls or the terminal is resized.
 #[derive(Debug, Clone, Copy, Default)]
 struct TranscriptSelection {
-    anchor: Option<(u16, u16)>,
-    head: Option<(u16, u16)>,
+    anchor: Option<TranscriptSelectionPoint>,
+    head: Option<TranscriptSelectionPoint>,
+}
+
+/// A single endpoint of a transcript selection.
+///
+/// `line_index` is an index into the flattened wrapped transcript lines, and
+/// `column` is a zero-based column offset within that visual line, counted from
+/// the first content column to the right of the transcript gutter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TranscriptSelectionPoint {
+    line_index: usize,
+    column: u16,
 }
 impl App {
     async fn shutdown_current_conversation(&mut self) {
@@ -823,9 +838,9 @@ impl App {
     ///
     /// - Mouse wheel movement scrolls the conversation history by small, fixed increments,
     ///   independent of the terminal's own scrollback.
-    /// - Mouse clicks and drags adjust a text selection defined in terms of transcript
-    ///   screen coordinates, so the selection stays anchored to the rendered transcript
-    ///   region above the composer.
+    /// - Mouse clicks and drags adjust a text selection defined in terms of
+    ///   flattened transcript lines and columns, so the selection is anchored
+    ///   to the underlying content rather than absolute screen rows.
     /// - When a selection begins while the view is following the bottom and a task is
     ///   actively running (e.g., streaming a response), the scroll mode is first converted
     ///   into an anchored position so that ongoing updates no longer move the viewport
@@ -908,8 +923,15 @@ impl App {
                         transcript_area.width,
                     );
                 }
-                self.transcript_selection.anchor = Some((clamped_x, clamped_y));
-                self.transcript_selection.head = Some((clamped_x, clamped_y));
+                if let Some(point) = self.transcript_point_from_coordinates(
+                    transcript_area,
+                    base_x,
+                    clamped_x,
+                    clamped_y,
+                ) {
+                    self.transcript_selection.anchor = Some(point);
+                    self.transcript_selection.head = Some(point);
+                }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if streaming
@@ -921,8 +943,15 @@ impl App {
                         transcript_area.width,
                     );
                 }
-                if self.transcript_selection.anchor.is_some() {
-                    self.transcript_selection.head = Some((clamped_x, clamped_y));
+                if self.transcript_selection.anchor.is_some()
+                    && let Some(point) = self.transcript_point_from_coordinates(
+                        transcript_area,
+                        base_x,
+                        clamped_x,
+                        clamped_y,
+                    )
+                {
+                    self.transcript_selection.head = Some(point);
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
@@ -1175,6 +1204,13 @@ impl App {
             .collect()
     }
 
+    /// Apply the current transcript selection to the given buffer.
+    ///
+    /// The selection is defined in terms of flattened wrapped transcript line
+    /// indices and columns. This method maps those content-relative endpoints
+    /// into the currently visible viewport based on `transcript_view_top` and
+    /// `transcript_total_lines`, so the highlight moves with the content as the
+    /// user scrolls.
     fn apply_transcript_selection(&self, area: Rect, buf: &mut Buffer) {
         let (anchor, head) = match (
             self.transcript_selection.anchor,
@@ -1184,20 +1220,33 @@ impl App {
             _ => return,
         };
 
-        let (mut start_x, mut start_y) = anchor;
-        let (mut end_x, mut end_y) = head;
-        if (end_y < start_y) || (end_y == start_y && end_x < start_x) {
-            std::mem::swap(&mut start_x, &mut end_x);
-            std::mem::swap(&mut start_y, &mut end_y);
+        if self.transcript_total_lines == 0 {
+            return;
         }
 
         let base_x = area.x.saturating_add(2);
         let max_x = area.right().saturating_sub(1);
 
-        for y in area.y..area.bottom() {
-            if y < start_y || y > end_y {
+        let mut start = anchor;
+        let mut end = head;
+        if (end.line_index < start.line_index)
+            || (end.line_index == start.line_index && end.column < start.column)
+        {
+            std::mem::swap(&mut start, &mut end);
+        }
+
+        let visible_start = self.transcript_view_top;
+        let visible_end = self
+            .transcript_view_top
+            .saturating_add(area.height as usize)
+            .min(self.transcript_total_lines);
+
+        for (row_index, line_index) in (visible_start..visible_end).enumerate() {
+            if line_index < start.line_index || line_index > end.line_index {
                 continue;
             }
+
+            let y = area.y + row_index as u16;
 
             let mut first_text_x = None;
             let mut last_text_x = None;
@@ -1212,16 +1261,27 @@ impl App {
             }
 
             let (text_start, text_end) = match (first_text_x, last_text_x) {
-                (Some(s), Some(e)) => (s, e),
+                // Treat indentation spaces as part of the selectable region by
+                // starting from the first content column to the right of the
+                // transcript gutter, but still clamp to the last non-space
+                // glyph so trailing padding is not included.
+                (Some(_), Some(e)) => (base_x, e),
                 _ => continue,
             };
 
-            let row_sel_start = if y == start_y {
-                start_x.max(base_x)
+            let line_start_col = if line_index == start.line_index {
+                start.column
             } else {
-                base_x
+                0
             };
-            let row_sel_end = if y == end_y { end_x.min(max_x) } else { max_x };
+            let line_end_col = if line_index == end.line_index {
+                end.column
+            } else {
+                max_x.saturating_sub(base_x)
+            };
+
+            let row_sel_start = base_x.saturating_add(line_start_col);
+            let row_sel_end = base_x.saturating_add(line_end_col).min(max_x);
 
             if row_sel_start > row_sel_end {
                 continue;
@@ -1244,10 +1304,10 @@ impl App {
 
     /// Copy the currently selected transcript region to the system clipboard.
     ///
-    /// This mirrors the legacy TUI behavior but operates on screen coordinates
-    /// (x, y) instead of transcript line indices. The selection is interpreted
-    /// relative to the inline transcript area above the composer, skipping the
-    /// left gutter so copied text does not include UI chrome.
+    /// The selection is defined in terms of flattened wrapped transcript line
+    /// indices and columns, and this method reconstructs the same wrapped
+    /// transcript used for on-screen rendering so the copied text closely
+    /// matches the highlighted region.
     fn copy_transcript_selection(&mut self, tui: &tui::Tui) {
         let (anchor, head) = match (
             self.transcript_selection.anchor,
@@ -1281,54 +1341,38 @@ impl App {
             height: transcript_height,
         };
 
-        let mut buf = Buffer::empty(transcript_area);
-
         let cells = self.transcript_cells.clone();
         let (lines, _) = Self::build_transcript_lines(&cells, transcript_area.width);
-        let total_lines = lines.len();
+        if lines.is_empty() {
+            return;
+        }
+
+        let wrapped = crate::wrapping::word_wrap_lines_borrowed(
+            &lines,
+            transcript_area.width.max(1) as usize,
+        );
+        let total_lines = wrapped.len();
         if total_lines == 0 {
             return;
         }
 
         let max_visible = transcript_area.height as usize;
-        let max_start = total_lines.saturating_sub(max_visible);
-        let top_offset = match self.transcript_scroll {
-            TranscriptScroll::ToBottom => max_start,
-            TranscriptScroll::Scrolled {
-                cell_index,
-                line_in_cell,
-            } => {
-                let mut anchor_idx = None;
-                for (idx, entry) in Self::build_transcript_lines(&cells, transcript_area.width)
-                    .1
-                    .iter()
-                    .enumerate()
-                {
-                    if let Some((ci, li)) = entry
-                        && *ci == cell_index
-                        && *li == line_in_cell
-                    {
-                        anchor_idx = Some(idx);
-                        break;
-                    }
-                }
-                anchor_idx.unwrap_or(max_start).min(max_start)
-            }
-        };
+        let visible_start = self
+            .transcript_view_top
+            .min(total_lines.saturating_sub(max_visible));
+        let visible_end = std::cmp::min(visible_start + max_visible, total_lines);
 
+        let mut buf = Buffer::empty(transcript_area);
         Clear.render_ref(transcript_area, &mut buf);
 
-        for (row_index, line_index) in (top_offset..total_lines).enumerate() {
-            if row_index >= max_visible {
-                break;
-            }
+        for (row_index, line_index) in (visible_start..visible_end).enumerate() {
             let row_area = Rect {
                 x: transcript_area.x,
                 y: transcript_area.y + row_index as u16,
                 width: transcript_area.width,
                 height: 1,
             };
-            lines[line_index].render_ref(row_area, &mut buf);
+            wrapped[line_index].render_ref(row_area, &mut buf);
         }
 
         let base_x = transcript_area.x.saturating_add(2);
@@ -1336,25 +1380,34 @@ impl App {
 
         let mut start = anchor;
         let mut end = head;
-        if (end.1 < start.1) || (end.1 == start.1 && end.0 < start.0) {
+        if (end.line_index < start.line_index)
+            || (end.line_index == start.line_index && end.column < start.column)
+        {
             std::mem::swap(&mut start, &mut end);
         }
-        let (start_x, start_y) = start;
-        let (end_x, end_y) = end;
 
         let mut lines_out: Vec<String> = Vec::new();
 
-        for y in transcript_area.y..transcript_area.bottom() {
-            if y < start_y || y > end_y {
+        for (row_index, line_index) in (visible_start..visible_end).enumerate() {
+            if line_index < start.line_index || line_index > end.line_index {
                 continue;
             }
 
-            let row_sel_start = if y == start_y {
-                start_x.max(base_x)
+            let y = transcript_area.y + row_index as u16;
+
+            let line_start_col = if line_index == start.line_index {
+                start.column
             } else {
-                base_x
+                0
             };
-            let row_sel_end = if y == end_y { end_x.min(max_x) } else { max_x };
+            let line_end_col = if line_index == end.line_index {
+                end.column
+            } else {
+                max_x.saturating_sub(base_x)
+            };
+
+            let row_sel_start = base_x.saturating_add(line_start_col);
+            let row_sel_end = base_x.saturating_add(line_end_col).min(max_x);
 
             if row_sel_start > row_sel_end {
                 continue;
@@ -1373,7 +1426,11 @@ impl App {
             }
 
             let (text_start, text_end) = match (first_text_x, last_text_x) {
-                (Some(s), Some(e)) => (s, e),
+                // Treat indentation spaces as part of the copyable region by
+                // starting from the first content column to the right of the
+                // transcript gutter, but still clamp to the last non-space
+                // glyph so trailing padding is not included.
+                (Some(_), Some(e)) => (base_x, e),
                 _ => {
                     lines_out.push(String::new());
                     continue;
@@ -1406,6 +1463,37 @@ impl App {
         if let Err(err) = clipboard_copy::copy_text(text) {
             tracing::error!(error = %err, "failed to copy selection to clipboard");
         }
+    }
+
+    /// Map a mouse position in the transcript area to a content-relative
+    /// selection point, if there is transcript content to select.
+    fn transcript_point_from_coordinates(
+        &self,
+        transcript_area: Rect,
+        base_x: u16,
+        x: u16,
+        y: u16,
+    ) -> Option<TranscriptSelectionPoint> {
+        if self.transcript_total_lines == 0 {
+            return None;
+        }
+
+        let mut row_index = y.saturating_sub(transcript_area.y);
+        if row_index >= transcript_area.height {
+            if transcript_area.height == 0 {
+                return None;
+            }
+            row_index = transcript_area.height.saturating_sub(1);
+        }
+
+        let max_line = self.transcript_total_lines.saturating_sub(1);
+        let line_index = self
+            .transcript_view_top
+            .saturating_add(usize::from(row_index))
+            .min(max_line);
+        let column = x.saturating_sub(base_x);
+
+        Some(TranscriptSelectionPoint { line_index, column })
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
@@ -2388,6 +2476,68 @@ mod tests {
         let (_, nth, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
         assert_eq!(nth, 1);
         assert_eq!(prefill, "follow-up (edited)");
+    }
+
+    #[test]
+    fn transcript_selection_moves_with_scroll() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut app = make_test_app();
+        app.transcript_total_lines = 3;
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 2,
+        };
+
+        // Anchor selection to logical line 1, columns 2..4.
+        app.transcript_selection = TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 2,
+            }),
+            head: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 4,
+            }),
+        };
+
+        // First render: top of view is line 0, so line 1 maps to the second row.
+        app.transcript_view_top = 0;
+        let mut buf = Buffer::empty(area);
+        for x in 2..area.width {
+            buf[(x, 0)].set_symbol("A");
+            buf[(x, 1)].set_symbol("B");
+        }
+
+        app.apply_transcript_selection(area, &mut buf);
+
+        // No selection should be applied to the first row when the view is anchored at the top.
+        for x in 0..area.width {
+            let cell = &buf[(x, 0)];
+            assert!(cell.style().add_modifier.is_empty());
+        }
+
+        // After scrolling down by one line, the same logical line should now be
+        // rendered on the first row, and the highlight should move with it.
+        app.transcript_view_top = 1;
+        let mut buf_scrolled = Buffer::empty(area);
+        for x in 2..area.width {
+            buf_scrolled[(x, 0)].set_symbol("B");
+            buf_scrolled[(x, 1)].set_symbol("C");
+        }
+
+        app.apply_transcript_selection(area, &mut buf_scrolled);
+
+        // After scrolling, the selection should now be applied on the first row rather than the
+        // second.
+        for x in 0..area.width {
+            let cell = &buf_scrolled[(x, 1)];
+            assert!(cell.style().add_modifier.is_empty());
+        }
     }
 
     #[tokio::test]
