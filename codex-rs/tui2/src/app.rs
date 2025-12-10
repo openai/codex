@@ -3,6 +3,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
+use crate::custom_terminal::Frame;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
@@ -46,9 +47,11 @@ use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -529,19 +532,74 @@ impl App {
                     {
                         return Ok(true);
                     }
-                    tui.draw(
-                        self.chat_widget.desired_height(tui.terminal.size()?.width),
-                        |frame| {
-                            self.chat_widget.render(frame.area(), frame.buffer);
-                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
-                                frame.set_cursor_position((x, y));
-                            }
-                        },
-                    )?;
+                    tui.draw(tui.terminal.size()?.height, |frame| {
+                        let chat_height = self.chat_widget.desired_height(frame.area().width);
+                        let chat_area = Rect {
+                            x: frame.area().x,
+                            y: frame.area().bottom().saturating_sub(chat_height),
+                            width: frame.area().width,
+                            height: chat_height,
+                        };
+                        self.chat_widget.render(chat_area, frame.buffer);
+                        if let Some((x, y)) = self.chat_widget.cursor_pos(chat_area) {
+                            frame.set_cursor_position((x, y));
+                        }
+                        self.render_transcript_cells(frame, &self.transcript_cells);
+                    })?;
                 }
             }
         }
         Ok(true)
+    }
+
+    pub(crate) fn render_transcript_cells(
+        &self,
+        frame: &mut Frame,
+        cells: &[Arc<dyn HistoryCell>],
+    ) {
+        if cells.is_empty() {
+            return;
+        }
+
+        let area = frame.area();
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        let chat_height = self.chat_widget.desired_height(area.width);
+        if chat_height >= area.height {
+            return;
+        }
+
+        let transcript_height = area.height.saturating_sub(chat_height);
+        if transcript_height == 0 {
+            return;
+        }
+
+        let transcript_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: transcript_height,
+        };
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        for cell in cells {
+            let cell_lines = cell.display_lines(transcript_area.width);
+            if cell_lines.is_empty() {
+                continue;
+            }
+            lines.extend(cell_lines);
+        }
+
+        if lines.is_empty() {
+            return;
+        }
+
+        let total = lines.len();
+        let start = total.saturating_sub(transcript_area.height as usize);
+        let visible: Vec<Line<'static>> = lines.into_iter().skip(start).collect();
+        Paragraph::new(visible).render_ref(transcript_area, frame.buffer);
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
@@ -655,8 +713,8 @@ impl App {
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
+                if let Some(Overlay::Transcript(transcript)) = &mut self.overlay {
+                    transcript.insert_cell(cell.clone());
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
@@ -674,8 +732,6 @@ impl App {
                     }
                     if self.overlay.is_some() {
                         self.deferred_history_lines.extend(display);
-                    } else {
-                        tui.insert_history_lines(display);
                     }
                 }
             }
