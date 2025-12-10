@@ -277,7 +277,7 @@ async fn login_account_chatgpt_start() -> Result<()> {
     )
     .await??;
     let cancel_response: CancelLoginAccountResponse = to_response(cancel_resp)?;
-    assert_eq!(cancel_response.status, CancelLoginAccountStatus::Cancelled);
+    assert_eq!(cancel_response.status, CancelLoginAccountStatus::Canceled);
 
     let note = timeout(
         DEFAULT_READ_TIMEOUT,

@@ -583,11 +583,11 @@ pub struct CancelLoginAccountParams {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum CancelLoginAccountStatus {
-    Cancelled,
+    Canceled,
     NotFound,
 }
 

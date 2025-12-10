@@ -186,6 +186,11 @@ struct ActiveLogin {
     login_id: Uuid,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum CancelLoginError {
+    NotFound(Uuid),
+}
+
 impl Drop for ActiveLogin {
     fn drop(&mut self) {
         self.shutdown_handle.shutdown();
@@ -803,7 +808,7 @@ impl CodexMessageProcessor {
     async fn cancel_login_chatgpt_common(
         &mut self,
         login_id: Uuid,
-    ) -> std::result::Result<(), JSONRPCErrorError> {
+    ) -> std::result::Result<(), CancelLoginError> {
         let mut guard = self.active_login.lock().await;
         if guard.as_ref().map(|l| l.login_id) == Some(login_id) {
             if let Some(active) = guard.take() {
@@ -811,11 +816,7 @@ impl CodexMessageProcessor {
             }
             Ok(())
         } else {
-            Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("login id not found: {login_id}"),
-                data: None,
-            })
+            Err(CancelLoginError::NotFound(login_id))
         }
     }
 
@@ -826,7 +827,12 @@ impl CodexMessageProcessor {
                     .send_response(request_id, CancelLoginChatGptResponse {})
                     .await;
             }
-            Err(error) => {
+            Err(CancelLoginError::NotFound(missing_login_id)) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("login id not found: {missing_login_id}"),
+                    data: None,
+                };
                 self.outgoing.send_error(request_id, error).await;
             }
         }
@@ -837,8 +843,8 @@ impl CodexMessageProcessor {
         match Uuid::parse_str(&login_id) {
             Ok(uuid) => {
                 let status = match self.cancel_login_chatgpt_common(uuid).await {
-                    Ok(()) => CancelLoginAccountStatus::Cancelled,
-                    Err(_) => CancelLoginAccountStatus::NotFound,
+                    Ok(()) => CancelLoginAccountStatus::Canceled,
+                    Err(CancelLoginError::NotFound(_)) => CancelLoginAccountStatus::NotFound,
                 };
                 let response = CancelLoginAccountResponse { status };
                 self.outgoing.send_response(request_id, response).await;
