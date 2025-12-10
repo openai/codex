@@ -515,16 +515,16 @@ fn rate_limit_warnings_emit_thresholds() {
         warnings,
         vec![
             String::from(
-                "Heads up, you've used over 75% of your 5h limit. Run /status for a breakdown."
+                "Heads up, you have less than 25% of your 5h limit left. Run /status for a breakdown."
             ),
             String::from(
-                "Heads up, you've used over 75% of your weekly limit. Run /status for a breakdown.",
+                "Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown.",
             ),
             String::from(
-                "Heads up, you've used over 95% of your 5h limit. Run /status for a breakdown."
+                "Heads up, you have less than 5% of your 5h limit left. Run /status for a breakdown."
             ),
             String::from(
-                "Heads up, you've used over 95% of your weekly limit. Run /status for a breakdown.",
+                "Heads up, you have less than 5% of your weekly limit left. Run /status for a breakdown.",
             ),
         ],
         "expected one warning per limit for the highest crossed threshold"
@@ -540,7 +540,7 @@ fn test_rate_limit_warnings_monthly() {
     assert_eq!(
         warnings,
         vec![String::from(
-            "Heads up, you've used over 75% of your monthly limit. Run /status for a breakdown.",
+            "Heads up, you have less than 25% of your monthly limit left. Run /status for a breakdown.",
         ),],
         "expected one warning per limit for the highest crossed threshold"
     );

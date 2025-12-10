@@ -199,8 +199,9 @@ impl RateLimitWarningState {
                 let limit_label = secondary_window_minutes
                     .map(get_limits_duration)
                     .unwrap_or_else(|| "weekly".to_string());
+                let remaining_percent = 100.0 - threshold;
                 warnings.push(format!(
-                    "Heads up, you've used over {threshold:.0}% of your {limit_label} limit. Run /status for a breakdown."
+                    "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
                 ));
             }
         }
@@ -217,8 +218,9 @@ impl RateLimitWarningState {
                 let limit_label = primary_window_minutes
                     .map(get_limits_duration)
                     .unwrap_or_else(|| "5h".to_string());
+                let remaining_percent = 100.0 - threshold;
                 warnings.push(format!(
-                    "Heads up, you've used over {threshold:.0}% of your {limit_label} limit. Run /status for a breakdown."
+                    "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
                 ));
             }
         }
