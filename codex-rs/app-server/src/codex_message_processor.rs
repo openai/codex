@@ -1848,7 +1848,7 @@ impl CodexMessageProcessor {
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
-            let page = match RolloutRecorder::list_conversations(
+            let page = RolloutRecorder::list_conversations(
                 &self.config.codex_home,
                 page_size,
                 cursor_obj.as_ref(),
@@ -1857,16 +1857,11 @@ impl CodexMessageProcessor {
                 fallback_provider.as_str(),
             )
             .await
-            {
-                Ok(p) => p,
-                Err(err) => {
-                    return Err(JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("failed to list conversations: {err}"),
-                        data: None,
-                    });
-                }
-            };
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to list conversations: {err}"),
+                data: None,
+            })?;
 
             let mut filtered = page
                 .items
