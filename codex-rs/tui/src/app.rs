@@ -3,6 +3,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
+use crate::chatwidget::ExternalEditorState;
 use crate::diff_render::DiffSummary;
 use crate::editor;
 use crate::editor::EditorError;
@@ -64,6 +65,7 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
+use tokio::time;
 
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
@@ -518,6 +520,10 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
+        // If the external editor is active, don't process any tui events.
+        if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
+            return Ok(true);
+        }
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -550,6 +556,12 @@ impl App {
                             }
                         },
                     )?;
+                    if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
+                        self.chat_widget
+                            .set_external_editor_state(ExternalEditorState::Active);
+                        self.app_event_tx
+                            .send(AppEvent::LaunchExternalEditorAfterDraw);
+                    }
                 }
             }
         }
@@ -803,6 +815,17 @@ impl App {
             }
             AppEvent::OpenFeedbackConsent { category } => {
                 self.chat_widget.open_feedback_consent(category);
+            }
+            AppEvent::ExternalEditorRequestTimeout => {
+                // Reset the external editor state if it was requested and no draw occurred in time.
+                if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
+                    self.reset_external_editor_state(tui);
+                }
+            }
+            AppEvent::LaunchExternalEditorAfterDraw => {
+                if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
+                    self.launch_external_editor(tui).await;
+                }
             }
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
@@ -1154,6 +1177,7 @@ impl App {
                     .add_to_history(history_cell::new_error_event(
                         "Cannot open external editor: set $VISUAL or $EDITOR".to_string(),
                     ));
+                self.reset_external_editor_state(tui);
                 return;
             }
             Err(err) => {
@@ -1161,20 +1185,10 @@ impl App {
                     .add_to_history(history_cell::new_error_event(format!(
                         "Failed to open editor: {err}",
                     )));
+                self.reset_external_editor_state(tui);
                 return;
             }
         };
-
-        // Seed the temp file with the full composer text (including pending pastes),
-        let seed = self.chat_widget.composer_text_with_pending();
-        // show a footer hint, and make sure it's visible before we drop TUI modes.
-        self.chat_widget.set_footer_hint_override(Some(vec![(
-            EXTERNAL_EDITOR_HINT.to_string(),
-            String::new(),
-        )]));
-        self.force_redraw_now(tui);
-        // Park the cursor after/below the hint.
-        let cursor_row = self.move_cursor_for_external_editor(tui);
 
         // Leave alt screen if active to avoid conflicts with editor.
         // This is defensive as we gate the external editor launch on there being no overlay.
@@ -1188,6 +1202,7 @@ impl App {
             tracing::warn!("failed to restore terminal modes before editor: {err}");
         }
 
+        let seed = self.chat_widget.composer_text_with_pending();
         let editor_result = editor::run_editor(&seed, &editor_cmd).await;
 
         if let Err(err) = tui::set_modes() {
@@ -1196,20 +1211,21 @@ impl App {
         // After the editor exits, reset terminal state, flush any buffered keypresses,
         // and clear the area below the bottom pane, as it may have been scribbled over while the external editor was open.
         Self::flush_terminal_input_buffer();
-        self.clear_bottom_pane_rows(tui, cursor_row);
-        self.chat_widget.set_footer_hint_override(None);
+        let clear_from_row = self
+            .pane_rows(tui)
+            .map(|(start, height)| start.saturating_add(height.saturating_sub(1)));
+        self.clear_bottom_pane_rows(tui, clear_from_row);
+        self.reset_external_editor_state(tui);
 
         if was_alt_screen {
             let _ = tui.enter_alt_screen();
         }
-        self.force_redraw_now(tui);
 
         match editor_result {
             Ok(new_text) => {
                 // Trim trailing whitespace
                 let cleaned = new_text.trim_end().to_string();
                 self.chat_widget.apply_external_edit(cleaned);
-                tui.frame_requester().schedule_frame();
             }
             Err(err) => {
                 self.chat_widget
@@ -1218,6 +1234,7 @@ impl App {
                     )));
             }
         }
+        tui.frame_requester().schedule_frame();
     }
 
     #[cfg(unix)]
@@ -1277,58 +1294,6 @@ impl App {
         }
     }
 
-    /// Park the cursor after/below the hint.
-    /// This prevents keystrokes while the external editor is open from overwriting TUI state.
-    fn move_cursor_for_external_editor(&self, tui: &mut tui::Tui) -> Option<u16> {
-        let (pane_start, pane_height) = self.pane_rows(tui)?;
-        let area = tui.terminal.size().ok()?;
-        let pane_bottom = pane_start.saturating_add(pane_height.saturating_sub(1));
-        let row = pane_bottom
-            .saturating_add(1)
-            .min(area.height.saturating_sub(1));
-        let mut col = tui.terminal.viewport_area.x;
-        let pane_area = ratatui::layout::Rect::new(
-            tui.terminal.viewport_area.x,
-            pane_start,
-            tui.terminal.viewport_area.width,
-            pane_height,
-        );
-        if row == pane_bottom {
-            // When we must reuse the footer row, offset the cursor past the hint so it stays readable.
-            let max_col = tui
-                .terminal
-                .viewport_area
-                .x
-                .saturating_add(tui.terminal.viewport_area.width.saturating_sub(1));
-            if let Some(footer_width) = self.chat_widget.footer_first_line_width(pane_area) {
-                let available = max_col.saturating_sub(col);
-                let offset = footer_width.min(available);
-                col = col.saturating_add(offset);
-            }
-        }
-        if let Err(err) = crossterm::execute!(tui.terminal.backend_mut(), MoveTo(col, row)) {
-            tracing::warn!("failed to reposition cursor before launching editor: {err}");
-            return None;
-        }
-        Some(row)
-    }
-
-    /// Force an immediate render.
-    fn force_redraw_now(&mut self, tui: &mut tui::Tui) {
-        let Ok(area) = tui.terminal.size() else {
-            return;
-        };
-        let desired_height = self.chat_widget.desired_height(area.width);
-        if let Err(err) = tui.draw(desired_height, |frame| {
-            self.chat_widget.render(frame.area(), frame.buffer);
-            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
-                frame.set_cursor_position((x, y));
-            }
-        }) {
-            tracing::warn!("failed to redraw TUI before launching editor: {err:?}");
-        }
-    }
-
     /// Return the top row and height of the bottom pane within the current viewport.
     fn pane_rows(&self, tui: &tui::Tui) -> Option<(u16, u16)> {
         let area = tui.terminal.size().ok()?;
@@ -1347,6 +1312,32 @@ impl App {
             .y
             .saturating_add(viewport.height.saturating_sub(pane_height));
         Some((pane_start, pane_height))
+    }
+
+    fn request_external_editor_launch(&mut self, tui: &mut tui::Tui) {
+        self.chat_widget
+            .set_external_editor_state(ExternalEditorState::Requested);
+        tui.pause_events();
+        self.chat_widget.set_footer_hint_override(Some(vec![(
+            EXTERNAL_EDITOR_HINT.to_string(),
+            String::new(),
+        )]));
+        tui.frame_requester().schedule_frame();
+
+        // Right now this sends the timeout event regardless of whether the frame was drawn.
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            time::sleep(Duration::from_millis(500)).await;
+            tx.send(AppEvent::ExternalEditorRequestTimeout);
+        });
+    }
+
+    fn reset_external_editor_state(&mut self, tui: &mut tui::Tui) {
+        self.chat_widget
+            .set_external_editor_state(ExternalEditorState::Closed);
+        self.chat_widget.set_footer_hint_override(None);
+        tui.resume_events();
+        tui.frame_requester().schedule_frame();
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
@@ -1370,8 +1361,11 @@ impl App {
             } => {
                 // Only launch the external editor if there is no overlay and the bottom pane is not in use.
                 // Note that it can be launched while a task is running to enable editing while the previous turn is ongoing.
-                if self.overlay.is_none() && self.chat_widget.can_launch_external_editor() {
-                    self.launch_external_editor(tui).await;
+                if self.overlay.is_none()
+                    && self.chat_widget.can_launch_external_editor()
+                    && self.chat_widget.external_editor_state() == ExternalEditorState::Closed
+                {
+                    self.request_external_editor_launch(tui);
                 }
             }
             // Esc primes/advances backtracking only in normal (not working) mode
