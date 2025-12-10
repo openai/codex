@@ -1961,13 +1961,18 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     )
     .await;
 
-    let compacted_history = vec![codex_protocol::models::ResponseItem::Message {
-        id: None,
-        role: "assistant".to_string(),
-        content: vec![codex_protocol::models::ContentItem::OutputText {
-            text: "REMOTE_COMPACT_SUMMARY".to_string(),
-        }],
-    }];
+    let compacted_history = vec![
+        codex_protocol::models::ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![codex_protocol::models::ContentItem::OutputText {
+                text: "REMOTE_COMPACT_SUMMARY".to_string(),
+            }],
+        },
+        codex_protocol::models::ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        },
+    ];
     let compact_mock =
         mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
 
@@ -2027,5 +2032,9 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     assert!(
         resume_body.contains("REMOTE_COMPACT_SUMMARY") || resume_body.contains(FINAL_REPLY),
         "resume request should follow remote compact and use compacted history"
+    );
+    assert!(
+        resume_body.contains("ENCRYPTED_COMPACTION_SUMMARY"),
+        "resume request should include compaction summary item"
     );
 }
