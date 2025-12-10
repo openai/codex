@@ -7,7 +7,6 @@ use crate::context_manager::ContextManager;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
-use crate::skills::SkillLoadOutcome;
 use crate::truncate::TruncationPolicy;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
@@ -15,21 +14,16 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
-    pub(crate) skills: Option<SkillLoadOutcome>,
 }
 
 impl SessionState {
     /// Create a new session state mirroring previous `State::default()` semantics.
-    pub(crate) fn new(
-        session_configuration: SessionConfiguration,
-        skills: Option<SkillLoadOutcome>,
-    ) -> Self {
+    pub(crate) fn new(session_configuration: SessionConfiguration) -> Self {
         let history = ContextManager::new();
         Self {
             session_configuration,
             history,
             latest_rate_limits: None,
-            skills,
         }
     }
 

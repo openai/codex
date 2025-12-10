@@ -205,7 +205,7 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<SKILL name=\"demo\" path=\"skills/demo/SKILL.md\">\nbody\n</SKILL>"
+                    text: "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
                         .to_string(),
                 }],
             },

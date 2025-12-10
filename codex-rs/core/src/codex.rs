@@ -1,7 +1,5 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::fmt::Debug;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -57,7 +55,6 @@ use mcp_types::ReadResourceResult;
 use mcp_types::RequestId;
 use serde_json;
 use serde_json::Value;
-use tokio::fs;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
@@ -116,8 +113,9 @@ use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::skills::SkillInjections;
 use crate::skills::SkillLoadOutcome;
-use crate::skills::SkillMetadata;
+use crate::skills::build_skill_injections;
 use crate::skills::load_skills;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
@@ -135,7 +133,6 @@ use crate::tools::spec::ToolsConfigParams;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::DeveloperInstructions;
-use crate::user_instructions::SkillInstructions;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
@@ -204,12 +201,9 @@ impl Codex {
 
         let user_instructions = get_user_instructions(
             &config,
-            skills_outcome.as_ref().and_then(|outcome| {
-                outcome
-                    .errors
-                    .is_empty()
-                    .then_some(outcome.skills.as_slice())
-            }),
+            skills_outcome
+                .as_ref()
+                .map(|outcome| outcome.skills.as_slice()),
         )
         .await;
 
@@ -621,7 +615,7 @@ impl Session {
                     .await
                     .map(Arc::new);
         }
-        let state = SessionState::new(session_configuration.clone(), skills.clone());
+        let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -635,6 +629,7 @@ impl Session {
             otel_event_manager,
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            skills: skills.clone(),
         };
 
         let sess = Arc::new(Session {
@@ -1343,54 +1338,6 @@ impl Session {
             self.emit_turn_item_started(turn_context, &item).await;
             self.emit_turn_item_completed(turn_context, item).await;
         }
-    }
-
-    async fn inject_skills(
-        &self,
-        turn_context: &TurnContext,
-        user_input: &[UserInput],
-    ) -> Vec<ResponseItem> {
-        if user_input.is_empty() || !self.enabled(Feature::Skills) {
-            return Vec::new();
-        }
-
-        let skills = {
-            let state = self.state.lock().await;
-            state
-                .skills
-                .as_ref()
-                .map(|outcome| outcome.skills.clone())
-                .unwrap_or_default()
-        };
-
-        let mentioned_skills = collect_explicit_skill_mentions(user_input, &skills);
-        if mentioned_skills.is_empty() {
-            return Vec::new();
-        }
-
-        let mut injections: Vec<ResponseItem> = Vec::with_capacity(mentioned_skills.len());
-        for skill in mentioned_skills {
-            match fs::read_to_string(&skill.path).await {
-                Ok(contents) => {
-                    injections.push(ResponseItem::from(SkillInstructions {
-                        name: skill.name,
-                        path: skill.path.to_string_lossy().into_owned(),
-                        contents,
-                    }));
-                }
-                Err(err) => {
-                    let message = format!(
-                        "Failed to load skill {} at {}: {err:#}",
-                        skill.name,
-                        skill.path.display()
-                    );
-                    self.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
-                        .await;
-                }
-            }
-        }
-
-        injections
     }
 
     pub(crate) async fn notify_background_event(
@@ -2108,42 +2055,6 @@ async fn spawn_review_thread(
         .await;
 }
 
-fn collect_explicit_skill_mentions(
-    inputs: &[UserInput],
-    skills: &[SkillMetadata],
-) -> Vec<SkillMetadata> {
-    let mut selected: Vec<SkillMetadata> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-
-    for input in inputs {
-        if let UserInput::Skill { name, path } = input
-            && seen.insert(name.clone())
-            && let Some(skill) = skills
-                .iter()
-                .find(|s| s.name == *name && paths_match(&s.path, path))
-        {
-            selected.push(skill.clone());
-        }
-    }
-
-    selected
-}
-
-fn paths_match(a: &Path, b: &Path) -> bool {
-    if a == b {
-        return true;
-    }
-
-    let Ok(ca) = std::fs::canonicalize(a) else {
-        return false;
-    };
-    let Ok(cb) = std::fs::canonicalize(b) else {
-        return false;
-    };
-
-    ca == cb
-}
-
 fn skill_load_outcome_for_client(
     outcome: Option<&SkillLoadOutcome>,
 ) -> Option<SkillLoadOutcomeInfo> {
@@ -2196,15 +2107,23 @@ pub(crate) async fn run_task(
     });
     sess.send_event(&turn_context, event).await;
 
-    let skill_injections = sess.inject_skills(&turn_context, &input).await;
+    let SkillInjections {
+        items: skill_items,
+        warnings: skill_warnings,
+    } = build_skill_injections(&input, sess.services.skills.as_ref()).await;
+
+    for message in skill_warnings {
+        sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
+            .await;
+    }
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_response_item_and_emit_turn_item(turn_context.as_ref(), response_item)
         .await;
 
-    if !skill_injections.is_empty() {
-        sess.record_conversation_items(&turn_context, &skill_injections)
+    if !skill_items.is_empty() {
+        sess.record_conversation_items(&turn_context, &skill_items)
             .await;
     }
 
@@ -2761,7 +2680,7 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let mut state = SessionState::new(session_configuration, None);
+        let mut state = SessionState::new(session_configuration);
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 10.0,
@@ -2832,7 +2751,7 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let mut state = SessionState::new(session_configuration, None);
+        let mut state = SessionState::new(session_configuration);
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 15.0,
@@ -3038,7 +2957,7 @@ mod tests {
         let otel_event_manager =
             otel_event_manager(conversation_id, config.as_ref(), &model_family);
 
-        let state = SessionState::new(session_configuration.clone(), None);
+        let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -3052,6 +2971,7 @@ mod tests {
             otel_event_manager: otel_event_manager.clone(),
             models_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            skills: None,
         };
 
         let turn_context = Session::make_turn_context(
@@ -3120,7 +3040,7 @@ mod tests {
         let otel_event_manager =
             otel_event_manager(conversation_id, config.as_ref(), &model_family);
 
-        let state = SessionState::new(session_configuration.clone(), None);
+        let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -3134,6 +3054,7 @@ mod tests {
             otel_event_manager: otel_event_manager.clone(),
             models_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            skills: None,
         };
 
         let turn_context = Arc::new(Session::make_turn_context(

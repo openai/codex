@@ -236,33 +236,6 @@ impl TestCodex {
         .await;
         Ok(())
     }
-
-    pub async fn submit_items(
-        &self,
-        items: Vec<UserInput>,
-        approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
-    ) -> Result<()> {
-        let session_model = self.session_configured.model.clone();
-        self.codex
-            .submit(Op::UserTurn {
-                items,
-                final_output_json_schema: None,
-                cwd: self.cwd.path().to_path_buf(),
-                approval_policy,
-                sandbox_policy,
-                model: session_model,
-                effort: None,
-                summary: ReasoningSummary::Auto,
-            })
-            .await?;
-
-        wait_for_event(&self.codex, |event| {
-            matches!(event, EventMsg::TaskComplete(_))
-        })
-        .await;
-        Ok(())
-    }
 }
 
 pub struct TestCodexHarness {

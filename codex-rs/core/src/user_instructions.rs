@@ -6,7 +6,7 @@ use codex_protocol::models::ResponseItem;
 
 pub const USER_INSTRUCTIONS_OPEN_TAG_LEGACY: &str = "<user_instructions>";
 pub const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
-pub const SKILL_INSTRUCTIONS_PREFIX: &str = "<SKILL";
+pub const SKILL_INSTRUCTIONS_PREFIX: &str = "<skill";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "user_instructions", rename_all = "snake_case")]
@@ -67,10 +67,8 @@ impl From<SkillInstructions> for ResponseItem {
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
                 text: format!(
-                    "<SKILL name=\"{name}\" path=\"{path}\">\n{contents}\n</SKILL>",
-                    name = si.name,
-                    path = si.path,
-                    contents = si.contents
+                    "<skill>\n<name>{}</name>\n<path>{}</path>\n{}\n</skill>",
+                    si.name, si.path, si.contents
                 ),
             }],
         }
@@ -174,7 +172,7 @@ mod tests {
 
         assert_eq!(
             text,
-            "<SKILL name=\"demo-skill\" path=\"skills/demo/SKILL.md\">\nbody\n</SKILL>",
+            "<skill>\n<name>demo-skill</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         );
     }
 
@@ -182,7 +180,7 @@ mod tests {
     fn test_is_skill_instructions() {
         assert!(SkillInstructions::is_skill_instructions(&[
             ContentItem::InputText {
-                text: "<SKILL name=\"demo-skill\" path=\"skills/demo/SKILL.md\">\nbody\n</SKILL>"
+                text: "<skill>\n<name>demo-skill</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
                     .to_string(),
             }
         ]));
