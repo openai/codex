@@ -19,6 +19,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthStatusChangeNotification;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
+use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecParams;
@@ -834,16 +835,14 @@ impl CodexMessageProcessor {
     async fn cancel_login_v2(&mut self, request_id: RequestId, params: CancelLoginAccountParams) {
         let login_id = params.login_id;
         match Uuid::parse_str(&login_id) {
-            Ok(uuid) => match self.cancel_login_chatgpt_common(uuid).await {
-                Ok(()) => {
-                    self.outgoing
-                        .send_response(request_id, CancelLoginAccountResponse {})
-                        .await;
-                }
-                Err(error) => {
-                    self.outgoing.send_error(request_id, error).await;
-                }
-            },
+            Ok(uuid) => {
+                let status = match self.cancel_login_chatgpt_common(uuid).await {
+                    Ok(()) => CancelLoginAccountStatus::Cancelled,
+                    Err(_) => CancelLoginAccountStatus::NotFound,
+                };
+                let response = CancelLoginAccountResponse { status };
+                self.outgoing.send_response(request_id, response).await;
+            }
             Err(_) => {
                 let error = JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,
