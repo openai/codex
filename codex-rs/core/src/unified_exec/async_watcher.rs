@@ -33,36 +33,32 @@ pub(crate) fn start_streaming_output(
     let session_ref = Arc::clone(&context.session);
     let turn_ref = Arc::clone(&context.turn);
     let call_id = context.call_id.clone();
-    let cancellation_token = session.cancellation_token();
 
     tokio::spawn(async move {
         let mut pending: Vec<u8> = Vec::new();
         loop {
-            tokio::select! {
-                _ = cancellation_token.cancelled() => break,
-                result = receiver.recv() => match result {
-                    Ok(chunk) => {
-                        pending.extend_from_slice(&chunk);
-                        while let Some(prefix) = split_valid_utf8_prefix(&mut pending) {
-                            {
-                                let mut guard = transcript.lock().await;
-                                guard.append(&prefix);
-                            }
-
-                            let event = ExecCommandOutputDeltaEvent {
-                                call_id: call_id.clone(),
-                                stream: ExecOutputStream::Stdout,
-                                chunk: prefix,
-                            };
-                            session_ref
-                                .send_event(turn_ref.as_ref(), EventMsg::ExecCommandOutputDelta(event))
-                                .await;
+            match receiver.recv().await {
+                Ok(chunk) => {
+                    pending.extend_from_slice(&chunk);
+                    while let Some(prefix) = split_valid_utf8_prefix(&mut pending) {
+                        {
+                            let mut guard = transcript.lock().await;
+                            guard.append(&prefix);
                         }
+
+                        let event = ExecCommandOutputDeltaEvent {
+                            call_id: call_id.clone(),
+                            stream: ExecOutputStream::Stdout,
+                            chunk: prefix,
+                        };
+                        session_ref
+                            .send_event(turn_ref.as_ref(), EventMsg::ExecCommandOutputDelta(event))
+                            .await;
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
-            };
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
         }
     });
 }

@@ -95,24 +95,17 @@ impl UnifiedExecSession {
         let mut receiver = initial_output_rx;
         let buffer_clone = Arc::clone(&output_buffer);
         let notify_clone = Arc::clone(&output_notify);
-        let cancellation_token_clone = cancellation_token.clone();
         let output_task = tokio::spawn(async move {
             loop {
-                tokio::select! {
-                    _ = cancellation_token_clone.cancelled() => break,
-                    result = receiver.recv() => match result {
-                        Ok(chunk) => {
-                            let mut guard = buffer_clone.lock().await;
-                            guard.push_chunk(chunk);
-                            drop(guard);
-                            notify_clone.notify_waiters();
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            cancellation_token_clone.cancel();
-                            break;
-                        }
+                match receiver.recv().await {
+                    Ok(chunk) => {
+                        let mut guard = buffer_clone.lock().await;
+                        guard.push_chunk(chunk);
+                        drop(guard);
+                        notify_clone.notify_waiters();
                     }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 };
             }
         });
