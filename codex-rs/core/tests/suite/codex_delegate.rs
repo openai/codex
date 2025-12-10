@@ -5,6 +5,7 @@ use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::sandboxing::SandboxPermissions;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -31,7 +32,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     let args = serde_json::json!({
         "command": "rm -rf delegated",
         "timeout_ms": 1000,
-        "with_escalated_permissions": true,
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
     })
     .to_string();
     let sse1 = sse(vec![

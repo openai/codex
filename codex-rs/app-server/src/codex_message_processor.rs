@@ -136,6 +136,7 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget as CoreReviewTarget;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::read_head_for_summary;
+use codex_core::sandboxing::SandboxPermissions;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
@@ -1191,7 +1192,7 @@ impl CodexMessageProcessor {
             cwd,
             expiration: timeout_ms.into(),
             env,
-            with_escalated_permissions: None,
+            sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
             arg0: None,
         };
