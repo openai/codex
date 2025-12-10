@@ -24,6 +24,7 @@ codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-api = { workspace = true }
+codex-client = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git = { workspace = true }
