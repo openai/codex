@@ -2180,14 +2180,14 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
     let startup_call_id = "uexec-python-seatbelt";
     let startup_args = serde_json::json!({
         "cmd": format!("{} -i", python.display()),
-        "yield_time_ms": 750,
+        "yield_time_ms": 1_500,
     });
 
     let exit_call_id = "uexec-python-exit";
     let exit_args = serde_json::json!({
         "chars": "exit()\n",
         "session_id": 1000,
-        "yield_time_ms": 750,
+        "yield_time_ms": 1_500,
     });
 
     let responses = vec![
