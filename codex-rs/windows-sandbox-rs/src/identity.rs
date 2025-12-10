@@ -21,8 +21,6 @@ use std::path::Path;
 struct SandboxIdentity {
     username: String,
     password: String,
-    #[allow(dead_code)]
-    offline: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -99,8 +97,7 @@ fn select_identity(policy: &SandboxPolicy, codex_home: &Path) -> Result<Option<S
         Some(u) if u.version_matches() => u,
         _ => return Ok(None),
     };
-    let offline = !policy.has_full_network_access();
-    let chosen = if offline {
+    let chosen = if !policy.has_full_network_access() {
         users.offline
     } else {
         users.online
@@ -109,7 +106,6 @@ fn select_identity(policy: &SandboxPolicy, codex_home: &Path) -> Result<Option<S
     Ok(Some(SandboxIdentity {
         username: chosen.username.clone(),
         password,
-        offline,
     }))
 }
 
