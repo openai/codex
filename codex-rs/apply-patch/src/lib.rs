@@ -131,11 +131,11 @@ fn unwrap_shell_snapshot(argv: &[String]) -> &[String] {
     // Shell snapshot wrapping is implemented in `core::shell::Shell::wrap_command_with_snapshot`.
     // The resulting argv has the general form:
     //
-    //   <shell> <flags...> <snapshot_loader> <snapshot_path> <shell> <flags...> <script...>
+    //   <outer_shell> <flags...> <snapshot_loader> <snapshot_path> <inner_shell> <flags...> <script...>
     //
-    // where `<snapshot_path>` lives under a `shell_snapshots` directory and the inner `<shell>`
-    // is the same binary as the outer one. For apply_patch detection we want to see the original
-    // inner command, so we strip the wrapper prefix when we detect this pattern.
+    // where `<snapshot_path>` lives under a `shell_snapshots` directory. For apply_patch detection
+    // we want to see the original inner command, so when we detect this pattern we strip the
+    // wrapper prefix and return the inner argv.
     let Some(shell) = argv.first() else {
         return argv;
     };
@@ -143,14 +143,20 @@ fn unwrap_shell_snapshot(argv: &[String]) -> &[String] {
         return argv;
     }
 
-    let Some(snapshot_idx) = argv.iter().position(|arg| arg.contains("shell_snapshots")) else {
+    let Some(loader_idx) = argv.iter().position(|arg| {
+        arg == ". \"$0\" && exec \"$@\"" || arg == "param($snapshot) . $snapshot; & @args"
+    }) else {
         return argv;
     };
 
-    if let Some(inner_shell) = argv.get(snapshot_idx + 1) {
-        if inner_shell == shell {
-            return &argv[snapshot_idx + 1..];
-        }
+    let snapshot_idx = loader_idx + 1;
+    if snapshot_idx >= argv.len() || !argv[snapshot_idx].contains("shell_snapshots") {
+        return argv;
+    }
+
+    let inner_start = snapshot_idx + 1;
+    if inner_start < argv.len() {
+        return &argv[inner_start..];
     }
 
     argv
@@ -1144,6 +1150,21 @@ mod tests {
             "/tmp/codex/shell_snapshots/123.sh",
             "/bin/bash",
             "-c",
+            &script,
+        ]);
+        assert_match_args(args, None);
+    }
+
+    #[test]
+    fn test_heredoc_wrapped_with_shell_snapshot_mismatched_shells() {
+        let script = heredoc_script("");
+        let args = strs_to_strings(&[
+            "/bin/bash",
+            "-c",
+            ". \"$0\" && exec \"$@\"",
+            "/tmp/codex/shell_snapshots/123.sh",
+            "/bin/zsh",
+            "-lc",
             &script,
         ]);
         assert_match_args(args, None);
