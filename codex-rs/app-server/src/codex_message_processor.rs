@@ -1894,6 +1894,9 @@ impl CodexMessageProcessor {
                 .as_ref()
                 .and_then(|cursor| serde_json::to_value(cursor).ok())
                 .and_then(|value| value.as_str().map(str::to_owned));
+            if remaining == 0 {
+                break;
+            }
 
             match page.next_cursor {
                 Some(cursor_val) if remaining > 0 => {
