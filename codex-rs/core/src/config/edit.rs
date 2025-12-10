@@ -555,7 +555,10 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn with_edits(mut self, edits: Vec<ConfigEdit>) -> Self {
+    pub fn with_edits<I>(mut self, edits: I) -> Self
+    where
+        I: IntoIterator<Item = ConfigEdit>,
+    {
         self.edits.extend(edits);
         self
     }

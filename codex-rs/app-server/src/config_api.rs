@@ -190,7 +190,7 @@ impl ConfigApi {
             )
         })?;
 
-        let updated_layers = layers.clone().with_user_config(user_config.clone());
+        let updated_layers = layers.with_user_config(user_config.clone());
         let effective = updated_layers.effective_config();
         validate_config(&effective).map_err(|err| {
             config_write_error(
@@ -772,6 +772,7 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
@@ -825,7 +826,7 @@ X-Doc = "42"
     }
 
     #[tokio::test]
-    async fn write_value_preserves_comments_and_order() {
+    async fn write_value_preserves_comments_and_order() -> Result<()> {
         let tmp = tempdir().expect("tempdir");
         let original = r#"# Codex user configuration
 model = "gpt-5"
@@ -838,7 +839,7 @@ hide_full_access_warning = true
 [features]
 unified_exec = true
 "#;
-        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), original).unwrap();
+        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), original)?;
 
         let api = ConfigApi::new(tmp.path().to_path_buf(), vec![]);
         api.write_value(ConfigValueWriteParams {
@@ -866,6 +867,7 @@ unified_exec = true
 remote_compaction = true
 "#;
         assert_eq!(updated, expected);
+        Ok(())
     }
 
     #[tokio::test]
