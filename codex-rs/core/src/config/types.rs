@@ -3,13 +3,14 @@
 // Note this file should generally be restricted to simple struct/enum
 // definitions that do not contain business logic.
 
-use serde::Deserializer;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
 
@@ -285,9 +286,9 @@ pub enum OtelHttpProtocol {
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct OtelTlsConfig {
-    pub ca_certificate: Option<PathBuf>,
-    pub client_certificate: Option<PathBuf>,
-    pub client_private_key: Option<PathBuf>,
+    pub ca_certificate: Option<AbsolutePathBuf>,
+    pub client_certificate: Option<AbsolutePathBuf>,
+    pub client_private_key: Option<AbsolutePathBuf>,
 }
 
 /// Which OTEL exporter to use.
