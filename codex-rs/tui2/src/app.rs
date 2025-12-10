@@ -560,17 +560,34 @@ impl App {
                     let cells = self.transcript_cells.clone();
                     tui.draw(tui.terminal.size()?.height, |frame| {
                         let chat_height = self.chat_widget.desired_height(frame.area().width);
+                        let chat_top = self.render_transcript_cells(frame, &cells, chat_height);
                         let chat_area = Rect {
                             x: frame.area().x,
-                            y: frame.area().bottom().saturating_sub(chat_height),
+                            y: chat_top,
                             width: frame.area().width,
-                            height: chat_height,
+                            height: chat_height.min(
+                                frame
+                                    .area()
+                                    .height
+                                    .saturating_sub(chat_top.saturating_sub(frame.area().y)),
+                            ),
                         };
                         self.chat_widget.render(chat_area, frame.buffer);
+                        let chat_bottom = chat_area.y.saturating_add(chat_area.height);
+                        if chat_bottom < frame.area().bottom() {
+                            Clear.render_ref(
+                                Rect {
+                                    x: frame.area().x,
+                                    y: chat_bottom,
+                                    width: frame.area().width,
+                                    height: frame.area().bottom().saturating_sub(chat_bottom),
+                                },
+                                frame.buffer,
+                            );
+                        }
                         if let Some((x, y)) = self.chat_widget.cursor_pos(chat_area) {
                             frame.set_cursor_position((x, y));
                         }
-                        self.render_transcript_cells(frame, &cells);
                     })?;
                 }
             }
@@ -582,51 +599,42 @@ impl App {
         &mut self,
         frame: &mut Frame,
         cells: &[Arc<dyn HistoryCell>],
-    ) {
+        chat_height: u16,
+    ) -> u16 {
         let area = frame.area();
         if area.width == 0 || area.height == 0 {
-            return;
+            return area.bottom().saturating_sub(chat_height);
         }
 
-        let chat_height = self.chat_widget.desired_height(area.width);
-        if chat_height >= area.height {
-            return;
-        }
-
-        let transcript_height = area.height.saturating_sub(chat_height);
-        if transcript_height == 0 {
-            return;
+        let chat_height = chat_height.min(area.height);
+        let max_transcript_height = area.height.saturating_sub(chat_height);
+        if max_transcript_height == 0 {
+            self.transcript_scroll = TranscriptScroll::ToBottom;
+            return area.y;
         }
 
         let transcript_area = Rect {
             x: area.x,
             y: area.y,
             width: area.width,
-            height: transcript_height,
+            height: max_transcript_height,
         };
 
         let (lines, meta) = Self::build_transcript_lines(cells, transcript_area.width);
         if lines.is_empty() {
-            Clear.render_ref(
-                Rect {
-                    x: area.x,
-                    y: area.y,
-                    width: area.width,
-                    height: transcript_height,
-                },
-                frame.buffer,
-            );
+            Clear.render_ref(transcript_area, frame.buffer);
             self.transcript_scroll = TranscriptScroll::ToBottom;
-            return;
+            return area.y;
         }
 
         let wrapped = word_wrap_lines_borrowed(&lines, transcript_area.width.max(1) as usize);
         if wrapped.is_empty() {
-            return;
+            self.transcript_scroll = TranscriptScroll::ToBottom;
+            return area.y;
         }
 
         let total_lines = wrapped.len();
-        let max_visible = transcript_area.height as usize;
+        let max_visible = std::cmp::min(max_transcript_height as usize, total_lines);
         let max_start = total_lines.saturating_sub(max_visible);
 
         let top_offset = match self.transcript_scroll {
@@ -654,7 +662,35 @@ impl App {
             }
         };
 
-        Clear.render_ref(transcript_area, frame.buffer);
+        let transcript_visible_height = max_visible as u16;
+        let chat_top = if total_lines <= max_transcript_height as usize {
+            let gap = if transcript_visible_height == 0 { 0 } else { 1 };
+            area.y
+                .saturating_add(transcript_visible_height)
+                .saturating_add(gap)
+        } else {
+            area.bottom().saturating_sub(chat_height)
+        };
+
+        let clear_height = chat_top.saturating_sub(area.y);
+        if clear_height > 0 {
+            Clear.render_ref(
+                Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: clear_height,
+                },
+                frame.buffer,
+            );
+        }
+
+        let transcript_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: transcript_visible_height,
+        };
 
         for (row_index, line_index) in (top_offset..total_lines).enumerate() {
             if row_index >= max_visible {
@@ -671,6 +707,8 @@ impl App {
 
             wrapped[line_index].render_ref(row_area, frame.buffer);
         }
+
+        chat_top
     }
 
     fn handle_mouse_event(
