@@ -174,6 +174,26 @@ Number of times Codex will attempt to reconnect when a streaming response is int
 
 How long Codex will wait for activity on a streaming response before treating the connection as lost. Defaults to `300_000` (5 minutes).
 
+#### TLS and mTLS configuration
+
+Model providers accept an optional `tls` block for custom CA certificates or mutual TLS. Relative paths are resolved against the directory containing the config file:
+
+```toml
+[model_providers.my-secure-provider.tls]
+ca-certificate = "certs/ca.pem"
+client-certificate = "certs/client.pem"
+client-private-key = "certs/client-key.pem"
+```
+
+Paths can also be read from environment variables (which take precedence if set). Paths from environment variables must be absolute:
+
+```toml
+[model_providers.my-secure-provider.tls]
+ca-certificate-env = "MY_CA_CERT_PATH"
+client-certificate-env = "MY_CLIENT_CERT_PATH"
+client-private-key-env = "MY_CLIENT_KEY_PATH"
+```
+
 ### model_provider
 
 Identifies which provider to use from the `model_providers` map. Defaults to `"openai"`. You can override the `base_url` for the built-in `openai` provider via the `OPENAI_BASE_URL` environment variable.
