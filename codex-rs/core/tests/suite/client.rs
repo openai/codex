@@ -20,7 +20,7 @@ use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
-use codex_otel::otel_event_manager::OtelEventManager;
+use codex_otel::otel_manager::OtelManager;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
@@ -1122,7 +1122,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
     let conversation_id = ConversationId::new();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let otel_event_manager = OtelEventManager::new(
+    let otel_manager = OtelManager::new(
         conversation_id,
         model.as_str(),
         model_family.slug.as_str(),
@@ -1131,18 +1131,19 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         auth_manager.get_auth_mode(),
         false,
         "test".to_string(),
+        SessionSource::Exec,
     );
 
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
         model_family,
-        otel_event_manager,
+        otel_manager,
         provider,
         effort,
         summary,
         conversation_id,
-        codex_protocol::protocol::SessionSource::Exec,
+        SessionSource::Exec,
     );
 
     let mut prompt = Prompt::default();

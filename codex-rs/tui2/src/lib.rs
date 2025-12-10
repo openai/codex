@@ -23,7 +23,6 @@ use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
 use codex_protocol::config_types::SandboxMode;
-use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use tracing::error;
@@ -307,22 +306,16 @@ pub async fn run_main(
         }
     };
 
-    if let Some(provider) = otel.as_ref() {
-        let otel_layer = OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
-            tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
-        );
+    let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
 
-        let _ = tracing_subscriber::registry()
-            .with(file_layer)
-            .with(feedback_layer)
-            .with(otel_layer)
-            .try_init();
-    } else {
-        let _ = tracing_subscriber::registry()
-            .with(file_layer)
-            .with(feedback_layer)
-            .try_init();
-    };
+    let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
+
+    let _ = tracing_subscriber::registry()
+        .with(file_layer)
+        .with(feedback_layer)
+        .with(otel_tracing_layer)
+        .with(otel_logger_layer)
+        .try_init();
 
     run_ratatui_app(
         cli,

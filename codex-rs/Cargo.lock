@@ -840,7 +840,6 @@ dependencies = [
  "codex-utils-json-to-toml",
  "core_test_support",
  "mcp-types",
- "opentelemetry-appender-tracing",
  "os_info",
  "pretty_assertions",
  "serde",
@@ -1015,6 +1014,8 @@ dependencies = [
  "eventsource-stream",
  "futures",
  "http",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "rand 0.9.2",
  "reqwest",
  "serde",
@@ -1022,6 +1023,8 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1160,6 +1163,7 @@ dependencies = [
  "toml 0.9.5",
  "toml_edit",
  "tracing",
+ "tracing-subscriber",
  "tracing-test",
  "tree-sitter",
  "tree-sitter-bash",
@@ -1186,7 +1190,6 @@ dependencies = [
  "core_test_support",
  "libc",
  "mcp-types",
- "opentelemetry-appender-tracing",
  "owo-colors",
  "predicates",
  "pretty_assertions",
@@ -1415,12 +1418,14 @@ name = "codex-otel"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "codex-api",
  "codex-app-server-protocol",
  "codex-protocol",
  "codex-utils-absolute-path",
  "eventsource-stream",
  "http",
  "opentelemetry",
+ "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
@@ -1431,6 +1436,8 @@ dependencies = [
  "tokio",
  "tonic",
  "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1560,7 +1567,6 @@ dependencies = [
  "lazy_static",
  "libc",
  "mcp-types",
- "opentelemetry-appender-tracing",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
@@ -1630,7 +1636,6 @@ dependencies = [
  "lazy_static",
  "libc",
  "mcp-types",
- "opentelemetry-appender-tracing",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
@@ -6895,6 +6900,24 @@ dependencies = [
  "log",
  "once_cell",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-opentelemetry"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddcf5959f39507d0d04d6413119c04f33b623f4f951ebcbdddddfad2d0623a9c"
+dependencies = [
+ "js-sys",
+ "once_cell",
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "smallvec",
+ "tracing",
+ "tracing-core",
+ "tracing-log",
+ "tracing-subscriber",
+ "web-time",
 ]
 
 [[package]]

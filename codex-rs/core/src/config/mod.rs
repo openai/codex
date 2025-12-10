@@ -1200,10 +1200,12 @@ impl Config {
                     .environment
                     .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
                 let exporter = t.exporter.unwrap_or(OtelExporterKind::None);
+                let trace_exporter = t.trace_exporter.unwrap_or_else(|| exporter.clone());
                 OtelConfig {
                     log_user_prompt,
                     environment,
                     exporter,
+                    trace_exporter,
                 }
             },
         };
