@@ -132,6 +132,7 @@ struct SessionEntry {
     cwd: PathBuf,
     started_at: tokio::time::Instant,
     last_used: tokio::time::Instant,
+    aggregated_output: String,
 }
 
 pub(crate) fn clamp_yield_time(yield_time_ms: u64) -> u64 {

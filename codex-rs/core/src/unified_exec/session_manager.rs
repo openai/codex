@@ -196,6 +196,8 @@ impl UnifiedExecSessionManager {
             )
             .await;
 
+            self.append_session_output(&request.process_id, &output)
+                .await;
             Self::emit_waiting_status(&context.session, &context.turn, &request.command).await;
         };
 
@@ -259,6 +261,9 @@ impl UnifiedExecSessionManager {
         let original_token_count = approx_token_count(&text);
         let chunk_id = generate_chunk_id();
 
+        self.append_session_output(process_id.as_str(), &output)
+            .await;
+
         let status = self.refresh_session_state(process_id.as_str()).await;
         let (process_id, exit_code, completion_entry, event_call_id) = match status {
             SessionStatus::Alive {
@@ -294,8 +299,7 @@ impl UnifiedExecSessionManager {
 
         if let (Some(exit), Some(entry)) = (response.exit_code, completion_entry) {
             let total_duration = Instant::now().saturating_duration_since(entry.started_at);
-            Self::emit_exec_end_from_entry(entry, response.output.clone(), exit, total_duration)
-                .await;
+            Self::emit_exec_end_from_entry(entry, exit, total_duration).await;
         }
 
         Ok(response)
@@ -388,6 +392,7 @@ impl UnifiedExecSessionManager {
             cwd,
             started_at,
             last_used: started_at,
+            aggregated_output: String::new(),
         };
         let number_sessions = {
             let mut store = self.session_store.lock().await;
@@ -407,12 +412,19 @@ impl UnifiedExecSessionManager {
         };
     }
 
-    async fn emit_exec_end_from_entry(
-        entry: SessionEntry,
-        aggregated_output: String,
-        exit_code: i32,
-        duration: Duration,
-    ) {
+    async fn append_session_output(&self, process_id: &str, output: &str) {
+        if output.is_empty() {
+            return;
+        }
+
+        let mut store = self.session_store.lock().await;
+        if let Some(entry) = store.sessions.get_mut(process_id) {
+            entry.aggregated_output.push_str(output);
+        }
+    }
+
+    async fn emit_exec_end_from_entry(entry: SessionEntry, exit_code: i32, duration: Duration) {
+        let aggregated_output = entry.aggregated_output.clone();
         let output = ExecToolCallOutput {
             exit_code,
             stdout: StreamOutput::new(aggregated_output.clone()),
@@ -570,47 +582,51 @@ impl UnifiedExecSessionManager {
         const POST_EXIT_OUTPUT_GRACE: Duration = Duration::from_millis(25);
 
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
-        let mut exit_signal_seen = cancellation_token.is_cancelled();
-
+        let mut exit_signal_received = cancellation_token.is_cancelled();
         loop {
-            let drained_chunks = {
+            let drained_chunks;
+            let mut wait_for_output = None;
+            {
                 let mut guard = output_buffer.lock().await;
-                guard.drain()
-            };
-
-            if !drained_chunks.is_empty() {
-                for chunk in drained_chunks {
-                    collected.extend_from_slice(&chunk);
+                drained_chunks = guard.drain();
+                if drained_chunks.is_empty() {
+                    wait_for_output = Some(output_notify.notified());
                 }
             }
 
-            let now = Instant::now();
-            if now >= deadline {
-                break;
+            if drained_chunks.is_empty() {
+                exit_signal_received |= cancellation_token.is_cancelled();
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining == Duration::ZERO {
+                    break;
+                }
+
+                let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
+                if exit_signal_received {
+                    let grace = remaining.min(POST_EXIT_OUTPUT_GRACE);
+                    if tokio::time::timeout(grace, notified).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
+
+                tokio::pin!(notified);
+                let exit_notified = cancellation_token.cancelled();
+                tokio::pin!(exit_notified);
+                tokio::select! {
+                    _ = &mut notified => {}
+                    _ = &mut exit_notified => exit_signal_received = true,
+                    _ = tokio::time::sleep(remaining) => break,
+                }
+                continue;
             }
 
-            let remaining = deadline.saturating_duration_since(now);
-            if remaining == Duration::ZERO {
-                break;
+            for chunk in drained_chunks {
+                collected.extend_from_slice(&chunk);
             }
 
-            let wait_for = if exit_signal_seen && !collected.is_empty() {
-                remaining.min(POST_EXIT_OUTPUT_GRACE)
-            } else {
-                remaining
-            };
-
-            if wait_for == Duration::ZERO {
-                break;
-            }
-
-            let notified = output_notify.notified();
-            let _ = tokio::time::timeout(wait_for, notified).await;
-            exit_signal_seen |= cancellation_token.is_cancelled();
-
-            if exit_signal_seen && !collected.is_empty() && wait_for == POST_EXIT_OUTPUT_GRACE {
-                // We already waited a post-exit grace window after seeing output; stop even
-                // if the overall deadline has not yet elapsed.
+            exit_signal_received |= cancellation_token.is_cancelled();
+            if Instant::now() >= deadline {
                 break;
             }
         }
