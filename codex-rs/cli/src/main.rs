@@ -663,7 +663,8 @@ async fn run_interactive_tui(
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> std::io::Result<AppExitInfo> {
     if is_tui2_enabled(&interactive).await? {
-        tui2::run_main(interactive, codex_linux_sandbox_exe).await
+        let result = tui2::run_main(interactive.into(), codex_linux_sandbox_exe).await?;
+        Ok(result.into())
     } else {
         codex_tui::run_main(interactive, codex_linux_sandbox_exe).await
     }

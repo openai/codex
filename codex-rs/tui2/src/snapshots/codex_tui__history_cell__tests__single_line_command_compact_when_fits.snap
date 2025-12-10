@@ -1,0 +1,6 @@
+---
+source: tui/src/history_cell.rs
+expression: rendered
+---
+• Ran echo ok
+  └ (no output)
