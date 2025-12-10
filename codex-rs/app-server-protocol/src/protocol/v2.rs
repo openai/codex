@@ -6,6 +6,7 @@ use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
@@ -125,17 +126,68 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
     }
 }
 
-v2_enum_from_core!(
-    pub enum AskForApproval from codex_protocol::protocol::AskForApproval {
-        UnlessTrusted, OnFailure, OnRequest, Never
-    }
-);
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum AskForApproval {
+    #[serde(rename = "untrusted")]
+    #[ts(rename = "untrusted")]
+    UnlessTrusted,
+    OnFailure,
+    OnRequest,
+    Never,
+}
 
-v2_enum_from_core!(
-    pub enum SandboxMode from codex_protocol::config_types::SandboxMode {
-        ReadOnly, WorkspaceWrite, DangerFullAccess
+impl AskForApproval {
+    pub fn to_core(self) -> CoreAskForApproval {
+        match self {
+            AskForApproval::UnlessTrusted => CoreAskForApproval::UnlessTrusted,
+            AskForApproval::OnFailure => CoreAskForApproval::OnFailure,
+            AskForApproval::OnRequest => CoreAskForApproval::OnRequest,
+            AskForApproval::Never => CoreAskForApproval::Never,
+        }
     }
-);
+}
+
+impl From<CoreAskForApproval> for AskForApproval {
+    fn from(value: CoreAskForApproval) -> Self {
+        match value {
+            CoreAskForApproval::UnlessTrusted => AskForApproval::UnlessTrusted,
+            CoreAskForApproval::OnFailure => AskForApproval::OnFailure,
+            CoreAskForApproval::OnRequest => AskForApproval::OnRequest,
+            CoreAskForApproval::Never => AskForApproval::Never,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum SandboxMode {
+    ReadOnly,
+    WorkspaceWrite,
+    DangerFullAccess,
+}
+
+impl SandboxMode {
+    pub fn to_core(self) -> CoreSandboxMode {
+        match self {
+            SandboxMode::ReadOnly => CoreSandboxMode::ReadOnly,
+            SandboxMode::WorkspaceWrite => CoreSandboxMode::WorkspaceWrite,
+            SandboxMode::DangerFullAccess => CoreSandboxMode::DangerFullAccess,
+        }
+    }
+}
+
+impl From<CoreSandboxMode> for SandboxMode {
+    fn from(value: CoreSandboxMode) -> Self {
+        match value {
+            CoreSandboxMode::ReadOnly => SandboxMode::ReadOnly,
+            CoreSandboxMode::WorkspaceWrite => SandboxMode::WorkspaceWrite,
+            CoreSandboxMode::DangerFullAccess => SandboxMode::DangerFullAccess,
+        }
+    }
+}
 
 v2_enum_from_core!(
     pub enum ReviewDelivery from codex_protocol::protocol::ReviewDelivery {
@@ -180,6 +232,7 @@ pub struct SandboxWorkspaceWrite {
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct ToolsV2 {
+    #[serde(alias = "web_search_request")]
     pub web_search: Option<bool>,
     pub view_image: Option<bool>,
 }
@@ -190,16 +243,13 @@ pub struct ToolsV2 {
 pub struct ProfileV2 {
     pub model: Option<String>,
     pub model_provider: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_approval_policy",
-        serialize_with = "serialize_approval_policy"
-    )]
     pub approval_policy: Option<AskForApproval>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub chatgpt_base_url: Option<String>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -211,17 +261,7 @@ pub struct Config {
     pub model_context_window: Option<i64>,
     pub model_auto_compact_token_limit: Option<i64>,
     pub model_provider: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_approval_policy",
-        serialize_with = "serialize_approval_policy"
-    )]
     pub approval_policy: Option<AskForApproval>,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_sandbox_mode",
-        serialize_with = "serialize_sandbox_mode"
-    )]
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
     pub forced_chatgpt_workspace_id: Option<String>,
@@ -238,45 +278,6 @@ pub struct Config {
     pub model_verbosity: Option<Verbosity>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
-}
-
-fn deserialize_approval_policy<'de, D>(deserializer: D) -> Result<Option<AskForApproval>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<CoreAskForApproval>::deserialize(deserializer)?;
-    Ok(value.map(AskForApproval::from))
-}
-
-fn serialize_approval_policy<S>(
-    value: &Option<AskForApproval>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    value
-        .as_ref()
-        .map(|policy| policy.to_core())
-        .serialize(serializer)
-}
-
-fn deserialize_sandbox_mode<'de, D>(deserializer: D) -> Result<Option<SandboxMode>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<codex_protocol::config_types::SandboxMode>::deserialize(deserializer)?;
-    Ok(value.map(SandboxMode::from))
-}
-
-fn serialize_sandbox_mode<S>(value: &Option<SandboxMode>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    value
-        .as_ref()
-        .map(|mode| mode.to_core())
-        .serialize(serializer)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
