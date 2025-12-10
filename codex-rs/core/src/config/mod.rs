@@ -1014,7 +1014,12 @@ impl Config {
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
         #[cfg(target_os = "windows")]
         {
-            crate::safety::set_windows_sandbox_enabled(features.enabled(Feature::WindowsSandbox));
+            // Base flag controls sandbox on/off; elevated only applies when base is enabled.
+            let sandbox_enabled = features.enabled(Feature::WindowsSandbox);
+            crate::safety::set_windows_sandbox_enabled(sandbox_enabled);
+            let elevated_enabled =
+                sandbox_enabled && features.enabled(Feature::WindowsSandboxElevated);
+            crate::safety::set_windows_elevated_sandbox_enabled(elevated_enabled);
         }
 
         let resolved_cwd = {

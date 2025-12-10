@@ -18,6 +18,8 @@ use std::sync::atomic::Ordering;
 
 #[cfg(target_os = "windows")]
 static WINDOWS_SANDBOX_ENABLED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static WINDOWS_ELEVATED_SANDBOX_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "windows")]
 pub fn set_windows_sandbox_enabled(enabled: bool) {
@@ -27,6 +29,24 @@ pub fn set_windows_sandbox_enabled(enabled: bool) {
 #[cfg(not(target_os = "windows"))]
 #[allow(dead_code)]
 pub fn set_windows_sandbox_enabled(_enabled: bool) {}
+
+#[cfg(target_os = "windows")]
+pub fn set_windows_elevated_sandbox_enabled(enabled: bool) {
+    WINDOWS_ELEVATED_SANDBOX_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_windows_elevated_sandbox_enabled(_enabled: bool) {}
+
+#[cfg(target_os = "windows")]
+pub fn is_windows_elevated_sandbox_enabled() -> bool {
+    WINDOWS_ELEVATED_SANDBOX_ENABLED.load(Ordering::Relaxed)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn is_windows_elevated_sandbox_enabled() -> bool {
+    false
+}
 
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
