@@ -30,6 +30,7 @@ pub(crate) fn start_streaming_output(
     transcript: Arc<Mutex<CommandTranscript>>,
 ) {
     let mut receiver = session.output_receiver();
+    let output_drained = session.output_drained_notify();
     let session_ref = Arc::clone(&context.session);
     let turn_ref = Arc::clone(&context.turn);
     let call_id = context.call_id.clone();
@@ -57,7 +58,10 @@ pub(crate) fn start_streaming_output(
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    output_drained.notify_waiters();
+                    break;
+                }
             }
         }
     });
@@ -78,9 +82,11 @@ pub(crate) fn spawn_exit_watcher(
     started_at: Instant,
 ) {
     let exit_token = session.cancellation_token();
+    let output_drained = session.output_drained_notify();
 
     tokio::spawn(async move {
         exit_token.cancelled().await;
+        output_drained.notified().await;
 
         let exit_code = session.exit_code().unwrap_or(-1);
         let duration = Instant::now().saturating_duration_since(started_at);
