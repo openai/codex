@@ -256,7 +256,13 @@ fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String>
 
     let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
 
-    let use_login_shell = args.login.unwrap_or(true);
+    let use_login_shell = args.login.unwrap_or_else(|| {
+        if model_shell.is_some() {
+            true
+        } else {
+            session_shell.shell_snapshot.is_none()
+        }
+    });
 
     shell.derive_exec_args(&args.cmd, use_login_shell)
 }

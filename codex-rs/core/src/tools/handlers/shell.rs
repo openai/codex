@@ -45,7 +45,7 @@ impl ShellHandler {
 
 impl ShellCommandHandler {
     fn base_command(shell: &Shell, command: &str, login: Option<bool>) -> Vec<String> {
-        let use_login_shell = login.unwrap_or(true);
+        let use_login_shell = login.unwrap_or(shell.shell_snapshot.is_none());
         shell.derive_exec_args(command, use_login_shell)
     }
 

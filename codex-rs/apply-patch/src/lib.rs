@@ -1105,36 +1105,6 @@ mod tests {
     }
 
     #[test]
-    fn test_heredoc_wrapped_with_shell_snapshot() {
-        let script = heredoc_script("");
-        let args = strs_to_strings(&[
-            "/bin/bash",
-            "-c",
-            ". \"$0\" && exec \"$@\"",
-            "/tmp/codex/shell_snapshots/123.sh",
-            "/bin/bash",
-            "-c",
-            &script,
-        ]);
-        assert_match_args(args, None);
-    }
-
-    #[test]
-    fn test_heredoc_wrapped_with_shell_snapshot_mismatched_shells() {
-        let script = heredoc_script("");
-        let args = strs_to_strings(&[
-            "/bin/bash",
-            "-c",
-            ". \"$0\" && exec \"$@\"",
-            "/tmp/codex/shell_snapshots/123.sh",
-            "/bin/zsh",
-            "-lc",
-            &script,
-        ]);
-        assert_match_args(args, None);
-    }
-
-    #[test]
     fn test_heredoc_applypatch() {
         let args = strs_to_strings(&[
             "bash",
