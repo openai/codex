@@ -1,4 +1,8 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
+<p align="center">
+  <code>npm i -g @openai/codex</code><br />
+  or <code>brew install --cask codex</code><br />
+  or <code>npx @openai/codex@latest</code>
+</p>
 
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 </br>
@@ -25,6 +29,11 @@ Alternatively, if you use Homebrew:
 
 ```shell
 brew install --cask codex
+```
+
+If you just want to try Codex without installing it globally, you can also run it via npx:
+```shell
+npx @openai/codex@latest
 ```
 
 Then simply run `codex` to get started:
