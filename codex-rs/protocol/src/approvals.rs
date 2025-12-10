@@ -9,14 +9,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum SandboxRiskLevel {
-    Low,
-    Medium,
-    High,
-}
-
 /// Proposed execpolicy change to allow commands starting with this prefix.
 ///
 /// The `command` tokens form the prefix that would be added as an execpolicy
@@ -45,22 +37,6 @@ impl From<Vec<String>> for ExecPolicyAmendment {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-pub struct SandboxCommandAssessment {
-    pub description: String,
-    pub risk_level: SandboxRiskLevel,
-}
-
-impl SandboxRiskLevel {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecApprovalRequestEvent {
     /// Identifier for the associated exec call, if available.
@@ -76,9 +52,6 @@ pub struct ExecApprovalRequestEvent {
     /// Optional human-readable reason for the approval (e.g. retry without sandbox).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// Optional model-provided risk assessment describing the blocked command.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub risk: Option<SandboxCommandAssessment>,
     /// Proposed execpolicy amendment that can be applied to allow future runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

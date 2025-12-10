@@ -367,6 +367,10 @@ mod tests {
     #[tokio::test]
     async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
         use std::process::Stdio;
+        use tokio::time::Duration as TokioDuration;
+        use tokio::time::Instant;
+        use tokio::time::sleep;
+
         let dir = tempdir()?;
         let shell_path = dir.path().join("hanging-shell.sh");
         let pid_path = dir.path().join("pid");
@@ -402,16 +406,22 @@ mod tests {
             .trim()
             .parse::<i32>()?;
 
-        let kill_status = StdCommand::new("kill")
-            .arg("-0")
-            .arg(pid.to_string())
-            .stderr(Stdio::null())
-            .stdout(Stdio::null())
-            .status()?;
-        assert!(
-            !kill_status.success(),
-            "timed out snapshot shell should be terminated"
-        );
+        let deadline = Instant::now() + TokioDuration::from_secs(1);
+        loop {
+            let kill_status = StdCommand::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .stderr(Stdio::null())
+                .stdout(Stdio::null())
+                .status()?;
+            if !kill_status.success() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                panic!("timed out snapshot shell is still alive after grace period");
+            }
+            sleep(TokioDuration::from_millis(50)).await;
+        }
 
         Ok(())
     }

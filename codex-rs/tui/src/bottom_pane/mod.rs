@@ -570,7 +570,6 @@ mod tests {
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
             reason: None,
-            risk: None,
             proposed_execpolicy_amendment: None,
         }
     }

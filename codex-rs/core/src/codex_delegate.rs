@@ -280,7 +280,6 @@ async fn handle_exec_approval(
         event.command,
         event.cwd,
         event.reason,
-        event.risk,
         event.proposed_execpolicy_amendment,
     );
     let decision = await_approval_with_cancel(

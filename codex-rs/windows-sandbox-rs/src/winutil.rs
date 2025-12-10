@@ -6,6 +6,7 @@ use windows_sys::Win32::System::Diagnostics::Debug::FormatMessageW;
 use windows_sys::Win32::System::Diagnostics::Debug::FORMAT_MESSAGE_ALLOCATE_BUFFER;
 use windows_sys::Win32::System::Diagnostics::Debug::FORMAT_MESSAGE_FROM_SYSTEM;
 use windows_sys::Win32::System::Diagnostics::Debug::FORMAT_MESSAGE_IGNORE_INSERTS;
+use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 
 pub fn to_wide<S: AsRef<OsStr>>(s: S) -> Vec<u16> {
     let mut v: Vec<u16> = s.as_ref().encode_wide().collect();
@@ -39,5 +40,24 @@ pub fn format_last_error(err: i32) -> String {
         s = s.trim().to_string();
         let _ = LocalFree(buf_ptr as HLOCAL);
         s
+    }
+}
+
+#[allow(dead_code)]
+pub fn string_from_sid_bytes(sid: &[u8]) -> Result<String, String> {
+    unsafe {
+        let mut str_ptr: *mut u16 = std::ptr::null_mut();
+        let ok = ConvertSidToStringSidW(sid.as_ptr() as *mut std::ffi::c_void, &mut str_ptr);
+        if ok == 0 || str_ptr.is_null() {
+            return Err(format!("ConvertSidToStringSidW failed: {}", std::io::Error::last_os_error()));
+        }
+        let mut len = 0;
+        while *str_ptr.add(len) != 0 {
+            len += 1;
+        }
+        let slice = std::slice::from_raw_parts(str_ptr, len);
+        let out = String::from_utf16_lossy(slice);
+        let _ = LocalFree(str_ptr as HLOCAL);
+        Ok(out)
     }
 }

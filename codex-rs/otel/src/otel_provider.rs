@@ -2,6 +2,7 @@ use crate::config::OtelExporter;
 use crate::config::OtelHttpProtocol;
 use crate::config::OtelSettings;
 use crate::config::OtelTlsConfig;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use http::Uri;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::LogExporter;
@@ -25,7 +26,6 @@ use std::error::Error;
 use std::fs;
 use std::io::ErrorKind;
 use std::io::{self};
-use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use tonic::metadata::MetadataMap;
@@ -85,12 +85,7 @@ impl OtelProvider {
                     .assume_http2(true);
 
                 let tls_config = match tls.as_ref() {
-                    Some(tls) => build_grpc_tls_config(
-                        endpoint,
-                        base_tls_config,
-                        tls,
-                        settings.codex_home.as_path(),
-                    )?,
+                    Some(tls) => build_grpc_tls_config(endpoint, base_tls_config, tls)?,
                     None => base_tls_config,
                 };
 
@@ -123,7 +118,7 @@ impl OtelProvider {
                     .with_headers(headers.clone());
 
                 if let Some(tls) = tls.as_ref() {
-                    let client = build_http_client(tls, settings.codex_home.as_path())?;
+                    let client = build_http_client(tls)?;
                     exporter_builder = exporter_builder.with_http_client(client);
                 }
 
@@ -149,7 +144,6 @@ fn build_grpc_tls_config(
     endpoint: &str,
     tls_config: ClientTlsConfig,
     tls: &OtelTlsConfig,
-    codex_home: &Path,
 ) -> Result<ClientTlsConfig, Box<dyn Error>> {
     let uri: Uri = endpoint.parse()?;
     let host = uri.host().ok_or_else(|| {
@@ -161,14 +155,14 @@ fn build_grpc_tls_config(
     let mut config = tls_config.domain_name(host.to_owned());
 
     if let Some(path) = tls.ca_certificate.as_ref() {
-        let (pem, _) = read_bytes(codex_home, path)?;
+        let (pem, _) = read_bytes(path)?;
         config = config.ca_certificate(TonicCertificate::from_pem(pem));
     }
 
     match (&tls.client_certificate, &tls.client_private_key) {
         (Some(cert_path), Some(key_path)) => {
-            let (cert_pem, _) = read_bytes(codex_home, cert_path)?;
-            let (key_pem, _) = read_bytes(codex_home, key_path)?;
+            let (cert_pem, _) = read_bytes(cert_path)?;
+            let (key_pem, _) = read_bytes(key_path)?;
             config = config.identity(TonicIdentity::from_pem(cert_pem, key_pem));
         }
         (Some(_), None) | (None, Some(_)) => {
@@ -188,24 +182,20 @@ fn build_grpc_tls_config(
 /// `opentelemetry_sdk` `BatchLogProcessor` spawns a dedicated OS thread that uses
 /// `futures_executor::block_on()` rather than tokio. When the async reqwest client's
 /// timeout calls `tokio::time::sleep()`, it panics with "no reactor running".
-fn build_http_client(
-    tls: &OtelTlsConfig,
-    codex_home: &Path,
-) -> Result<reqwest::blocking::Client, Box<dyn Error>> {
+fn build_http_client(tls: &OtelTlsConfig) -> Result<reqwest::blocking::Client, Box<dyn Error>> {
     // Wrap in block_in_place because reqwest::blocking::Client creates its own
     // internal tokio runtime, which would panic if built directly from an async context.
-    tokio::task::block_in_place(|| build_http_client_inner(tls, codex_home))
+    tokio::task::block_in_place(|| build_http_client_inner(tls))
 }
 
 fn build_http_client_inner(
     tls: &OtelTlsConfig,
-    codex_home: &Path,
 ) -> Result<reqwest::blocking::Client, Box<dyn Error>> {
     let mut builder = reqwest::blocking::Client::builder()
         .timeout(resolve_otlp_timeout(OTEL_EXPORTER_OTLP_LOGS_TIMEOUT));
 
     if let Some(path) = tls.ca_certificate.as_ref() {
-        let (pem, location) = read_bytes(codex_home, path)?;
+        let (pem, location) = read_bytes(path)?;
         let certificate = ReqwestCertificate::from_pem(pem.as_slice()).map_err(|error| {
             config_error(format!(
                 "failed to parse certificate {}: {error}",
@@ -220,8 +210,8 @@ fn build_http_client_inner(
 
     match (&tls.client_certificate, &tls.client_private_key) {
         (Some(cert_path), Some(key_path)) => {
-            let (mut cert_pem, cert_location) = read_bytes(codex_home, cert_path)?;
-            let (key_pem, key_location) = read_bytes(codex_home, key_path)?;
+            let (mut cert_pem, cert_location) = read_bytes(cert_path)?;
+            let (key_pem, key_location) = read_bytes(key_path)?;
             cert_pem.extend_from_slice(key_pem.as_slice());
             let identity = ReqwestIdentity::from_pem(cert_pem.as_slice()).map_err(|error| {
                 config_error(format!(
@@ -264,22 +254,13 @@ fn read_timeout_env(var: &str) -> Option<Duration> {
     Some(Duration::from_millis(parsed as u64))
 }
 
-fn read_bytes(base: &Path, provided: &PathBuf) -> Result<(Vec<u8>, PathBuf), Box<dyn Error>> {
-    let resolved = resolve_config_path(base, provided);
-    match fs::read(&resolved) {
-        Ok(bytes) => Ok((bytes, resolved)),
+fn read_bytes(path: &AbsolutePathBuf) -> Result<(Vec<u8>, PathBuf), Box<dyn Error>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok((bytes, path.to_path_buf())),
         Err(error) => Err(Box::new(io::Error::new(
             error.kind(),
-            format!("failed to read {}: {error}", resolved.display()),
+            format!("failed to read {}: {error}", path.display()),
         ))),
-    }
-}
-
-fn resolve_config_path(base: &Path, provided: &PathBuf) -> PathBuf {
-    if provided.is_absolute() {
-        provided.clone()
-    } else {
-        base.join(provided)
     }
 }
 
