@@ -40,6 +40,7 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dirs::home_dir;
 use dunce::canonicalize;
 use serde::Deserialize;
@@ -299,9 +300,9 @@ impl Config {
         )
         .await?;
 
-        let cfg: ConfigToml = root_value.try_into().map_err(|e| {
+        let cfg = deserialize_config_toml_with_base(root_value, &codex_home).map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+            e
         })?;
 
         Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)
@@ -319,9 +320,9 @@ pub async fn load_config_as_toml_with_cli_overrides(
     )
     .await?;
 
-    let cfg: ConfigToml = root_value.try_into().map_err(|e| {
+    let cfg = deserialize_config_toml_with_base(root_value, codex_home).map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
-        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+        e
     })?;
 
     Ok(cfg)
@@ -355,6 +356,18 @@ fn apply_overlays(
     }
 
     base
+}
+
+fn deserialize_config_toml_with_base(
+    root_value: TomlValue,
+    config_base_dir: &Path,
+) -> std::io::Result<ConfigToml> {
+    // This guard ensures that any relative paths that is deserialized into an
+    // [AbsolutePathBuf] is resolved against `config_base_dir`.
+    let _guard = AbsolutePathBufGuard::new(config_base_dir);
+    root_value
+        .try_into()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 pub async fn load_global_mcp_servers(
@@ -1852,10 +1865,11 @@ trust_level = "trusted"
         };
 
         let root_value = load_resolved_config(codex_home.path(), Vec::new(), overrides).await?;
-        let cfg: ConfigToml = root_value.try_into().map_err(|e| {
-            tracing::error!("Failed to deserialize overridden config: {e}");
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-        })?;
+        let cfg =
+            deserialize_config_toml_with_base(root_value, codex_home.path()).map_err(|e| {
+                tracing::error!("Failed to deserialize overridden config: {e}");
+                e
+            })?;
         assert_eq!(
             cfg.mcp_oauth_credentials_store,
             Some(OAuthCredentialsStoreMode::Keyring),
@@ -1972,10 +1986,11 @@ trust_level = "trusted"
         )
         .await?;
 
-        let cfg: ConfigToml = root_value.try_into().map_err(|e| {
-            tracing::error!("Failed to deserialize overridden config: {e}");
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-        })?;
+        let cfg =
+            deserialize_config_toml_with_base(root_value, codex_home.path()).map_err(|e| {
+                tracing::error!("Failed to deserialize overridden config: {e}");
+                e
+            })?;
 
         assert_eq!(cfg.model.as_deref(), Some("managed_config"));
         Ok(())

@@ -1157,6 +1157,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-utils-absolute-path",
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-string",
@@ -1464,6 +1465,7 @@ dependencies = [
  "chrono",
  "codex-app-server-protocol",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "eventsource-stream",
  "http",
  "opentelemetry",
@@ -1648,6 +1650,16 @@ dependencies = [
  "codex-common",
  "codex-core",
  "codex-tui",
+]
+
+[[package]]
+name = "codex-utils-absolute-path"
+version = "0.0.0"
+dependencies = [
+ "path-absolutize",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
