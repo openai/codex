@@ -13,29 +13,48 @@ windows_modules!(
 mod setup;
 
 #[cfg(target_os = "windows")]
-pub use {
-    audit::apply_world_writable_scan_and_denies,
-    dpapi::protect as dpapi_protect,
-    dpapi::unprotect as dpapi_unprotect,
-    identity::require_logon_sandbox_creds,
-    logging::log_note,
-    logging::LOG_FILE_NAME,
-    setup::run_setup_refresh,
-    setup::{run_elevated_setup, sandbox_dir, SETUP_VERSION},
-    token::convert_string_sid_to_sid,
-    windows_impl::{run_windows_sandbox_capture, CaptureResult},
-    {
-        acl::{ensure_allow_write_aces, fetch_dacl_handle, path_mask_allows},
-        cap::load_or_create_cap_sids,
-        winutil::string_from_sid_bytes,
-    },
-};
+pub use acl::ensure_allow_write_aces;
+#[cfg(target_os = "windows")]
+pub use acl::fetch_dacl_handle;
+#[cfg(target_os = "windows")]
+pub use acl::path_mask_allows;
+#[cfg(target_os = "windows")]
+pub use audit::apply_world_writable_scan_and_denies;
+#[cfg(target_os = "windows")]
+pub use cap::load_or_create_cap_sids;
+#[cfg(target_os = "windows")]
+pub use dpapi::protect as dpapi_protect;
+#[cfg(target_os = "windows")]
+pub use dpapi::unprotect as dpapi_unprotect;
+#[cfg(target_os = "windows")]
+pub use identity::require_logon_sandbox_creds;
+#[cfg(target_os = "windows")]
+pub use logging::log_note;
+#[cfg(target_os = "windows")]
+pub use logging::LOG_FILE_NAME;
+#[cfg(target_os = "windows")]
+pub use setup::run_elevated_setup;
+#[cfg(target_os = "windows")]
+pub use setup::run_setup_refresh;
+#[cfg(target_os = "windows")]
+pub use setup::sandbox_dir;
+#[cfg(target_os = "windows")]
+pub use setup::SETUP_VERSION;
+#[cfg(target_os = "windows")]
+pub use token::convert_string_sid_to_sid;
+#[cfg(target_os = "windows")]
+pub use windows_impl::run_windows_sandbox_capture;
+#[cfg(target_os = "windows")]
+pub use windows_impl::CaptureResult;
+#[cfg(target_os = "windows")]
+pub use winutil::string_from_sid_bytes;
 
 #[cfg(not(target_os = "windows"))]
-pub use {
-    stub::apply_world_writable_scan_and_denies, stub::run_windows_sandbox_capture,
-    stub::CaptureResult,
-};
+pub use stub::apply_world_writable_scan_and_denies;
+#[cfg(not(target_os = "windows"))]
+pub use stub::run_windows_sandbox_capture;
+#[cfg(not(target_os = "windows"))]
+pub use stub::CaptureResult;
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
