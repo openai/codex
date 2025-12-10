@@ -34,12 +34,16 @@ pub(crate) async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> 
         .send_with_fds(&HANDSHAKE_MESSAGE, &[server.into_inner().into()])
         .await
         .context("failed to send handshake datagram")?;
-    let env = std::env::vars()
-        .filter(|(k, _)| {
-            !matches!(
-                k.as_str(),
+    let env = std::env::vars_os()
+        .filter_map(|(key, value)| {
+            let key = key.into_string().ok()?;
+            if matches!(
+                key.as_str(),
                 ESCALATE_SOCKET_ENV_VAR | BASH_EXEC_WRAPPER_ENV_VAR
-            )
+            ) {
+                return None;
+            }
+            Some((key, value.into_string().ok()?))
         })
         .collect();
     client

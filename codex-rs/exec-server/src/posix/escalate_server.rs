@@ -55,7 +55,9 @@ impl EscalateServer {
         client_socket.set_cloexec(false)?;
 
         let escalate_task = tokio::spawn(escalate_task(escalate_server, self.policy.clone()));
-        let mut env = std::env::vars().collect::<HashMap<String, String>>();
+        let mut env = std::env::vars_os()
+            .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+            .collect::<HashMap<String, String>>();
         env.insert(
             ESCALATE_SOCKET_ENV_VAR.to_string(),
             client_socket.as_raw_fd().to_string(),

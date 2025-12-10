@@ -232,7 +232,9 @@ async fn java_home_finds_runtime_under_seatbelt() {
     let command_cwd = std::env::current_dir().expect("getcwd");
     let sandbox_cwd = command_cwd.clone();
 
-    let mut env: HashMap<String, String> = std::env::vars().collect();
+    let mut env: HashMap<String, String> = std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .collect();
     env.remove("JAVA_HOME");
     env.remove(CODEX_SANDBOX_ENV_VAR);
 

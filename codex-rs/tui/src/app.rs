@@ -401,7 +401,7 @@ impl App {
                     .unwrap_or(false);
             if should_check {
                 let cwd = app.config.cwd.clone();
-                let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
+                let env_map = collect_string_env_map();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
                 let sandbox_policy = app.config.sandbox_policy.clone();
@@ -864,8 +864,7 @@ impl App {
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
                         let cwd = self.config.cwd.clone();
-                        let env_map: std::collections::HashMap<String, String> =
-                            std::env::vars().collect();
+                        let env_map = collect_string_env_map();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
                         let sandbox_policy = self.config.sandbox_policy.clone();
@@ -1115,6 +1114,13 @@ impl App {
             }
         });
     }
+}
+
+#[cfg(target_os = "windows")]
+fn collect_string_env_map() -> std::collections::HashMap<String, String> {
+    std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
 }
 
 fn migration_prompt_allowed_auth_modes(migration_config_key: &str) -> Option<&'static [AuthMode]> {
