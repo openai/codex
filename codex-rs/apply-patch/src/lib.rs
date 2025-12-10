@@ -127,43 +127,7 @@ fn can_skip_flag(shell: &str, flag: &str) -> bool {
     })
 }
 
-fn unwrap_shell_snapshot(argv: &[String]) -> &[String] {
-    // Shell snapshot wrapping is implemented in `core::shell::Shell::wrap_command_with_snapshot`.
-    // The resulting argv has the general form:
-    //
-    //   <outer_shell> <flags...> <snapshot_loader> <snapshot_path> <inner_shell> <flags...> <script...>
-    //
-    // where `<snapshot_path>` lives under a `shell_snapshots` directory. For apply_patch detection
-    // we want to see the original inner command, so when we detect this pattern we strip the
-    // wrapper prefix and return the inner argv.
-    let Some(shell) = argv.first() else {
-        return argv;
-    };
-    if classify_shell_name(shell).is_none() {
-        return argv;
-    }
-
-    let Some(loader_idx) = argv.iter().position(|arg| {
-        arg == ". \"$0\" && exec \"$@\"" || arg == "param($snapshot) . $snapshot; & @args"
-    }) else {
-        return argv;
-    };
-
-    let snapshot_idx = loader_idx + 1;
-    if snapshot_idx >= argv.len() || !argv[snapshot_idx].contains("shell_snapshots") {
-        return argv;
-    }
-
-    let inner_start = snapshot_idx + 1;
-    if inner_start < argv.len() {
-        return &argv[inner_start..];
-    }
-
-    argv
-}
-
 fn parse_shell_script(argv: &[String]) -> Option<(ApplyPatchShell, &str)> {
-    let argv = unwrap_shell_snapshot(argv);
     match argv {
         [shell, flag, script] => classify_shell(shell, flag).map(|shell_type| {
             let script = script.as_str();

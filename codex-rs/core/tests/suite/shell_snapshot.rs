@@ -85,14 +85,12 @@ async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
         _ => None,
     })
     .await;
-
-    let snapshot_arg = begin
-        .command
-        .iter()
-        .find(|arg| arg.contains("shell_snapshots"))
-        .expect("command includes shell snapshot path")
-        .to_owned();
-    let snapshot_path = PathBuf::from(&snapshot_arg);
+    let mut entries = fs::read_dir(codex_home.join("shell_snapshots")).await?;
+    let snapshot_path = entries
+        .next_entry()
+        .await?
+        .map(|entry| entry.path())
+        .expect("shell snapshot created");
     let snapshot_content = fs::read_to_string(&snapshot_path).await?;
 
     let end = wait_for_event_match(&codex, |ev| match ev {
@@ -163,14 +161,12 @@ async fn run_shell_command_snapshot(command: &str) -> Result<SnapshotRun> {
         _ => None,
     })
     .await;
-
-    let snapshot_arg = begin
-        .command
-        .iter()
-        .find(|arg| arg.contains("shell_snapshots"))
-        .expect("command includes shell snapshot path")
-        .to_owned();
-    let snapshot_path = PathBuf::from(&snapshot_arg);
+    let mut entries = fs::read_dir(codex_home.join("shell_snapshots")).await?;
+    let snapshot_path = entries
+        .next_entry()
+        .await?
+        .map(|entry| entry.path())
+        .expect("shell snapshot created");
     let snapshot_content = fs::read_to_string(&snapshot_path).await?;
 
     let end = wait_for_event_match(&codex, |ev| match ev {
@@ -211,21 +207,9 @@ async fn linux_unified_exec_uses_shell_snapshot() -> Result<()> {
     let command = "echo snapshot-linux";
     let run = run_snapshot_command(command).await?;
 
-    let shell_path = run
-        .begin
-        .command
-        .first()
-        .expect("shell path recorded")
-        .clone();
     assert_eq!(run.begin.command.get(1).map(String::as_str), Some("-c"));
-    assert_eq!(
-        run.begin.command.get(2).map(String::as_str),
-        Some(". \"$0\" && exec \"$@\"")
-    );
-    assert_eq!(run.begin.command.get(4), Some(&shell_path));
-    assert_eq!(run.begin.command.get(5).map(String::as_str), Some("-c"));
-    assert_eq!(run.begin.command.last(), Some(&command.to_string()));
-
+    assert_eq!(run.begin.command.get(2).map(String::as_str), Some(command));
+    assert_eq!(run.begin.command.len(), 3);
     assert!(run.snapshot_path.starts_with(&run.codex_home));
     assert_posix_snapshot_sections(&run.snapshot_content);
     assert_eq!(normalize_newlines(&run.end.stdout).trim(), "snapshot-linux");
@@ -240,21 +224,9 @@ async fn linux_shell_command_uses_shell_snapshot() -> Result<()> {
     let command = "echo shell-command-snapshot-linux";
     let run = run_shell_command_snapshot(command).await?;
 
-    let shell_path = run
-        .begin
-        .command
-        .first()
-        .expect("shell path recorded")
-        .clone();
     assert_eq!(run.begin.command.get(1).map(String::as_str), Some("-c"));
-    assert_eq!(
-        run.begin.command.get(2).map(String::as_str),
-        Some(". \"$0\" && exec \"$@\"")
-    );
-    assert_eq!(run.begin.command.get(4), Some(&shell_path));
-    assert_eq!(run.begin.command.get(5).map(String::as_str), Some("-c"));
-    assert_eq!(run.begin.command.last(), Some(&command.to_string()));
-
+    assert_eq!(run.begin.command.get(2).map(String::as_str), Some(command));
+    assert_eq!(run.begin.command.len(), 3);
     assert!(run.snapshot_path.starts_with(&run.codex_home));
     assert_posix_snapshot_sections(&run.snapshot_content);
     assert_eq!(

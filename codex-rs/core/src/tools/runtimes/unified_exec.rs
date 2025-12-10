@@ -8,6 +8,7 @@ use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecExpiration;
 use crate::tools::runtimes::build_command_spec;
+use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -171,10 +172,14 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecSession> for UnifiedExecRunt
         &mut self,
         req: &UnifiedExecRequest,
         attempt: &SandboxAttempt<'_>,
-        _ctx: &ToolCtx<'_>,
+        ctx: &ToolCtx<'_>,
     ) -> Result<UnifiedExecSession, ToolError> {
+        let base_command = &req.command;
+        let session_shell = ctx.session.user_shell();
+        let command = maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref());
+
         let spec = build_command_spec(
-            &req.command,
+            &command,
             &req.cwd,
             &req.env,
             ExecExpiration::DefaultTimeout,

@@ -44,13 +44,9 @@ impl ShellHandler {
 }
 
 impl ShellCommandHandler {
-    fn command_with_snapshot(shell: &Shell, command: &str, login: Option<bool>) -> Vec<String> {
+    fn base_command(shell: &Shell, command: &str, login: Option<bool>) -> Vec<String> {
         let use_login_shell = login.unwrap_or(shell.shell_snapshot.is_none());
-        let command = shell.derive_exec_args(command, use_login_shell);
-        if login.is_none() {
-            return shell.wrap_command_with_snapshot(&command);
-        }
-        command
+        shell.derive_exec_args(command, use_login_shell)
     }
 
     fn to_exec_params(
@@ -59,7 +55,7 @@ impl ShellCommandHandler {
         turn_context: &TurnContext,
     ) -> ExecParams {
         let shell = session.user_shell();
-        let command = Self::command_with_snapshot(shell.as_ref(), &params.command, params.login);
+        let command = Self::base_command(shell.as_ref(), &params.command, params.login);
 
         ExecParams {
             command,
@@ -166,8 +162,7 @@ impl ToolHandler for ShellCommandHandler {
         serde_json::from_str::<ShellCommandToolCallParams>(arguments)
             .map(|params| {
                 let shell = invocation.session.user_shell();
-                let command =
-                    Self::command_with_snapshot(shell.as_ref(), &params.command, params.login);
+                let command = Self::base_command(shell.as_ref(), &params.command, params.login);
                 !is_known_safe_command(&command)
             })
             .unwrap_or(true)
@@ -388,23 +383,6 @@ mod tests {
     }
 
     #[test]
-    fn shell_command_handler_wraps_command_with_snapshot_when_login_unspecified() {
-        let shell = Shell {
-            shell_type: ShellType::Bash,
-            shell_path: PathBuf::from("/bin/bash"),
-            shell_snapshot: Some(Arc::new(ShellSnapshot {
-                path: PathBuf::from("/tmp/snapshot.sh"),
-            })),
-        };
-
-        let command =
-            ShellCommandHandler::command_with_snapshot(&shell, "echo hello from snapshot", None);
-        let base_command = shell.derive_exec_args("echo hello from snapshot", false);
-
-        assert_eq!(command, shell.wrap_command_with_snapshot(&base_command));
-    }
-
-    #[test]
     fn shell_command_handler_respects_explicit_login_flag() {
         let shell = Shell {
             shell_type: ShellType::Bash,
@@ -415,14 +393,14 @@ mod tests {
         };
 
         let login_command =
-            ShellCommandHandler::command_with_snapshot(&shell, "echo login shell", Some(true));
+            ShellCommandHandler::base_command(&shell, "echo login shell", Some(true));
         assert_eq!(
             login_command,
             shell.derive_exec_args("echo login shell", true)
         );
 
         let non_login_command =
-            ShellCommandHandler::command_with_snapshot(&shell, "echo non login shell", Some(false));
+            ShellCommandHandler::base_command(&shell, "echo non login shell", Some(false));
         assert_eq!(
             non_login_command,
             shell.derive_exec_args("echo non login shell", false)

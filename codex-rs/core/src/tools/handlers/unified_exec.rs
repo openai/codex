@@ -264,13 +264,7 @@ fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String>
         }
     });
 
-    let base = shell.derive_exec_args(&args.cmd, use_login_shell);
-
-    if args.login.is_none() {
-        session_shell.wrap_command_with_snapshot(&base)
-    } else {
-        base
-    }
+    shell.derive_exec_args(&args.cmd, use_login_shell)
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {
