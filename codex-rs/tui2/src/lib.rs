@@ -516,6 +516,15 @@ async fn run_ratatui_app(
 
     let _ = tui.leave_alt_screen();
     restore();
+    if let Ok(exit_info) = &app_result {
+        let mut stdout = std::io::stdout();
+        for line in exit_info.session_lines.iter() {
+            let _ = writeln!(stdout, "{line}");
+        }
+        if !exit_info.session_lines.is_empty() {
+            let _ = writeln!(stdout);
+        }
+    }
     // Mark the end of the recorded session.
     session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead
