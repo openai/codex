@@ -20,6 +20,7 @@ use crate::skill_error_prompt::run_skill_error_prompt;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
+use crate::wrapping::word_wrap_lines_borrowed;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
@@ -50,6 +51,7 @@ use crossterm::event::KeyEventKind;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
@@ -557,10 +559,6 @@ impl App {
         frame: &mut Frame,
         cells: &[Arc<dyn HistoryCell>],
     ) {
-        if cells.is_empty() {
-            return;
-        }
-
         let area = frame.area();
         if area.width == 0 || area.height == 0 {
             return;
@@ -584,22 +582,55 @@ impl App {
         };
 
         let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut has_emitted_lines = false;
+
         for cell in cells {
-            let cell_lines = cell.display_lines(transcript_area.width);
+            let mut cell_lines = cell.display_lines(transcript_area.width);
             if cell_lines.is_empty() {
                 continue;
             }
-            lines.extend(cell_lines);
+
+            if !cell.is_stream_continuation() {
+                if has_emitted_lines {
+                    lines.push(Line::from(""));
+                } else {
+                    has_emitted_lines = true;
+                }
+            }
+
+            lines.append(&mut cell_lines);
         }
 
         if lines.is_empty() {
             return;
         }
 
-        let total = lines.len();
-        let start = total.saturating_sub(transcript_area.height as usize);
-        let visible: Vec<Line<'static>> = lines.into_iter().skip(start).collect();
-        Paragraph::new(visible).render_ref(transcript_area, frame.buffer);
+        let wrapped = word_wrap_lines_borrowed(&lines, transcript_area.width.max(1) as usize);
+        if wrapped.is_empty() {
+            return;
+        }
+
+        let total_lines = wrapped.len();
+        let max_visible = transcript_area.height as usize;
+        let start_index = total_lines.saturating_sub(max_visible);
+
+        Clear.render_ref(transcript_area, frame.buffer);
+
+        for (row_index, line_index) in (start_index..total_lines).enumerate() {
+            if row_index >= max_visible {
+                break;
+            }
+
+            let y = transcript_area.y + row_index as u16;
+            let row_area = Rect {
+                x: transcript_area.x,
+                y,
+                width: transcript_area.width,
+                height: 1,
+            };
+
+            wrapped[line_index].render_ref(row_area, frame.buffer);
+        }
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
