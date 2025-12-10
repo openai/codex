@@ -34,7 +34,6 @@ use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
-use codex_app_server_protocol::SandboxCommandAssessment as V2SandboxCommandAssessment;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::ThreadItem;
@@ -179,7 +178,6 @@ pub(crate) async fn apply_bespoke_event_handling(
             command,
             cwd,
             reason,
-            risk,
             proposed_execpolicy_amendment,
             parsed_cmd,
         }) => match api_version {
@@ -190,7 +188,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                     command,
                     cwd,
                     reason,
-                    risk,
                     parsed_cmd,
                 };
                 let rx = outgoing
@@ -218,7 +215,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                     // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                     item_id: item_id.clone(),
                     reason,
-                    risk: risk.map(V2SandboxCommandAssessment::from),
                     proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                 };
                 let rx = outgoing
@@ -1199,7 +1195,7 @@ async fn construct_mcp_tool_call_notification(
     }
 }
 
-/// simiilar to handle_mcp_tool_call_end in exec
+/// similar to handle_mcp_tool_call_end in exec
 async fn construct_mcp_tool_call_end_notification(
     end_event: McpToolCallEndEvent,
     thread_id: String,

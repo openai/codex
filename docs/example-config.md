@@ -218,7 +218,6 @@ rmcp_client = false
 apply_patch_freeform = false
 view_image_tool = true
 web_search_request = false
-experimental_sandbox_command_assessment = false
 ghost_commit = false
 enable_experimental_windows_sandbox = false
 
@@ -314,7 +313,6 @@ experimental_use_freeform_apply_patch = false
 # experimental_compact_prompt_file = "compact_prompt.txt"
 # include_apply_patch_tool = false
 # experimental_use_freeform_apply_patch = false
-# experimental_sandbox_command_assessment = false
 # tools_web_search = false
 # tools_view_image = true
 # features = { unified_exec = false }

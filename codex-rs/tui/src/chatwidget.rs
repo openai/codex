@@ -1092,7 +1092,6 @@ impl ChatWidget {
             id,
             command: ev.command,
             reason: ev.reason,
-            risk: ev.risk,
             proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
         };
         self.bottom_pane

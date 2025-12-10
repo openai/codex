@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use crate::protocol::common::AuthMode;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
-use codex_protocol::approvals::SandboxCommandAssessment as CoreSandboxCommandAssessment;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
@@ -275,14 +274,6 @@ pub struct ConfigEdit {
     pub merge_strategy: MergeStrategy,
 }
 
-v2_enum_from_core!(
-    pub enum CommandRiskLevel from codex_protocol::approvals::SandboxRiskLevel {
-        Low,
-        Medium,
-        High
-    }
-);
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -358,32 +349,6 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             },
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SandboxCommandAssessment {
-    pub description: String,
-    pub risk_level: CommandRiskLevel,
-}
-
-impl SandboxCommandAssessment {
-    pub fn into_core(self) -> CoreSandboxCommandAssessment {
-        CoreSandboxCommandAssessment {
-            description: self.description,
-            risk_level: self.risk_level.to_core(),
-        }
-    }
-}
-
-impl From<CoreSandboxCommandAssessment> for SandboxCommandAssessment {
-    fn from(value: CoreSandboxCommandAssessment) -> Self {
-        Self {
-            description: value.description,
-            risk_level: CommandRiskLevel::from(value.risk_level),
         }
     }
 }
@@ -1524,8 +1489,6 @@ pub struct CommandExecutionRequestApprovalParams {
     pub item_id: String,
     /// Optional explanatory reason (e.g. request for network access).
     pub reason: Option<String>,
-    /// Optional model-provided risk assessment describing the blocked command.
-    pub risk: Option<SandboxCommandAssessment>,
     /// Optional proposed execpolicy amendment to allow similar commands without prompting.
     pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
 }

@@ -653,7 +653,6 @@ mod tests {
             command: vec!["echo".to_string(), "hello".to_string()],
             cwd: PathBuf::from("/tmp"),
             reason: Some("because tests".to_string()),
-            risk: None,
             parsed_cmd: vec![ParsedCommand::Unknown {
                 cmd: "echo hello".to_string(),
             }],
@@ -673,7 +672,6 @@ mod tests {
                     "command": ["echo", "hello"],
                     "cwd": "/tmp",
                     "reason": "because tests",
-                    "risk": null,
                     "parsedCmd": [
                         {
                             "type": "unknown",
