@@ -1,9 +1,8 @@
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecCommandSource;
-use crate::protocol::ExecOutputStream;
+use crate::protocol::TerminalInteractionEvent;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
@@ -189,7 +188,6 @@ impl ToolHandler for UnifiedExecHandler {
                     &command,
                     cwd.clone(),
                     ExecCommandSource::UnifiedExecStartup,
-                    None,
                     Some(process_id.clone()),
                 );
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
@@ -218,7 +216,7 @@ impl ToolHandler for UnifiedExecHandler {
                         "failed to parse write_stdin arguments: {err:?}"
                     ))
                 })?;
-                manager
+                let response = manager
                     .write_stdin(WriteStdinRequest {
                         process_id: &args.session_id.to_string(),
                         input: &args.chars,
@@ -228,7 +226,18 @@ impl ToolHandler for UnifiedExecHandler {
                     .await
                     .map_err(|err| {
                         FunctionCallError::RespondToModel(format!("write_stdin failed: {err:?}"))
-                    })?
+                    })?;
+
+                let interaction = TerminalInteractionEvent {
+                    call_id: response.event_call_id.clone(),
+                    process_id: args.session_id.to_string(),
+                    stdin: args.chars.clone(),
+                };
+                session
+                    .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
+                    .await;
+
+                response
             }
             other => {
                 return Err(FunctionCallError::RespondToModel(format!(
@@ -236,18 +245,6 @@ impl ToolHandler for UnifiedExecHandler {
                 )));
             }
         };
-
-        // Emit a delta event with the chunk of output we just produced, if any.
-        if !response.output.is_empty() {
-            let delta = ExecCommandOutputDeltaEvent {
-                call_id: response.event_call_id.clone(),
-                stream: ExecOutputStream::Stdout,
-                chunk: response.output.as_bytes().to_vec(),
-            };
-            session
-                .send_event(turn.as_ref(), EventMsg::ExecCommandOutputDelta(delta))
-                .await;
-        }
 
         let content = format_response(&response);
 

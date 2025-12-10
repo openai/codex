@@ -553,6 +553,10 @@ impl CodexClient {
                     print!("{}", delta.delta);
                     std::io::stdout().flush().ok();
                 }
+                ServerNotification::TerminalInteraction(delta) => {
+                    println!("[stdin sent: {}]", delta.stdin);
+                    std::io::stdout().flush().ok();
+                }
                 ServerNotification::ItemStarted(payload) => {
                     println!("\n< item started: {:?}", payload.item);
                 }

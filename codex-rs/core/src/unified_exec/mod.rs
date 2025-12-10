@@ -34,6 +34,7 @@ use tokio::sync::Mutex;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 
+mod async_watcher;
 mod errors;
 mod session;
 mod session_manager;
@@ -50,6 +51,24 @@ pub(crate) const MAX_UNIFIED_EXEC_SESSIONS: usize = 64;
 
 // Send a warning message to the models when it reaches this number of sessions.
 pub(crate) const WARNING_UNIFIED_EXEC_SESSIONS: usize = 60;
+
+#[derive(Debug, Default)]
+pub(crate) struct CommandTranscript {
+    pub data: Vec<u8>,
+}
+
+impl CommandTranscript {
+    pub fn append(&mut self, bytes: &[u8]) {
+        self.data.extend_from_slice(bytes);
+        if self.data.len() > UNIFIED_EXEC_OUTPUT_MAX_BYTES {
+            let excess = self
+                .data
+                .len()
+                .saturating_sub(UNIFIED_EXEC_OUTPUT_MAX_BYTES);
+            self.data.drain(..excess);
+        }
+    }
+}
 
 pub(crate) struct UnifiedExecContext {
     pub session: Arc<Session>,
@@ -92,18 +111,14 @@ pub(crate) struct UnifiedExecResponse {
     pub chunk_id: String,
     pub wall_time: Duration,
     pub output: String,
+    /// Raw bytes returned for this unified exec call before any truncation.
+    pub raw_output: Vec<u8>,
     pub process_id: Option<String>,
     pub exit_code: Option<i32>,
     pub original_token_count: Option<usize>,
     pub session_command: Option<Vec<String>>,
 }
 
-#[derive(Default)]
-pub(crate) struct UnifiedExecSessionManager {
-    session_store: Mutex<SessionStore>,
-}
-
-// Required for mutex sharing.
 #[derive(Default)]
 pub(crate) struct SessionStore {
     sessions: HashMap<String, SessionEntry>,
@@ -115,22 +130,27 @@ impl SessionStore {
         self.reserved_sessions_id.remove(session_id);
         self.sessions.remove(session_id)
     }
+}
 
-    pub(crate) fn clear(&mut self) {
-        self.reserved_sessions_id.clear();
-        self.sessions.clear();
+pub(crate) struct UnifiedExecSessionManager {
+    session_store: Mutex<SessionStore>,
+}
+
+impl Default for UnifiedExecSessionManager {
+    fn default() -> Self {
+        Self {
+            session_store: Mutex::new(SessionStore::default()),
+        }
     }
 }
 
 struct SessionEntry {
-    session: UnifiedExecSession,
+    session: Arc<UnifiedExecSession>,
     session_ref: Arc<Session>,
     turn_ref: Arc<TurnContext>,
     call_id: String,
     process_id: String,
     command: Vec<String>,
-    cwd: PathBuf,
-    started_at: tokio::time::Instant,
     last_used: tokio::time::Instant,
 }
 
