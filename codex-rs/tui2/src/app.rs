@@ -721,6 +721,18 @@ impl App {
         chat_top
     }
 
+    /// Handle mouse interaction in the main transcript view.
+    ///
+    /// - Mouse wheel movement scrolls the conversation history by small, fixed increments,
+    ///   independent of the terminal's own scrollback.
+    /// - Mouse clicks and drags adjust a text selection defined in terms of transcript
+    ///   screen coordinates, so the selection stays anchored to the rendered transcript
+    ///   region above the composer.
+    /// - When a selection begins while the view is following the bottom and a task is
+    ///   actively running (e.g., streaming a response), the scroll mode is first converted
+    ///   into an anchored position so that ongoing updates no longer move the viewport
+    ///   under the selection. If no task is running, starting a selection leaves scroll
+    ///   behavior unchanged.
     fn handle_mouse_event(
         &mut self,
         tui: &mut tui::Tui,
@@ -772,6 +784,8 @@ impl App {
             clamped_x = max_x;
         }
 
+        let streaming = self.chat_widget.is_task_running();
+
         match mouse_event.kind {
             MouseEventKind::ScrollUp => {
                 self.transcript_selection = TranscriptSelection::default();
@@ -792,10 +806,25 @@ impl App {
                 );
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                if streaming && matches!(self.transcript_scroll, TranscriptScroll::ToBottom) {
+                    self.lock_transcript_scroll_to_current_view(
+                        transcript_area.height as usize,
+                        transcript_area.width,
+                    );
+                }
                 self.transcript_selection.anchor = Some((clamped_x, clamped_y));
                 self.transcript_selection.head = Some((clamped_x, clamped_y));
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                if streaming
+                    && matches!(self.transcript_scroll, TranscriptScroll::ToBottom)
+                    && self.transcript_selection.anchor.is_some()
+                {
+                    self.lock_transcript_scroll_to_current_view(
+                        transcript_area.height as usize,
+                        transcript_area.width,
+                    );
+                }
                 if self.transcript_selection.anchor.is_some() {
                     self.transcript_selection.head = Some((clamped_x, clamped_y));
                 }
@@ -809,6 +838,12 @@ impl App {
         }
     }
 
+    /// Scroll the transcript by a fixed number of visual lines.
+    ///
+    /// This is the shared implementation behind mouse wheel movement and PgUp/PgDn keys in
+    /// the main view. Scroll state is expressed in terms of transcript cells and their
+    /// internal line indices, so scrolling refers to logical conversation content and
+    /// remains stable even as wrapping or streaming causes visual reflows.
     fn scroll_transcript(
         &mut self,
         tui: &mut tui::Tui,
@@ -885,6 +920,62 @@ impl App {
         }
 
         tui.frame_requester().schedule_frame();
+    }
+
+    /// Convert a `ToBottom` (auto-follow) scroll state into a fixed anchor at the current view.
+    ///
+    /// When the user begins a mouse selection while new output is streaming in, the view
+    /// should stop auto-following the latest line so the selection stays on the intended
+    /// content. This helper inspects the flattened transcript at the given width, derives
+    /// a concrete position corresponding to the current top row, and switches into a scroll
+    /// mode that keeps that position stable until the user scrolls again.
+    fn lock_transcript_scroll_to_current_view(&mut self, visible_lines: usize, width: u16) {
+        if self.transcript_cells.is_empty() || visible_lines == 0 || width == 0 {
+            return;
+        }
+
+        let (lines, meta) = Self::build_transcript_lines(&self.transcript_cells, width);
+        if lines.is_empty() || meta.is_empty() {
+            return;
+        }
+
+        let total_lines = lines.len();
+        let max_visible = std::cmp::min(visible_lines, total_lines);
+        if max_visible == 0 {
+            return;
+        }
+
+        let max_start = total_lines.saturating_sub(max_visible);
+        let top_offset = match self.transcript_scroll {
+            TranscriptScroll::ToBottom => max_start,
+            TranscriptScroll::Scrolled { .. } => {
+                // Already anchored; nothing to lock.
+                return;
+            }
+        };
+
+        let mut anchor = None;
+        for idx in top_offset..meta.len() {
+            if let Some((cell_index, line_in_cell)) = meta[idx] {
+                anchor = Some((cell_index, line_in_cell));
+                break;
+            }
+        }
+        if anchor.is_none() {
+            for idx in (0..top_offset).rev() {
+                if let Some((cell_index, line_in_cell)) = meta[idx] {
+                    anchor = Some((cell_index, line_in_cell));
+                    break;
+                }
+            }
+        }
+
+        if let Some((cell_index, line_in_cell)) = anchor {
+            self.transcript_scroll = TranscriptScroll::Scrolled {
+                cell_index,
+                line_in_cell,
+            };
+        }
     }
 
     /// Build the flattened transcript lines for rendering and scrolling.

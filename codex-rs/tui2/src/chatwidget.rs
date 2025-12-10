@@ -3073,6 +3073,15 @@ impl ChatWidget {
     pub(crate) fn clear_esc_backtrack_hint(&mut self) {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
+
+    /// Return true when the bottom pane currently has an active task.
+    ///
+    /// This is used by the viewport to decide when mouse selections should
+    /// disengage auto-follow behavior while responses are streaming.
+    pub(crate) fn is_task_running(&self) -> bool {
+        self.bottom_pane.is_task_running()
+    }
+
     /// Forward an `Op` directly to codex.
     pub(crate) fn submit_op(&self, op: Op) {
         // Record outbound operation for session replay fidelity.
