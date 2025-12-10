@@ -310,6 +310,8 @@ pub(crate) struct App {
     #[allow(dead_code)]
     transcript_scroll: TranscriptScroll,
     transcript_selection: TranscriptSelection,
+    transcript_view_top: usize,
+    transcript_total_lines: usize,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -477,6 +479,8 @@ impl App {
             transcript_cells: Vec::new(),
             transcript_scroll: TranscriptScroll::ToBottom,
             transcript_selection: TranscriptSelection::default(),
+            transcript_view_top: 0,
+            transcript_total_lines: 0,
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -622,6 +626,25 @@ impl App {
                             frame.set_cursor_position((x, y));
                         }
                     })?;
+                    let transcript_scrolled =
+                        !matches!(self.transcript_scroll, TranscriptScroll::ToBottom);
+                    let selection_active = matches!(
+                        (self.transcript_selection.anchor, self.transcript_selection.head),
+                        (Some(a), Some(b)) if a != b
+                    );
+                    let scroll_position = if self.transcript_total_lines == 0 {
+                        None
+                    } else {
+                        Some((
+                            self.transcript_view_top.saturating_add(1),
+                            self.transcript_total_lines,
+                        ))
+                    };
+                    self.chat_widget.set_transcript_ui_state(
+                        transcript_scrolled,
+                        selection_active,
+                        scroll_position,
+                    );
                 }
             }
         }
@@ -636,6 +659,9 @@ impl App {
     ) -> u16 {
         let area = frame.area();
         if area.width == 0 || area.height == 0 {
+            self.transcript_scroll = TranscriptScroll::ToBottom;
+            self.transcript_view_top = 0;
+            self.transcript_total_lines = 0;
             return area.bottom().saturating_sub(chat_height);
         }
 
@@ -643,6 +669,8 @@ impl App {
         let max_transcript_height = area.height.saturating_sub(chat_height);
         if max_transcript_height == 0 {
             self.transcript_scroll = TranscriptScroll::ToBottom;
+            self.transcript_view_top = 0;
+            self.transcript_total_lines = 0;
             return area.y;
         }
 
@@ -657,16 +685,21 @@ impl App {
         if lines.is_empty() {
             Clear.render_ref(transcript_area, frame.buffer);
             self.transcript_scroll = TranscriptScroll::ToBottom;
+            self.transcript_view_top = 0;
+            self.transcript_total_lines = 0;
             return area.y;
         }
 
         let wrapped = word_wrap_lines_borrowed(&lines, transcript_area.width.max(1) as usize);
         if wrapped.is_empty() {
             self.transcript_scroll = TranscriptScroll::ToBottom;
+            self.transcript_view_top = 0;
+            self.transcript_total_lines = 0;
             return area.y;
         }
 
         let total_lines = wrapped.len();
+        self.transcript_total_lines = total_lines;
         let max_visible = std::cmp::min(max_transcript_height as usize, total_lines);
         let max_start = total_lines.saturating_sub(max_visible);
 
@@ -694,6 +727,7 @@ impl App {
                 }
             }
         };
+        self.transcript_view_top = top_offset;
 
         let transcript_visible_height = max_visible as u16;
         let chat_top = if total_lines <= max_transcript_height as usize {
@@ -2045,6 +2079,8 @@ mod tests {
             transcript_cells: Vec::new(),
             transcript_scroll: TranscriptScroll::ToBottom,
             transcript_selection: TranscriptSelection::default(),
+            transcript_view_top: 0,
+            transcript_total_lines: 0,
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -2087,6 +2123,8 @@ mod tests {
                 transcript_cells: Vec::new(),
                 transcript_scroll: TranscriptScroll::ToBottom,
                 transcript_selection: TranscriptSelection::default(),
+                transcript_view_top: 0,
+                transcript_total_lines: 0,
                 overlay: None,
                 deferred_history_lines: Vec::new(),
                 has_emitted_history_lines: false,
