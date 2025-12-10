@@ -2,6 +2,13 @@
 
 use anyhow::Context;
 use anyhow::Result;
+<<<<<<< HEAD
+=======
+#[allow(unused_imports)]
+use base64::engine::general_purpose::STANDARD as BASE64;
+#[allow(unused_imports)]
+use base64::Engine;
+>>>>>>> 3b1de4489 (dedicated command runner implementation)
 use codex_windows_sandbox::allow_null_device;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::create_process_as_user;
