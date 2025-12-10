@@ -14,13 +14,16 @@ use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
+/// Controls whether a command should use the session sandbox or bypass it.
 #[derive(
     Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxPermissions {
+    /// Run with the configured sandbox
     #[default]
     UseDefault,
+    /// Request to run outside the sandbox
     RequireEscalated,
 }
 
