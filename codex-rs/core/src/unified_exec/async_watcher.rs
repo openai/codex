@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
+use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
@@ -31,6 +32,7 @@ pub(crate) fn start_streaming_output(
 ) {
     let mut receiver = session.output_receiver();
     let output_drained = session.output_drained_notify();
+    let exit_token = session.cancellation_token();
     let session_ref = Arc::clone(&context.session);
     let turn_ref = Arc::clone(&context.turn);
     let call_id = context.call_id.clone();
@@ -38,29 +40,38 @@ pub(crate) fn start_streaming_output(
     tokio::spawn(async move {
         let mut pending: Vec<u8> = Vec::new();
         loop {
-            match receiver.recv().await {
-                Ok(chunk) => {
-                    pending.extend_from_slice(&chunk);
-                    while let Some(prefix) = split_valid_utf8_prefix(&mut pending) {
-                        {
-                            let mut guard = transcript.lock().await;
-                            guard.append(&prefix);
+            tokio::select! {
+                _ = exit_token.cancelled() => {
+                    loop {
+                        match receiver.try_recv() {
+                            Ok(chunk) => {
+                                process_chunk(&mut pending, &transcript, &call_id, &session_ref, &turn_ref, chunk).await;
+                            }
+                            Err(TryRecvError::Lagged(_)) => continue,
+                            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
                         }
-
-                        let event = ExecCommandOutputDeltaEvent {
-                            call_id: call_id.clone(),
-                            stream: ExecOutputStream::Stdout,
-                            chunk: prefix,
-                        };
-                        session_ref
-                            .send_event(turn_ref.as_ref(), EventMsg::ExecCommandOutputDelta(event))
-                            .await;
                     }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    output_drained.notify_waiters();
+                    output_drained.notify_one();
                     break;
+                }
+                received = receiver.recv() => {
+                    match received {
+                        Ok(chunk) => {
+                            process_chunk(
+                                &mut pending,
+                                &transcript,
+                                &call_id,
+                                &session_ref,
+                                &turn_ref,
+                                chunk,
+                            ).await;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            output_drained.notify_one();
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -104,6 +115,32 @@ pub(crate) fn spawn_exit_watcher(
         )
         .await;
     });
+}
+
+async fn process_chunk(
+    pending: &mut Vec<u8>,
+    transcript: &Arc<Mutex<CommandTranscript>>,
+    call_id: &str,
+    session_ref: &Arc<Session>,
+    turn_ref: &Arc<TurnContext>,
+    chunk: Vec<u8>,
+) {
+    pending.extend_from_slice(&chunk);
+    while let Some(prefix) = split_valid_utf8_prefix(pending) {
+        {
+            let mut guard = transcript.lock().await;
+            guard.append(&prefix);
+        }
+
+        let event = ExecCommandOutputDeltaEvent {
+            call_id: call_id.to_string(),
+            stream: ExecOutputStream::Stdout,
+            chunk: prefix,
+        };
+        session_ref
+            .send_event(turn_ref.as_ref(), EventMsg::ExecCommandOutputDelta(event))
+            .await;
+    }
 }
 
 /// Emit an ExecCommandEnd event for a unified exec session, using the transcript
