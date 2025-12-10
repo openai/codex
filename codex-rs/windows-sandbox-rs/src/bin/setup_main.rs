@@ -48,7 +48,6 @@ use windows::Win32::System::Com::COINIT_APARTMENTTHREADED;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
-use windows_sys::Win32::Foundation::GENERIC_WRITE;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::NetworkManagement::NetManagement::NERR_Success;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupAddMembers;
@@ -61,14 +60,12 @@ use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1003;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_PRIV_USER;
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
-use windows_sys::Win32::Security::Authorization::GetEffectiveRightsFromAclW;
 use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
 use windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::GRANT_ACCESS;
 use windows_sys::Win32::Security::Authorization::SE_FILE_OBJECT;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
-use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
 use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::ACL;
@@ -77,13 +74,10 @@ use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::OBJECT_INHERIT_ACE;
 use windows_sys::Win32::Security::SID_NAME_USE;
 use windows_sys::Win32::Storage::FileSystem::DELETE;
-use windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
-use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
-use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 
 #[derive(Debug, Deserialize)]
 struct Payload {
@@ -147,12 +141,8 @@ fn random_password() -> String {
         .collect()
 }
 
-fn sid_to_string(sid: &[u8]) -> Result<String> {
-    string_from_sid_bytes(sid).map_err(anyhow::Error::msg)
-}
-
 fn sid_bytes_to_psid(sid: &[u8]) -> Result<*mut c_void> {
-    let sid_str = sid_to_string(sid)?;
+    let sid_str = string_from_sid_bytes(sid).map_err(anyhow::Error::msg)?;
     let sid_w = to_wide(OsStr::new(&sid_str));
     let mut psid: *mut c_void = std::ptr::null_mut();
     if unsafe { ConvertStringSidToSidW(sid_w.as_ptr(), &mut psid) } == 0 {
@@ -254,105 +244,10 @@ fn resolve_sid(name: &str) -> Result<Vec<u8>> {
     }
 }
 
-/// Evaluate effective rights for a set of SIDs against a path's DACL (single fetch).
-#[allow(dead_code)]
-fn effective_rights_for_psids(
-    path: &Path,
-    entries: &[(*mut c_void, &str)],
-    map_generic: bool,
-    needed_mask: u32,
-) -> Result<Vec<(String, bool)>> {
-    let mut results = Vec::new();
-    unsafe {
-        let (existing_dacl, sd) = fetch_dacl_handle(path)?;
-        for (psid, label) in entries {
-            let trustee = TRUSTEE_W {
-                pMultipleTrustee: std::ptr::null_mut(),
-                MultipleTrusteeOperation: 0,
-                TrusteeForm: TRUSTEE_IS_SID,
-                TrusteeType: TRUSTEE_IS_UNKNOWN,
-                ptstrName: *psid as *mut u16,
-            };
-            let mut access: u32 = 0;
-            let eff = GetEffectiveRightsFromAclW(existing_dacl, &trustee, &mut access);
-            if eff == 0 && map_generic {
-                if (access & GENERIC_WRITE) != 0 {
-                    access |= FILE_GENERIC_WRITE | FILE_WRITE_DATA | FILE_APPEND_DATA;
-                }
-                if (access & READ_CONTROL) != 0 {
-                    access |= FILE_GENERIC_READ;
-                }
-            }
-            let ok = eff == 0 && (access & needed_mask) == needed_mask;
-            results.push(((*label).to_string(), ok));
-        }
-        if !sd.is_null() {
-            LocalFree(sd as HLOCAL);
-        }
-    }
-    Ok(results)
-}
-
-/// Resolve trustee names to SIDs and reuse the single-fetch effective rights check.
-#[allow(dead_code)]
-fn effective_rights_for_trustees(
-    path: &Path,
-    trustees: &[&str],
-    map_generic: bool,
-    needed_mask: u32,
-) -> Result<Vec<(String, bool)>> {
-    let mut psids: Vec<(*mut c_void, &str)> = Vec::new();
-    for t in trustees {
-        let sid_bytes = resolve_sid(t)?;
-        let sid_str = sid_to_string(&sid_bytes)?;
-        let sid_w = to_wide(OsStr::new(&sid_str));
-        let mut psid: *mut c_void = std::ptr::null_mut();
-        if unsafe { ConvertStringSidToSidW(sid_w.as_ptr(), &mut psid) } == 0 {
-            continue;
-        }
-        psids.push((psid, *t));
-    }
-    let res = effective_rights_for_psids(path, &psids, map_generic, needed_mask);
-    unsafe {
-        for (psid, _) in psids {
-            if !psid.is_null() {
-                LocalFree(psid as HLOCAL);
-            }
-        }
-    }
-    res
-}
-
-/// Check if the given SIDs already have the needed write mask on the path with a single DACL fetch.
-fn collect_system_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Ok(sr) = std::env::var("SystemRoot") {
-        roots.push(PathBuf::from(sr));
-    } else {
-        roots.push(PathBuf::from(r"C:\Windows"));
-    }
-    if let Ok(pf) = std::env::var("ProgramFiles") {
-        roots.push(PathBuf::from(pf));
-    } else {
-        roots.push(PathBuf::from(r"C:\Program Files"));
-    }
-    if let Ok(pf86) = std::env::var("ProgramFiles(x86)") {
-        roots.push(PathBuf::from(pf86));
-    } else {
-        roots.push(PathBuf::from(r"C:\Program Files (x86)"));
-    }
-    if let Ok(pd) = std::env::var("ProgramData") {
-        roots.push(PathBuf::from(pd));
-    } else {
-        roots.push(PathBuf::from(r"C:\ProgramData"));
-    }
-    roots
-}
-
 fn add_inheritable_allow_no_log(path: &Path, sid: &[u8], mask: u32) -> Result<()> {
     unsafe {
         let mut psid: *mut c_void = std::ptr::null_mut();
-        let sid_str = sid_to_string(sid)?;
+        let sid_str = string_from_sid_bytes(sid).map_err(anyhow::Error::msg)?;
         let sid_w = to_wide(OsStr::new(&sid_str));
         if ConvertStringSidToSidW(sid_w.as_ptr(), &mut psid) == 0 {
             return Err(anyhow::anyhow!(
@@ -550,7 +445,7 @@ fn lock_sandbox_dir(
             .map(|(s, m)| (s, *m))
             .chain(sandbox_entries.iter().map(|(s, m)| (s, *m)))
         {
-            let sid_str = sid_to_string(sid_bytes)?;
+            let sid_str = string_from_sid_bytes(sid_bytes).map_err(anyhow::Error::msg)?;
             let sid_w = to_wide(OsStr::new(&sid_str));
             let mut psid: *mut c_void = std::ptr::null_mut();
             if ConvertStringSidToSidW(sid_w.as_ptr(), &mut psid) == 0 {
@@ -743,14 +638,13 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
     let online_sid = resolve_sid(&payload.online_username)?;
     let offline_psid = sid_bytes_to_psid(&offline_sid)?;
     let online_psid = sid_bytes_to_psid(&online_sid)?;
-    let _system_roots = collect_system_roots();
-    let offline_sid_str = sid_to_string(&offline_sid)?;
+    let offline_sid_str = string_from_sid_bytes(&offline_sid).map_err(anyhow::Error::msg)?;
     log_line(
         log,
         &format!(
             "resolved SIDs offline={} online={}",
             offline_sid_str,
-            sid_to_string(&online_sid)?
+            string_from_sid_bytes(&online_sid).map_err(anyhow::Error::msg)?
         ),
     )?;
     let caps = load_or_create_cap_sids(&payload.codex_home);
