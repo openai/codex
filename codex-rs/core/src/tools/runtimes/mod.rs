@@ -62,7 +62,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     }
 
     let flag = command[1].as_str();
-    if flag != "-lc" && flag != "-c" {
+    if flag != "-lc" {
         return command.to_vec();
     }
 
