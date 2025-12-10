@@ -127,6 +127,40 @@ pub(crate) fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(POLICY_DIR_NAME).join(DEFAULT_POLICY_FILE)
 }
 
+pub(crate) fn apply_config_sandbox_bypass_rules(
+    policy: &mut Policy,
+    prefixes: &[Vec<String>],
+) -> Result<(), ExecPolicyRuleError> {
+    for prefix in prefixes {
+        if prefix.is_empty() {
+            continue;
+        }
+
+        policy.add_prefix_rule(prefix, Decision::Allow)?;
+
+        if let Some(flattened) = flatten_whitespace_tokens(prefix) {
+            policy.add_prefix_rule(&flattened, Decision::Allow)?;
+        }
+    }
+    Ok(())
+}
+
+fn flatten_whitespace_tokens(prefix: &[String]) -> Option<Vec<String>> {
+    let mut flattened = Vec::with_capacity(prefix.len());
+    let mut changed = false;
+
+    for token in prefix {
+        if token.chars().any(char::is_whitespace) {
+            changed = true;
+            flattened.extend(token.split_whitespace().map(str::to_string));
+        } else {
+            flattened.push(token.clone());
+        }
+    }
+
+    if changed { Some(flattened) } else { None }
+}
+
 pub(crate) async fn append_execpolicy_amendment_and_update(
     codex_home: &Path,
     current_policy: &Arc<RwLock<Policy>>,
@@ -803,6 +837,189 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             ExecApprovalRequirement::Skip {
                 bypass_sandbox: true,
                 proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn config_bypass_rule_allows_and_bypasses_sandbox() {
+        let mut policy = Policy::empty();
+        apply_config_sandbox_bypass_rules(
+            &mut policy,
+            &[vec!["cargo".to_string(), "build".to_string()]],
+        )
+        .expect("apply bypass rules");
+
+        let requirement = create_exec_approval_requirement_for_command(
+            &Arc::new(RwLock::new(policy)),
+            &Features::with_defaults(),
+            &["cargo".to_string(), "build".to_string()],
+            AskForApproval::OnRequest,
+            &SandboxPolicy::ReadOnly,
+            SandboxPermissions::UseDefault,
+        )
+        .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn config_bypass_rule_matches_when_quotes_are_split() {
+        let mut policy = Policy::empty();
+        apply_config_sandbox_bypass_rules(
+            &mut policy,
+            &[vec![
+                "xcodebuild".to_string(),
+                "-destination".to_string(),
+                "generic/platform=iOS Simulator".to_string(),
+                "build".to_string(),
+                "-quiet".to_string(),
+            ]],
+        )
+        .expect("apply bypass rules");
+
+        assert!(
+            policy.rules().get_vec("xcodebuild").is_some(),
+            "expected rules to be registered for xcodebuild"
+        );
+
+        let split_tokens = vec![
+            "xcodebuild".to_string(),
+            "-destination".to_string(),
+            "generic/platform=iOS".to_string(),
+            "Simulator".to_string(),
+            "build".to_string(),
+            "-quiet".to_string(),
+        ];
+
+        // Ensure policy rule actually matches the split form.
+        let matches = policy.matches_for_command(&split_tokens, None);
+        assert!(
+            matches
+                .iter()
+                .any(|m| matches!(m, RuleMatch::PrefixRuleMatch { .. })),
+            "expected policy prefix match for split destination tokens"
+        );
+
+        // Tokens as seen after shell splits the quoted destination into two tokens.
+        let requirement = create_exec_approval_requirement_for_command(
+            &Arc::new(RwLock::new(policy)),
+            &Features::with_defaults(),
+            &split_tokens,
+            AskForApproval::OnRequest,
+            &SandboxPolicy::ReadOnly,
+            SandboxPermissions::UseDefault,
+        )
+        .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn config_bypass_rule_matches_bash_lc_with_env_assignment() {
+        let mut policy = Policy::empty();
+        apply_config_sandbox_bypass_rules(
+            &mut policy,
+            &[vec![
+                "xcodebuild".to_string(),
+                "-destination".to_string(),
+                "generic/platform=iOS Simulator".to_string(),
+                "build".to_string(),
+                "-quiet".to_string(),
+            ]],
+        )
+        .expect("apply bypass rules");
+
+        // Command as invoked via zsh -lc with env assignment; parse_shell_lc_plain_commands
+        // should strip the env assignment and still match the bypass rule.
+        let requirement = create_exec_approval_requirement_for_command(
+            &Arc::new(RwLock::new(policy)),
+            &Features::with_defaults(),
+            &[
+                "zsh".to_string(),
+                "-lc".to_string(),
+                "SWIFT_USE_SANDBOX=NO xcodebuild -destination 'generic/platform=iOS Simulator' build -quiet"
+                    .to_string(),
+            ],
+            AskForApproval::OnRequest,
+            &SandboxPolicy::ReadOnly,
+            SandboxPermissions::UseDefault,
+        )
+        .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn config_bypass_rule_does_not_match_env_inserted_mid_command() {
+        let mut policy = Policy::empty();
+        apply_config_sandbox_bypass_rules(
+            &mut policy,
+            &[vec![
+                "xcodebuild".to_string(),
+                "-scheme".to_string(),
+                "SomeScheme".to_string(),
+                "-destination".to_string(),
+                "generic/platform=iOS Simulator".to_string(),
+                "build".to_string(),
+            ]],
+        )
+        .expect("apply bypass rules");
+
+        // Env-like token appears before the final argument; prefix should not match.
+        let requirement = create_exec_approval_requirement_for_command(
+            &Arc::new(RwLock::new(policy)),
+            &Features::with_defaults(),
+            &[
+                "xcodebuild".to_string(),
+                "-scheme".to_string(),
+                "SomeScheme".to_string(),
+                "-destination".to_string(),
+                "generic/platform=iOS".to_string(),
+                "Simulator".to_string(),
+                "FOO=bar".to_string(),
+                "build".to_string(),
+            ],
+            AskForApproval::OnRequest,
+            &SandboxPolicy::ReadOnly,
+            SandboxPermissions::UseDefault,
+        )
+        .await;
+
+        // Env-style token inserted mid-command prevents prefix match; heuristics allow
+        // still skips approval but keeps sandbox enabled (bypass_sandbox=false).
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::from(vec![
+                    "xcodebuild".to_string(),
+                    "-scheme".to_string(),
+                    "SomeScheme".to_string(),
+                    "-destination".to_string(),
+                    "generic/platform=iOS".to_string(),
+                    "Simulator".to_string(),
+                    "FOO=bar".to_string(),
+                    "build".to_string(),
+                ]))
             }
         );
     }

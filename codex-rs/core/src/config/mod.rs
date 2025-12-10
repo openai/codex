@@ -8,6 +8,7 @@ use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
 use crate::config::types::ReasoningSummaryFormat;
+use crate::config::types::SandboxBypassEntryToml;
 use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
@@ -47,9 +48,11 @@ use serde::Deserialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use tracing::warn;
 
 use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
@@ -93,6 +96,9 @@ pub struct Config {
     pub approval_policy: AskForApproval,
 
     pub sandbox_policy: SandboxPolicy,
+
+    /// Commands that should bypass sandbox and approvals, configured via config.toml/profile/project.
+    pub sandbox_bypass_prefixes: Vec<Vec<String>>,
 
     /// True if the user passed in an override or set a value in config.toml
     /// for either of approval_policy or sandbox_mode.
@@ -403,6 +409,45 @@ fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
     Ok(())
 }
 
+fn parse_sandbox_bypass_entries(entries: Option<&Vec<SandboxBypassEntryToml>>) -> Vec<Vec<String>> {
+    let mut prefixes = Vec::new();
+    let Some(entries) = entries else {
+        return prefixes;
+    };
+
+    for entry in entries {
+        match entry {
+            SandboxBypassEntryToml::String(raw) => match shlex::split(raw) {
+                Some(tokens) if !tokens.is_empty() => prefixes.push(tokens),
+                _ => warn!(
+                    "sandbox_bypass entry {:?} could not be tokenized; skipping",
+                    raw
+                ),
+            },
+            SandboxBypassEntryToml::Tokens(tokens) => {
+                if tokens.is_empty() {
+                    warn!("sandbox_bypass entry with empty token list skipped");
+                } else {
+                    prefixes.push(tokens.clone());
+                }
+            }
+        }
+    }
+
+    prefixes
+}
+
+fn dedupe_prefixes(prefixes: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    let mut seen: HashSet<Vec<String>> = HashSet::new();
+    let mut out = Vec::new();
+    for prefix in prefixes {
+        if seen.insert(prefix.clone()) {
+            out.push(prefix);
+        }
+    }
+    out
+}
+
 pub(crate) fn set_project_trust_level_inner(
     doc: &mut DocumentMut,
     project_path: &Path,
@@ -591,6 +636,9 @@ pub struct ConfigToml {
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
 
+    /// Commands that should bypass sandbox/approvals (string or token array).
+    pub sandbox_bypass: Option<Vec<crate::config::types::SandboxBypassEntryToml>>,
+
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
@@ -761,6 +809,8 @@ impl From<ConfigToml> for UserSavedConfig {
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     pub trust_level: Option<TrustLevel>,
+    #[serde(default)]
+    pub sandbox_bypass: Option<Vec<crate::config::types::SandboxBypassEntryToml>>,
 }
 
 impl ProjectConfig {
@@ -1031,7 +1081,10 @@ impl Config {
             .collect();
         let active_project = cfg
             .get_active_project(&resolved_cwd)
-            .unwrap_or(ProjectConfig { trust_level: None });
+            .unwrap_or(ProjectConfig {
+                trust_level: None,
+                sandbox_bypass: None,
+            });
 
         let SandboxPolicyResolution {
             policy: mut sandbox_policy,
@@ -1089,6 +1142,15 @@ impl Config {
         let shell_environment_policy = cfg.shell_environment_policy.into();
 
         let history = cfg.history.unwrap_or_default();
+
+        let mut sandbox_bypass_prefixes = parse_sandbox_bypass_entries(cfg.sandbox_bypass.as_ref());
+        sandbox_bypass_prefixes.extend(parse_sandbox_bypass_entries(
+            config_profile.sandbox_bypass.as_ref(),
+        ));
+        sandbox_bypass_prefixes.extend(parse_sandbox_bypass_entries(
+            active_project.sandbox_bypass.as_ref(),
+        ));
+        let sandbox_bypass_prefixes = dedupe_prefixes(sandbox_bypass_prefixes);
 
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
@@ -1161,6 +1223,7 @@ impl Config {
             cwd: resolved_cwd,
             approval_policy,
             sandbox_policy,
+            sandbox_bypass_prefixes,
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
@@ -2939,6 +3002,7 @@ model_verbosity = "high"
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                sandbox_bypass_prefixes: Vec::new(),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -2975,7 +3039,10 @@ model_verbosity = "high"
                 use_experimental_use_rmcp_client: false,
                 features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
-                active_project: ProjectConfig { trust_level: None },
+                active_project: ProjectConfig {
+                    trust_level: None,
+                    sandbox_bypass: None,
+                },
                 windows_wsl_setup_acknowledged: false,
                 notices: Default::default(),
                 check_for_update_on_startup: true,
@@ -3013,6 +3080,7 @@ model_verbosity = "high"
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: AskForApproval::UnlessTrusted,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            sandbox_bypass_prefixes: Vec::new(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3049,7 +3117,10 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
-            active_project: ProjectConfig { trust_level: None },
+            active_project: ProjectConfig {
+                trust_level: None,
+                sandbox_bypass: None,
+            },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -3102,6 +3173,7 @@ model_verbosity = "high"
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            sandbox_bypass_prefixes: Vec::new(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3138,7 +3210,10 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
-            active_project: ProjectConfig { trust_level: None },
+            active_project: ProjectConfig {
+                trust_level: None,
+                sandbox_bypass: None,
+            },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -3177,6 +3252,7 @@ model_verbosity = "high"
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            sandbox_bypass_prefixes: Vec::new(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3213,7 +3289,10 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
-            active_project: ProjectConfig { trust_level: None },
+            active_project: ProjectConfig {
+                trust_level: None,
+                sandbox_bypass: None,
+            },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -3339,6 +3418,87 @@ trust_level = "trusted"
 trust_level = "trusted"
 "#;
         assert_eq!(contents, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_bypass_merges_profile_and_project_and_dedupes() -> std::io::Result<()> {
+        let cwd = TempDir::new().expect("cwd");
+        let project_path = cwd.path().to_string_lossy().to_string();
+
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "p".to_string(),
+            ConfigProfile {
+                sandbox_bypass: Some(vec![SandboxBypassEntryToml::String(
+                    "cargo build".to_string(),
+                )]),
+                ..Default::default()
+            },
+        );
+
+        let cfg = ConfigToml {
+            sandbox_bypass: Some(vec![
+                SandboxBypassEntryToml::String("cargo build".to_string()),
+                SandboxBypassEntryToml::Tokens(vec!["npm".into(), "test".into()]),
+            ]),
+            profiles,
+            projects: Some({
+                let mut map = HashMap::new();
+                map.insert(
+                    project_path,
+                    ProjectConfig {
+                        trust_level: None,
+                        sandbox_bypass: Some(vec![SandboxBypassEntryToml::String(
+                            "cargo fmt".to_string(),
+                        )]),
+                    },
+                );
+                map
+            }),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                config_profile: Some("p".to_string()),
+                ..Default::default()
+            },
+            TempDir::new().expect("codex home").keep(),
+        )?;
+
+        assert_eq!(
+            config.sandbox_bypass_prefixes,
+            vec![
+                vec!["cargo".to_string(), "build".to_string()],
+                vec!["npm".to_string(), "test".to_string()],
+                vec!["cargo".to_string(), "fmt".to_string()],
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_bypass_skips_invalid_entries() -> std::io::Result<()> {
+        let cfg = ConfigToml {
+            sandbox_bypass: Some(vec![
+                SandboxBypassEntryToml::String("".to_string()),
+                SandboxBypassEntryToml::String("unterminated \" quote".to_string()),
+            ]),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            TempDir::new().expect("codex home").keep(),
+        )?;
+
+        assert!(config.sandbox_bypass_prefixes.is_empty());
 
         Ok(())
     }
@@ -3498,6 +3658,7 @@ trust_level = "untrusted"
             test_path.to_string_lossy().to_string(),
             ProjectConfig {
                 trust_level: Some(TrustLevel::Untrusted),
+                sandbox_bypass: None,
             },
         );
 

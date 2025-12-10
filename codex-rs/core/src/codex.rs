@@ -175,9 +175,26 @@ impl Codex {
 
         let user_instructions = get_user_instructions(&config).await;
 
-        let exec_policy = load_exec_policy_for_features(&config.features, &config.codex_home)
+        let mut exec_policy = load_exec_policy_for_features(&config.features, &config.codex_home)
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
+        if !config.sandbox_bypass_prefixes.is_empty()
+            && !config
+                .features
+                .enabled(crate::features::Feature::ExecPolicy)
+        {
+            warn!(
+                "sandbox_bypass is set but exec_policy feature is disabled; applying in-memory allow rules"
+            );
+        }
+        if let Err(err) = crate::exec_policy::apply_config_sandbox_bypass_rules(
+            &mut exec_policy,
+            &config.sandbox_bypass_prefixes,
+        ) {
+            return Err(CodexErr::Fatal(format!(
+                "failed to apply sandbox_bypass rules: {err}"
+            )));
+        }
         let exec_policy = Arc::new(RwLock::new(exec_policy));
 
         let config = Arc::new(config);

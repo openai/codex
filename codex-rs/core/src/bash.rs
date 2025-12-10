@@ -42,13 +42,17 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
         "command",
         "command_name",
         "word",
+        "variable_assignment",
+        "environment_variable_assignment",
+        "variable_name",
+        "assignment_word",
         "string",
         "string_content",
         "raw_string",
         "number",
     ];
     // Allow only safe punctuation / operator tokens; anything else causes reject.
-    const ALLOWED_PUNCT_TOKENS: &[&str] = &["&&", "||", ";", "|", "\"", "'"];
+    const ALLOWED_PUNCT_TOKENS: &[&str] = &["&&", "||", ";", "|", "\"", "'", "="];
 
     let root = tree.root_node();
     let mut cursor = root.walk();
@@ -158,6 +162,9 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
                     return None;
                 }
             }
+            // Ignore leading environment assignments (e.g., FOO=bar cmd) so the
+            // command still parses to its executable token for execpolicy matching.
+            "variable_assignment" | "environment_variable_assignment" => {}
             _ => return None,
         }
     }
@@ -241,8 +248,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_variable_assignment_prefix() {
-        assert!(parse_seq("FOO=bar ls").is_none());
+    fn accepts_variable_assignment_prefix_and_ignores_assignment_token() {
+        let cmds = parse_seq("FOO=bar ls").unwrap();
+        assert_eq!(cmds, vec![vec!["ls".to_string()]]);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
+use crate::config::types::SandboxBypassEntryToml;
 use crate::protocol::AskForApproval;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -29,6 +30,7 @@ pub struct ConfigProfile {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub tools_web_search: Option<bool>,
     pub tools_view_image: Option<bool>,
+    pub sandbox_bypass: Option<Vec<SandboxBypassEntryToml>>,
     /// Optional feature toggles scoped to this profile.
     #[serde(default)]
     pub features: Option<crate::features::FeaturesToml>,

@@ -623,7 +623,10 @@ mod tests {
             temp_dir.path().to_path_buf(),
         )?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
-        config.active_project = ProjectConfig { trust_level: None };
+        config.active_project = ProjectConfig {
+            trust_level: None,
+            sandbox_bypass: None,
+        };
         config.set_windows_sandbox_globally(false);
 
         let should_show = should_show_trust_screen(&config);
@@ -650,7 +653,10 @@ mod tests {
             temp_dir.path().to_path_buf(),
         )?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
-        config.active_project = ProjectConfig { trust_level: None };
+        config.active_project = ProjectConfig {
+            trust_level: None,
+            sandbox_bypass: None,
+        };
         config.set_windows_sandbox_globally(true);
 
         let should_show = should_show_trust_screen(&config);
@@ -679,6 +685,7 @@ mod tests {
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig {
             trust_level: Some(TrustLevel::Untrusted),
+            sandbox_bypass: None,
         };
 
         let should_show = should_show_trust_screen(&config);

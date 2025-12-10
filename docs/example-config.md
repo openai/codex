@@ -82,6 +82,10 @@ model_reasoning_summary_format = "none"
 # - never: never prompt (risky)
 approval_policy = "on-request"
 
+# Commands to auto-approve and run outside the sandbox. Strings are shell-split;
+# arrays are treated as explicit tokens.
+# sandbox_bypass = ["cargo build", ["xcodebuild", "-showsdks"]]
+
 # Filesystem/network sandbox policy for tool calls:
 # - read-only (default)
 # - workspace-write
