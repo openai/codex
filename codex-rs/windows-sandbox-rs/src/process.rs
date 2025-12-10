@@ -81,6 +81,7 @@ fn quote_arg(a: &str) -> String {
     out.push('"');
     out
 }
+
 #[allow(dead_code)]
 unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
     for kind in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {

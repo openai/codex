@@ -1,5 +1,3 @@
-#![cfg(target_os = "windows")]
-
 use anyhow::Context;
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -552,7 +550,7 @@ fn write_secrets(
     Ok(())
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     let ret = real_main();
     if let Err(e) = &ret {
         // Best-effort: log unexpected top-level errors.

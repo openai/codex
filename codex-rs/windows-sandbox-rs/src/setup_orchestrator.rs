@@ -20,67 +20,16 @@ use base64::Engine;
 
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
-use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Security::AllocateAndInitializeSid;
-use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
-use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
-use windows_sys::Win32::Security::SID_NAME_USE;
 
 pub const SETUP_VERSION: u32 = 2;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
-
-#[allow(dead_code)]
-fn resolve_sid(name: &str) -> Result<Vec<u8>> {
-    let name_w = crate::winutil::to_wide(name);
-    let mut sid_buffer = vec![0u8; 68];
-    let mut sid_len: u32 = sid_buffer.len() as u32;
-    let mut domain: Vec<u16> = Vec::new();
-    let mut domain_len: u32 = 0;
-    let mut use_type: SID_NAME_USE = 0;
-    loop {
-        let ok = unsafe {
-            LookupAccountNameW(
-                std::ptr::null(),
-                name_w.as_ptr(),
-                sid_buffer.as_mut_ptr() as *mut c_void,
-                &mut sid_len,
-                domain.as_mut_ptr(),
-                &mut domain_len,
-                &mut use_type,
-            )
-        };
-        if ok != 0 {
-            sid_buffer.truncate(sid_len as usize);
-            return Ok(sid_buffer);
-        }
-        let err = unsafe { GetLastError() };
-        if err == ERROR_INSUFFICIENT_BUFFER {
-            sid_buffer.resize(sid_len as usize, 0);
-            domain.resize(domain_len as usize, 0);
-            continue;
-        }
-        return Err(anyhow!("LookupAccountNameW failed for {name}: {}", err));
-    }
-}
-
-#[allow(dead_code)]
-fn sid_bytes_to_psid(sid: &[u8]) -> Result<*mut c_void> {
-    let sid_str = crate::winutil::string_from_sid_bytes(sid).map_err(anyhow::Error::msg)?;
-    let sid_w = crate::winutil::to_wide(&sid_str);
-    let mut psid: *mut c_void = std::ptr::null_mut();
-    if unsafe { ConvertStringSidToSidW(sid_w.as_ptr(), &mut psid) } == 0 {
-        return Err(anyhow!("ConvertStringSidToSidW failed: {}", unsafe {
-            GetLastError()
-        }));
-    }
-    Ok(psid)
-}
 
 pub fn sandbox_dir(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox")
