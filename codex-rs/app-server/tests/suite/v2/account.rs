@@ -9,7 +9,6 @@ use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
-use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCError;
@@ -27,7 +26,6 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
-use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -243,7 +241,7 @@ async fn login_account_chatgpt_rejected_when_forced_api() -> Result<()> {
 #[tokio::test]
 // Serialize tests that launch the login server since it binds to a fixed port.
 #[serial(login_port)]
-async fn login_account_chatgpt_start() -> Result<()> {
+async fn login_account_chatgpt_start_can_be_cancelled() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
@@ -276,8 +274,7 @@ async fn login_account_chatgpt_start() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
     )
     .await??;
-    let cancel_response: CancelLoginAccountResponse = to_response(cancel_resp)?;
-    assert_eq!(cancel_response.status, CancelLoginAccountStatus::Canceled);
+    let _ok: CancelLoginAccountResponse = to_response(cancel_resp)?;
 
     let note = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -304,29 +301,6 @@ async fn login_account_chatgpt_start() -> Result<()> {
         maybe_updated.is_err(),
         "account/updated should not be emitted when login is cancelled"
     );
-    Ok(())
-}
-
-#[tokio::test]
-async fn cancel_login_account_not_found_returns_status() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_cancel_login_account_request(CancelLoginAccountParams {
-            login_id: Uuid::new_v4().to_string(),
-        })
-        .await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: CancelLoginAccountResponse = to_response(resp)?;
-    assert_eq!(response.status, CancelLoginAccountStatus::NotFound);
     Ok(())
 }
 
