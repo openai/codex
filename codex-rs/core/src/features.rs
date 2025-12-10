@@ -352,12 +352,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ParallelToolCalls,
-        key: "parallel",
-        stage: Stage::Experimental,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::Skills,
         key: "skills",
         stage: Stage::Experimental,
