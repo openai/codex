@@ -58,6 +58,7 @@ pub(crate) async fn run_skill_error_prompt(
         if let Some(event) = events.next().await {
             match event {
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
+                TuiEvent::Mouse(_) => {}
                 TuiEvent::Paste(_) => {}
                 TuiEvent::Draw => {
                     let _ = alt.tui.draw(u16::MAX, |frame| {

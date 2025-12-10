@@ -491,6 +491,12 @@ async fn run_ratatui_app(
 
     let Cli { prompt, images, .. } = cli;
 
+    // Run the main chat + transcript UI on the terminal's alternate screen so
+    // the entire viewport can be used without polluting normal scrollback. This
+    // mirrors the behavior of the legacy TUI but keeps inline mode available
+    // for smaller prompts like onboarding and model migration.
+    let _ = tui.enter_alt_screen();
+
     let app_result = App::run(
         &mut tui,
         auth_manager,
@@ -504,6 +510,7 @@ async fn run_ratatui_app(
     )
     .await;
 
+    let _ = tui.leave_alt_screen();
     restore();
     // Mark the end of the recorded session.
     session_log::log_session_end();
