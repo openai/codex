@@ -199,12 +199,16 @@ async fn pipe_output_without_login() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
 
     let call_id = "shell-command-timeout";
-    mount_shell_responses_with_timeout(&harness, call_id, "sleep 5", None, 200).await;
+    let command = if cfg!(windows) {
+        "timeout /t 5"
+    } else {
+        "sleep 5"
+    };
+    mount_shell_responses_with_timeout(&harness, call_id, command, None, 200).await;
     harness
         .submit("run a long command with a short timeout")
         .await?;
