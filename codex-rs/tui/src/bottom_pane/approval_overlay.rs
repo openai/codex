@@ -23,8 +23,6 @@ use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
-use codex_core::protocol::SandboxCommandAssessment;
-use codex_core::protocol::SandboxRiskLevel;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -45,7 +43,6 @@ pub(crate) enum ApprovalRequest {
         id: String,
         command: Vec<String>,
         reason: Option<String>,
-        risk: Option<SandboxCommandAssessment>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     },
     ApplyPatch {
@@ -345,18 +342,11 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 id,
                 command,
                 reason,
-                risk,
                 proposed_execpolicy_amendment,
             } => {
-                let reason = reason.filter(|item| !item.is_empty());
-                let has_reason = reason.is_some();
                 let mut header: Vec<Line<'static>> = Vec::new();
                 if let Some(reason) = reason {
                     header.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
-                }
-                if let Some(risk) = risk.as_ref() {
-                    header.extend(render_risk_lines(risk));
-                } else if has_reason {
                     header.push(Line::from(""));
                 }
                 let full_cmd = strip_bash_lc_and_escape(&command);
@@ -417,28 +407,6 @@ impl From<ApprovalRequest> for ApprovalRequestState {
             }
         }
     }
-}
-
-fn render_risk_lines(risk: &SandboxCommandAssessment) -> Vec<Line<'static>> {
-    let level_span = match risk.risk_level {
-        SandboxRiskLevel::Low => "LOW".green().bold(),
-        SandboxRiskLevel::Medium => "MEDIUM".cyan().bold(),
-        SandboxRiskLevel::High => "HIGH".red().bold(),
-    };
-
-    let mut lines = Vec::new();
-
-    let description = risk.description.trim();
-    if !description.is_empty() {
-        lines.push(Line::from(vec![
-            "Summary: ".into(),
-            description.to_string().into(),
-        ]));
-    }
-
-    lines.push(vec!["Risk: ".into(), level_span].into());
-    lines.push(Line::from(""));
-    lines
 }
 
 #[derive(Clone)]
@@ -570,7 +538,6 @@ mod tests {
             id: "test".to_string(),
             command: vec!["echo".to_string(), "hi".to_string()],
             reason: Some("reason".to_string()),
-            risk: None,
             proposed_execpolicy_amendment: None,
         }
     }
@@ -613,7 +580,6 @@ mod tests {
                 id: "test".to_string(),
                 command: vec!["echo".to_string()],
                 reason: None,
-                risk: None,
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                     "echo".to_string(),
                 ])),
@@ -652,7 +618,6 @@ mod tests {
                 id: "test".to_string(),
                 command: vec!["echo".to_string()],
                 reason: None,
-                risk: None,
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                     "echo".to_string(),
                 ])),
@@ -679,7 +644,6 @@ mod tests {
             id: "test".into(),
             command,
             reason: None,
-            risk: None,
             proposed_execpolicy_amendment: None,
         };
 

@@ -246,9 +246,6 @@ pub struct Config {
 
     pub tools_web_search_request: bool,
 
-    /// When `true`, run a model-based assessment for commands denied by the sandbox.
-    pub experimental_sandbox_command_assessment: bool,
-
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
@@ -733,7 +730,6 @@ pub struct ConfigToml {
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
-    pub experimental_sandbox_command_assessment: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
 }
@@ -919,7 +915,6 @@ pub struct ConfigOverrides {
     pub include_apply_patch_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
-    pub experimental_sandbox_command_assessment: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -978,7 +973,6 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
-            experimental_sandbox_command_assessment: sandbox_command_assessment_override,
             additional_writable_roots,
         } = overrides;
 
@@ -1003,7 +997,6 @@ impl Config {
         let feature_overrides = FeatureOverrides {
             include_apply_patch_tool: include_apply_patch_tool_override,
             web_search_request: override_tools_web_search_request,
-            experimental_sandbox_command_assessment: sandbox_command_assessment_override,
         };
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
@@ -1102,8 +1095,6 @@ impl Config {
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
         let use_experimental_use_rmcp_client = features.enabled(Feature::RmcpClient);
-        let experimental_sandbox_command_assessment =
-            features.enabled(Feature::SandboxCommandAssessment);
 
         let forced_chatgpt_workspace_id =
             cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
@@ -1234,7 +1225,6 @@ impl Config {
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
-            experimental_sandbox_command_assessment,
             use_experimental_unified_exec_tool,
             use_experimental_use_rmcp_client,
             features,
@@ -2990,7 +2980,6 @@ model_verbosity = "high"
                 forced_login_method: None,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
-                experimental_sandbox_command_assessment: false,
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
                 features: Features::with_defaults(),
@@ -3065,7 +3054,6 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
-            experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),
@@ -3155,7 +3143,6 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
-            experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),
@@ -3231,7 +3218,6 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
-            experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             features: Features::with_defaults(),

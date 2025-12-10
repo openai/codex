@@ -553,6 +553,10 @@ impl CodexClient {
                     print!("{}", delta.delta);
                     std::io::stdout().flush().ok();
                 }
+                ServerNotification::TerminalInteraction(delta) => {
+                    println!("[stdin sent: {}]", delta.stdin);
+                    std::io::stdout().flush().ok();
+                }
                 ServerNotification::ItemStarted(payload) => {
                     println!("\n< item started: {:?}", payload.item);
                 }
@@ -752,7 +756,6 @@ impl CodexClient {
             turn_id,
             item_id,
             reason,
-            risk,
             proposed_execpolicy_amendment,
         } = params;
 
@@ -761,9 +764,6 @@ impl CodexClient {
         );
         if let Some(reason) = reason.as_deref() {
             println!("< reason: {reason}");
-        }
-        if let Some(risk) = risk.as_ref() {
-            println!("< risk assessment: {risk:?}");
         }
         if let Some(execpolicy_amendment) = proposed_execpolicy_amendment.as_ref() {
             println!("< proposed execpolicy amendment: {execpolicy_amendment:?}");

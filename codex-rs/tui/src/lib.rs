@@ -218,7 +218,6 @@ pub async fn run_main(
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: None,
-        experimental_sandbox_command_assessment: None,
         additional_writable_roots: additional_dirs,
     };
 

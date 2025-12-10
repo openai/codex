@@ -45,7 +45,7 @@
     "prepare": "pnpm run build"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.20.2",
+    "@modelcontextprotocol/sdk": "^1.24.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^20.19.18",
     "eslint": "^9.36.0",

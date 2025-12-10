@@ -46,6 +46,7 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
+use codex_core::protocol::TerminalInteractionEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
 use codex_core::protocol::TurnAbortReason;
@@ -199,8 +200,9 @@ impl RateLimitWarningState {
                 let limit_label = secondary_window_minutes
                     .map(get_limits_duration)
                     .unwrap_or_else(|| "weekly".to_string());
+                let remaining_percent = 100.0 - threshold;
                 warnings.push(format!(
-                    "Heads up, you've used over {threshold:.0}% of your {limit_label} limit. Run /status for a breakdown."
+                    "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
                 ));
             }
         }
@@ -217,8 +219,9 @@ impl RateLimitWarningState {
                 let limit_label = primary_window_minutes
                     .map(get_limits_duration)
                     .unwrap_or_else(|| "5h".to_string());
+                let remaining_percent = 100.0 - threshold;
                 warnings.push(format!(
-                    "Heads up, you've used over {threshold:.0}% of your {limit_label} limit. Run /status for a breakdown."
+                    "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
                 ));
             }
         }
@@ -823,6 +826,10 @@ impl ChatWidget {
         // TODO: Handle streaming exec output if/when implemented
     }
 
+    fn on_terminal_interaction(&mut self, _ev: TerminalInteractionEvent) {
+        // TODO: Handle once design is ready
+    }
+
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
         self.add_to_history(history_cell::new_patch_event(
             event.changes,
@@ -1020,11 +1027,7 @@ impl ChatWidget {
         }
         let (command, parsed, source) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd, rc.source),
-            None => (
-                vec![ev.call_id.clone()],
-                Vec::new(),
-                ExecCommandSource::Agent,
-            ),
+            None => (ev.command.clone(), ev.parsed_cmd.clone(), ev.source),
         };
         let is_unified_exec_interaction =
             matches!(source, ExecCommandSource::UnifiedExecInteraction);
@@ -1041,7 +1044,7 @@ impl ChatWidget {
                 command,
                 parsed,
                 source,
-                None,
+                ev.interaction_input.clone(),
                 self.config.animations,
             )));
         }
@@ -1092,7 +1095,6 @@ impl ChatWidget {
             id,
             command: ev.command,
             reason: ev.reason,
-            risk: ev.risk,
             proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
         };
         self.bottom_pane
@@ -1787,6 +1789,7 @@ impl ChatWidget {
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
+            | EventMsg::TerminalInteraction(_)
             | EventMsg::ExecCommandOutputDelta(_) => {}
             _ => {
                 tracing::trace!("handle_codex_event: {:?}", msg);
@@ -1844,6 +1847,7 @@ impl ChatWidget {
                 self.on_elicitation_request(ev);
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
+            EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),

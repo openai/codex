@@ -95,7 +95,6 @@ use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReasoningContentDeltaEvent;
 use crate::protocol::ReasoningRawContentDeltaEvent;
 use crate::protocol::ReviewDecision;
-use crate::protocol::SandboxCommandAssessment;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
@@ -875,34 +874,6 @@ impl Session {
         .await;
     }
 
-    pub(crate) async fn assess_sandbox_command(
-        &self,
-        turn_context: &TurnContext,
-        call_id: &str,
-        command: &[String],
-        failure_message: Option<&str>,
-    ) -> Option<SandboxCommandAssessment> {
-        let config = turn_context.client.config();
-        let provider = turn_context.client.provider().clone();
-        let auth_manager = Arc::clone(&self.services.auth_manager);
-        let otel = self.services.otel_event_manager.clone();
-        crate::sandboxing::assessment::assess_command(
-            config,
-            provider,
-            auth_manager,
-            &otel,
-            self.conversation_id,
-            self.services.models_manager.clone(),
-            turn_context.client.get_session_source(),
-            call_id,
-            command,
-            &turn_context.sandbox_policy,
-            &turn_context.cwd,
-            failure_message,
-        )
-        .await
-    }
-
     /// Adds an execpolicy amendment to both the in-memory and on-disk policies so future
     /// commands can use the newly approved prefix.
     pub(crate) async fn persist_execpolicy_amendment(
@@ -950,7 +921,6 @@ impl Session {
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
-        risk: Option<SandboxCommandAssessment>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     ) -> ReviewDecision {
         let sub_id = turn_context.sub_id.clone();
@@ -978,7 +948,6 @@ impl Session {
             command,
             cwd,
             reason,
-            risk,
             proposed_execpolicy_amendment,
             parsed_cmd,
         });
@@ -3325,6 +3294,7 @@ mod tests {
         use crate::exec::ExecParams;
         use crate::protocol::AskForApproval;
         use crate::protocol::SandboxPolicy;
+        use crate::sandboxing::SandboxPermissions;
         use crate::turn_diff_tracker::TurnDiffTracker;
         use std::collections::HashMap;
 
@@ -3335,6 +3305,7 @@ mod tests {
         let mut turn_context = Arc::new(turn_context_raw);
 
         let timeout_ms = 1000;
+        let sandbox_permissions = SandboxPermissions::RequireEscalated;
         let params = ExecParams {
             command: if cfg!(windows) {
                 vec![
@@ -3352,13 +3323,13 @@ mod tests {
             cwd: turn_context.cwd.clone(),
             expiration: timeout_ms.into(),
             env: HashMap::new(),
-            with_escalated_permissions: Some(true),
+            sandbox_permissions,
             justification: Some("test".to_string()),
             arg0: None,
         };
 
         let params2 = ExecParams {
-            with_escalated_permissions: Some(false),
+            sandbox_permissions: SandboxPermissions::UseDefault,
             command: params.command.clone(),
             cwd: params.cwd.clone(),
             expiration: timeout_ms.into(),
@@ -3385,7 +3356,7 @@ mod tests {
                         "command": params.command.clone(),
                         "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
                         "timeout_ms": params.expiration.timeout_ms(),
-                        "with_escalated_permissions": params.with_escalated_permissions,
+                        "sandbox_permissions": params.sandbox_permissions,
                         "justification": params.justification.clone(),
                     })
                     .to_string(),
@@ -3422,7 +3393,7 @@ mod tests {
                         "command": params2.command.clone(),
                         "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
                         "timeout_ms": params2.expiration.timeout_ms(),
-                        "with_escalated_permissions": params2.with_escalated_permissions,
+                        "sandbox_permissions": params2.sandbox_permissions,
                         "justification": params2.justification.clone(),
                     })
                     .to_string(),
@@ -3455,6 +3426,7 @@ mod tests {
     #[tokio::test]
     async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request() {
         use crate::protocol::AskForApproval;
+        use crate::sandboxing::SandboxPermissions;
         use crate::turn_diff_tracker::TurnDiffTracker;
 
         let (session, mut turn_context_raw) = make_session_and_context();
@@ -3474,7 +3446,7 @@ mod tests {
                 payload: ToolPayload::Function {
                     arguments: serde_json::json!({
                         "cmd": "echo hi",
-                        "with_escalated_permissions": true,
+                        "sandbox_permissions": SandboxPermissions::RequireEscalated,
                         "justification": "need unsandboxed execution",
                     })
                     .to_string(),
