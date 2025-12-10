@@ -1,9 +1,11 @@
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
 use tokio::time::Duration;
 use tokio::time::Instant;
+use tokio::time::Sleep;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -21,7 +23,7 @@ use super::CommandTranscript;
 use super::UnifiedExecContext;
 use super::session::UnifiedExecSession;
 
-pub(crate) const TRAILING_OUTPUT_GRACE: Duration = Duration::from_millis(1000);
+pub(crate) const TRAILING_OUTPUT_GRACE: Duration = Duration::from_millis(100);
 
 /// Spawn a background task that continuously reads from the PTY, appends to the
 /// shared transcript, and emits ExecCommandOutputDelta events on UTF‑8
@@ -34,64 +36,54 @@ pub(crate) fn start_streaming_output(
     let mut receiver = session.output_receiver();
     let output_drained = session.output_drained_notify();
     let exit_token = session.cancellation_token();
+
     let session_ref = Arc::clone(&context.session);
     let turn_ref = Arc::clone(&context.turn);
     let call_id = context.call_id.clone();
 
     tokio::spawn(async move {
-        let mut pending: Vec<u8> = Vec::new();
-        let mut exit_deadline = None;
+        use tokio::sync::broadcast::error::RecvError;
+
+        let mut pending = Vec::<u8>::new();
+
+        let mut grace_sleep: Option<Pin<Box<Sleep>>> = None;
+
         loop {
-            if let Some(deadline) = exit_deadline {
-                tokio::select! {
-                    _ = tokio::time::sleep_until(deadline) => {
-                        output_drained.notify_one();
-                        break;
-                    }
-                    received = receiver.recv() => {
-                        match received {
-                            Ok(chunk) => {
-                                process_chunk(
-                                    &mut pending,
-                                    &transcript,
-                                    &call_id,
-                                    &session_ref,
-                                    &turn_ref,
-                                    chunk,
-                                ).await;
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                output_drained.notify_one();
-                                break;
-                            }
-                        }
-                    }
+            tokio::select! {
+                _ = exit_token.cancelled(), if grace_sleep.is_none() => {
+                    let deadline = Instant::now() + TRAILING_OUTPUT_GRACE;
+                    grace_sleep.replace(Box::pin(tokio::time::sleep_until(deadline)));
                 }
-            } else {
-                tokio::select! {
-                    _ = exit_token.cancelled() => {
-                        exit_deadline = Some(Instant::now() + TRAILING_OUTPUT_GRACE);
+
+                _ = async {
+                    if let Some(sleep) = grace_sleep.as_mut() {
+                        sleep.as_mut().await;
                     }
-                    received = receiver.recv() => {
-                        match received {
-                            Ok(chunk) => {
-                                process_chunk(
-                                    &mut pending,
-                                    &transcript,
-                                    &call_id,
-                                    &session_ref,
-                                    &turn_ref,
-                                    chunk,
-                                ).await;
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                output_drained.notify_one();
-                                break;
-                            }
+                }, if grace_sleep.is_some() => {
+                    output_drained.notify_one();
+                    break;
+                }
+
+                received = receiver.recv() => {
+                    let chunk = match received {
+                        Ok(chunk) => chunk,
+                        Err(RecvError::Lagged(_)) => {
+                            continue;
+                        },
+                        Err(RecvError::Closed) => {
+                            output_drained.notify_one();
+                            break;
                         }
-                    }
+                    };
+
+                    process_chunk(
+                        &mut pending,
+                        &transcript,
+                        &call_id,
+                        &session_ref,
+                        &turn_ref,
+                        chunk,
+                    ).await;
                 }
             }
         }
