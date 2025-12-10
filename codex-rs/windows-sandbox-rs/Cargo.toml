@@ -13,6 +13,10 @@ path = "src/lib.rs"
 name = "codex-windows-sandbox-setup"
 path = "src/bin/setup_main.rs"
 
+[[bin]]
+name = "codex-command-runner"
+path = "src/bin/command_runner.rs"
+
 [dependencies]
 anyhow = "1.0"
 base64 = { workspace = true }
