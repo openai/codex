@@ -62,6 +62,8 @@ pub enum Feature {
     Skills,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Experimental TUI v2 (viewport) implementation.
+    Tui2,
 }
 
 impl Feature {
@@ -364,6 +366,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ShellSnapshot,
         key: "shell_snapshot",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Tui2,
+        key: "tui2",
         stage: Stage::Experimental,
         default_enabled: false,
     },

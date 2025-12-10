@@ -37,6 +37,7 @@ use codex_app_server_protocol::ReasoningTextDeltaNotification;
 use codex_app_server_protocol::SandboxCommandAssessment as V2SandboxCommandAssessment;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -572,6 +573,20 @@ pub(crate) async fn apply_bespoke_event_handling(
                     ))
                     .await;
             }
+        }
+        EventMsg::TerminalInteraction(terminal_event) => {
+            let item_id = terminal_event.call_id.clone();
+
+            let notification = TerminalInteractionNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item_id,
+                process_id: terminal_event.process_id,
+                stdin: terminal_event.stdin,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::TerminalInteraction(notification))
+                .await;
         }
         EventMsg::ExecCommandEnd(exec_command_end_event) => {
             let ExecCommandEndEvent {

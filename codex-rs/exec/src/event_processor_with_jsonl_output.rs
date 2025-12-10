@@ -48,6 +48,7 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
+use codex_core::protocol::TerminalInteractionEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -72,6 +73,7 @@ pub struct EventProcessorWithJsonOutput {
 struct RunningCommand {
     command: String,
     item_id: String,
+    aggregated_output: String,
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +111,10 @@ impl EventProcessorWithJsonOutput {
             EventMsg::AgentReasoning(ev) => self.handle_reasoning_event(ev),
             EventMsg::ExecCommandBegin(ev) => self.handle_exec_command_begin(ev),
             EventMsg::ExecCommandEnd(ev) => self.handle_exec_command_end(ev),
+            EventMsg::TerminalInteraction(ev) => self.handle_terminal_interaction(ev),
+            EventMsg::ExecCommandOutputDelta(ev) => {
+                self.handle_output_chunk(&ev.call_id, &ev.chunk)
+            }
             EventMsg::McpToolCallBegin(ev) => self.handle_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.handle_mcp_tool_call_end(ev),
             EventMsg::PatchApplyBegin(ev) => self.handle_patch_apply_begin(ev),
@@ -172,6 +178,16 @@ impl EventProcessorWithJsonOutput {
         vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
 
+    fn handle_output_chunk(&mut self, _call_id: &str, _chunk: &[u8]) -> Vec<ThreadEvent> {
+        //TODO see how we want to process them
+        vec![]
+    }
+
+    fn handle_terminal_interaction(&mut self, _ev: &TerminalInteractionEvent) -> Vec<ThreadEvent> {
+        //TODO see how we want to process them
+        vec![]
+    }
+
     fn handle_agent_message(&self, payload: &AgentMessageEvent) -> Vec<ThreadEvent> {
         let item = ThreadItem {
             id: self.get_next_item_id(),
@@ -214,6 +230,7 @@ impl EventProcessorWithJsonOutput {
             RunningCommand {
                 command: command_string.clone(),
                 item_id: item_id.clone(),
+                aggregated_output: String::new(),
             },
         );
 
@@ -366,7 +383,11 @@ impl EventProcessorWithJsonOutput {
     }
 
     fn handle_exec_command_end(&mut self, ev: &ExecCommandEndEvent) -> Vec<ThreadEvent> {
-        let Some(RunningCommand { command, item_id }) = self.running_commands.remove(&ev.call_id)
+        let Some(RunningCommand {
+            command,
+            item_id,
+            aggregated_output,
+        }) = self.running_commands.remove(&ev.call_id)
         else {
             warn!(
                 call_id = ev.call_id,
@@ -379,12 +400,17 @@ impl EventProcessorWithJsonOutput {
         } else {
             CommandExecutionStatus::Failed
         };
+        let aggregated_output = if ev.aggregated_output.is_empty() {
+            aggregated_output
+        } else {
+            ev.aggregated_output.clone()
+        };
         let item = ThreadItem {
             id: item_id,
 
             details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                 command,
-                aggregated_output: ev.aggregated_output.clone(),
+                aggregated_output,
                 exit_code: Some(ev.exit_code),
                 status,
             }),
@@ -453,6 +479,21 @@ impl EventProcessorWithJsonOutput {
                 }),
             };
             items.push(ThreadEvent::ItemCompleted(ItemCompletedEvent { item }));
+        }
+
+        if !self.running_commands.is_empty() {
+            for (_, running) in self.running_commands.drain() {
+                let item = ThreadItem {
+                    id: running.item_id,
+                    details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                        command: running.command,
+                        aggregated_output: running.aggregated_output,
+                        exit_code: None,
+                        status: CommandExecutionStatus::Completed,
+                    }),
+                };
+                items.push(ThreadEvent::ItemCompleted(ItemCompletedEvent { item }));
+            }
         }
 
         if let Some(error) = self.last_critical_error.take() {

@@ -98,19 +98,22 @@ impl UnifiedExecSession {
         let cancellation_token_clone = cancellation_token.clone();
         let output_task = tokio::spawn(async move {
             loop {
-                match receiver.recv().await {
-                    Ok(chunk) => {
-                        let mut guard = buffer_clone.lock().await;
-                        guard.push_chunk(chunk);
-                        drop(guard);
-                        notify_clone.notify_waiters();
+                tokio::select! {
+                    _ = cancellation_token_clone.cancelled() => break,
+                    result = receiver.recv() => match result {
+                        Ok(chunk) => {
+                            let mut guard = buffer_clone.lock().await;
+                            guard.push_chunk(chunk);
+                            drop(guard);
+                            notify_clone.notify_waiters();
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            cancellation_token_clone.cancel();
+                            break;
+                        }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        cancellation_token_clone.cancel();
-                        break;
-                    }
-                }
+                };
             }
         });
 
@@ -136,12 +139,26 @@ impl UnifiedExecSession {
         }
     }
 
+    pub(super) fn output_receiver(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
+        self.session.output_receiver()
+    }
+
+    pub(super) fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation_token.clone()
+    }
+
     pub(super) fn has_exited(&self) -> bool {
         self.session.has_exited()
     }
 
     pub(super) fn exit_code(&self) -> Option<i32> {
         self.session.exit_code()
+    }
+
+    pub(super) fn terminate(&self) {
+        self.session.terminate();
+        self.cancellation_token.cancel();
+        self.output_task.abort();
     }
 
     async fn snapshot_output(&self) -> Vec<Vec<u8>> {
@@ -246,6 +263,6 @@ impl UnifiedExecSession {
 
 impl Drop for UnifiedExecSession {
     fn drop(&mut self) {
-        self.output_task.abort();
+        self.terminate();
     }
 }

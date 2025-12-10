@@ -94,10 +94,8 @@ impl ExecCommandSession {
     pub fn exit_code(&self) -> Option<i32> {
         self.exit_code.lock().ok().and_then(|guard| *guard)
     }
-}
 
-impl Drop for ExecCommandSession {
-    fn drop(&mut self) {
+    pub fn terminate(&self) {
         if let Ok(mut killer_opt) = self.killer.lock() {
             if let Some(mut killer) = killer_opt.take() {
                 let _ = killer.kill();
@@ -119,6 +117,12 @@ impl Drop for ExecCommandSession {
                 handle.abort();
             }
         }
+    }
+}
+
+impl Drop for ExecCommandSession {
+    fn drop(&mut self) {
+        self.terminate();
     }
 }
 

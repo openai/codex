@@ -1,0 +1,29 @@
+[package]
+name = "codex-tui2"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_tui2"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codex-tui2"
+path = "src/main.rs"
+
+[features]
+# Keep feature surface aligned with codex-tui while tui2 delegates to it.
+vt100-tests = []
+debug-logs = []
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-arg0 = { workspace = true }
+codex-common = { workspace = true }
+codex-core = { workspace = true }
+codex-tui = { workspace = true }
