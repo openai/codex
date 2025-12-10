@@ -259,15 +259,15 @@ impl ChatComposer {
 
         // normalize_pasted_path already handles Windows → WSL path conversion,
         // so we can directly try to read the image dimensions.
-        match image::image_dimensions(&path_buf) {
-            Ok((w, h)) => {
+        match crate::clipboard_paste::safe_image_dimensions(&path_buf) {
+            Some((w, h)) => {
                 tracing::info!("OK: {pasted}");
                 let format_label = pasted_image_format(&path_buf).label();
                 self.attach_image(path_buf, w, h, format_label);
                 true
             }
-            Err(err) => {
-                tracing::trace!("ERR: {err}");
+            None => {
+                tracing::trace!("ERR: could not read dimensions for {pasted}");
                 false
             }
         }
@@ -668,7 +668,7 @@ impl ChatComposer {
                 if is_image {
                     // Determine dimensions; if that fails fall back to normal path insertion.
                     let path_buf = PathBuf::from(&sel_path);
-                    if let Ok((w, h)) = image::image_dimensions(&path_buf) {
+                    if let Some((w, h)) = crate::clipboard_paste::safe_image_dimensions(&path_buf) {
                         // Remove the current @token (mirror logic from insert_selected_path without inserting text)
                         // using the flat text and byte-offset cursor API.
                         let cursor_offset = self.textarea.cursor();
