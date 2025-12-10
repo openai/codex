@@ -1512,7 +1512,7 @@ impl CodexMessageProcessor {
         } = params;
 
         let requested_page_size = limit
-            .map(|value| usize::try_from(value).unwrap_or(THREAD_LIST_MAX_LIMIT))
+            .map(|value| value as usize)
             .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
             .clamp(1, THREAD_LIST_MAX_LIMIT);
         let (summaries, next_cursor) = match self
@@ -1805,7 +1805,6 @@ impl CodexMessageProcessor {
             model_providers,
         } = params;
         let requested_page_size = page_size
-            .map(|value| usize::try_from(value).unwrap_or(THREAD_LIST_MAX_LIMIT))
             .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
             .clamp(1, THREAD_LIST_MAX_LIMIT);
 
@@ -1869,7 +1868,7 @@ impl CodexMessageProcessor {
                 }
             };
 
-            let filtered = page
+            let mut filtered = page
                 .items
                 .into_iter()
                 .filter_map(|it| {
@@ -1885,12 +1884,15 @@ impl CodexMessageProcessor {
                     )
                 })
                 .collect::<Vec<_>>();
+            if filtered.len() > remaining {
+                filtered.truncate(remaining);
+            }
             items.extend(filtered);
             remaining = requested_page_size.saturating_sub(items.len());
 
             // Encode RolloutCursor into the JSON-RPC string form returned to clients.
-            next_cursor = page
-                .next_cursor
+            let next_cursor_value = page.next_cursor.clone();
+            next_cursor = next_cursor_value
                 .as_ref()
                 .and_then(|cursor| serde_json::to_value(cursor).ok())
                 .and_then(|value| value.as_str().map(str::to_owned));
@@ -1898,11 +1900,12 @@ impl CodexMessageProcessor {
                 break;
             }
 
-            match page.next_cursor {
+            match next_cursor_value {
                 Some(cursor_val) if remaining > 0 => {
                     // Break if our pagination would reuse the same cursor again; this avoids
                     // an infinite loop when filtering drops everything on the page.
                     if last_cursor.as_ref() == Some(&cursor_val) {
+                        next_cursor = None;
                         break;
                     }
                     last_cursor = Some(cursor_val.clone());
