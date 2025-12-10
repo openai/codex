@@ -1,6 +1,5 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
-use anyhow::anyhow;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigLayer;
 use codex_app_server_protocol::ConfigLayerMetadata;
@@ -16,7 +15,7 @@ use codex_app_server_protocol::OverriddenMetadata;
 use codex_app_server_protocol::WriteStatus;
 use codex_core::config::ConfigToml;
 use codex_core::config::edit::ConfigEdit;
-use codex_core::config::edit::apply_blocking;
+use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::LoadedConfigLayers;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::load_config_layers_with_overrides;
@@ -28,7 +27,6 @@ use sha2::Sha256;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use tokio::task;
 use toml::Value as TomlValue;
 use toml_edit::Item as TomlItem;
 
@@ -143,7 +141,6 @@ impl ConfigApi {
         }
 
         let mut user_config = layers.user.config.clone();
-        let mut mutated = false;
         let mut parsed_segments = Vec::new();
         let mut config_edits = Vec::new();
 
@@ -156,8 +153,8 @@ impl ConfigApi {
                 config_write_error(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
 
-            let changed = apply_merge(&mut user_config, &segments, parsed_value.as_ref(), strategy)
-                .map_err(|err| match err {
+            apply_merge(&mut user_config, &segments, parsed_value.as_ref(), strategy).map_err(
+                |err| match err {
                     MergeError::PathNotFound => config_write_error(
                         ConfigWriteErrorCode::ConfigPathNotFound,
                         "Path not found",
@@ -165,21 +162,24 @@ impl ConfigApi {
                     MergeError::Validation(message) => {
                         config_write_error(ConfigWriteErrorCode::ConfigValidationError, message)
                     }
-                })?;
+                },
+            )?;
 
-            if changed {
-                let updated_value = value_at_path(&user_config, &segments).cloned();
-                let mut path = segments.clone();
-                collect_config_edits(
-                    &mut path,
-                    original_value.as_ref(),
-                    updated_value.as_ref(),
-                    &mut config_edits,
-                )
-                .map_err(|err| internal_error("failed to build config edits", err))?;
+            let updated_value = value_at_path(&user_config, &segments).cloned();
+            if original_value != updated_value {
+                let edit = match updated_value {
+                    Some(value) => ConfigEdit::SetPath {
+                        segments: segments.clone(),
+                        value: toml_value_to_item(&value)
+                            .map_err(|err| internal_error("failed to build config edits", err))?,
+                    },
+                    None => ConfigEdit::ClearPath {
+                        segments: segments.clone(),
+                    },
+                };
+                config_edits.push(edit);
             }
 
-            mutated |= changed;
             parsed_segments.push(segments);
         }
 
@@ -199,8 +199,10 @@ impl ConfigApi {
             )
         })?;
 
-        if mutated {
-            self.persist_user_config(config_edits)
+        if !config_edits.is_empty() {
+            ConfigEditsBuilder::new(&self.codex_home)
+                .with_edits(config_edits)
+                .apply()
                 .await
                 .map_err(|err| internal_error("failed to persist config.toml", err))?;
         }
@@ -268,22 +270,6 @@ impl ConfigApi {
             system,
             mdm,
         })
-    }
-
-    async fn persist_user_config(&self, edits: Vec<ConfigEdit>) -> anyhow::Result<()> {
-        if edits.is_empty() {
-            return Ok(());
-        }
-
-        let codex_home = self.codex_home.clone();
-
-        task::spawn_blocking(move || -> anyhow::Result<()> {
-            apply_blocking(&codex_home, None, &edits)
-        })
-        .await
-        .map_err(|err| anyhow!("config persistence task panicked: {err}"))??;
-
-        Ok(())
     }
 }
 
@@ -435,57 +421,6 @@ fn clear_path(root: &mut TomlValue, segments: &[String]) -> Result<bool, MergeEr
     Ok(parent.remove(last).is_some())
 }
 
-fn collect_config_edits(
-    path: &mut Vec<String>,
-    original: Option<&TomlValue>,
-    updated: Option<&TomlValue>,
-    edits: &mut Vec<ConfigEdit>,
-) -> anyhow::Result<()> {
-    match (original, updated) {
-        (Some(old_value), Some(new_value)) if old_value == new_value => {}
-        (Some(TomlValue::Table(old_table)), Some(TomlValue::Table(new_table))) => {
-            for (key, old_value) in old_table.iter() {
-                if new_table.contains_key(key) {
-                    let mut nested = path.clone();
-                    nested.push(key.clone());
-                    collect_config_edits(&mut nested, Some(old_value), new_table.get(key), edits)?;
-                } else {
-                    let mut nested = path.clone();
-                    nested.push(key.clone());
-                    edits.push(ConfigEdit::ClearPath { segments: nested });
-                }
-            }
-
-            for (key, new_value) in new_table.iter() {
-                if old_table.contains_key(key) {
-                    continue;
-                }
-
-                let mut nested = path.clone();
-                nested.push(key.clone());
-                edits.push(ConfigEdit::SetPath {
-                    segments: nested,
-                    value: toml_value_to_item(new_value)?,
-                });
-            }
-        }
-        (_, Some(new_value)) => {
-            edits.push(ConfigEdit::SetPath {
-                segments: path.clone(),
-                value: toml_value_to_item(new_value)?,
-            });
-        }
-        (Some(_), None) => {
-            edits.push(ConfigEdit::ClearPath {
-                segments: path.clone(),
-            });
-        }
-        (None, None) => {}
-    }
-
-    Ok(())
-}
-
 fn toml_value_to_item(value: &TomlValue) -> anyhow::Result<TomlItem> {
     match value {
         TomlValue::Table(table) => {
@@ -506,7 +441,7 @@ fn toml_value_to_value(value: &TomlValue) -> anyhow::Result<toml_edit::Value> {
         TomlValue::Integer(val) => Ok(toml_edit::Value::from(*val)),
         TomlValue::Float(val) => Ok(toml_edit::Value::from(*val)),
         TomlValue::Boolean(val) => Ok(toml_edit::Value::from(*val)),
-        TomlValue::Datetime(val) => Ok(toml_edit::Value::from(val.clone())),
+        TomlValue::Datetime(val) => Ok(toml_edit::Value::from(*val)),
         TomlValue::Array(items) => {
             let mut array = toml_edit::Array::new();
             for item in items {
@@ -839,6 +774,99 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
+
+    #[test]
+    fn toml_value_to_item_handles_nested_config_tables() {
+        let config = r#"
+[mcp_servers.docs]
+command = "docs-server"
+
+[mcp_servers.docs.http_headers]
+X-Doc = "42"
+"#;
+
+        let value: TomlValue = toml::from_str(config).expect("parse config example");
+        let item = toml_value_to_item(&value).expect("convert to toml_edit item");
+
+        let root = item.as_table().expect("root table");
+        assert!(!root.is_implicit(), "root table should be explicit");
+
+        let mcp_servers = root
+            .get("mcp_servers")
+            .and_then(TomlItem::as_table)
+            .expect("mcp_servers table");
+        assert!(
+            !mcp_servers.is_implicit(),
+            "mcp_servers table should be explicit"
+        );
+
+        let docs = mcp_servers
+            .get("docs")
+            .and_then(TomlItem::as_table)
+            .expect("docs table");
+        assert_eq!(
+            docs.get("command")
+                .and_then(TomlItem::as_value)
+                .and_then(toml_edit::Value::as_str),
+            Some("docs-server")
+        );
+
+        let http_headers = docs
+            .get("http_headers")
+            .and_then(TomlItem::as_table)
+            .expect("http_headers table");
+        assert_eq!(
+            http_headers
+                .get("X-Doc")
+                .and_then(TomlItem::as_value)
+                .and_then(toml_edit::Value::as_str),
+            Some("42")
+        );
+    }
+
+    #[tokio::test]
+    async fn write_value_preserves_comments_and_order() {
+        let tmp = tempdir().expect("tempdir");
+        let original = r#"# Codex user configuration
+model = "gpt-5"
+approval_policy = "on-request"
+
+[notice]
+# Preserve this comment
+hide_full_access_warning = true
+
+[features]
+unified_exec = true
+"#;
+        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), original).unwrap();
+
+        let api = ConfigApi::new(tmp.path().to_path_buf(), vec![]);
+        api.write_value(ConfigValueWriteParams {
+            file_path: Some(tmp.path().join(CONFIG_FILE_NAME).display().to_string()),
+            key_path: "features.remote_compaction".to_string(),
+            value: json!(true),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("write succeeds");
+
+        let updated =
+            std::fs::read_to_string(tmp.path().join(CONFIG_FILE_NAME)).expect("read config");
+        let expected = r#"# Codex user configuration
+model = "gpt-5"
+approval_policy = "on-request"
+
+[notice]
+# Preserve this comment
+hide_full_access_warning = true
+
+[features]
+unified_exec = true
+remote_compaction = true
+"#;
+        assert_eq!(updated, expected);
+    }
 
     #[tokio::test]
     async fn read_includes_origins_and_layers() {

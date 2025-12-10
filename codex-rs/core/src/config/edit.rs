@@ -555,6 +555,11 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn with_edits(mut self, edits: Vec<ConfigEdit>) -> Self {
+        self.edits.extend(edits);
+        self
+    }
+
     /// Apply edits on a blocking thread.
     pub fn apply_blocking(self) -> anyhow::Result<()> {
         apply_blocking(&self.codex_home, self.profile.as_deref(), &self.edits)
@@ -601,6 +606,24 @@ mod tests {
 model_reasoning_effort = "high"
 "#;
         assert_eq!(contents, expected);
+    }
+
+    #[test]
+    fn builder_with_edits_applies_custom_paths() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+
+        ConfigEditsBuilder::new(codex_home)
+            .with_edits(vec![ConfigEdit::SetPath {
+                segments: vec!["enabled".to_string()],
+                value: value(true),
+            }])
+            .apply_blocking()
+            .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        assert_eq!(contents, "enabled = true\n");
     }
 
     #[test]
