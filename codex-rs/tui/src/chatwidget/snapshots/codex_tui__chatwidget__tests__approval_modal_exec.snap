@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests.rs
 expression: terminal.backend().vt100().screen().contents()
 ---
+
+
   Would you like to run the following command?
 
   Reason: this is a test reason such as one that would be produced by the model

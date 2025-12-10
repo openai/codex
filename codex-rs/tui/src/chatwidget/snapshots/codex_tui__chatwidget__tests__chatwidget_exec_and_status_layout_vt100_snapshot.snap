@@ -2,6 +2,33 @@
 source: tui/src/chatwidget/tests.rs
 expression: term.backend().vt100().screen().contents()
 ---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 • I’m going to search the repo for where “Change Approved” is rendered to update
   that view.
 

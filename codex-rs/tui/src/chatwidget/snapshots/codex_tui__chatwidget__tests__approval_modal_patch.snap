@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests.rs
 expression: terminal.backend().vt100().screen().contents()
 ---
+
+
   Would you like to make the following edits?
 
   Reason: The model wants to apply changes
