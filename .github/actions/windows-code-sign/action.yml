@@ -49,6 +49,7 @@ runs:
         exclude-azure-powershell-credential: true
         exclude-azure-developer-cli-credential: true
         exclude-interactive-browser-credential: true
+        cache-dependencies: false
         files: |
           ${{ github.workspace }}/codex-rs/target/${{ inputs.target }}/release/codex.exe
           ${{ github.workspace }}/codex-rs/target/${{ inputs.target }}/release/codex-responses-api-proxy.exe
