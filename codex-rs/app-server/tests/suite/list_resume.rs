@@ -358,3 +358,81 @@ async fn test_list_and_resume_conversations() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_conversations_fetches_through_filtered_pages() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    // Only the last 3 conversations match the provider filter; request 3 and
+    // ensure pagination keeps fetching past non-matching pages.
+    let cases = [
+        (
+            "2025-03-04T12-00-00",
+            "2025-03-04T12:00:00Z",
+            "skip_provider",
+        ),
+        (
+            "2025-03-03T12-00-00",
+            "2025-03-03T12:00:00Z",
+            "skip_provider",
+        ),
+        (
+            "2025-03-02T12-00-00",
+            "2025-03-02T12:00:00Z",
+            "target_provider",
+        ),
+        (
+            "2025-03-01T12-00-00",
+            "2025-03-01T12:00:00Z",
+            "target_provider",
+        ),
+        (
+            "2025-02-28T12-00-00",
+            "2025-02-28T12:00:00Z",
+            "target_provider",
+        ),
+    ];
+
+    for (ts_file, ts_rfc, provider) in cases {
+        create_fake_rollout(
+            codex_home.path(),
+            ts_file,
+            ts_rfc,
+            "Hello",
+            Some(provider),
+            None,
+        )?;
+    }
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_list_conversations_request(ListConversationsParams {
+            page_size: Some(3),
+            cursor: None,
+            model_providers: Some(vec!["target_provider".to_string()]),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ListConversationsResponse { items, next_cursor } =
+        to_response::<ListConversationsResponse>(resp)?;
+
+    assert_eq!(
+        items.len(),
+        3,
+        "should fetch across pages to satisfy the limit"
+    );
+    assert!(
+        items
+            .iter()
+            .all(|item| item.model_provider == "target_provider")
+    );
+    assert_eq!(next_cursor, None);
+
+    Ok(())
+}
