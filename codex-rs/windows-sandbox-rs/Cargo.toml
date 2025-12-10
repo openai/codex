@@ -11,7 +11,7 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "codex-windows-sandbox-setup"
-path = "src/bin/setup.rs"
+path = "src/bin/setup_main.rs"
 
 [dependencies]
 anyhow = "1.0"

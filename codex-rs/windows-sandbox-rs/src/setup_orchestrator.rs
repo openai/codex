@@ -2,32 +2,32 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
-use std::os::windows::process::CommandExt;
-use std::process::Stdio;
 use std::process::Command;
+use std::process::Stdio;
 
+use crate::allow::compute_allow_paths;
+use crate::allow::AllowDenyPaths;
+use crate::logging::log_note;
+use crate::policy::SandboxPolicy;
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
-use crate::allow::compute_allow_paths;
-use crate::allow::AllowDenyPaths;
-use crate::logging::log_note;
-use crate::policy::SandboxPolicy;
 
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Security::AllocateAndInitializeSid;
+use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 use windows_sys::Win32::Security::SID_NAME_USE;
-use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 
 pub const SETUP_VERSION: u32 = 2;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
@@ -75,7 +75,9 @@ fn sid_bytes_to_psid(sid: &[u8]) -> Result<*mut c_void> {
     let sid_w = crate::winutil::to_wide(&sid_str);
     let mut psid: *mut c_void = std::ptr::null_mut();
     if unsafe { ConvertStringSidToSidW(sid_w.as_ptr(), &mut psid) } == 0 {
-        return Err(anyhow!("ConvertStringSidToSidW failed: {}", unsafe { GetLastError() }));
+        return Err(anyhow!("ConvertStringSidToSidW failed: {}", unsafe {
+            GetLastError()
+        }));
     }
     Ok(psid)
 }
@@ -122,9 +124,7 @@ pub fn run_setup_refresh(
     );
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
-    cmd.arg(&b64)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
     let cwd = std::env::current_dir().unwrap_or_else(|_| codex_home.to_path_buf());
     log_note(
         &format!(
@@ -135,13 +135,16 @@ pub fn run_setup_refresh(
         ),
         Some(&sandbox_dir(codex_home)),
     );
-    let status = cmd.status().map_err(|e| {
-        log_note(
-            &format!("setup refresh: failed to spawn {}: {e}", exe.display()),
-            Some(&sandbox_dir(codex_home)),
-        );
-        e
-    }).context("spawn setup refresh")?;
+    let status = cmd
+        .status()
+        .map_err(|e| {
+            log_note(
+                &format!("setup refresh: failed to spawn {}: {e}", exe.display()),
+                Some(&sandbox_dir(codex_home)),
+            );
+            e
+        })
+        .context("spawn setup refresh")?;
     if !status.success() {
         log_note(
             &format!("setup refresh: exited with status {status:?}"),

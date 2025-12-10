@@ -5,8 +5,12 @@ macro_rules! windows_modules {
 }
 
 windows_modules!(
-    acl, allow, audit, cap, dpapi, env, identity, logging, policy, process, setup, token, winutil
+    acl, allow, audit, cap, dpapi, env, identity, logging, policy, process, token, winutil
 );
+
+#[cfg(target_os = "windows")]
+#[path = "setup_orchestrator.rs"]
+mod setup;
 
 #[cfg(target_os = "windows")]
 pub use {
