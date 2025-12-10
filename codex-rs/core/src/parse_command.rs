@@ -117,9 +117,6 @@ mod tests {
                     query: None,
                     path: None,
                 },
-                ParsedCommand::Unknown {
-                    cmd: "head -n 40".to_string(),
-                },
             ],
         );
     }
@@ -143,16 +140,11 @@ mod tests {
         let inner = "rg -n \"BUG|FIXME|TODO|XXX|HACK\" -S | head -n 200";
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
-            vec![
-                ParsedCommand::Search {
-                    cmd: "rg -n 'BUG|FIXME|TODO|XXX|HACK' -S".to_string(),
-                    query: Some("BUG|FIXME|TODO|XXX|HACK".to_string()),
-                    path: None,
-                },
-                ParsedCommand::Unknown {
-                    cmd: "head -n 200".to_string(),
-                },
-            ],
+            vec![ParsedCommand::Search {
+                cmd: "rg -n 'BUG|FIXME|TODO|XXX|HACK' -S".to_string(),
+                query: Some("BUG|FIXME|TODO|XXX|HACK".to_string()),
+                path: None,
+            }],
         );
     }
 
@@ -174,16 +166,11 @@ mod tests {
         let inner = "rg --files | head -n 50";
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
-            vec![
-                ParsedCommand::Search {
-                    cmd: "rg --files".to_string(),
-                    query: None,
-                    path: None,
-                },
-                ParsedCommand::Unknown {
-                    cmd: "head -n 50".to_string(),
-                },
-            ],
+            vec![ParsedCommand::Search {
+                cmd: "rg --files".to_string(),
+                query: None,
+                path: None,
+            }],
         );
     }
 
@@ -391,6 +378,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn supports_single_string_script_with_cd_and_pipe() {
+        assert_parsed(
+            &vec_str(&[
+                r#"cd /Users/pakrym/code/codex && rg -n "codex_api" codex-rs -S | head -n 50"#,
+            ]),
+            vec![ParsedCommand::Search {
+                cmd: "rg -n codex_api codex-rs -S".to_string(),
+                query: Some("codex_api".to_string()),
+                path: Some("codex-rs".to_string()),
+            }],
+        );
+    }
+
     // ---- is_small_formatting_command unit tests ----
     #[test]
     fn small_formatting_always_true_commands() {
@@ -408,10 +409,8 @@ mod tests {
     fn head_behavior() {
         // No args -> small formatting
         assert!(is_small_formatting_command(&vec_str(&["head"])));
-        // Numeric count only -> not considered small formatting by implementation
-        assert!(!is_small_formatting_command(&shlex_split_safe(
-            "head -n 40"
-        )));
+        // Numeric count only -> formatting
+        assert!(is_small_formatting_command(&shlex_split_safe("head -n 40")));
         // With explicit file -> not small formatting
         assert!(!is_small_formatting_command(&shlex_split_safe(
             "head -n 40 file.txt"
@@ -424,17 +423,15 @@ mod tests {
     fn tail_behavior() {
         // No args -> small formatting
         assert!(is_small_formatting_command(&vec_str(&["tail"])));
-        // Numeric with plus offset -> not small formatting
-        assert!(!is_small_formatting_command(&shlex_split_safe(
+        // Numeric with plus offset -> formatting
+        assert!(is_small_formatting_command(&shlex_split_safe(
             "tail -n +10"
         )));
         assert!(!is_small_formatting_command(&shlex_split_safe(
             "tail -n +10 file.txt"
         )));
-        // Numeric count
-        assert!(!is_small_formatting_command(&shlex_split_safe(
-            "tail -n 30"
-        )));
+        // Numeric count -> formatting
+        assert!(is_small_formatting_command(&shlex_split_safe("tail -n 30")));
         assert!(!is_small_formatting_command(&shlex_split_safe(
             "tail -n 30 file.txt"
         )));
@@ -718,16 +715,11 @@ mod tests {
         let inner = "rg --files | head -n 1";
         assert_parsed(
             &shlex_split_safe(inner),
-            vec![
-                ParsedCommand::Search {
-                    cmd: "rg --files".to_string(),
-                    query: None,
-                    path: None,
-                },
-                ParsedCommand::Unknown {
-                    cmd: "head -n 1".to_string(),
-                },
-            ],
+            vec![ParsedCommand::Search {
+                cmd: "rg --files".to_string(),
+                query: None,
+                path: None,
+            }],
         );
     }
 
@@ -940,6 +932,19 @@ pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
         vec![normalized]
     };
 
+    // If we have a compound/pipelined command, drop small formatting helpers
+    // (e.g., `head -n 50`) so summaries focus on the primary operation.
+    // If dropping them would remove everything except `cd`, keep the originals.
+    let parts = if parts.len() > 1 {
+        let filtered = drop_small_formatting_commands(parts.clone());
+        let has_non_cd = filtered
+            .iter()
+            .any(|tokens| tokens.first().is_some_and(|t| t != "cd"));
+        if has_non_cd { filtered } else { parts }
+    } else {
+        parts
+    };
+
     // Preserve left-to-right execution order for all commands, including bash -c/-lc
     // so summaries reflect the order they will run.
 
@@ -1082,6 +1087,14 @@ fn normalize_tokens(cmd: &[String]) -> Vec<String> {
             if (shell == "bash" || shell == "zsh") && (flag == "-c" || flag == "-lc") =>
         {
             shlex_split(script).unwrap_or_else(|| vec![shell.clone(), flag.clone(), script.clone()])
+        }
+        [script]
+            if script
+                .chars()
+                .any(|c| c.is_whitespace() || c == '|' || c == ';' || c == '&') =>
+        {
+            shlex_split(script)
+                .unwrap_or_else(|| script.split_whitespace().map(str::to_string).collect())
         }
         _ => cmd.to_vec(),
     }
@@ -1384,13 +1397,37 @@ fn is_small_formatting_command(tokens: &[String]) -> bool {
             // Treat as formatting when no explicit file operand is present.
             // Common forms: `head -n 40`, `head -c 100`.
             // Keep cases like `head -n 40 file`.
-            tokens.len() < 3
+            match tokens {
+                // `head` / `head <file>` / `head -n50` (we don't parse `head <file>` elsewhere)
+                [_] | [_, _] => true,
+                // `head -n 40` / `head -c 100` (no file operand)
+                [_, flag, count]
+                    if (flag == "-n" || flag == "-c")
+                        && count.chars().all(|c| c.is_ascii_digit()) =>
+                {
+                    true
+                }
+                _ => false,
+            }
         }
         "tail" => {
             // Treat as formatting when no explicit file operand is present.
             // Common forms: `tail -n +10`, `tail -n 30`.
             // Keep cases like `tail -n 30 file`.
-            tokens.len() < 3
+            match tokens {
+                // `tail` / `tail <file>` / `tail -n30` / `tail -n+10`
+                [_] | [_, _] => true,
+                // `tail -n 30` / `tail -n +10` (no file operand)
+                [_, flag, count]
+                    if flag == "-n"
+                        && (count.chars().all(|c| c.is_ascii_digit())
+                            || (count.starts_with('+')
+                                && count[1..].chars().all(|c| c.is_ascii_digit()))) =>
+                {
+                    true
+                }
+                _ => false,
+            }
         }
         "sed" => {
             // Keep `sed -n <range> file` (treated as a file read elsewhere);
