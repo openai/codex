@@ -733,7 +733,7 @@ impl App {
             let seg_count = word_wrap_line(line, opts).len();
             let is_user_row = meta
                 .get(idx)
-                .and_then(|entry| entry.as_ref())
+                .and_then(Option::as_ref)
                 .map(|(cell_index, _)| is_user_cell.get(*cell_index).copied().unwrap_or(false))
                 .unwrap_or(false);
             wrapped_is_user_row.extend(std::iter::repeat_n(is_user_row, seg_count));
@@ -1074,19 +1074,14 @@ impl App {
         };
 
         let mut anchor = None;
-        for entry in meta.iter().skip(top_offset) {
-            if let Some((cell_index, line_in_cell)) = *entry {
-                anchor = Some((cell_index, line_in_cell));
-                break;
-            }
+        if let Some((cell_index, line_in_cell)) = meta.iter().skip(top_offset).flatten().next() {
+            anchor = Some((*cell_index, *line_in_cell));
         }
-        if anchor.is_none() {
-            for idx in (0..top_offset).rev() {
-                if let Some((cell_index, line_in_cell)) = meta[idx] {
-                    anchor = Some((cell_index, line_in_cell));
-                    break;
-                }
-            }
+        if anchor.is_none()
+            && let Some((cell_index, line_in_cell)) =
+                meta[..top_offset].iter().rev().flatten().next()
+        {
+            anchor = Some((*cell_index, *line_in_cell));
         }
 
         if let Some((cell_index, line_in_cell)) = anchor {
@@ -2104,9 +2099,10 @@ impl App {
                     if chat_height < height {
                         let transcript_height = height.saturating_sub(chat_height);
                         if transcript_height > 0 {
+                            let delta = -i32::from(transcript_height);
                             self.scroll_transcript(
                                 tui,
-                                -i32::from(transcript_height),
+                                delta,
                                 usize::from(transcript_height),
                                 width,
                             );
@@ -2127,9 +2123,10 @@ impl App {
                     if chat_height < height {
                         let transcript_height = height.saturating_sub(chat_height);
                         if transcript_height > 0 {
+                            let delta = i32::from(transcript_height);
                             self.scroll_transcript(
                                 tui,
-                                i32::from(transcript_height),
+                                delta,
                                 usize::from(transcript_height),
                                 width,
                             );
