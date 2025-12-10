@@ -28,6 +28,8 @@ use tempfile::TempDir;
 /// Verify that when using a read-only sandbox and an execpolicy that prompts,
 /// the proper elicitation is sent. Upon auto-approving the elicitation, the
 /// command should be run privileged outside the sandbox.
+// Flaky: failing on some runners due to codex-linux-sandbox not being present.
+#[ignore]
 #[tokio::test(flavor = "current_thread")]
 async fn accept_elicitation_for_prompt_rule() -> Result<()> {
     // Configure a stdio transport that will launch the MCP server using
