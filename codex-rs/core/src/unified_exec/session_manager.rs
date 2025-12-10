@@ -570,51 +570,47 @@ impl UnifiedExecSessionManager {
         const POST_EXIT_OUTPUT_GRACE: Duration = Duration::from_millis(25);
 
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
-        let mut exit_signal_received = cancellation_token.is_cancelled();
+        let mut exit_signal_seen = cancellation_token.is_cancelled();
+
         loop {
-            let drained_chunks;
-            let mut wait_for_output = None;
-            {
+            let drained_chunks = {
                 let mut guard = output_buffer.lock().await;
-                drained_chunks = guard.drain();
-                if drained_chunks.is_empty() {
-                    wait_for_output = Some(output_notify.notified());
+                guard.drain()
+            };
+
+            if !drained_chunks.is_empty() {
+                for chunk in drained_chunks {
+                    collected.extend_from_slice(&chunk);
                 }
             }
 
-            if drained_chunks.is_empty() {
-                exit_signal_received |= cancellation_token.is_cancelled();
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining == Duration::ZERO {
-                    break;
-                }
-
-                let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
-                if exit_signal_received {
-                    let grace = remaining.min(POST_EXIT_OUTPUT_GRACE);
-                    if tokio::time::timeout(grace, notified).await.is_err() {
-                        break;
-                    }
-                    continue;
-                }
-
-                tokio::pin!(notified);
-                let exit_notified = cancellation_token.cancelled();
-                tokio::pin!(exit_notified);
-                tokio::select! {
-                    _ = &mut notified => {}
-                    _ = &mut exit_notified => exit_signal_received = true,
-                    _ = tokio::time::sleep(remaining) => break,
-                }
-                continue;
+            let now = Instant::now();
+            if now >= deadline {
+                break;
             }
 
-            for chunk in drained_chunks {
-                collected.extend_from_slice(&chunk);
+            let remaining = deadline.saturating_duration_since(now);
+            if remaining == Duration::ZERO {
+                break;
             }
 
-            exit_signal_received |= cancellation_token.is_cancelled();
-            if Instant::now() >= deadline {
+            let wait_for = if exit_signal_seen && !collected.is_empty() {
+                remaining.min(POST_EXIT_OUTPUT_GRACE)
+            } else {
+                remaining
+            };
+
+            if wait_for == Duration::ZERO {
+                break;
+            }
+
+            let notified = output_notify.notified();
+            let _ = tokio::time::timeout(wait_for, notified).await;
+            exit_signal_seen |= cancellation_token.is_cancelled();
+
+            if exit_signal_seen && !collected.is_empty() && wait_for == POST_EXIT_OUTPUT_GRACE {
+                // We already waited a post-exit grace window after seeing output; stop even
+                // if the overall deadline has not yet elapsed.
                 break;
             }
         }
