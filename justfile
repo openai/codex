@@ -51,3 +51,8 @@ test:
 # Run the MCP server
 mcp-server-run *args:
     cargo run -p codex-mcp-server -- "$@"
+
+# Verify that native-tls is not in the dependency tree (rustls-only is required for mTLS)
+# This should be run in CI to catch feature unification bugs
+check-tls:
+    ./scripts/check-tls-backend.sh
