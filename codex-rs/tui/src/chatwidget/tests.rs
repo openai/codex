@@ -27,6 +27,8 @@ use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::McpStartupStatus;
+use codex_core::protocol::McpStartupUpdateEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
@@ -2427,6 +2429,28 @@ fn status_widget_active_snapshot() {
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status widget");
     assert_snapshot!("status_widget_active", terminal.backend());
+}
+
+#[test]
+fn mcp_startup_header_booting_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None);
+    chat.show_welcome_banner = false;
+
+    chat.handle_codex_event(Event {
+        id: "mcp-1".into(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "alpha".into(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+
+    let height = chat.desired_height(80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw chat widget");
+    assert_snapshot!("mcp_startup_header_booting", terminal.backend());
 }
 
 #[test]
