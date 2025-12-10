@@ -344,10 +344,10 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 reason,
                 proposed_execpolicy_amendment,
             } => {
+                let reason = reason.filter(|item| !item.is_empty());
                 let mut header: Vec<Line<'static>> = Vec::new();
                 if let Some(reason) = reason {
                     header.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
-                    header.push(Line::from(""));
                 }
                 let full_cmd = strip_bash_lc_and_escape(&command);
                 let mut full_cmd_lines = highlight_bash_to_lines(&full_cmd);
