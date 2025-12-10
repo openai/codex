@@ -1804,10 +1804,13 @@ impl CodexMessageProcessor {
             cursor,
             model_providers,
         } = params;
-        let requested = page_size.unwrap_or(25).max(1);
+        let requested_page_size = page_size
+            .map(|value| usize::try_from(value).unwrap_or(THREAD_LIST_MAX_LIMIT))
+            .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
+            .clamp(1, THREAD_LIST_MAX_LIMIT);
 
         match self
-            .list_conversations_common(requested, cursor, model_providers)
+            .list_conversations_common(requested_page_size, cursor, model_providers)
             .await
         {
             Ok((items, next_cursor)) => {
@@ -1885,6 +1888,7 @@ impl CodexMessageProcessor {
             items.extend(filtered);
             remaining = requested_page_size.saturating_sub(items.len());
 
+            // Encode RolloutCursor into the JSON-RPC string form returned to clients.
             next_cursor = page
                 .next_cursor
                 .as_ref()
