@@ -19,7 +19,7 @@ use tempfile::TempDir;
 fn resume_history(config: &codex_core::config::Config, previous_model: &str, rollout_path: &std::path::Path) -> InitialHistory {
     let turn_ctx = TurnContextItem {
         cwd: config.cwd.clone(),
-        approval_policy: config.approval_policy,
+        approval_policy: config.approval_policy.value(),
         sandbox_policy: config.sandbox_policy.clone(),
         model: previous_model.to_string(),
         effort: config.model_reasoning_effort,
