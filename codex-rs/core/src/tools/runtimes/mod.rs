@@ -6,6 +6,7 @@ small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
 use crate::exec::ExecExpiration;
 use crate::sandboxing::CommandSpec;
+use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::tools::sandboxing::ToolError;
 use std::collections::HashMap;
@@ -22,7 +23,7 @@ pub(crate) fn build_command_spec(
     cwd: &Path,
     env: &HashMap<String, String>,
     expiration: ExecExpiration,
-    with_escalated_permissions: Option<bool>,
+    sandbox_permissions: SandboxPermissions,
     justification: Option<String>,
 ) -> Result<CommandSpec, ToolError> {
     let (program, args) = command
@@ -34,7 +35,7 @@ pub(crate) fn build_command_spec(
         cwd: cwd.to_path_buf(),
         env: env.clone(),
         expiration,
-        with_escalated_permissions,
+        sandbox_permissions,
         justification,
     })
 }

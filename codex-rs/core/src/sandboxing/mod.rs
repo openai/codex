@@ -23,31 +23,10 @@ use crate::seatbelt::create_seatbelt_command_args;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::SandboxablePreference;
+pub use codex_protocol::models::SandboxPermissions;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SandboxPermissions {
-    UseDefault,
-    RequireEscalated,
-}
-
-impl SandboxPermissions {
-    pub fn requires_escalated_permissions(self) -> bool {
-        matches!(self, SandboxPermissions::RequireEscalated)
-    }
-}
-
-impl From<bool> for SandboxPermissions {
-    fn from(with_escalated_permissions: bool) -> Self {
-        if with_escalated_permissions {
-            SandboxPermissions::RequireEscalated
-        } else {
-            SandboxPermissions::UseDefault
-        }
-    }
-}
 
 #[derive(Debug)]
 pub struct CommandSpec {
@@ -56,7 +35,7 @@ pub struct CommandSpec {
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub expiration: ExecExpiration,
-    pub with_escalated_permissions: Option<bool>,
+    pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
 }
 
@@ -67,7 +46,7 @@ pub struct ExecEnv {
     pub env: HashMap<String, String>,
     pub expiration: ExecExpiration,
     pub sandbox: SandboxType,
-    pub with_escalated_permissions: Option<bool>,
+    pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub arg0: Option<String>,
 }
@@ -181,7 +160,7 @@ impl SandboxManager {
             env,
             expiration: spec.expiration,
             sandbox,
-            with_escalated_permissions: spec.with_escalated_permissions,
+            sandbox_permissions: spec.sandbox_permissions,
             justification: spec.justification,
             arg0: arg0_override,
         })
