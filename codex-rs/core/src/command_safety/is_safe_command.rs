@@ -74,8 +74,7 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
             "uniq" |
             "wc" |
             "which" |
-            "whoami" |
-            "yes") => {
+            "whoami") => {
             true
         },
 
@@ -101,6 +100,8 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
                 "-delete",
                 // Options that write pathnames to a file.
                 "-fls", "-fprint", "-fprint0", "-fprintf",
+                // Options that write archives to a file.
+                "-cpio", "-ncpio",
             ];
 
             !command
@@ -115,6 +116,8 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
                 "--pre",
                 // Takes a command that can be used to obtain the local hostname.
                 "--hostname-bin",
+                // Pipes output through an arbitrary pager command.
+                "--pager",
             ];
             const UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS: &[&str] = &[
                 // Calls out to other decompression tools, so do not auto-approve
