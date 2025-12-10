@@ -257,7 +257,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     #[cfg(target_os = "linux")]
     use std::process::Command as StdCommand;
-    
+
     use tempfile::tempdir;
 
     #[cfg(not(target_os = "windows"))]
