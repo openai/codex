@@ -7,7 +7,7 @@ use crate::operations::resolve_head;
 use crate::operations::resolve_repository_root;
 use crate::operations::run_git_for_stdout;
 
-/// Returns the merge-base commit between `HEAD` and the latest version between local 
+/// Returns the merge-base commit between `HEAD` and the latest version between local
 /// and remote of the provided branch, if both exist.
 ///
 /// The function mirrors `git merge-base HEAD <branch>` but returns `Ok(None)` when
