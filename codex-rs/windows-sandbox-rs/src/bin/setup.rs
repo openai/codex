@@ -8,7 +8,7 @@ use codex_windows_sandbox::ensure_allow_write_aces;
 use codex_windows_sandbox::fetch_dacl_handle;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
-use codex_windows_sandbox::path_quick_mask_allows;
+use codex_windows_sandbox::path_mask_allows;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::LOG_FILE_NAME;
@@ -328,73 +328,6 @@ fn effective_rights_for_trustees(
         }
     }
     res
-}
-
-/// Fast mask-based check: does any ACE for the provided SIDs grant the desired mask?
-/// Skips inherit-only ACEs; expands generic bits.
-fn quick_mask_allows(path: &Path, psids: &[*mut c_void], desired_mask: u32) -> Result<bool> {
-    unsafe {
-        let (p_dacl, sd) = fetch_dacl_handle(path)?;
-        const INHERIT_ONLY_ACE: u8 = 0x08;
-        let mut info: ACL_SIZE_INFORMATION = std::mem::zeroed();
-        let ok = GetAclInformation(
-            p_dacl as *const ACL,
-            &mut info as *mut _ as *mut c_void,
-            std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
-            AclSizeInformation,
-        );
-        if ok == 0 {
-            if !sd.is_null() {
-                LocalFree(sd as HLOCAL);
-            }
-            return Ok(false);
-        }
-        let mapping = GENERIC_MAPPING {
-            GenericRead: FILE_GENERIC_READ,
-            GenericWrite: FILE_GENERIC_WRITE,
-            GenericExecute: FILE_GENERIC_EXECUTE,
-            GenericAll: FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
-        };
-        for i in 0..(info.AceCount as usize) {
-            let mut p_ace: *mut c_void = std::ptr::null_mut();
-            if GetAce(p_dacl as *const ACL, i as u32, &mut p_ace) == 0 {
-                continue;
-            }
-            let hdr = &*(p_ace as *const ACE_HEADER);
-            if hdr.AceType != 0 {
-                continue; // not ACCESS_ALLOWED
-            }
-            if (hdr.AceFlags & INHERIT_ONLY_ACE) != 0 {
-                continue;
-            }
-            let base = p_ace as usize;
-            let sid_ptr = (base + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>())
-                as *mut c_void;
-            let mut matched = false;
-            for psid in psids {
-                if EqualSid(sid_ptr, *psid) != 0 {
-                    matched = true;
-                    break;
-                }
-            }
-            if !matched {
-                continue;
-            }
-            let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
-            let mut mask = ace.Mask;
-            MapGenericMask(&mut mask, &mapping);
-            if (mask & desired_mask) == desired_mask {
-                if !sd.is_null() {
-                    LocalFree(sd as HLOCAL);
-                }
-                return Ok(true);
-            }
-        }
-        if !sd.is_null() {
-            LocalFree(sd as HLOCAL);
-        }
-    }
-    Ok(false)
 }
 
 /// Check if the given SIDs already have the needed write mask on the path with a single DACL fetch.
@@ -861,7 +794,12 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
             )?;
             continue;
         }
-        match quick_mask_allows(root, &rx_psids, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE) {
+        match path_mask_allows(
+            root,
+            &rx_psids,
+            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+            true,
+        ) {
             Ok(has) => {
                 if has {
                     log_line(
@@ -953,7 +891,7 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
             ("online", online_psid),
             ("cap", cap_psid),
         ] {
-            let has = match path_quick_mask_allows(root, &[psid], write_mask) {
+            let has = match path_mask_allows(root, &[psid], write_mask, true) {
                 Ok(h) => h,
                 Err(e) => {
                     refresh_errors.push(format!(
