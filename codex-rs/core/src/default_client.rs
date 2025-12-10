@@ -1,3 +1,4 @@
+use crate::default_client_config::TlsConfig;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
@@ -134,7 +135,39 @@ pub fn create_client() -> CodexHttpClient {
     CodexHttpClient::new(inner)
 }
 
+/// Create an HTTP client with optional TLS configuration.
+/// Optionally configure TLS/mTLS settings via the `tls_config` parameter.
+pub fn create_configured_client(tls_config: Option<&TlsConfig>) -> CodexHttpClient {
+    let inner = build_configured_reqwest_client(tls_config);
+    CodexHttpClient::new(inner)
+}
+
 pub fn build_reqwest_client() -> reqwest::Client {
+    build_configured_reqwest_client(None)
+}
+
+pub fn build_configured_reqwest_client(tls_config: Option<&TlsConfig>) -> reqwest::Client {
+    let builder = create_base_client_builder();
+
+    // Apply TLS configuration if provided
+    let builder = if let Some(tls) = tls_config {
+        match apply_tls_config(builder, tls) {
+            Ok(configured_builder) => configured_builder,
+            Err(e) => {
+                tracing::error!("Failed to apply TLS configuration: {}", e);
+                // Fall back to base builder without TLS
+                create_base_client_builder()
+            }
+        }
+    } else {
+        builder
+    };
+
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// Create the base HTTP client builder with standard configuration.
+fn create_base_client_builder() -> reqwest::ClientBuilder {
     use reqwest::header::HeaderMap;
 
     let mut headers = HeaderMap::new();
@@ -142,14 +175,94 @@ pub fn build_reqwest_client() -> reqwest::Client {
     let ua = get_codex_user_agent();
 
     let mut builder = reqwest::Client::builder()
-        // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
         .default_headers(headers);
+
     if is_sandboxed() {
         builder = builder.no_proxy();
     }
 
-    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+    builder
+}
+
+/// Apply TLS configuration to a reqwest ClientBuilder.
+fn apply_tls_config(
+    mut builder: reqwest::ClientBuilder,
+    tls: &TlsConfig,
+) -> Result<reqwest::ClientBuilder, String> {
+    use reqwest::Certificate;
+    use reqwest::Identity;
+
+    // Add custom CA certificate if provided
+    if let Some(ca_path) = &tls.ca_certificate {
+        let cert_pem = std::fs::read(ca_path).map_err(|e| {
+            format!(
+                "Failed to read CA certificate from {}: {}",
+                ca_path.display(),
+                e
+            )
+        })?;
+
+        let certificate = Certificate::from_pem(&cert_pem).map_err(|e| {
+            format!(
+                "Failed to parse CA certificate from {}: {}",
+                ca_path.display(),
+                e
+            )
+        })?;
+
+        // Disable built-in root certificates and use only our custom CA
+        builder = builder
+            .tls_built_in_root_certs(false)
+            .add_root_certificate(certificate);
+    }
+
+    // Configure client certificate and private key for mTLS
+    match (&tls.client_certificate, &tls.client_private_key) {
+        (Some(cert_path), Some(key_path)) => {
+            // Read cert and key files
+            let cert_pem = std::fs::read(cert_path).map_err(|e| {
+                format!(
+                    "Failed to read client certificate from {}: {}",
+                    cert_path.display(),
+                    e
+                )
+            })?;
+            let key_pem = std::fs::read(key_path).map_err(|e| {
+                format!(
+                    "Failed to read client private key from {}: {}",
+                    key_path.display(),
+                    e
+                )
+            })?;
+
+            // For rustls, Identity::from_pem() accepts combined cert+key PEM data
+            let mut combined_pem = cert_pem;
+            combined_pem.extend_from_slice(&key_pem);
+
+            let identity = Identity::from_pem(&combined_pem).map_err(|e| {
+                format!(
+                    "Failed to create client identity from {} and {}: {}",
+                    cert_path.display(),
+                    key_path.display(),
+                    e
+                )
+            })?;
+
+            builder = builder.identity(identity).https_only(true);
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(
+                "client_certificate and client_private_key must both be provided for mTLS"
+                    .to_string(),
+            );
+        }
+        (None, None) => {
+            // No client certificate configured
+        }
+    }
+
+    Ok(builder)
 }
 
 fn is_sandboxed() -> bool {
