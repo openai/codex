@@ -51,8 +51,7 @@ pub use winutil::string_from_sid_bytes;
 
 #[cfg(not(target_os = "windows"))]
 pub use {
-    stub::apply_world_writable_scan_and_denies,
-    stub::run_windows_sandbox_capture,
+    stub::apply_world_writable_scan_and_denies, stub::run_windows_sandbox_capture,
     stub::CaptureResult,
 };
 
