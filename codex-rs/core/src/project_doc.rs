@@ -239,6 +239,7 @@ mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
+    use crate::skills::load_skills;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -505,9 +506,13 @@ mod tests {
             "extract from pdfs",
         );
 
-        let res = get_user_instructions(&cfg, None)
-            .await
-            .expect("instructions expected");
+        let skills = load_skills(&cfg);
+        let res = get_user_instructions(
+            &cfg,
+            skills.errors.is_empty().then_some(skills.skills.as_slice()),
+        )
+        .await
+        .expect("instructions expected");
         let expected_path = dunce::canonicalize(
             cfg.codex_home
                 .join("skills/pdf-processing/SKILL.md")
@@ -528,9 +533,13 @@ mod tests {
         let cfg = make_config(&tmp, 4096, None);
         create_skill(cfg.codex_home.clone(), "linting", "run clippy");
 
-        let res = get_user_instructions(&cfg, None)
-            .await
-            .expect("instructions expected");
+        let skills = load_skills(&cfg);
+        let res = get_user_instructions(
+            &cfg,
+            skills.errors.is_empty().then_some(skills.skills.as_slice()),
+        )
+        .await
+        .expect("instructions expected");
         let expected_path =
             dunce::canonicalize(cfg.codex_home.join("skills/linting/SKILL.md").as_path())
                 .unwrap_or_else(|_| cfg.codex_home.join("skills/linting/SKILL.md"));

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -100,6 +101,9 @@ use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxCommandAssessment;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
+use crate::protocol::SkillErrorInfo;
+use crate::protocol::SkillInfo;
+use crate::protocol::SkillLoadOutcomeInfo;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
@@ -111,9 +115,10 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
 use crate::shell;
+use crate::shell_snapshot::ShellSnapshot;
+use crate::skills::SkillLoadOutcome;
 use crate::skills::SkillMetadata;
 use crate::skills::load_skills;
-use crate::shell_snapshot::ShellSnapshot;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -195,9 +200,18 @@ impl Codex {
             }
         }
 
-        let user_instructions =
-            get_user_instructions(&config, loaded_skills.as_ref().map(|o| o.skills.as_slice()))
-                .await;
+        let skills_outcome = loaded_skills.clone();
+
+        let user_instructions = get_user_instructions(
+            &config,
+            skills_outcome.as_ref().and_then(|outcome| {
+                outcome
+                    .errors
+                    .is_empty()
+                    .then_some(outcome.skills.as_slice())
+            }),
+        )
+        .await;
 
         let exec_policy = load_exec_policy_for_features(&config.features, &config.codex_home)
             .await
@@ -225,7 +239,6 @@ impl Codex {
 
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
-        let skills_cache = loaded_skills.as_ref().map(|o| o.skills.clone());
 
         let session = Session::new(
             session_configuration,
@@ -235,7 +248,7 @@ impl Codex {
             tx_event.clone(),
             conversation_history,
             session_source_clone,
-            skills_cache,
+            skills_outcome.clone(),
         )
         .await
         .map_err(|e| {
@@ -501,7 +514,7 @@ impl Session {
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
         session_source: SessionSource,
-        loaded_skills: Option<Vec<SkillMetadata>>,
+        skills: Option<SkillLoadOutcome>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -608,7 +621,7 @@ impl Session {
                     .await
                     .map(Arc::new);
         }
-        let state = SessionState::new(session_configuration.clone(), loaded_skills);
+        let state = SessionState::new(session_configuration.clone(), skills.clone());
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -637,6 +650,7 @@ impl Session {
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
+        let skill_load_outcome = skill_load_outcome_for_client(skills.as_ref());
 
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
@@ -651,6 +665,7 @@ impl Session {
                 history_log_id,
                 history_entry_count,
                 initial_messages,
+                skill_load_outcome,
                 rollout_path,
             }),
         })
@@ -1341,7 +1356,11 @@ impl Session {
 
         let skills = {
             let state = self.state.lock().await;
-            state.skills.clone().unwrap_or_default()
+            state
+                .skills
+                .as_ref()
+                .map(|outcome| outcome.skills.clone())
+                .unwrap_or_default()
         };
 
         let mentioned_skills = collect_explicit_skill_mentions(user_input, &skills);
@@ -2093,30 +2112,60 @@ fn collect_explicit_skill_mentions(
     inputs: &[UserInput],
     skills: &[SkillMetadata],
 ) -> Vec<SkillMetadata> {
-    let mut full_text: Vec<String> = Vec::new();
-    for input in inputs {
-        if let UserInput::Text { text } = input {
-            full_text.push(text.clone());
-        }
-    }
-    let combined = full_text.join(" ");
+    let mut selected: Vec<SkillMetadata> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let mut matches: Vec<SkillMetadata> = Vec::new();
 
-    for skill in skills {
-        let name = skill.name.clone();
-        if seen.contains(&name) {
-            continue;
-        }
-        let needle = format!("${name}");
-        let hit = combined.contains(&needle);
-        if hit {
-            seen.insert(name);
-            matches.push(skill.clone());
+    for input in inputs {
+        if let UserInput::Skill { name, path } = input
+            && seen.insert(name.clone())
+            && let Some(skill) = skills
+                .iter()
+                .find(|s| s.name == *name && paths_match(&s.path, path))
+        {
+            selected.push(skill.clone());
         }
     }
 
-    matches
+    selected
+}
+
+fn paths_match(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+
+    let Ok(ca) = std::fs::canonicalize(a) else {
+        return false;
+    };
+    let Ok(cb) = std::fs::canonicalize(b) else {
+        return false;
+    };
+
+    ca == cb
+}
+
+fn skill_load_outcome_for_client(
+    outcome: Option<&SkillLoadOutcome>,
+) -> Option<SkillLoadOutcomeInfo> {
+    outcome.map(|outcome| SkillLoadOutcomeInfo {
+        skills: outcome
+            .skills
+            .iter()
+            .map(|skill| SkillInfo {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                path: skill.path.clone(),
+            })
+            .collect(),
+        errors: outcome
+            .errors
+            .iter()
+            .map(|err| SkillErrorInfo {
+                path: err.path.clone(),
+                message: err.message.clone(),
+            })
+            .collect(),
+    })
 }
 
 /// Takes a user message as input and runs a loop where, at each turn, the model

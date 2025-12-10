@@ -801,6 +801,10 @@ impl ChatComposer {
         self.skills.as_ref().is_some_and(|s| !s.is_empty())
     }
 
+    pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
+        self.skills.as_ref()
+    }
+
     /// Extract a token prefixed with `prefix` under the cursor, if any.
     ///
     /// The returned string **does not** include the prefix.

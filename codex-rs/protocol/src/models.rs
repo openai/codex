@@ -311,6 +311,9 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             }
                         }
                     },
+                    UserInput::Skill { .. } => ContentItem::InputText {
+                        text: String::new(),
+                    },
                 })
                 .collect::<Vec<ContentItem>>(),
         }

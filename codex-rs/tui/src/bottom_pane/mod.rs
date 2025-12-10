@@ -131,8 +131,17 @@ impl BottomPane {
         }
     }
 
+    pub fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
+        self.composer.set_skill_mentions(skills);
+        self.request_redraw();
+    }
+
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
         self.status.as_ref()
+    }
+
+    pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
+        self.composer.skills()
     }
 
     #[cfg(test)]

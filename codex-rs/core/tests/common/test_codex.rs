@@ -27,6 +27,7 @@ use crate::responses::start_mock_server;
 use crate::wait_for_event;
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
+type PreBuildHook = dyn FnOnce(&Path) + Send + 'static;
 
 /// A collection of different ways the model can output an apply_patch call
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -50,6 +51,7 @@ pub enum ShellModelOutput {
 pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
     auth: CodexAuth,
+    pre_build_hooks: Vec<Box<PreBuildHook>>,
 }
 
 impl TestCodexBuilder {
@@ -71,6 +73,14 @@ impl TestCodexBuilder {
         self.with_config(move |config| {
             config.model = new_model.clone();
         })
+    }
+
+    pub fn with_pre_build_hook<F>(mut self, hook: F) -> Self
+    where
+        F: FnOnce(&Path) + Send + 'static,
+    {
+        self.pre_build_hooks.push(Box::new(hook));
+        self
     }
 
     pub async fn build(&mut self, server: &wiremock::MockServer) -> anyhow::Result<TestCodex> {
@@ -135,6 +145,9 @@ impl TestCodexBuilder {
         let mut config = load_default_config_for_test(home);
         config.cwd = cwd.path().to_path_buf();
         config.model_provider = model_provider;
+        for hook in self.pre_build_hooks.drain(..) {
+            hook(home.path());
+        }
         if let Ok(cmd) = assert_cmd::Command::cargo_bin("codex") {
             config.codex_linux_sandbox_exe = Some(PathBuf::from(cmd.get_program().to_os_string()));
         }
@@ -167,6 +180,10 @@ pub struct TestCodex {
 impl TestCodex {
     pub fn cwd_path(&self) -> &Path {
         self.cwd.path()
+    }
+
+    pub fn codex_home_path(&self) -> &Path {
+        self.config.codex_home.as_path()
     }
 
     pub fn workspace_path(&self, rel: impl AsRef<Path>) -> PathBuf {
@@ -203,6 +220,33 @@ impl TestCodex {
                 items: vec![UserInput::Text {
                     text: prompt.into(),
                 }],
+                final_output_json_schema: None,
+                cwd: self.cwd.path().to_path_buf(),
+                approval_policy,
+                sandbox_policy,
+                model: session_model,
+                effort: None,
+                summary: ReasoningSummary::Auto,
+            })
+            .await?;
+
+        wait_for_event(&self.codex, |event| {
+            matches!(event, EventMsg::TaskComplete(_))
+        })
+        .await;
+        Ok(())
+    }
+
+    pub async fn submit_items(
+        &self,
+        items: Vec<UserInput>,
+        approval_policy: AskForApproval,
+        sandbox_policy: SandboxPolicy,
+    ) -> Result<()> {
+        let session_model = self.session_configured.model.clone();
+        self.codex
+            .submit(Op::UserTurn {
+                items,
                 final_output_json_schema: None,
                 cwd: self.cwd.path().to_path_buf(),
                 approval_policy,
@@ -355,5 +399,6 @@ pub fn test_codex() -> TestCodexBuilder {
     TestCodexBuilder {
         config_mutators: vec![],
         auth: CodexAuth::from_api_key("dummy"),
+        pre_build_hooks: vec![],
     }
 }
