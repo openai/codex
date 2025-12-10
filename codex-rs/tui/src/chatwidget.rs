@@ -399,6 +399,7 @@ impl ChatWidget {
         self.session_header.set_model(&model_for_header);
         self.add_to_history(history_cell::new_session_info(
             &self.config,
+            &model_for_header,
             event,
             self.show_welcome_banner,
         ));
@@ -625,7 +626,7 @@ impl ChatWidget {
 
             if high_usage
                 && !self.rate_limit_switch_prompt_hidden()
-                && self.config.model != NUDGE_MODEL_SLUG
+                && self.model_family.get_model_slug() != NUDGE_MODEL_SLUG
                 && !matches!(
                     self.rate_limit_switch_prompt,
                     RateLimitSwitchPromptState::Shown
@@ -1265,6 +1266,9 @@ impl ChatWidget {
             is_first_run,
             model_family,
         } = common;
+        let model_slug = model_family.get_model_slug().to_string();
+        let mut config = config;
+        config.model = Some(model_slug.clone());
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
@@ -1284,11 +1288,11 @@ impl ChatWidget {
                 skills,
             }),
             active_cell: None,
-            config: config.clone(),
+            config,
             model_family,
             auth_manager,
             models_manager,
-            session_header: SessionHeader::new(config.model),
+            session_header: SessionHeader::new(model_slug),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -1348,6 +1352,7 @@ impl ChatWidget {
             model_family,
             ..
         } = common;
+        let model_slug = model_family.get_model_slug().to_string();
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
 
@@ -1369,11 +1374,11 @@ impl ChatWidget {
                 skills,
             }),
             active_cell: None,
-            config: config.clone(),
+            config,
             model_family,
             auth_manager,
             models_manager,
-            session_header: SessionHeader::new(config.model),
+            session_header: SessionHeader::new(model_slug),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -2035,6 +2040,7 @@ impl ChatWidget {
             self.rate_limit_snapshot.as_ref(),
             self.plan_type,
             Local::now(),
+            self.model_family.get_model_slug(),
         ));
     }
     fn stop_rate_limit_poller(&mut self) {
@@ -2177,7 +2183,7 @@ impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
-        let current_model = self.config.model.clone();
+        let current_model = self.model_family.get_model_slug().to_string();
         let presets: Vec<ModelPreset> =
             // todo(aibrahim): make this async function
             match self.models_manager.try_list_models() {
@@ -2284,7 +2290,7 @@ impl ChatWidget {
             return;
         }
 
-        let current_model = self.config.model.clone();
+        let current_model = self.model_family.get_model_slug().to_string();
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {
             let description =
@@ -2413,7 +2419,7 @@ impl ChatWidget {
             .or(Some(default_effort));
 
         let model_slug = preset.model.to_string();
-        let is_current_model = self.config.model == preset.model;
+        let is_current_model = self.model_family.get_model_slug() == preset.model;
         let highlight_choice = if is_current_model {
             self.config.model_reasoning_effort
         } else {
@@ -2970,7 +2976,6 @@ impl ChatWidget {
     /// Set the model in the widget's config copy.
     pub(crate) fn set_model(&mut self, model: &str, model_family: ModelFamily) {
         self.session_header.set_model(model);
-        self.config.model = model.to_string();
         self.model_family = model_family;
     }
 

@@ -17,7 +17,7 @@ fn normalize_agents_display_path(path: &Path) -> String {
 }
 
 pub(crate) fn compose_model_display(
-    config: &Config,
+    model_name: &str,
     entries: &[(&str, String)],
 ) -> (String, Vec<String>) {
     let mut details: Vec<String> = Vec::new();
@@ -33,7 +33,7 @@ pub(crate) fn compose_model_display(
         }
     }
 
-    (config.model.clone(), details)
+    (model_name.to_string(), details)
 }
 
 pub(crate) fn compose_agents_summary(config: &Config) -> String {

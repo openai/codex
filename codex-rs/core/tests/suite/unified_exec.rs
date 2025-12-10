@@ -18,6 +18,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::get_responses_request_bodies;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -1240,10 +1241,7 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
+    let bodies = get_responses_request_bodies(&server).await;
 
     let outputs = collect_tool_outputs(&bodies)?;
     let metadata = outputs
@@ -1347,10 +1345,7 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
+    let bodies = get_responses_request_bodies(&server).await;
 
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs
@@ -1475,10 +1470,7 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
+    let bodies = get_responses_request_bodies(&server).await;
 
     let outputs = collect_tool_outputs(&bodies)?;
 
@@ -1727,10 +1719,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
+    let bodies = get_responses_request_bodies(&server).await;
 
     let outputs = collect_tool_outputs(&bodies)?;
 
@@ -1864,10 +1853,7 @@ PY
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
+    let bodies = get_responses_request_bodies(&server).await;
 
     let outputs = collect_tool_outputs(&bodies)?;
 
@@ -1976,10 +1962,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
+    let bodies = get_responses_request_bodies(&server).await;
 
     let outputs = collect_tool_outputs(&bodies)?;
 
@@ -2065,10 +2048,7 @@ PY
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
+    let bodies = get_responses_request_bodies(&server).await;
 
     let outputs = collect_tool_outputs(&bodies)?;
     let large_output = outputs.get(call_id).expect("missing large output summary");
@@ -2145,10 +2125,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
+    let bodies = get_responses_request_bodies(&server).await;
 
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs.get(call_id).expect("missing output");
@@ -2246,10 +2223,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
+    let bodies = get_responses_request_bodies(&server).await;
 
     let outputs = collect_tool_outputs(&bodies)?;
     let startup_output = outputs
@@ -2339,10 +2313,7 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
 
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
+    let bodies = get_responses_request_bodies(&server).await;
 
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs.get(call_id).expect("missing output");

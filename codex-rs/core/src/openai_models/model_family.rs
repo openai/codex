@@ -116,6 +116,10 @@ impl ModelFamily {
     const fn default_auto_compact_limit(context_window: i64) -> i64 {
         (context_window * 9) / 10
     }
+
+    pub fn get_model_slug(&self) -> &str {
+        &self.slug
+    }
 }
 
 macro_rules! model_family {

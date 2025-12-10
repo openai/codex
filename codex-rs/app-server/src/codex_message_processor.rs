@@ -1885,7 +1885,7 @@ impl CodexMessageProcessor {
 
     async fn list_models(&self, request_id: RequestId, params: ModelListParams) {
         let ModelListParams { limit, cursor } = params;
-        let models = supported_models(self.conversation_manager.clone()).await;
+        let models = supported_models(self.conversation_manager.clone(), &self.config).await;
         let total = models.len();
 
         if total == 0 {
@@ -2796,7 +2796,7 @@ impl CodexMessageProcessor {
         })?;
 
         let mut config = self.config.as_ref().clone();
-        config.model = self.config.review_model.clone();
+        config.model = Some(self.config.review_model.clone());
 
         let NewConversation {
             conversation_id,

@@ -487,9 +487,13 @@ async fn stdio_image_completions_round_trip() -> anyhow::Result<()> {
 
     // Chat Completions assertion: the second POST should include a tool role message
     // with an array `content` containing an item with the expected data URL.
-    let requests = server.received_requests().await.expect("requests captured");
+    let all_requests = server.received_requests().await.expect("requests captured");
+    let requests: Vec<_> = all_requests
+        .iter()
+        .filter(|req| req.method == "POST" && req.url.path().ends_with("/chat/completions"))
+        .collect();
     assert!(requests.len() >= 2, "expected two chat completion calls");
-    let second = &requests[1];
+    let second = requests[1];
     let body: Value = serde_json::from_slice(&second.body)?;
     let messages = body
         .get("messages")

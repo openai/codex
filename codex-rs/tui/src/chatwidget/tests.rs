@@ -75,6 +75,7 @@ fn set_windows_sandbox_enabled(enabled: bool) {
 
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
+
     Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
@@ -346,10 +347,12 @@ async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config();
-    let model_family = ModelsManager::construct_model_family_offline(&cfg.model, &cfg);
-    let conversation_manager = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
-        "test",
-    )));
+    let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
+    let model_family = ModelsManager::construct_model_family_offline(&resolved_model, &cfg);
+    let conversation_manager = Arc::new(ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("test"),
+        cfg.model_provider.clone(),
+    ));
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
@@ -382,8 +385,11 @@ fn make_chatwidget_manual(
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
     let mut cfg = test_config();
+    let resolved_model = model_override
+        .map(str::to_owned)
+        .unwrap_or_else(|| ModelsManager::get_model_offline(cfg.model.as_deref()));
     if let Some(model) = model_override {
-        cfg.model = model.to_string();
+        cfg.model = Some(model.to_string());
     }
     let bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
@@ -402,10 +408,10 @@ fn make_chatwidget_manual(
         bottom_pane: bottom,
         active_cell: None,
         config: cfg.clone(),
-        model_family: ModelsManager::construct_model_family_offline(&cfg.model, &cfg),
+        model_family: ModelsManager::construct_model_family_offline(&resolved_model, &cfg),
         auth_manager: auth_manager.clone(),
         models_manager: Arc::new(ModelsManager::new(auth_manager)),
-        session_header: SessionHeader::new(cfg.model),
+        session_header: SessionHeader::new(resolved_model.clone()),
         initial_user_message: None,
         token_info: None,
         rate_limit_snapshot: None,
@@ -650,10 +656,9 @@ fn rate_limit_snapshot_updates_and_retains_plan_type() {
 
 #[test]
 fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
-    let (mut chat, _, _) = make_chatwidget_manual(None);
+    let (mut chat, _, _) = make_chatwidget_manual(Some(NUDGE_MODEL_SLUG));
     chat.auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    chat.config.model = NUDGE_MODEL_SLUG.to_string();
 
     chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
 
@@ -666,8 +671,7 @@ fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
 #[test]
 fn rate_limit_switch_prompt_shows_once_per_session() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let (mut chat, _, _) = make_chatwidget_manual(None);
-    chat.config.model = "gpt-5".to_string();
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5"));
     chat.auth_manager = AuthManager::from_auth_for_testing(auth);
 
     chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
@@ -691,8 +695,7 @@ fn rate_limit_switch_prompt_shows_once_per_session() {
 #[test]
 fn rate_limit_switch_prompt_respects_hidden_notice() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let (mut chat, _, _) = make_chatwidget_manual(None);
-    chat.config.model = "gpt-5".to_string();
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5"));
     chat.auth_manager = AuthManager::from_auth_for_testing(auth);
     chat.config.notices.hide_rate_limit_model_nudge = Some(true);
 
@@ -707,8 +710,7 @@ fn rate_limit_switch_prompt_respects_hidden_notice() {
 #[test]
 fn rate_limit_switch_prompt_defers_until_task_complete() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let (mut chat, _, _) = make_chatwidget_manual(None);
-    chat.config.model = "gpt-5".to_string();
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5"));
     chat.auth_manager = AuthManager::from_auth_for_testing(auth);
 
     chat.bottom_pane.set_task_running(true);
@@ -728,10 +730,9 @@ fn rate_limit_switch_prompt_defers_until_task_complete() {
 
 #[test]
 fn rate_limit_switch_prompt_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None);
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5"));
     chat.auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    chat.config.model = "gpt-5".to_string();
 
     chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
     chat.maybe_show_pending_rate_limit_prompt();
@@ -1774,9 +1775,7 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
 
 #[test]
 fn model_selection_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None);
-
-    chat.config.model = "gpt-5-codex".to_string();
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex"));
     chat.open_model_popup();
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1879,10 +1878,9 @@ fn startup_prompts_for_windows_sandbox_when_agent_requested() {
 
 #[test]
 fn model_reasoning_selection_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None);
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max"));
 
     set_chatgpt_auth(&mut chat);
-    chat.config.model = "gpt-5.1-codex-max".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
@@ -1894,10 +1892,9 @@ fn model_reasoning_selection_popup_snapshot() {
 
 #[test]
 fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None);
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max"));
 
     set_chatgpt_auth(&mut chat);
-    chat.config.model = "gpt-5.1-codex-max".to_string();
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::XHigh);
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
@@ -1909,10 +1906,9 @@ fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
 
 #[test]
 fn reasoning_popup_shows_extra_high_with_space() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None);
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max"));
 
     set_chatgpt_auth(&mut chat);
-    chat.config.model = "gpt-5.1-codex-max".to_string();
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
     chat.open_reasoning_popup(preset);
@@ -1992,9 +1988,7 @@ fn feedback_upload_consent_popup_snapshot() {
 
 #[test]
 fn reasoning_popup_escape_returns_to_model_popup() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None);
-
-    chat.config.model = "gpt-5.1".to_string();
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1"));
     chat.open_model_popup();
 
     let preset = get_available_model(&chat, "gpt-5.1-codex");

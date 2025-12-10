@@ -263,7 +263,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let default_cwd = config.cwd.to_path_buf();
     let default_approval_policy = config.approval_policy;
     let default_sandbox_policy = config.sandbox_policy.clone();
-    let default_model = config.model.clone();
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
 
@@ -278,6 +277,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         config.cli_auth_credentials_store_mode,
     );
     let conversation_manager = ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
+    let default_model = conversation_manager
+        .get_models_manager()
+        .get_model(&config.model, &config)
+        .await;
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
     let NewConversation {
