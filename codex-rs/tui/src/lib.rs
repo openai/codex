@@ -41,7 +41,7 @@ mod ascii_animation;
 mod bottom_pane;
 mod chatwidget;
 mod cli;
-mod clipboard_paste;
+pub(crate) mod clipboard_paste;
 mod color;
 pub mod custom_terminal;
 mod diff_render;
