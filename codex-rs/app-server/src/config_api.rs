@@ -15,6 +15,8 @@ use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::OverriddenMetadata;
 use codex_app_server_protocol::WriteStatus;
 use codex_core::config::ConfigToml;
+use codex_core::config::edit::ConfigEdit;
+use codex_core::config::edit::apply_blocking;
 use codex_core::config_loader::LoadedConfigLayers;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::load_config_layers_with_overrides;
@@ -26,9 +28,9 @@ use sha2::Sha256;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use tempfile::NamedTempFile;
 use tokio::task;
 use toml::Value as TomlValue;
+use toml_edit::Item as TomlItem;
 
 const SESSION_FLAGS_SOURCE: &str = "--config";
 const MDM_SOURCE: &str = "com.openai.codex/config_toml_base64";
@@ -143,11 +145,13 @@ impl ConfigApi {
         let mut user_config = layers.user.config.clone();
         let mut mutated = false;
         let mut parsed_segments = Vec::new();
+        let mut config_edits = Vec::new();
 
         for (key_path, value, strategy) in edits.into_iter() {
             let segments = parse_key_path(&key_path).map_err(|message| {
                 config_write_error(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
+            let original_value = value_at_path(&user_config, &segments).cloned();
             let parsed_value = parse_value(value).map_err(|message| {
                 config_write_error(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
@@ -163,6 +167,18 @@ impl ConfigApi {
                     }
                 })?;
 
+            if changed {
+                let updated_value = value_at_path(&user_config, &segments).cloned();
+                let mut path = segments.clone();
+                collect_config_edits(
+                    &mut path,
+                    original_value.as_ref(),
+                    updated_value.as_ref(),
+                    &mut config_edits,
+                )
+                .map_err(|err| internal_error("failed to build config edits", err))?;
+            }
+
             mutated |= changed;
             parsed_segments.push(segments);
         }
@@ -174,7 +190,7 @@ impl ConfigApi {
             )
         })?;
 
-        let updated_layers = layers.with_user_config(user_config.clone());
+        let updated_layers = layers.clone().with_user_config(user_config.clone());
         let effective = updated_layers.effective_config();
         validate_config(&effective).map_err(|err| {
             config_write_error(
@@ -184,7 +200,7 @@ impl ConfigApi {
         })?;
 
         if mutated {
-            self.persist_user_config(&user_config)
+            self.persist_user_config(config_edits)
                 .await
                 .map_err(|err| internal_error("failed to persist config.toml", err))?;
         }
@@ -254,18 +270,15 @@ impl ConfigApi {
         })
     }
 
-    async fn persist_user_config(&self, user_config: &TomlValue) -> anyhow::Result<()> {
+    async fn persist_user_config(&self, edits: Vec<ConfigEdit>) -> anyhow::Result<()> {
+        if edits.is_empty() {
+            return Ok(());
+        }
+
         let codex_home = self.codex_home.clone();
-        let serialized = toml::to_string_pretty(user_config)?;
 
         task::spawn_blocking(move || -> anyhow::Result<()> {
-            std::fs::create_dir_all(&codex_home)?;
-
-            let target = codex_home.join(CONFIG_FILE_NAME);
-            let tmp = NamedTempFile::new_in(&codex_home)?;
-            std::fs::write(tmp.path(), serialized.as_bytes())?;
-            tmp.persist(&target)?;
-            Ok(())
+            apply_blocking(&codex_home, None, &edits)
         })
         .await
         .map_err(|err| anyhow!("config persistence task panicked: {err}"))??;
@@ -420,6 +433,95 @@ fn clear_path(root: &mut TomlValue, segments: &[String]) -> Result<bool, MergeEr
     };
 
     Ok(parent.remove(last).is_some())
+}
+
+fn collect_config_edits(
+    path: &mut Vec<String>,
+    original: Option<&TomlValue>,
+    updated: Option<&TomlValue>,
+    edits: &mut Vec<ConfigEdit>,
+) -> anyhow::Result<()> {
+    match (original, updated) {
+        (Some(old_value), Some(new_value)) if old_value == new_value => {}
+        (Some(TomlValue::Table(old_table)), Some(TomlValue::Table(new_table))) => {
+            for (key, old_value) in old_table.iter() {
+                if new_table.contains_key(key) {
+                    let mut nested = path.clone();
+                    nested.push(key.clone());
+                    collect_config_edits(&mut nested, Some(old_value), new_table.get(key), edits)?;
+                } else {
+                    let mut nested = path.clone();
+                    nested.push(key.clone());
+                    edits.push(ConfigEdit::ClearPath { segments: nested });
+                }
+            }
+
+            for (key, new_value) in new_table.iter() {
+                if old_table.contains_key(key) {
+                    continue;
+                }
+
+                let mut nested = path.clone();
+                nested.push(key.clone());
+                edits.push(ConfigEdit::SetPath {
+                    segments: nested,
+                    value: toml_value_to_item(new_value)?,
+                });
+            }
+        }
+        (_, Some(new_value)) => {
+            edits.push(ConfigEdit::SetPath {
+                segments: path.clone(),
+                value: toml_value_to_item(new_value)?,
+            });
+        }
+        (Some(_), None) => {
+            edits.push(ConfigEdit::ClearPath {
+                segments: path.clone(),
+            });
+        }
+        (None, None) => {}
+    }
+
+    Ok(())
+}
+
+fn toml_value_to_item(value: &TomlValue) -> anyhow::Result<TomlItem> {
+    match value {
+        TomlValue::Table(table) => {
+            let mut table_item = toml_edit::Table::new();
+            table_item.set_implicit(false);
+            for (key, val) in table {
+                table_item.insert(key, toml_value_to_item(val)?);
+            }
+            Ok(TomlItem::Table(table_item))
+        }
+        other => Ok(TomlItem::Value(toml_value_to_value(other)?)),
+    }
+}
+
+fn toml_value_to_value(value: &TomlValue) -> anyhow::Result<toml_edit::Value> {
+    match value {
+        TomlValue::String(val) => Ok(toml_edit::Value::from(val.clone())),
+        TomlValue::Integer(val) => Ok(toml_edit::Value::from(*val)),
+        TomlValue::Float(val) => Ok(toml_edit::Value::from(*val)),
+        TomlValue::Boolean(val) => Ok(toml_edit::Value::from(*val)),
+        TomlValue::Datetime(val) => Ok(toml_edit::Value::from(val.clone())),
+        TomlValue::Array(items) => {
+            let mut array = toml_edit::Array::new();
+            for item in items {
+                array.push(toml_value_to_value(item)?);
+            }
+            Ok(toml_edit::Value::Array(array))
+        }
+        TomlValue::Table(table) => {
+            let mut inline = toml_edit::InlineTable::new();
+            for (key, val) in table {
+                inline.insert(key, toml_value_to_value(val)?);
+            }
+            Ok(toml_edit::Value::InlineTable(inline))
+        }
+    }
 }
 
 #[derive(Clone)]
