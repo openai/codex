@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
@@ -22,6 +21,8 @@ use super::CommandTranscript;
 use super::UnifiedExecContext;
 use super::session::UnifiedExecSession;
 
+pub(crate) const TRAILING_OUTPUT_GRACE: Duration = Duration::from_millis(1000);
+
 /// Spawn a background task that continuously reads from the PTY, appends to the
 /// shared transcript, and emits ExecCommandOutputDelta events on UTF‑8
 /// boundaries.
@@ -39,37 +40,56 @@ pub(crate) fn start_streaming_output(
 
     tokio::spawn(async move {
         let mut pending: Vec<u8> = Vec::new();
+        let mut exit_deadline = None;
         loop {
-            tokio::select! {
-                _ = exit_token.cancelled() => {
-                    loop {
-                        match receiver.try_recv() {
+            if let Some(deadline) = exit_deadline {
+                tokio::select! {
+                    _ = tokio::time::sleep_until(deadline) => {
+                        output_drained.notify_one();
+                        break;
+                    }
+                    received = receiver.recv() => {
+                        match received {
                             Ok(chunk) => {
-                                process_chunk(&mut pending, &transcript, &call_id, &session_ref, &turn_ref, chunk).await;
+                                process_chunk(
+                                    &mut pending,
+                                    &transcript,
+                                    &call_id,
+                                    &session_ref,
+                                    &turn_ref,
+                                    chunk,
+                                ).await;
                             }
-                            Err(TryRecvError::Lagged(_)) => continue,
-                            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                output_drained.notify_one();
+                                break;
+                            }
                         }
                     }
-                    output_drained.notify_one();
-                    break;
                 }
-                received = receiver.recv() => {
-                    match received {
-                        Ok(chunk) => {
-                            process_chunk(
-                                &mut pending,
-                                &transcript,
-                                &call_id,
-                                &session_ref,
-                                &turn_ref,
-                                chunk,
-                            ).await;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            output_drained.notify_one();
-                            break;
+            } else {
+                tokio::select! {
+                    _ = exit_token.cancelled() => {
+                        exit_deadline = Some(Instant::now() + TRAILING_OUTPUT_GRACE);
+                    }
+                    received = receiver.recv() => {
+                        match received {
+                            Ok(chunk) => {
+                                process_chunk(
+                                    &mut pending,
+                                    &transcript,
+                                    &call_id,
+                                    &session_ref,
+                                    &turn_ref,
+                                    chunk,
+                                ).await;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                output_drained.notify_one();
+                                break;
+                            }
                         }
                     }
                 }
