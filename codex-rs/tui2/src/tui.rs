@@ -1,4 +1,3 @@
-use std::fmt;
 use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
@@ -10,7 +9,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-use crossterm::Command;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
@@ -75,51 +73,10 @@ pub fn set_modes() -> Result<()> {
     );
 
     let _ = execute!(stdout(), EnableFocusChange);
-    let _ = execute!(stdout(), DisableAlternateScroll);
+    // Enable application mouse mode so scroll events are delivered as
+    // Mouse events instead of arrow keys.
     let _ = execute!(stdout(), EnableMouseCapture);
     Ok(())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct EnableAlternateScroll;
-
-impl Command for EnableAlternateScroll {
-    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        write!(f, "\x1b[?1007h")
-    }
-
-    #[cfg(windows)]
-    fn execute_winapi(&self) -> Result<()> {
-        Err(std::io::Error::other(
-            "tried to execute EnableAlternateScroll using WinAPI; use ANSI instead",
-        ))
-    }
-
-    #[cfg(windows)]
-    fn is_ansi_code_supported(&self) -> bool {
-        true
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DisableAlternateScroll;
-
-impl Command for DisableAlternateScroll {
-    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        write!(f, "\x1b[?1007l")
-    }
-
-    #[cfg(windows)]
-    fn execute_winapi(&self) -> Result<()> {
-        Err(std::io::Error::other(
-            "tried to execute DisableAlternateScroll using WinAPI; use ANSI instead",
-        ))
-    }
-
-    #[cfg(windows)]
-    fn is_ansi_code_supported(&self) -> bool {
-        true
-    }
 }
 
 /// Restore the terminal to its original state.
@@ -348,8 +305,6 @@ impl Tui {
     /// inline viewport for restoration when leaving.
     pub fn enter_alt_screen(&mut self) -> Result<()> {
         let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
-        // Enable "alternate scroll" so terminals may translate wheel to arrows
-        let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
         if let Ok(size) = self.terminal.size() {
             self.alt_saved_viewport = Some(self.terminal.viewport_area);
             self.terminal.set_viewport_area(ratatui::layout::Rect::new(
@@ -366,8 +321,6 @@ impl Tui {
 
     /// Leave alternate screen and restore the previously saved inline viewport, if any.
     pub fn leave_alt_screen(&mut self) -> Result<()> {
-        // Disable alternate scroll when leaving alt-screen
-        let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
         let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
         if let Some(saved) = self.alt_saved_viewport.take() {
             self.terminal.set_viewport_area(saved);
