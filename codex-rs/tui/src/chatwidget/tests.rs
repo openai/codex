@@ -1191,7 +1191,7 @@ fn exec_end_without_begin_uses_event_command() {
             call_id: "call-orphan".to_string(),
             process_id: None,
             turn_id: "turn-1".to_string(),
-            command: command.clone(),
+            command,
             cwd,
             parsed_cmd,
             source: ExecCommandSource::Agent,
