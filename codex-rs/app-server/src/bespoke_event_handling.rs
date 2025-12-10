@@ -576,7 +576,6 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::TerminalInteraction(terminal_event) => {
             let item_id = terminal_event.call_id.clone();
-            let stdout = String::from_utf8_lossy(&terminal_event.stdout).to_string();
 
             let notification = TerminalInteractionNotification {
                 thread_id: conversation_id.to_string(),
@@ -584,7 +583,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 item_id,
                 process_id: terminal_event.process_id,
                 stdin: terminal_event.stdin,
-                stdout,
             };
             outgoing
                 .send_server_notification(ServerNotification::TerminalInteraction(notification))

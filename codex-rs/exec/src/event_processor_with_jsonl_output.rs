@@ -56,8 +56,6 @@ use serde_json::Value as JsonValue;
 use tracing::error;
 use tracing::warn;
 
-const COMMAND_OUTPUT_AGGREGATE_LIMIT: usize = 1024 * 1024;
-
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
     next_event_id: AtomicU64,

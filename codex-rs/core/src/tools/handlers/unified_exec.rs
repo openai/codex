@@ -232,7 +232,6 @@ impl ToolHandler for UnifiedExecHandler {
                     call_id: response.event_call_id.clone(),
                     process_id: args.session_id.to_string(),
                     stdin: args.chars.clone(),
-                    stdout: response.raw_output.clone(),
                 };
                 session
                     .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))

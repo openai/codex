@@ -849,32 +849,26 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
         })
         .await?;
 
-    // Expect a delta event corresponding to the write_stdin call.
-    let delta = wait_for_event_match(&codex, |msg| match msg {
-        EventMsg::TerminalInteraction(ev) if ev.call_id == open_call_id => {
-            let text = String::from_utf8_lossy(&ev.stdout);
-            if text.contains("WSTDIN-MARK") {
-                Some(ev.clone())
-            } else {
-                None
+    let mut terminal_interaction = None;
+
+    loop {
+        let msg = wait_for_event(&codex, |_| true).await;
+        match msg {
+            EventMsg::TerminalInteraction(ev) if ev.call_id == open_call_id => {
+                terminal_interaction = Some(ev);
             }
+            EventMsg::TaskComplete(_) => break,
+            _ => {}
         }
-        _ => None,
-    })
-    .await;
+    }
 
-    assert_eq!(
-        delta.process_id, "1000",
-        "TerminalInteraction event should include process_id for an active session"
-    );
-
-    let text = String::from_utf8_lossy(&delta.stdout).to_string();
-    assert!(
-        text.contains("WSTDIN-MARK"),
-        "stdin delta chunk missing expected text: {text:?}"
-    );
-
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    let delta = terminal_interaction.expect("expected TerminalInteraction event");
+    assert_eq!(delta.process_id, "1000");
+    let expected_stdin = stdin_args
+        .get("chars")
+        .and_then(Value::as_str)
+        .expect("stdin chars");
+    assert_eq!(delta.stdin, expected_stdin);
     Ok(())
 }
 
@@ -1027,24 +1021,17 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
         "expected three terminal interactions; got {terminal_events:?}"
     );
 
-    assert!(
-        terminal_events[0].stdout.is_empty(),
-        "first poll should return no stdout while command sleeps"
-    );
-    let second_stdout = String::from_utf8_lossy(&terminal_events[1].stdout);
-    assert!(
-        second_stdout.contains("MARKER1"),
-        "second poll should capture the first marker: {second_stdout:?}"
-    );
-    assert!(
-        !second_stdout.contains("MARKER2"),
-        "second poll should not include the second marker yet: {second_stdout:?}"
-    );
-
-    let third_stdout = String::from_utf8_lossy(&terminal_events[2].stdout);
-    assert!(
-        third_stdout.contains("MARKER2"),
-        "third poll should capture the second marker: {third_stdout:?}"
+    for event in &terminal_events {
+        assert_eq!(event.call_id, open_call_id);
+        assert_eq!(event.process_id, "1000");
+    }
+    assert_eq!(
+        terminal_events
+            .iter()
+            .map(|ev| ev.stdin.as_str())
+            .collect::<Vec<_>>(),
+        vec!["", "", ""],
+        "terminal interactions should reflect the three stdin polls"
     );
 
     assert!(

@@ -1467,11 +1467,6 @@ pub struct TerminalInteractionEvent {
     pub process_id: String,
     /// Stdin sent to the running session.
     pub stdin: String,
-    /// Raw bytes from the unified exec stream (may not be valid UTF-8).
-    #[serde_as(as = "serde_with::base64::Base64")]
-    #[schemars(with = "String")]
-    #[ts(type = "string")]
-    pub stdout: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
