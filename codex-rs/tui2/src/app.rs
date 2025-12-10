@@ -1013,8 +1013,8 @@ impl App {
         };
 
         let mut anchor = None;
-        for idx in top_offset..meta.len() {
-            if let Some((cell_index, line_in_cell)) = meta[idx] {
+        for entry in meta.iter().skip(top_offset) {
+            if let Some((cell_index, line_in_cell)) = *entry {
                 anchor = Some((cell_index, line_in_cell));
                 break;
             }
@@ -1266,11 +1266,12 @@ impl App {
                     .iter()
                     .enumerate()
                 {
-                    if let Some((ci, li)) = entry {
-                        if *ci == cell_index && *li == line_in_cell {
-                            anchor_idx = Some(idx);
-                            break;
-                        }
+                    if let Some((ci, li)) = entry
+                        && *ci == cell_index
+                        && *li == line_in_cell
+                    {
+                        anchor_idx = Some(idx);
+                        break;
                     }
                 }
                 anchor_idx.unwrap_or(max_start).min(max_start)
@@ -1986,7 +1987,7 @@ impl App {
                             self.transcript_selection = TranscriptSelection::default();
                             self.scroll_transcript(
                                 tui,
-                                -i32::try_from(transcript_height).unwrap_or(i32::MIN),
+                                -i32::from(transcript_height),
                                 usize::from(transcript_height),
                                 width,
                             );
@@ -2010,7 +2011,7 @@ impl App {
                             self.transcript_selection = TranscriptSelection::default();
                             self.scroll_transcript(
                                 tui,
-                                i32::try_from(transcript_height).unwrap_or(i32::MAX),
+                                i32::from(transcript_height),
                                 usize::from(transcript_height),
                                 width,
                             );

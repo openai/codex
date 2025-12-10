@@ -113,6 +113,11 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                     line.push_span(Span::from(format!("{current}/{total}")).dim());
                 }
             }
+            if props.transcript_selection_active {
+                line.push_span(" · ".dim());
+                line.push_span(key_hint::ctrl(KeyCode::Char('y')));
+                line.push_span(" copy selection".dim());
+            }
             vec![line]
         }
         FooterMode::ShortcutOverlay => {
@@ -462,6 +467,21 @@ mod tests {
                 transcript_scrolled: false,
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_shortcuts_transcript_scrolled_and_selection",
+            FooterProps {
+                mode: FooterMode::ShortcutSummary,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                context_window_percent: None,
+                context_window_used_tokens: None,
+                transcript_scrolled: true,
+                transcript_selection_active: true,
+                transcript_scroll_position: Some((3, 42)),
             },
         );
 
