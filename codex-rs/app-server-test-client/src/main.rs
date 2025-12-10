@@ -554,9 +554,8 @@ impl CodexClient {
                     std::io::stdout().flush().ok();
                 }
                 ServerNotification::TerminalInteraction(delta) => {
-                    print!("{}", delta.stdout);
-                    std::io::stdout().flush().ok();
                     println!("[stdin sent: {}]", delta.stdin);
+                    std::io::stdout().flush().ok();
                 }
                 ServerNotification::ItemStarted(payload) => {
                     println!("\n< item started: {:?}", payload.item);
