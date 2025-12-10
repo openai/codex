@@ -353,6 +353,16 @@ pub fn pasted_image_format(path: &Path) -> EncodedImageFormat {
     }
 }
 
+/// Safely attempt to get image dimensions, avoiding hangs on special files (like FIFOs).
+pub fn safe_image_dimensions(path: &Path) -> Option<(u32, u32)> {
+    // Ensure it's a regular file (or symlink to one) before opening.
+    // metadata() follows symlinks, which is what we want.
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_file() => image::image_dimensions(path).ok(),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod pasted_paths_tests {
     use super::*;
