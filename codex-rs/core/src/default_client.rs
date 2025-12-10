@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
-pub use codex_client::CodexHttpClient;
+use codex_client::CodexHttpClient;
 pub use codex_client::CodexRequestBuilder;
 
 /// Set this to add a suffix to the User-Agent string.
