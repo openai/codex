@@ -1970,6 +1970,77 @@ impl App {
             } => {
                 self.copy_transcript_selection(tui);
             }
+            KeyEvent {
+                code: KeyCode::PageUp,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                let size = tui.terminal.last_known_screen_size;
+                let width = size.width;
+                let height = size.height;
+                if width > 0 && height > 0 {
+                    let chat_height = self.chat_widget.desired_height(width);
+                    if chat_height < height {
+                        let transcript_height = height.saturating_sub(chat_height);
+                        if transcript_height > 0 {
+                            self.transcript_selection = TranscriptSelection::default();
+                            self.scroll_transcript(
+                                tui,
+                                -i32::try_from(transcript_height).unwrap_or(i32::MIN),
+                                usize::from(transcript_height),
+                                width,
+                            );
+                        }
+                    }
+                }
+            }
+            KeyEvent {
+                code: KeyCode::PageDown,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                let size = tui.terminal.last_known_screen_size;
+                let width = size.width;
+                let height = size.height;
+                if width > 0 && height > 0 {
+                    let chat_height = self.chat_widget.desired_height(width);
+                    if chat_height < height {
+                        let transcript_height = height.saturating_sub(chat_height);
+                        if transcript_height > 0 {
+                            self.transcript_selection = TranscriptSelection::default();
+                            self.scroll_transcript(
+                                tui,
+                                i32::try_from(transcript_height).unwrap_or(i32::MAX),
+                                usize::from(transcript_height),
+                                width,
+                            );
+                        }
+                    }
+                }
+            }
+            KeyEvent {
+                code: KeyCode::Home,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                if !self.transcript_cells.is_empty() {
+                    self.transcript_scroll = TranscriptScroll::Scrolled {
+                        cell_index: 0,
+                        line_in_cell: 0,
+                    };
+                    self.transcript_selection = TranscriptSelection::default();
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            KeyEvent {
+                code: KeyCode::End,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                self.transcript_scroll = TranscriptScroll::ToBottom;
+                self.transcript_selection = TranscriptSelection::default();
+                tui.frame_requester().schedule_frame();
+            }
             // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
             KeyEvent {
                 code: KeyCode::Enter,
