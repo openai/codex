@@ -11,3 +11,19 @@ workspace = true
 anyhow = { workspace = true }
 portable-pty = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[target.'cfg(windows)'.dependencies]
+filedescriptor = "0.8.3"
+lazy_static = { workspace = true }
+log = { workspace = true }
+shared_library = "0.1.9"
+winapi = { version = "0.3.9", features = [
+    "handleapi",
+    "minwinbase",
+    "processthreadsapi",
+    "synchapi",
+    "winbase",
+    "wincon",
+    "winerror",
+    "winnt",
+] }

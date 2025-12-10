@@ -269,6 +269,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::ParallelToolCalls,
+        key: "parallel",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
         id: Feature::ViewImageTool,
         key: "view_image_tool",
         stage: Stage::Stable,

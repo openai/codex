@@ -21,6 +21,7 @@ otel = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "tonic"]
 [dependencies]
 chrono = { workspace = true }
 codex-app-server-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 codex-protocol = { workspace = true }
 eventsource-stream = { workspace = true }
 opentelemetry = { workspace = true, features = ["logs"], optional = true }

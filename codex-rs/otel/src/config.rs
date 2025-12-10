@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use codex_utils_absolute_path::AbsolutePathBuf;
+
 #[derive(Clone, Debug)]
 pub struct OtelSettings {
     pub environment: String,
@@ -20,9 +22,9 @@ pub enum OtelHttpProtocol {
 
 #[derive(Clone, Debug, Default)]
 pub struct OtelTlsConfig {
-    pub ca_certificate: Option<PathBuf>,
-    pub client_certificate: Option<PathBuf>,
-    pub client_private_key: Option<PathBuf>,
+    pub ca_certificate: Option<AbsolutePathBuf>,
+    pub client_certificate: Option<AbsolutePathBuf>,
+    pub client_private_key: Option<AbsolutePathBuf>,
 }
 
 #[derive(Clone, Debug)]
