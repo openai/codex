@@ -79,6 +79,7 @@ pub(crate) struct UnifiedExecSession {
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
     cancellation_token: CancellationToken,
+    output_drained: Arc<Notify>,
     output_task: JoinHandle<()>,
     sandbox_type: SandboxType,
 }
@@ -92,27 +93,21 @@ impl UnifiedExecSession {
         let output_buffer = Arc::new(Mutex::new(OutputBufferState::default()));
         let output_notify = Arc::new(Notify::new());
         let cancellation_token = CancellationToken::new();
+        let output_drained = Arc::new(Notify::new());
         let mut receiver = initial_output_rx;
         let buffer_clone = Arc::clone(&output_buffer);
         let notify_clone = Arc::clone(&output_notify);
-        let cancellation_token_clone = cancellation_token.clone();
         let output_task = tokio::spawn(async move {
             loop {
-                tokio::select! {
-                    _ = cancellation_token_clone.cancelled() => break,
-                    result = receiver.recv() => match result {
-                        Ok(chunk) => {
-                            let mut guard = buffer_clone.lock().await;
-                            guard.push_chunk(chunk);
-                            drop(guard);
-                            notify_clone.notify_waiters();
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            cancellation_token_clone.cancel();
-                            break;
-                        }
+                match receiver.recv().await {
+                    Ok(chunk) => {
+                        let mut guard = buffer_clone.lock().await;
+                        guard.push_chunk(chunk);
+                        drop(guard);
+                        notify_clone.notify_waiters();
                     }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 };
             }
         });
@@ -122,6 +117,7 @@ impl UnifiedExecSession {
             output_buffer,
             output_notify,
             cancellation_token,
+            output_drained,
             output_task,
             sandbox_type,
         }
@@ -145,6 +141,10 @@ impl UnifiedExecSession {
 
     pub(super) fn cancellation_token(&self) -> CancellationToken {
         self.cancellation_token.clone()
+    }
+
+    pub(super) fn output_drained_notify(&self) -> Arc<Notify> {
+        Arc::clone(&self.output_drained)
     }
 
     pub(super) fn has_exited(&self) -> bool {

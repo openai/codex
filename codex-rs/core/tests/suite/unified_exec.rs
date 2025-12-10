@@ -228,6 +228,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
             false
         }
         EventMsg::ExecCommandBegin(event) if event.call_id == call_id => {
+            println!("Saw it");
             saw_exec_begin = true;
             false
         }
@@ -893,7 +894,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
 
     let open_call_id = "uexec-delayed-open";
     let open_args = json!({
-        "cmd": "sleep 5 && echo MARKER1 && sleep 5 && echo MARKER2",
+        "cmd": "sleep 3 && echo MARKER1 && sleep 3 && echo MARKER2",
         "yield_time_ms": 10,
     });
 
@@ -910,14 +911,14 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
     let second_poll_args = json!({
         "chars": "",
         "session_id": 1000,
-        "yield_time_ms": 6000,
+        "yield_time_ms": 4000,
     });
 
     let third_poll_call_id = "uexec-delayed-poll-3";
     let third_poll_args = json!({
         "chars": "",
         "session_id": 1000,
-        "yield_time_ms": 10000,
+        "yield_time_ms": 6000,
     });
 
     let responses = vec![
@@ -984,6 +985,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
 
     let mut begin_event = None;
     let mut end_event = None;
+    let mut task_completed = false;
     let mut terminal_events = Vec::new();
     let mut delta_text = String::new();
 
@@ -1003,8 +1005,13 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
             EventMsg::ExecCommandEnd(ev) if ev.call_id == open_call_id => {
                 end_event = Some(ev);
             }
-            EventMsg::TaskComplete(_) => break,
+            EventMsg::TaskComplete(_) => {
+                task_completed = true;
+            }
             _ => {}
+        };
+        if task_completed && end_event.is_some() {
+            break;
         }
     }
 
