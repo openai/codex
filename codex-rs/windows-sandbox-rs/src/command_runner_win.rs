@@ -206,6 +206,9 @@ pub fn main() -> Result<()> {
         if proc_info.hProcess != 0 {
             CloseHandle(proc_info.hProcess);
         }
+        CloseHandle(h_stdin);
+        CloseHandle(h_stdout);
+        CloseHandle(h_stderr);
         CloseHandle(h_token);
         if let Some(job) = h_job {
             CloseHandle(job);
