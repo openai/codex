@@ -1931,7 +1931,7 @@ fn single_reasoning_option_skips_selection() {
 
     let single_effort = vec![ReasoningEffortPreset {
         effort: ReasoningEffortConfig::High,
-        description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
+        description: "Greater reasoning depth for complex or ambiguous problems".to_string(),
     }];
     let preset = ModelPreset {
         id: "model-with-single-reasoning".to_string(),

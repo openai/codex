@@ -79,7 +79,7 @@ fn gpt_5_1_codex_max() -> ModelPreset {
             ),
             effort(
                 ReasoningEffort::High,
-                "Maximizes reasoning depth for complex problems",
+                "Greater reasoning depth for complex problems",
             ),
             effort(
                 ReasoningEffort::XHigh,
@@ -160,7 +160,7 @@ fn robin() -> ModelPreset {
             ),
             effort(
                 ReasoningEffort::High,
-                "Maximizes reasoning depth for complex or ambiguous problems",
+                "Greater reasoning depth for complex or ambiguous problems",
             ),
             effort(
                 ReasoningEffort::XHigh,

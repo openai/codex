@@ -64,7 +64,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                 },
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::High,
-                    description: "Maximizes reasoning depth for complex problems".to_string(),
+                    description: "Greater reasoning depth for complex problems".to_string(),
                 },
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::XHigh,
@@ -136,7 +136,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                 },
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::High,
-                    description: "Maximizes reasoning depth for complex or ambiguous problems"
+                    description: "Greater reasoning depth for complex or ambiguous problems"
                         .to_string(),
                 },
                 ReasoningEffortOption {
