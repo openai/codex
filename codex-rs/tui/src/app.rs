@@ -25,6 +25,7 @@ use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
+#[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::openai_models::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::openai_models::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
@@ -33,9 +34,9 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
+use codex_core::protocol::SkillLoadOutcomeInfo;
 use codex_core::protocol::TokenUsage;
-use codex_core::skills::load_skills;
-use codex_core::skills::model::SkillMetadata;
+use codex_core::skills::SkillError;
 use codex_protocol::ConversationId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -86,6 +87,17 @@ fn session_summary(
         usage_line,
         resume_command,
     })
+}
+
+fn skill_errors_from_outcome(outcome: &SkillLoadOutcomeInfo) -> Vec<SkillError> {
+    outcome
+        .errors
+        .iter()
+        .map(|err| SkillError {
+            path: err.path.clone(),
+            message: err.message.clone(),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,8 +249,6 @@ pub(crate) struct App {
 
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
-
-    pub(crate) skills: Option<Vec<SkillMetadata>>,
 }
 
 impl App {
@@ -291,26 +301,6 @@ impl App {
             model = updated_model;
         }
 
-        let skills_outcome = load_skills(&config);
-        if !skills_outcome.errors.is_empty() {
-            match run_skill_error_prompt(tui, &skills_outcome.errors).await {
-                SkillErrorPromptOutcome::Exit => {
-                    return Ok(AppExitInfo {
-                        token_usage: TokenUsage::default(),
-                        conversation_id: None,
-                        update_action: None,
-                    });
-                }
-                SkillErrorPromptOutcome::Continue => {}
-            }
-        }
-
-        let skills = if config.features.enabled(Feature::Skills) {
-            Some(skills_outcome.skills.clone())
-        } else {
-            None
-        };
-
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let model_family = conversation_manager
             .get_models_manager()
@@ -328,7 +318,6 @@ impl App {
                     auth_manager: auth_manager.clone(),
                     models_manager: conversation_manager.get_models_manager(),
                     feedback: feedback.clone(),
-                    skills: skills.clone(),
                     is_first_run,
                     model_family: model_family.clone(),
                 };
@@ -355,7 +344,6 @@ impl App {
                     auth_manager: auth_manager.clone(),
                     models_manager: conversation_manager.get_models_manager(),
                     feedback: feedback.clone(),
-                    skills: skills.clone(),
                     is_first_run,
                     model_family: model_family.clone(),
                 };
@@ -393,7 +381,6 @@ impl App {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
-            skills,
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -519,7 +506,6 @@ impl App {
                     auth_manager: self.auth_manager.clone(),
                     models_manager: self.server.get_models_manager(),
                     feedback: self.feedback.clone(),
-                    skills: self.skills.clone(),
                     is_first_run: false,
                     model_family: model_family.clone(),
                 };
@@ -570,7 +556,6 @@ impl App {
                                     auth_manager: self.auth_manager.clone(),
                                     models_manager: self.server.get_models_manager(),
                                     feedback: self.feedback.clone(),
-                                    skills: self.skills.clone(),
                                     is_first_run: false,
                                     model_family: model_family.clone(),
                                 };
@@ -661,6 +646,19 @@ impl App {
                 {
                     self.suppress_shutdown_complete = false;
                     return Ok(true);
+                }
+                if let EventMsg::SessionConfigured(cfg) = &event.msg
+                    && let Some(outcome) = cfg.skill_load_outcome.as_ref()
+                    && !outcome.errors.is_empty()
+                {
+                    let errors = skill_errors_from_outcome(outcome);
+                    match run_skill_error_prompt(tui, &errors).await {
+                        SkillErrorPromptOutcome::Exit => {
+                            self.chat_widget.submit_op(Op::Shutdown);
+                            return Ok(false);
+                        }
+                        SkillErrorPromptOutcome::Continue => {}
+                    }
                 }
                 self.chat_widget.handle_codex_event(event);
             }
@@ -1209,7 +1207,6 @@ mod tests {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
-            skills: None,
         }
     }
 
@@ -1250,7 +1247,6 @@ mod tests {
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 skip_world_writable_scan_once: false,
-                skills: None,
             },
             rx,
             op_rx,
@@ -1358,6 +1354,7 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                skill_load_outcome: None,
                 rollout_path: PathBuf::new(),
             };
             Arc::new(new_session_info(
@@ -1413,6 +1410,7 @@ mod tests {
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
+            skill_load_outcome: None,
             rollout_path: PathBuf::new(),
         };
 

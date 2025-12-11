@@ -185,6 +185,9 @@ pub(crate) struct TurnSummary {
 
 pub(crate) type TurnSummaryStore = Arc<Mutex<HashMap<ConversationId, TurnSummary>>>;
 
+const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
+const THREAD_LIST_MAX_LIMIT: usize = 100;
+
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 struct ActiveLogin {
@@ -1508,10 +1511,12 @@ impl CodexMessageProcessor {
             model_providers,
         } = params;
 
-        let page_size = limit.unwrap_or(25).max(1) as usize;
-
+        let requested_page_size = limit
+            .map(|value| value as usize)
+            .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
+            .clamp(1, THREAD_LIST_MAX_LIMIT);
         let (summaries, next_cursor) = match self
-            .list_conversations_common(page_size, cursor, model_providers)
+            .list_conversations_common(requested_page_size, cursor, model_providers)
             .await
         {
             Ok(r) => r,
@@ -1522,7 +1527,6 @@ impl CodexMessageProcessor {
         };
 
         let data = summaries.into_iter().map(summary_to_thread).collect();
-
         let response = ThreadListResponse { data, next_cursor };
         self.outgoing.send_response(request_id, response).await;
     }
@@ -1800,10 +1804,12 @@ impl CodexMessageProcessor {
             cursor,
             model_providers,
         } = params;
-        let page_size = page_size.unwrap_or(25).max(1);
+        let requested_page_size = page_size
+            .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
+            .clamp(1, THREAD_LIST_MAX_LIMIT);
 
         match self
-            .list_conversations_common(page_size, cursor, model_providers)
+            .list_conversations_common(requested_page_size, cursor, model_providers)
             .await
         {
             Ok((items, next_cursor)) => {
@@ -1818,12 +1824,15 @@ impl CodexMessageProcessor {
 
     async fn list_conversations_common(
         &self,
-        page_size: usize,
+        requested_page_size: usize,
         cursor: Option<String>,
         model_providers: Option<Vec<String>>,
     ) -> Result<(Vec<ConversationSummary>, Option<String>), JSONRPCErrorError> {
-        let cursor_obj: Option<RolloutCursor> = cursor.as_ref().and_then(|s| parse_cursor(s));
-        let cursor_ref = cursor_obj.as_ref();
+        let mut cursor_obj: Option<RolloutCursor> = cursor.as_ref().and_then(|s| parse_cursor(s));
+        let mut last_cursor = cursor_obj.clone();
+        let mut remaining = requested_page_size;
+        let mut items = Vec::with_capacity(requested_page_size);
+        let mut next_cursor: Option<String> = None;
 
         let model_provider_filter = match model_providers {
             Some(providers) => {
@@ -1837,48 +1846,69 @@ impl CodexMessageProcessor {
         };
         let fallback_provider = self.config.model_provider_id.clone();
 
-        let page = match RolloutRecorder::list_conversations(
-            &self.config.codex_home,
-            page_size,
-            cursor_ref,
-            INTERACTIVE_SESSION_SOURCES,
-            model_provider_filter.as_deref(),
-            fallback_provider.as_str(),
-        )
-        .await
-        {
-            Ok(p) => p,
-            Err(err) => {
-                return Err(JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to list conversations: {err}"),
-                    data: None,
-                });
+        while remaining > 0 {
+            let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
+            let page = RolloutRecorder::list_conversations(
+                &self.config.codex_home,
+                page_size,
+                cursor_obj.as_ref(),
+                INTERACTIVE_SESSION_SOURCES,
+                model_provider_filter.as_deref(),
+                fallback_provider.as_str(),
+            )
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to list conversations: {err}"),
+                data: None,
+            })?;
+
+            let mut filtered = page
+                .items
+                .into_iter()
+                .filter_map(|it| {
+                    let session_meta_line = it.head.first().and_then(|first| {
+                        serde_json::from_value::<SessionMetaLine>(first.clone()).ok()
+                    })?;
+                    extract_conversation_summary(
+                        it.path,
+                        &it.head,
+                        &session_meta_line.meta,
+                        session_meta_line.git.as_ref(),
+                        fallback_provider.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if filtered.len() > remaining {
+                filtered.truncate(remaining);
             }
-        };
+            items.extend(filtered);
+            remaining = requested_page_size.saturating_sub(items.len());
 
-        let items = page
-            .items
-            .into_iter()
-            .filter_map(|it| {
-                let session_meta_line = it.head.first().and_then(|first| {
-                    serde_json::from_value::<SessionMetaLine>(first.clone()).ok()
-                })?;
-                extract_conversation_summary(
-                    it.path,
-                    &it.head,
-                    &session_meta_line.meta,
-                    session_meta_line.git.as_ref(),
-                    fallback_provider.as_str(),
-                )
-            })
-            .collect::<Vec<_>>();
+            // Encode RolloutCursor into the JSON-RPC string form returned to clients.
+            let next_cursor_value = page.next_cursor.clone();
+            next_cursor = next_cursor_value
+                .as_ref()
+                .and_then(|cursor| serde_json::to_value(cursor).ok())
+                .and_then(|value| value.as_str().map(str::to_owned));
+            if remaining == 0 {
+                break;
+            }
 
-        // Encode next_cursor as a plain string
-        let next_cursor = page
-            .next_cursor
-            .and_then(|cursor| serde_json::to_value(&cursor).ok())
-            .and_then(|value| value.as_str().map(str::to_owned));
+            match next_cursor_value {
+                Some(cursor_val) if remaining > 0 => {
+                    // Break if our pagination would reuse the same cursor again; this avoids
+                    // an infinite loop when filtering drops everything on the page.
+                    if last_cursor.as_ref() == Some(&cursor_val) {
+                        next_cursor = None;
+                        break;
+                    }
+                    last_cursor = Some(cursor_val.clone());
+                    cursor_obj = Some(cursor_val);
+                }
+                _ => break,
+            }
+        }
 
         Ok((items, next_cursor))
     }

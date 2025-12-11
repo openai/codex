@@ -122,6 +122,7 @@ fn resumed_initial_messages_render_history() {
                 message: "assistant reply".to_string(),
             }),
         ]),
+        skill_load_outcome: None,
         rollout_path: rollout_file.path().to_path_buf(),
     };
 
@@ -364,7 +365,6 @@ async fn helpers_are_available_and_do_not_panic() {
         auth_manager,
         models_manager: conversation_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
-        skills: None,
         is_first_run: true,
         model_family,
     };

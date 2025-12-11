@@ -85,6 +85,7 @@ fn session_configured_produces_thread_started_event() {
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
+            skill_load_outcome: None,
             rollout_path,
         }),
     );

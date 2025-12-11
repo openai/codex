@@ -1,7 +1,10 @@
+pub mod injection;
 pub mod loader;
 pub mod model;
 pub mod render;
 
+pub(crate) use injection::SkillInjections;
+pub(crate) use injection::build_skill_injections;
 pub use loader::load_skills;
 pub use model::SkillError;
 pub use model::SkillLoadOutcome;

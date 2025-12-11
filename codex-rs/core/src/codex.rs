@@ -97,6 +97,9 @@ use crate::protocol::ReasoningRawContentDeltaEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
+use crate::protocol::SkillErrorInfo;
+use crate::protocol::SkillInfo;
+use crate::protocol::SkillLoadOutcomeInfo;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
@@ -109,6 +112,10 @@ use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::skills::SkillInjections;
+use crate::skills::SkillLoadOutcome;
+use crate::skills::build_skill_injections;
+use crate::skills::load_skills;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -173,7 +180,31 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let user_instructions = get_user_instructions(&config).await;
+        let loaded_skills = if config.features.enabled(Feature::Skills) {
+            Some(load_skills(&config))
+        } else {
+            None
+        };
+
+        if let Some(outcome) = &loaded_skills {
+            for err in &outcome.errors {
+                error!(
+                    "failed to load skill {}: {}",
+                    err.path.display(),
+                    err.message
+                );
+            }
+        }
+
+        let skills_outcome = loaded_skills.clone();
+
+        let user_instructions = get_user_instructions(
+            &config,
+            skills_outcome
+                .as_ref()
+                .map(|outcome| outcome.skills.as_slice()),
+        )
+        .await;
 
         let exec_policy = load_exec_policy_for_features(&config.features, &config.codex_home)
             .await
@@ -206,6 +237,7 @@ impl Codex {
 
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
+
         let session = Session::new(
             session_configuration,
             config.clone(),
@@ -214,6 +246,7 @@ impl Codex {
             tx_event.clone(),
             conversation_history,
             session_source_clone,
+            skills_outcome.clone(),
         )
         .await
         .map_err(|e| {
@@ -471,6 +504,7 @@ impl Session {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn new(
         session_configuration: SessionConfiguration,
         config: Arc<Config>,
@@ -479,6 +513,7 @@ impl Session {
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
         session_source: SessionSource,
+        skills: Option<SkillLoadOutcome>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -596,6 +631,7 @@ impl Session {
             otel_event_manager,
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            skills: skills.clone(),
         };
 
         let sess = Arc::new(Session {
@@ -611,6 +647,7 @@ impl Session {
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
+        let skill_load_outcome = skill_load_outcome_for_client(skills.as_ref());
 
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
@@ -625,6 +662,7 @@ impl Session {
                 history_log_id,
                 history_entry_count,
                 initial_messages,
+                skill_load_outcome,
                 rollout_path,
             }),
         })
@@ -1978,6 +2016,30 @@ async fn spawn_review_thread(
         .await;
 }
 
+fn skill_load_outcome_for_client(
+    outcome: Option<&SkillLoadOutcome>,
+) -> Option<SkillLoadOutcomeInfo> {
+    outcome.map(|outcome| SkillLoadOutcomeInfo {
+        skills: outcome
+            .skills
+            .iter()
+            .map(|skill| SkillInfo {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                path: skill.path.clone(),
+            })
+            .collect(),
+        errors: outcome
+            .errors
+            .iter()
+            .map(|err| SkillErrorInfo {
+                path: err.path.clone(),
+                message: err.message.clone(),
+            })
+            .collect(),
+    })
+}
+
 /// Takes a user message as input and runs a loop where, at each turn, the model
 /// replies with either:
 ///
@@ -2006,10 +2068,25 @@ pub(crate) async fn run_task(
     });
     sess.send_event(&turn_context, event).await;
 
+    let SkillInjections {
+        items: skill_items,
+        warnings: skill_warnings,
+    } = build_skill_injections(&input, sess.services.skills.as_ref()).await;
+
+    for message in skill_warnings {
+        sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
+            .await;
+    }
+
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_response_item_and_emit_turn_item(turn_context.as_ref(), response_item)
         .await;
+
+    if !skill_items.is_empty() {
+        sess.record_conversation_items(&turn_context, &skill_items)
+            .await;
+    }
 
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
         .await;
@@ -2860,6 +2937,7 @@ mod tests {
             otel_event_manager: otel_event_manager.clone(),
             models_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            skills: None,
         };
 
         let turn_context = Session::make_turn_context(
@@ -2945,6 +3023,7 @@ mod tests {
             otel_event_manager: otel_event_manager.clone(),
             models_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            skills: None,
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
