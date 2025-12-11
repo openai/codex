@@ -113,6 +113,7 @@ const BUG_POLISH_CONCURRENCY: usize = 8;
 const COMMAND_PREVIEW_MAX_LINES: usize = 2;
 const COMMAND_PREVIEW_MAX_GRAPHEMES: usize = 96;
 const MODEL_REASONING_LOG_MAX_GRAPHEMES: usize = 240;
+const BUG_SCOPE_PROMPT_MAX_GRAPHEMES: usize = 600;
 const ANALYSIS_CONTEXT_MAX_CHARS: usize = 6_000;
 const AUTO_SCOPE_MODEL: &str = "gpt-5-codex";
 const SPEC_GENERATION_MODEL: &str = "gpt-5-codex";
@@ -863,7 +864,8 @@ struct FileCollectionResult {
 
 #[derive(Clone)]
 pub struct SecurityReviewLogSink {
-    path: PathBuf,
+    path: Option<PathBuf>,
+    callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
 impl SecurityReviewLogSink {
@@ -872,22 +874,41 @@ impl SecurityReviewLogSink {
             fs::create_dir_all(parent)?;
         }
         Ok(Self {
-            path: path.to_path_buf(),
+            path: Some(path.to_path_buf()),
+            callback: None,
         })
     }
 
+    pub fn with_callback(callback: Arc<dyn Fn(String) + Send + Sync>) -> Self {
+        Self {
+            path: None,
+            callback: Some(callback),
+        }
+    }
+
+    pub fn with_path_and_callback(
+        path: &Path,
+        callback: Arc<dyn Fn(String) + Send + Sync>,
+    ) -> std::io::Result<Self> {
+        let mut sink = Self::new(path)?;
+        sink.callback = Some(callback);
+        Ok(sink)
+    }
+
     fn write(&self, message: &str) {
-        let timestamp = OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .unwrap_or_else(|_| "unknown-time".to_string());
-        let mut line = String::new();
-        let _ = writeln!(&mut line, "{timestamp} {message}");
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-        {
-            let _ = file.write_all(line.as_bytes());
+        if let Some(callback) = self.callback.as_ref() {
+            callback(message.to_string());
+        }
+
+        if let Some(path) = self.path.as_ref() {
+            let timestamp = OffsetDateTime::now_utc()
+                .format(&Rfc3339)
+                .unwrap_or_else(|_| "unknown-time".to_string());
+            let mut line = String::new();
+            let _ = writeln!(&mut line, "{timestamp} {message}");
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+                let _ = file.write_all(line.as_bytes());
+            }
         }
     }
 }
@@ -3735,14 +3756,10 @@ pub async fn run_security_review(
     );
 
     let repository_summary = build_repository_summary(&selected_snippets);
-    let bug_scope_prompt = if matches!(mode, SecurityReviewMode::Bugs) {
-        auto_scope_prompt
-            .as_ref()
-            .map(|prompt| prompt.trim().to_string())
-            .filter(|prompt| !prompt.is_empty())
-    } else {
-        None
-    };
+    let bug_scope_prompt = auto_scope_prompt
+        .as_ref()
+        .map(|prompt| prompt.trim().to_string())
+        .filter(|prompt| !prompt.is_empty());
     let mut spec_targets: Vec<PathBuf> = if !include_paths.is_empty() {
         include_paths.clone()
     } else {
@@ -4638,8 +4655,7 @@ pub async fn run_security_review(
     // Final Linear sync and per-bug ticket creation.
     if let Some(linear_issue) = linear_issue.as_ref() {
         // Create child tickets (unassigned) for each bug and link back to the review issue.
-        let create_prompt =
-            build_linear_create_tickets_prompt(linear_issue, artifacts.bugs_path.as_path());
+        let create_prompt = build_linear_create_tickets_prompt(linear_issue, &bugs_markdown);
         {
             let config = request.config.clone();
             let provider = request.provider.clone();
@@ -5039,11 +5055,20 @@ fn build_linear_finalize_prompt(
     )
 }
 
-fn build_linear_create_tickets_prompt(issue_ref: &str, bugs_markdown_path: &Path) -> String {
+fn build_linear_create_tickets_prompt(issue_ref: &str, bugs_markdown: &str) -> String {
+    let bugs_preview = bugs_markdown.trim();
+    let bugs_block = if bugs_preview.is_empty() {
+        "No structured findings were produced; do not create any child tickets.".to_string()
+    } else {
+        format!(
+            "Source findings markdown (full content):\n```markdown\n{bugs}\n```",
+            bugs = bugs_preview
+        )
+    };
     format!(
-        "Create Linear child tickets for validated security findings and link them to the review ticket `{issue}`.\n\nSource findings markdown: {bugs}\n\nInstructions:\n- For each finding in the markdown, first search for existing sub-issues or clearly related tickets (matching severity + component/file + summary) using Linear MCP. If a closely matching ticket already exists, link that ticket to `{issue}` and **do not** create a duplicate.\n- Only create new tickets for findings that have no similar existing ticket.\n- When creating a new ticket, keep it unassigned and in the initial TODO/backlog state; do **not** auto-assign owners or move tickets to triaged/in-progress/done.\n- Parse the bugs markdown to create concise titles that include severity and the most important component/file.\n- Include reproduction/verification details and recommendations in each ticket body.\n- If the finding includes blame information or a suggested owner (for example, a `Suggested owner:` line derived from git blame), copy that line into the ticket body but do **not** set an assignee.\n- Add links back to the artifacts directory and the review ticket `{issue}` so engineers can reach the full report.\n- Do **not** post comments on the review ticket; this step is only for creating/linking child tickets. The final summary comment is handled separately.\n- Keep everything within the Linear MCP; do not use external network calls.",
+        "Create Linear child tickets for validated security findings and link them to the review ticket `{issue}`.\n\n{bugs_block}\n\nInstructions:\n- Work only from the findings markdown above plus the main review ticket context; do NOT invent findings.\n- For each HIGH-severity finding, first search for existing sub-issues or clearly related tickets (matching severity + component/file + summary) using Linear MCP. If a closely matching ticket already exists, link that ticket to `{issue}` and **do not** create a duplicate.\n- Only create new tickets for findings that have no similar existing ticket.\n- When creating a new ticket, keep it unassigned and in the initial TODO/backlog state; do **not** auto-assign owners or move tickets to triaged/in-progress/done.\n- Parse the bugs markdown to create concise titles that include severity and the most important component/file.\n- Include reproduction/verification details and recommendations in each ticket body.\n- If the finding includes blame information or a suggested owner (for example, a `Suggested owner:` line derived from git blame), copy that line into the ticket body but do **not** set an assignee.\n- Add links back to the review ticket `{issue}` so engineers can reach the full report and artifacts.\n- Do **not** post comments on the review ticket; this step is only for creating/linking child tickets. The final summary comment is handled separately.\n- Keep everything within the Linear MCP; do not use external network calls.",
         issue = issue_ref,
-        bugs = bugs_markdown_path.display(),
+        bugs_block = bugs_block,
     )
 }
 
@@ -11581,18 +11606,26 @@ fn build_bugs_user_prompt(
     code_context: &str,
     scope_prompt: Option<&str>,
 ) -> BugPromptData {
+    let mut logs = Vec::new();
     let scope_reminder = scope_prompt
         .and_then(|prompt| {
-            let trimmed = prompt.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                let normalized = trimmed
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                Some(format!("- User scope prompt: {normalized}\n- After reading the file, if it does not meaningfully relate to that scope, skip it and move on (respond with `no bugs found` for this file).\n"))
+            let normalized = prompt
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_string();
+            if normalized.is_empty() {
+                return None;
             }
+            let scope_summary = truncate_text(&normalized, BUG_SCOPE_PROMPT_MAX_GRAPHEMES);
+            if scope_summary.len() < normalized.len() {
+                logs.push(format!(
+                    "User scope prompt truncated to {} graphemes for bug analysis.",
+                    BUG_SCOPE_PROMPT_MAX_GRAPHEMES
+                ));
+            }
+            Some(format!("- User scope prompt: {scope_summary}\n- After reading the file, if it does not meaningfully relate to that scope, skip it and move on (respond with `no bugs found` for this file).\n"))
         })
         .unwrap_or_default();
     let repository_section = format!("# Repository context\n{repository_summary}\n");
@@ -11602,7 +11635,6 @@ fn build_bugs_user_prompt(
     let base_len = repository_section.len() + code_and_task.len();
     let mut prompt =
         String::with_capacity(base_len + spec_markdown.map(str::len).unwrap_or_default());
-    let mut logs = Vec::new();
 
     prompt.push_str(repository_section.as_str());
 
@@ -11771,14 +11803,15 @@ async fn run_trufflehog_scan(
     }
 
     if let Some(parent) = target_path.parent()
-        && let Err(err) = tokio_fs::create_dir_all(parent).await {
-            let message = format!(
-                "Failed to create directory for trufflehog output {}: {err}",
-                parent.display()
-            );
-            push_progress_log(&progress_sender, &log_sink, logs, message);
-            return None;
-        }
+        && let Err(err) = tokio_fs::create_dir_all(parent).await
+    {
+        let message = format!(
+            "Failed to create directory for trufflehog output {}: {err}",
+            parent.display()
+        );
+        push_progress_log(&progress_sender, &log_sink, logs, message);
+        return None;
+    }
 
     if let Err(err) = tokio_fs::write(&target_path, stdout.as_bytes()).await {
         let message = format!(
@@ -13563,9 +13596,10 @@ fn format_revision_label(commit: &str, branch: Option<&String>, timestamp: Optio
         parts.push(date);
     }
     if let Some(branch_name) = branch
-        && !branch_name.trim().is_empty() {
-            parts.push(format!("branch {branch_name}"));
-        }
+        && !branch_name.trim().is_empty()
+    {
+        parts.push(format!("branch {branch_name}"));
+    }
     format!("Analyzed revision: {}", parts.join(" · "))
 }
 

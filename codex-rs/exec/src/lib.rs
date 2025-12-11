@@ -334,6 +334,19 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     None,
                 )
             };
+        let log_callback: Arc<dyn Fn(String) + Send + Sync> = Arc::new(|line| eprintln!("{line}"));
+        let log_sink = match codex_tui::SecurityReviewLogSink::with_path_and_callback(
+            &output_root.join("sec-review.log"),
+            log_callback.clone(),
+        ) {
+            Ok(sink) => Arc::new(sink),
+            Err(err) => {
+                eprintln!("Failed to initialize security review log sink: {err}");
+                Arc::new(codex_tui::SecurityReviewLogSink::with_callback(
+                    log_callback,
+                ))
+            }
+        };
         let request = SecurityReviewRequest {
             repo_path: default_cwd.clone(),
             include_paths,
@@ -348,10 +361,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             config: config.clone(),
             auth_manager: auth_manager.clone(),
             progress_sender: None,
-            log_sink: None,
-            progress_callback: Some(Arc::new(|line| {
-                eprintln!("{line}");
-            })),
+            log_sink: Some(log_sink),
+            progress_callback: None,
             skip_auto_scope_confirmation: true,
             auto_scope_prompt: review_args.auto_scope_prompt,
             resume_checkpoint,
