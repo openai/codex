@@ -157,10 +157,9 @@ macro_rules! model_family {
     }};
 }
 
-// todo(aibrahim): remove this function
-/// Returns a `ModelFamily` for the given model slug, or `None` if the slug
-/// does not match any known model family.
-pub fn find_family_for_model(slug: &str) -> ModelFamily {
+/// Internal offline helper for `ModelsManager` that returns a `ModelFamily` for the given
+/// model slug.
+pub(in crate::openai_models) fn find_family_for_model(slug: &str) -> ModelFamily {
     if slug.starts_with("o3") {
         model_family!(
             slug, "o3",
@@ -329,6 +328,7 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
 }
 
 fn derive_default_model_family(model: &str) -> ModelFamily {
+    tracing::warn!("Unknown model {model} is used. This will degrade the performance of Codex.");
     ModelFamily {
         slug: model.to_string(),
         family: model.to_string(),

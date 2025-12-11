@@ -252,14 +252,29 @@ impl Stream for ResponseStream {
 
 #[cfg(test)]
 mod tests {
-    use crate::openai_models::model_family::find_family_for_model;
     use codex_api::ResponsesApiRequest;
     use codex_api::common::OpenAiVerbosity;
     use codex_api::common::TextControls;
     use codex_api::create_text_param_for_request;
     use pretty_assertions::assert_eq;
 
+    use crate::config::Config;
+    use crate::config::ConfigOverrides;
+    use crate::config::ConfigToml;
+    use crate::openai_models::models_manager::ModelsManager;
+    use tempfile::TempDir;
+
     use super::*;
+
+    fn test_config() -> Config {
+        let codex_home = TempDir::new().expect("create temp dir");
+        Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load default test config")
+    }
 
     struct InstructionsTestCase {
         pub slug: &'static str,
@@ -309,7 +324,9 @@ mod tests {
             },
         ];
         for test_case in test_cases {
-            let model_family = find_family_for_model(test_case.slug);
+            let config = test_config();
+            let model_family =
+                ModelsManager::construct_model_family_offline(test_case.slug, &config);
             let expected = if test_case.expects_apply_patch_instructions {
                 format!(
                     "{}\n{}",
