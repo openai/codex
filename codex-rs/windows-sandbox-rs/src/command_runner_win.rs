@@ -33,6 +33,7 @@ use windows_sys::Win32::System::JobObjects::JobObjectExtendedLimitInformation;
 use windows_sys::Win32::System::JobObjects::SetInformationJobObject;
 use windows_sys::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
 use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use windows_sys::Win32::System::Threading::INFINITE;
 
@@ -56,6 +57,8 @@ struct RunnerRequest {
     stdout_pipe: String,
     stderr_pipe: String,
 }
+
+const WAIT_TIMEOUT: u32 = 0x0000_0102;
 
 // Best-effort early marker to detect image load before main.
 unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
@@ -203,6 +206,7 @@ pub fn main() -> Result<()> {
             req.timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE),
         )
     };
+    let timed_out = wait_res == WAIT_TIMEOUT;
     log_note(
         &format!(
             "runner wait done pid={} wait_res={}",
@@ -211,12 +215,19 @@ pub fn main() -> Result<()> {
         log_dir,
     );
 
-    let mut exit_code: u32 = 1;
+    let exit_code: i32;
     unsafe {
-        windows_sys::Win32::System::Threading::GetExitCodeProcess(
-            proc_info.hProcess,
-            &mut exit_code,
-        );
+        if timed_out {
+            let _ = TerminateProcess(proc_info.hProcess, 1);
+            exit_code = 128 + 64;
+        } else {
+            let mut raw_exit: u32 = 1;
+            windows_sys::Win32::System::Threading::GetExitCodeProcess(
+                proc_info.hProcess,
+                &mut raw_exit,
+            );
+            exit_code = raw_exit as i32;
+        }
         if proc_info.hThread != 0 {
             CloseHandle(proc_info.hThread);
         }
@@ -235,5 +246,5 @@ pub fn main() -> Result<()> {
         &format!("runner exit pid={} code={}", proc_info.hProcess, exit_code),
         log_dir,
     );
-    std::process::exit(exit_code as i32);
+    std::process::exit(exit_code);
 }
