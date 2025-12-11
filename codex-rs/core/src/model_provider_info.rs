@@ -99,7 +99,6 @@ pub struct ModelProviderInfo {
 }
 
 impl ModelProviderInfo {
-    #[allow(dead_code)]
     fn build_header_map(&self) -> crate::error::Result<HeaderMap> {
         let mut headers = HeaderMap::new();
         if let Some(extra) = &self.http_headers {
