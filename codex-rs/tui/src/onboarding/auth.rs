@@ -61,6 +61,13 @@ pub(crate) struct ApiKeyInputState {
     prepopulated_from_env: bool,
 }
 
+impl ApiKeyInputState {
+    #[cfg(test)]
+    pub(crate) fn value_for_test(&self) -> &str {
+        &self.value
+    }
+}
+
 #[derive(Clone)]
 /// Used to manage the lifecycle of SpawnedLogin and ensure it gets cleaned up.
 pub(crate) struct ContinueInBrowserState {

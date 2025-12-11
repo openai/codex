@@ -195,11 +195,24 @@ impl OnboardingScreen {
     pub fn should_exit(&self) -> bool {
         self.should_exit
     }
+
+    fn is_api_key_entry_active(&self) -> bool {
+        self.steps.iter().any(|step| {
+            if let Step::Auth(widget) = step {
+                return widget
+                    .sign_in_state
+                    .read()
+                    .is_ok_and(|g| matches!(&*g, SignInState::ApiKeyEntry(_)));
+            }
+            false
+        })
+    }
 }
 
 impl KeyboardHandler for OnboardingScreen {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        match key_event {
+        let is_api_key_entry_active = self.is_api_key_entry_active();
+        let should_quit = match key_event {
             KeyEvent {
                 code: KeyCode::Char('d'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
@@ -211,32 +224,33 @@ impl KeyboardHandler for OnboardingScreen {
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
-            }
-            | KeyEvent {
+            } => true,
+            KeyEvent {
                 code: KeyCode::Char('q'),
                 kind: KeyEventKind::Press,
                 ..
-            } => {
-                if self.is_auth_in_progress() {
-                    // If the user cancels the auth menu, exit the app rather than
-                    // leave the user at a prompt in an unauthed state.
-                    self.should_exit = true;
-                }
-                self.is_done = true;
-            }
-            _ => {
-                if let Some(Step::Welcome(widget)) = self
-                    .steps
-                    .iter_mut()
-                    .find(|step| matches!(step, Step::Welcome(_)))
-                {
-                    widget.handle_key_event(key_event);
-                }
-                if let Some(active_step) = self.current_steps_mut().into_iter().last() {
-                    active_step.handle_key_event(key_event);
-                }
-            }
+            } => !is_api_key_entry_active,
+            _ => false,
         };
+        if should_quit {
+            if self.is_auth_in_progress() {
+                // If the user cancels the auth menu, exit the app rather than
+                // leave the user at a prompt in an unauthed state.
+                self.should_exit = true;
+            }
+            self.is_done = true;
+        } else {
+            if let Some(Step::Welcome(widget)) = self
+                .steps
+                .iter_mut()
+                .find(|step| matches!(step, Step::Welcome(_)))
+            {
+                widget.handle_key_event(key_event);
+            }
+            if let Some(active_step) = self.current_steps_mut().into_iter().last() {
+                active_step.handle_key_event(key_event);
+            }
+        }
         self.request_frame.schedule_frame();
     }
 
@@ -427,4 +441,77 @@ pub(crate) async fn run_onboarding_app(
         directory_trust_decision: onboarding_screen.directory_trust_decision(),
         should_exit: onboarding_screen.should_exit(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::auth::AuthCredentialsStoreMode;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    fn onboarding_with_auth_state(
+        state: SignInState,
+    ) -> (OnboardingScreen, Arc<RwLock<SignInState>>, TempDir) {
+        let codex_home = TempDir::new().expect("temp home");
+        let codex_home_path = codex_home.path().to_path_buf();
+        let sign_in_state = Arc::new(RwLock::new(state));
+        let auth_manager = AuthManager::shared(
+            codex_home_path.clone(),
+            false,
+            AuthCredentialsStoreMode::File,
+        );
+
+        let onboarding = OnboardingScreen {
+            request_frame: FrameRequester::test_dummy(),
+            steps: vec![Step::Auth(AuthModeWidget {
+                request_frame: FrameRequester::test_dummy(),
+                highlighted_mode: AuthMode::ApiKey,
+                error: None,
+                sign_in_state: sign_in_state.clone(),
+                codex_home: codex_home_path,
+                cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+                login_status: LoginStatus::NotAuthenticated,
+                auth_manager,
+                forced_chatgpt_workspace_id: None,
+                forced_login_method: None,
+                animations_enabled: false,
+            })],
+            is_done: false,
+            should_exit: false,
+        };
+
+        (onboarding, sign_in_state, codex_home)
+    }
+
+    #[test]
+    fn q_in_api_key_entry_is_treated_as_input() {
+        let (mut onboarding, sign_in_state, _tmp) =
+            onboarding_with_auth_state(SignInState::ApiKeyEntry(Default::default()));
+
+        onboarding.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+
+        assert!(!onboarding.is_done());
+        assert!(!onboarding.should_exit());
+        let guard = sign_in_state.read().expect("sign in state poisoned");
+        if let SignInState::ApiKeyEntry(state) = &*guard {
+            assert_eq!(state.value_for_test(), "q");
+        } else {
+            panic!("expected API key entry state");
+        }
+    }
+
+    #[test]
+    fn q_still_exits_when_not_editing_api_key() {
+        let (mut onboarding, _sign_in_state, _tmp) =
+            onboarding_with_auth_state(SignInState::PickMode);
+
+        onboarding.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+
+        assert!(onboarding.is_done());
+        assert!(onboarding.should_exit());
+    }
 }
