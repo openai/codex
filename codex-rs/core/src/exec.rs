@@ -221,9 +221,8 @@ async fn exec_windows_sandbox(
 ) -> Result<RawExecToolCallOutput> {
     use crate::config::find_codex_home;
     use crate::safety::is_windows_elevated_sandbox_enabled;
-    use codex_windows_sandbox::{
-        run_windows_sandbox_capture, run_windows_sandbox_capture_elevated,
-    };
+    use codex_windows_sandbox::run_windows_sandbox_capture;
+    use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
 
     let ExecParams {
         command,

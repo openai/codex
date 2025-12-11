@@ -137,9 +137,8 @@ async fn run_command_under_sandbox(
         #[cfg(target_os = "windows")]
         {
             use codex_core::features::Feature;
-            use codex_windows_sandbox::{
-                run_windows_sandbox_capture, run_windows_sandbox_capture_elevated,
-            };
+            use codex_windows_sandbox::run_windows_sandbox_capture;
+            use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
 
             let policy_str = serde_json::to_string(&config.sandbox_policy)?;
 
