@@ -407,7 +407,10 @@ pub fn create_ghost_commit_with_report(
             existing_untracked.files,
             &existing_untracked.ignored_untracked_files,
         ),
-        existing_untracked.dirs,
+        merge_preserved_untracked_dirs(
+            existing_untracked.dirs,
+            &existing_untracked.ignored_large_untracked_dirs,
+        ),
     );
 
     Ok((
@@ -707,6 +710,24 @@ fn merge_preserved_untracked_files(
 
     files.extend(ignored.iter().map(|entry| entry.path.clone()));
     files
+}
+
+fn merge_preserved_untracked_dirs(
+    mut dirs: Vec<PathBuf>,
+    ignored_large_dirs: &[LargeUntrackedDir],
+) -> Vec<PathBuf> {
+    if ignored_large_dirs.is_empty() {
+        return dirs;
+    }
+
+    for entry in ignored_large_dirs {
+        if dirs.iter().any(|dir| dir == &entry.path) {
+            continue;
+        }
+        dirs.push(entry.path.clone());
+    }
+
+    dirs
 }
 
 /// Removes untracked files and directories that were not present when the snapshot was captured.
@@ -1026,6 +1047,59 @@ mod tests {
         assert!(
             repo.join("models/weights-0.bin").exists(),
             "ignored untracked directories should be preserved during undo cleanup"
+        );
+        assert!(!repo.join("ephemeral.txt").exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn restore_preserves_large_untracked_dirs_when_threshold_disabled()
+    -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join("tracked.txt"), "contents\n")?;
+        run_git_in(repo, &["add", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let models = repo.join("models");
+        std::fs::create_dir(&models)?;
+        let threshold: i64 = 2;
+        for idx in 0..(threshold + 1) {
+            let file = models.join(format!("weights-{idx}.bin"));
+            std::fs::write(file, "data\n")?;
+        }
+
+        let snapshot_config = GhostSnapshotConfig {
+            ignore_large_untracked_files: Some(DEFAULT_IGNORE_LARGE_UNTRACKED_FILES),
+            ignore_large_untracked_dirs: Some(threshold),
+        };
+        let (ghost, _report) = create_ghost_commit_with_report(
+            &CreateGhostCommitOptions::new(repo).ghost_snapshot(snapshot_config),
+        )?;
+
+        std::fs::write(repo.join("ephemeral.txt"), "temp\n")?;
+        restore_ghost_commit_with_options(
+            &RestoreGhostCommitOptions::new(repo).ignore_large_untracked_dirs(0),
+            &ghost,
+        )?;
+
+        assert!(
+            repo.join("models/weights-0.bin").exists(),
+            "ignored untracked directories should be preserved during undo cleanup, even when the threshold is disabled at restore time"
         );
         assert!(!repo.join("ephemeral.txt").exists());
 
