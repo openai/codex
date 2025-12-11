@@ -63,7 +63,11 @@ pub(crate) fn create_seatbelt_command_args(
 
             for (index, wr) in writable_roots.iter().enumerate() {
                 // Canonicalize to avoid mismatches like /var vs /private/var on macOS.
-                let canonical_root = wr.root.canonicalize().unwrap_or_else(|_| wr.root.clone());
+                let canonical_root = wr
+                    .root
+                    .as_path()
+                    .canonicalize()
+                    .unwrap_or_else(|_| wr.root.to_path_buf());
                 let root_param = format!("WRITABLE_ROOT_{index}");
                 file_write_params.push((root_param.clone(), canonical_root));
 
@@ -75,7 +79,10 @@ pub(crate) fn create_seatbelt_command_args(
                     let mut require_parts: Vec<String> = Vec::new();
                     require_parts.push(format!("(subpath (param \"{root_param}\"))"));
                     for (subpath_index, ro) in wr.read_only_subpaths.iter().enumerate() {
-                        let canonical_ro = ro.canonicalize().unwrap_or_else(|_| ro.clone());
+                        let canonical_ro = ro
+                            .as_path()
+                            .canonicalize()
+                            .unwrap_or_else(|_| ro.to_path_buf());
                         let ro_param = format!("WRITABLE_ROOT_{index}_RO_{subpath_index}");
                         require_parts
                             .push(format!("(require-not (subpath (param \"{ro_param}\")))"));
@@ -182,7 +189,10 @@ mod tests {
         // Build a policy that only includes the two test roots as writable and
         // does not automatically include defaults TMPDIR or /tmp.
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![root_with_git, root_without_git],
+            writable_roots: vec![root_with_git, root_without_git]
+                .into_iter()
+                .map(|p| p.try_into().unwrap())
+                .collect(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
