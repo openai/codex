@@ -406,7 +406,7 @@ impl Notice {
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]
-    pub writable_roots: Vec<PathBuf>,
+    pub writable_roots: Vec<AbsolutePathBuf>,
     #[serde(default)]
     pub network_access: bool,
     #[serde(default)]
