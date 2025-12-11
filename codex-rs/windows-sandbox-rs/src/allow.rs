@@ -1,3 +1,4 @@
+use codex_utils_absolute_path::AbsolutePathBuf;
 use crate::policy::SandboxPolicy;
 use dunce::canonicalize;
 use std::collections::HashMap;
@@ -109,7 +110,7 @@ mod tests {
         let _ = fs::create_dir_all(&extra_root);
 
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![extra_root.clone()],
+            writable_roots: vec![AbsolutePathBuf::try_from(extra_root.as_path()).unwrap()],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
