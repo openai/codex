@@ -24,6 +24,7 @@ use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::user_input::UserInput as CoreUserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::ContentBlock as McpContentBlock;
 use mcp_types::Resource as McpResource;
 use mcp_types::ResourceTemplate as McpResourceTemplate;
@@ -420,7 +421,7 @@ pub enum SandboxPolicy {
     #[ts(rename_all = "camelCase")]
     WorkspaceWrite {
         #[serde(default)]
-        writable_roots: Vec<PathBuf>,
+        writable_roots: Vec<AbsolutePathBuf>,
         #[serde(default)]
         network_access: bool,
         #[serde(default)]
