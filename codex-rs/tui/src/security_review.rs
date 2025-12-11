@@ -67,6 +67,7 @@ const MAX_FILE_ANALYSIS_ATTEMPTS: usize = 2;
 const COMMAND_PREVIEW_MAX_LINES: usize = 2;
 const COMMAND_PREVIEW_MAX_GRAPHEMES: usize = 96;
 const AUTO_SCOPE_MODEL: &str = "gpt-5-codex";
+const FILE_TRIAGE_MODEL: &str = "gpt-5-codex-mini";
 const SPEC_GENERATION_MODEL: &str = "gpt-5-codex";
 const BUG_RERANK_SYSTEM_PROMPT: &str = "You are a senior application security engineer triaging review findings. Reassess customer-facing risk using the supplied repository context and previously generated specs. Only respond with JSON Lines.";
 const BUG_RERANK_CHUNK_SIZE: usize = 4;
@@ -894,12 +895,18 @@ pub(crate) async fn run_security_review(
         });
     }
 
+    let triage_model = if request.triage_model.trim().is_empty() {
+        FILE_TRIAGE_MODEL
+    } else {
+        request.triage_model.as_str()
+    };
+
     record("Running LLM file triage to prioritize analysis...".to_string());
     let triage = match triage_files_for_bug_analysis(
         &client,
         &request.provider,
         &request.auth,
-        &request.triage_model,
+        triage_model,
         collection.snippets,
         progress_sender.clone(),
         metrics.clone(),
@@ -1345,6 +1352,11 @@ async fn triage_files_for_bug_analysis(
 ) -> Result<FileTriageResult, SecurityReviewFailure> {
     let total = snippets.len();
     let mut logs: Vec<String> = Vec::new();
+    let triage_model = if triage_model.trim().is_empty() {
+        FILE_TRIAGE_MODEL
+    } else {
+        triage_model
+    };
 
     if total == 0 {
         return Ok(FileTriageResult {
