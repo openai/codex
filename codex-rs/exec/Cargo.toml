@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "codex-exec"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "codex-exec"
@@ -24,6 +25,7 @@ codex-common = { workspace = true, features = [
     "sandbox_summary",
 ] }
 codex-core = { workspace = true }
+codex-tui = { workspace = true }
 codex-protocol = { workspace = true }
 mcp-types = { workspace = true }
 opentelemetry-appender-tracing = { workspace = true }

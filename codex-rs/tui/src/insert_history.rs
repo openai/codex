@@ -7,17 +7,14 @@ use crossterm::Command;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Color as CColor;
-use crossterm::style::Colors;
 use crossterm::style::Print;
 use crossterm::style::SetAttribute;
 use crossterm::style::SetBackgroundColor;
-use crossterm::style::SetColors;
 use crossterm::style::SetForegroundColor;
 use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
 use ratatui::layout::Size;
 use ratatui::prelude::Backend;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -36,7 +33,7 @@ where
     let mut area = terminal.viewport_area;
     let mut should_update_area = false;
     let last_cursor_pos = terminal.last_known_cursor_pos;
-    let writer = terminal.backend_mut();
+    let mut writer = terminal.backend_mut();
 
     // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
     // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
@@ -93,21 +90,25 @@ where
     queue!(writer, MoveTo(0, cursor_top))?;
 
     for line in wrapped {
-        queue!(writer, Print("\r\n"))?;
+        let line_fg = line
+            .style
+            .fg
+            .map(std::convert::Into::into)
+            .unwrap_or(CColor::Reset);
+        let line_bg = line
+            .style
+            .bg
+            .map(std::convert::Into::into)
+            .unwrap_or(CColor::Reset);
         queue!(
             writer,
-            SetColors(Colors::new(
-                line.style
-                    .fg
-                    .map(std::convert::Into::into)
-                    .unwrap_or(CColor::Reset),
-                line.style
-                    .bg
-                    .map(std::convert::Into::into)
-                    .unwrap_or(CColor::Reset)
-            ))
+            Print("\r\n"),
+            SetForegroundColor(CColor::Reset),
+            SetBackgroundColor(CColor::Reset),
+            Clear(ClearType::UntilNewLine),
+            SetForegroundColor(line_fg),
+            SetBackgroundColor(line_bg)
         )?;
-        queue!(writer, Clear(ClearType::UntilNewLine))?;
         // Merge line-level style into each span so that ANSI colors reflect
         // line styles (e.g., blockquotes with green fg).
         let merged_spans: Vec<Span> = line
@@ -126,7 +127,8 @@ where
     // Restore the cursor position to where it was before we started.
     queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
 
-    let _ = writer;
+    std::io::Write::flush(&mut writer)?;
+
     if should_update_area {
         terminal.set_viewport_area(area);
     }
@@ -245,8 +247,8 @@ fn write_spans<'a, I>(mut writer: &mut impl Write, content: I) -> io::Result<()>
 where
     I: IntoIterator<Item = &'a Span<'a>>,
 {
-    let mut fg = Color::Reset;
-    let mut bg = Color::Reset;
+    let mut fg = CColor::Reset;
+    let mut bg = CColor::Reset;
     let mut last_modifier = Modifier::empty();
     for span in content {
         let mut modifier = Modifier::empty();
@@ -260,14 +262,22 @@ where
             diff.queue(&mut writer)?;
             last_modifier = modifier;
         }
-        let next_fg = span.style.fg.unwrap_or(Color::Reset);
-        let next_bg = span.style.bg.unwrap_or(Color::Reset);
-        if next_fg != fg || next_bg != bg {
-            queue!(
-                writer,
-                SetColors(Colors::new(next_fg.into(), next_bg.into()))
-            )?;
+        let next_fg = span
+            .style
+            .fg
+            .map(std::convert::Into::into)
+            .unwrap_or(CColor::Reset);
+        let next_bg = span
+            .style
+            .bg
+            .map(std::convert::Into::into)
+            .unwrap_or(CColor::Reset);
+        if next_fg != fg {
+            queue!(writer, SetForegroundColor(next_fg))?;
             fg = next_fg;
+        }
+        if next_bg != bg {
+            queue!(writer, SetBackgroundColor(next_bg))?;
             bg = next_bg;
         }
 
@@ -289,6 +299,22 @@ mod tests {
     use crate::test_backend::VT100Backend;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
+
+    #[test]
+    fn vt100_backend_applies_set_foreground_color() {
+        let mut backend = VT100Backend::new(8, 4);
+        queue!(
+            backend,
+            SetForegroundColor(CColor::Green),
+            Print("hi"),
+            SetForegroundColor(CColor::Reset)
+        )
+        .unwrap();
+        std::io::Write::flush(&mut backend).unwrap();
+        let screen = backend.vt100().screen();
+        let cell = screen.cell(0, 0).unwrap();
+        assert_ne!(cell.fgcolor(), vt100::Color::Default);
+    }
 
     #[test]
     fn writes_bold_then_regular_spans() {

@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "codex-tui"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "codex-tui"
@@ -39,6 +40,7 @@ codex-core = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
 codex-login = { workspace = true }
+codex-rmcp-client = { workspace = true }
 codex-protocol = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
@@ -62,7 +64,8 @@ ratatui = { workspace = true, features = [
 ] }
 ratatui-macros = { workspace = true }
 regex-lite = { workspace = true }
-reqwest = { version = "0.12", features = ["json"] }
+regex = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 shlex = { workspace = true }
@@ -72,11 +75,14 @@ supports-color = { workspace = true }
 tempfile = { workspace = true }
 textwrap = { workspace = true }
 tokio = { workspace = true, features = [
+    "fs",
     "io-std",
     "macros",
     "process",
     "rt-multi-thread",
     "signal",
+    "test-util",
+    "time",
 ] }
 tokio-stream = { workspace = true }
 toml = { workspace = true }
@@ -88,8 +94,11 @@ tree-sitter-highlight = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
+futures = { workspace = true }
+time = { workspace = true, features = ["serde"] }
 
 codex-windows-sandbox = { workspace = true }
+tokio-util = { workspace = true, features = ["time"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
@@ -101,6 +110,7 @@ arboard = { workspace = true }
 
 
 [dev-dependencies]
+codex-core = { workspace = true, features = ["test-support"] }
 assert_matches = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }
@@ -108,3 +118,4 @@ pretty_assertions = { workspace = true }
 rand = { workspace = true }
 serial_test = { workspace = true }
 vt100 = { workspace = true }
+uuid = { workspace = true }

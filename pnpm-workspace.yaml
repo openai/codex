@@ -2,6 +2,8 @@ packages:
   - docs
   - sdk/typescript
   - shell-tool-mcp
+  - google-workspace-mcp
+  - google-drive-mcp
 
 ignoredBuiltDependencies:
   - esbuild

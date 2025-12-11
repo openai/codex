@@ -6,6 +6,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::project_doc::discover_project_doc_paths;
+use codex_protocol::account::PlanType;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
@@ -83,13 +84,18 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
     }
 }
 
-pub(crate) fn compose_account_display(auth_manager: &AuthManager) -> Option<StatusAccountDisplay> {
+pub(crate) fn compose_account_display(
+    auth_manager: &AuthManager,
+    plan: Option<PlanType>,
+) -> Option<StatusAccountDisplay> {
     let auth = auth_manager.auth()?;
 
     match auth.mode {
         AuthMode::ChatGPT => {
             let email = auth.get_account_email();
-            let plan = auth.raw_plan_type().map(|plan| title_case(plan.as_str()));
+            let plan = plan
+                .map(|plan_type| title_case(format!("{plan_type:?}").as_str()))
+                .or_else(|| Some("Unknown".to_string()));
             Some(StatusAccountDisplay::ChatGpt { email, plan })
         }
         AuthMode::ApiKey => Some(StatusAccountDisplay::ApiKey),

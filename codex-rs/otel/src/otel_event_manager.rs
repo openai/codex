@@ -2,9 +2,9 @@ use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_protocol::ConversationId;
-use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -131,7 +131,18 @@ impl OtelEventManager {
             Ok(response) => (Some(response.status().as_u16()), None),
             Err(error) => (error.status().map(|s| s.as_u16()), Some(error.to_string())),
         };
+        self.record_api_request(attempt, status, error.as_deref(), duration);
 
+        response
+    }
+
+    pub fn record_api_request(
+        &self,
+        attempt: u64,
+        status: Option<u16>,
+        error: Option<&str>,
+        duration: Duration,
+    ) {
         tracing::event!(
             tracing::Level::INFO,
             event.name = "codex.api_request",
@@ -149,8 +160,6 @@ impl OtelEventManager {
             error.message = error,
             attempt = attempt,
         );
-
-        response
     }
 
     pub fn log_sse_event<E>(
@@ -343,7 +352,7 @@ impl OtelEventManager {
         &self,
         tool_name: &str,
         call_id: &str,
-        decision: ReviewDecision,
+        decision: &ReviewDecision,
         source: ToolDecisionSource,
     ) {
         tracing::event!(
@@ -360,7 +369,7 @@ impl OtelEventManager {
             slug = %self.metadata.slug,
             tool_name = %tool_name,
             call_id = %call_id,
-            decision = %decision.to_string().to_lowercase(),
+            decision = %decision.clone().to_string().to_lowercase(),
             source = %source.to_string(),
         );
     }

@@ -19,6 +19,7 @@ use crate::app_event::FeedbackCategory;
 use crate::app_event_sender::AppEventSender;
 use crate::history_cell;
 use crate::render::renderable::Renderable;
+use codex_core::protocol::SessionSource;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -85,6 +86,7 @@ impl FeedbackNoteView {
             } else {
                 None
             },
+            Some(SessionSource::Cli),
         );
 
         match result {

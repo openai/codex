@@ -1,3 +1,6 @@
 model = "gpt-5.1"
 
 # Consider setting [mcp_servers] here!
+
+[features]
+parallel_tools = true

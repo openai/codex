@@ -12,7 +12,6 @@ use std::time::Duration;
 
 use crate::ConversationId;
 use crate::approvals::ElicitationRequestEvent;
-use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
 use crate::items::TurnItem;
@@ -20,6 +19,7 @@ use crate::message_history::HistoryEntry;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::num_format::format_with_separators;
+use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::user_input::UserInput;
@@ -39,6 +39,7 @@ use ts_rs::TS;
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
+pub use crate::approvals::ExecPolicyAmendment;
 pub use crate::approvals::SandboxCommandAssessment;
 pub use crate::approvals::SandboxRiskLevel;
 
@@ -208,6 +209,9 @@ pub enum Op {
         /// The raw command string after '!'
         command: String,
     },
+
+    /// Request the list of available models.
+    ListModels,
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -454,6 +458,9 @@ pub enum EventMsg {
     /// Warning issued while processing a submission. Unlike `Error`, this
     /// indicates the task continued but the user should still be notified.
     Warning(WarningEvent),
+
+    /// Conversation history was compacted (either automatically or manually).
+    ContextCompacted(ContextCompactedEvent),
 
     /// Agent has started a task
     TaskStarted(TaskStartedEvent),
@@ -740,6 +747,9 @@ pub struct WarningEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ContextCompactedEvent;
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TaskCompleteEvent {
     pub last_agent_message: Option<String>,
 }
@@ -837,6 +847,7 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
+    pub plan_type: Option<crate::account::PlanType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
@@ -1131,6 +1142,29 @@ pub enum SubAgentSource {
     Other(String),
 }
 
+impl fmt::Display for SessionSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SessionSource::Cli => f.write_str("cli"),
+            SessionSource::VSCode => f.write_str("vscode"),
+            SessionSource::Exec => f.write_str("exec"),
+            SessionSource::Mcp => f.write_str("mcp"),
+            SessionSource::SubAgent(sub_source) => write!(f, "subagent_{sub_source}"),
+            SessionSource::Unknown => f.write_str("unknown"),
+        }
+    }
+}
+
+impl fmt::Display for SubAgentSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SubAgentSource::Review => f.write_str("review"),
+            SubAgentSource::Compact => f.write_str("compact"),
+            SubAgentSource::Other(other) => f.write_str(other),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
     pub id: ConversationId,
@@ -1227,13 +1261,47 @@ pub struct GitInfo {
     pub repository_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDelivery {
+    Inline,
+    Detached,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+pub enum ReviewTarget {
+    /// Review the working tree: staged, unstaged, and untracked files.
+    UncommittedChanges,
+
+    /// Review changes between the current branch and the given base branch.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    BaseBranch { branch: String },
+
+    /// Review the changes introduced by a specific commit.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Commit {
+        sha: String,
+        /// Optional human-readable label (e.g., commit subject) for UIs.
+        title: Option<String>,
+    },
+
+    /// Arbitrary instructions provided by the user.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Custom { instructions: String },
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 /// Review request sent to the review session.
 pub struct ReviewRequest {
-    pub prompt: String,
-    pub user_facing_hint: String,
-    #[serde(default)]
-    pub append_to_original_thread: bool,
+    pub target: ReviewTarget,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_facing_hint: Option<String>,
 }
 
 /// Structured review result produced by a child review session.
@@ -1280,7 +1348,7 @@ pub struct ReviewLineRange {
     pub end: u32,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Debug, Clone, Copy, Display, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecCommandSource {
     Agent,
@@ -1299,6 +1367,10 @@ impl Default for ExecCommandSource {
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
     pub call_id: String,
+    /// Identifier for the underlying PTY process (when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub process_id: Option<String>,
     /// Turn ID that this command belongs to.
     pub turn_id: String,
     /// The command to be executed.
@@ -1319,6 +1391,10 @@ pub struct ExecCommandBeginEvent {
 pub struct ExecCommandEndEvent {
     /// Identifier for the ExecCommandBegin that finished.
     pub call_id: String,
+    /// Identifier for the underlying PTY process (when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub process_id: Option<String>,
     /// Turn ID that this command belongs to.
     pub turn_id: String,
     /// The command that was executed.
@@ -1575,13 +1651,17 @@ pub struct SessionConfiguredEvent {
 }
 
 /// User's decision in response to an ExecApprovalRequest.
-#[derive(
-    Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Display, JsonSchema, TS,
-)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewDecision {
     /// User has approved this command and the agent should execute it.
     Approved,
+
+    /// User has approved this command and wants to apply the proposed execpolicy
+    /// amendment so future matching commands are permitted.
+    ApprovedExecpolicyAmendment {
+        proposed_execpolicy_amendment: ExecPolicyAmendment,
+    },
 
     /// User has approved this command and wants to automatically approve any
     /// future identical instances (`command` and `cwd` match exactly) for the

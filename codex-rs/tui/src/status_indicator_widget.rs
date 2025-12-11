@@ -10,7 +10,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Paragraph;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -20,9 +20,27 @@ use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 
+#[derive(Debug, Clone)]
+pub(crate) struct StatusSnapshot {
+    pub(crate) header: String,
+    pub(crate) progress: Option<f32>,
+    pub(crate) thinking: Vec<String>,
+    pub(crate) tool_calls: Vec<String>,
+    pub(crate) logs: Vec<String>,
+}
+
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
     header: String,
+    /// Percentage progress to display, if available.
+    progress: Option<f32>,
+    /// Recent reasoning lines emitted by the model.
+    thinking_lines: Vec<String>,
+    /// Labels of in-flight tool calls.
+    tool_calls: Vec<String>,
+    /// Recent log messages emitted by long-running tasks.
+    logs: Vec<String>,
+    /// Whether to show the interrupt key hint.
     show_interrupt_hint: bool,
 
     elapsed_running: Duration,
@@ -58,6 +76,10 @@ impl StatusIndicatorWidget {
     ) -> Self {
         Self {
             header: String::from("Working"),
+            progress: None,
+            thinking_lines: Vec::new(),
+            tool_calls: Vec::new(),
+            logs: Vec::new(),
             show_interrupt_hint: true,
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
@@ -83,6 +105,15 @@ impl StatusIndicatorWidget {
         &self.header
     }
 
+    pub(crate) fn update_snapshot(&mut self, snapshot: StatusSnapshot) {
+        self.update_header(snapshot.header);
+        self.progress = snapshot.progress;
+        self.thinking_lines = snapshot.thinking;
+        self.tool_calls = snapshot.tool_calls;
+        self.logs = snapshot.logs;
+        self.frame_requester.schedule_frame();
+    }
+
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
         self.show_interrupt_hint = visible;
     }
@@ -90,6 +121,11 @@ impl StatusIndicatorWidget {
     #[cfg(test)]
     pub(crate) fn interrupt_hint_visible(&self) -> bool {
         self.show_interrupt_hint
+    }
+
+    pub(crate) fn set_logs(&mut self, logs: Vec<String>) {
+        self.logs = logs;
+        self.frame_requester.schedule_frame();
     }
 
     pub(crate) fn pause_timer(&mut self) {
@@ -135,8 +171,34 @@ impl StatusIndicatorWidget {
 }
 
 impl Renderable for StatusIndicatorWidget {
-    fn desired_height(&self, _width: u16) -> u16 {
-        1
+    fn desired_height(&self, width: u16) -> u16 {
+        let inner_width = width.max(1) as usize;
+        let mut total: u16 = 1; // status line
+
+        // Additional thinking/tool call lines beyond the latest one shown inline.
+        let extra_thinking = self
+            .thinking_lines
+            .len()
+            .saturating_sub(usize::from(self.thinking_lines.last().is_some()))
+            as u16;
+        let extra_tool_calls =
+            self.tool_calls
+                .len()
+                .saturating_sub(usize::from(self.tool_calls.last().is_some())) as u16;
+        total = total.saturating_add(extra_thinking);
+        total = total.saturating_add(extra_tool_calls);
+
+        let text_width = inner_width.saturating_sub(3); // account for " ↳ " prefix
+        if text_width > 0 {
+            for log in &self.logs {
+                let wrapped = textwrap::wrap(log, text_width);
+                total = total.saturating_add(wrapped.len() as u16);
+            }
+        } else {
+            total = total.saturating_add(self.logs.len() as u16);
+        }
+
+        total
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -151,13 +213,29 @@ impl Renderable for StatusIndicatorWidget {
         let elapsed_duration = self.elapsed_duration_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
 
-        let mut spans = Vec::with_capacity(5);
+        let latest_thinking = self.thinking_lines.last().map(String::as_str);
+        let latest_tool_call = self.tool_calls.last().map(String::as_str);
+
+        let mut spans = Vec::with_capacity(9);
         spans.push(spinner(Some(self.last_resume_at), self.animations_enabled));
         spans.push(" ".into());
         if self.animations_enabled {
             spans.extend(shimmer_spans(&self.header));
         } else if !self.header.is_empty() {
             spans.push(self.header.clone().into());
+        }
+        if let Some(progress) = self.progress {
+            let pct = (progress.clamp(0.0, 1.0) * 100.0).round();
+            spans.push(" ".into());
+            spans.push(format!("{pct:.0}%").dim());
+        }
+        if let Some(thinking) = latest_thinking {
+            spans.push(" - ".into());
+            spans.push(thinking.to_string().magenta());
+        }
+        if let Some(tool) = latest_tool_call {
+            spans.push(" - ".into());
+            spans.push(tool.to_string().cyan());
         }
         spans.push(" ".into());
         if self.show_interrupt_hint {
@@ -170,7 +248,47 @@ impl Renderable for StatusIndicatorWidget {
             spans.push(format!("({pretty_elapsed})").dim());
         }
 
-        Line::from(spans).render_ref(area, buf);
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(spans));
+
+        let extra_thinking = self
+            .thinking_lines
+            .len()
+            .saturating_sub(usize::from(latest_thinking.is_some()));
+        if extra_thinking > 0 {
+            for thinking in self.thinking_lines.iter().take(extra_thinking) {
+                lines.push(vec![" ↺ ".magenta(), thinking.clone().magenta()].into());
+            }
+        }
+
+        let extra_tool_calls = self
+            .tool_calls
+            .len()
+            .saturating_sub(usize::from(latest_tool_call.is_some()));
+        if extra_tool_calls > 0 {
+            for call in self.tool_calls.iter().take(extra_tool_calls) {
+                lines.push(vec![" ↳ ".cyan(), call.clone().cyan()].into());
+            }
+        }
+
+        let text_width = area.width.saturating_sub(3); // " ↳ " prefix
+        if !self.logs.is_empty() {
+            if text_width > 0 {
+                for log in &self.logs {
+                    let wrapped = textwrap::wrap(log, text_width as usize);
+                    for (i, piece) in wrapped.iter().enumerate() {
+                        let prefix = if i == 0 { " ↳ ".dim() } else { "   ".dim() };
+                        lines.push(vec![prefix, piece.to_string().into()].into());
+                    }
+                }
+            } else {
+                for log in &self.logs {
+                    lines.push(vec![" ↳ ".dim(), log.clone().into()].into());
+                }
+            }
+        }
+
+        Paragraph::new(lines).render(area, buf);
     }
 }
 

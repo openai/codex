@@ -15,6 +15,7 @@ use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
+use crate::tooltips;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
@@ -30,7 +31,7 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
-use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -408,6 +409,19 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
+        ApprovedExecpolicyAmendment { .. } => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "approved".bold(),
+                    " codex to run ".into(),
+                    snippet,
+                    " and applied the execpolicy amendment".bold(),
+                ],
+            )
+        }
         ApprovedForSession => {
             let snippet = Span::from(exec_snippet(&command)).dim();
             (
@@ -560,6 +574,35 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
 }
 
 #[derive(Debug)]
+struct TooltipHistoryCell {
+    tip: &'static str,
+}
+
+impl TooltipHistoryCell {
+    fn new(tip: &'static str) -> Self {
+        Self { tip }
+    }
+}
+
+impl HistoryCell for TooltipHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let indent = "  ";
+        let indent_width = UnicodeWidthStr::width(indent);
+        let wrap_width = usize::from(width.max(1))
+            .saturating_sub(indent_width)
+            .max(1);
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        append_markdown(
+            &format!("**Tip:** {}", self.tip),
+            Some(wrap_width),
+            &mut lines,
+        );
+
+        prefix_lines(lines, indent.into(), indent.into())
+    }
+}
+
+#[derive(Debug)]
 pub struct SessionInfoCell(CompositeHistoryCell);
 
 impl HistoryCell for SessionInfoCell {
@@ -586,15 +629,16 @@ pub(crate) fn new_session_info(
         reasoning_effort,
         ..
     } = event;
-    SessionInfoCell(if is_first_event {
-        // Header box rendered as history (so it appears at the very top)
-        let header = SessionHeaderHistoryCell::new(
-            model,
-            reasoning_effort,
-            config.cwd.clone(),
-            crate::version::CODEX_CLI_VERSION,
-        );
+    // Header box rendered as history (so it appears at the very top)
+    let header = SessionHeaderHistoryCell::new(
+        model.clone(),
+        reasoning_effort,
+        config.cwd.clone(),
+        CODEX_CLI_VERSION,
+    );
+    let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
+    if is_first_event {
         // Help lines below the header (new copy and list)
         let help_lines: Vec<Line<'static>> = vec![
             "  To get started, describe a task or try one of these commands:"
@@ -628,24 +672,24 @@ pub(crate) fn new_session_info(
             ]),
         ];
 
-        CompositeHistoryCell {
-            parts: vec![
-                Box::new(header),
-                Box::new(PlainHistoryCell { lines: help_lines }),
-            ],
-        }
-    } else if config.model == model {
-        CompositeHistoryCell { parts: vec![] }
+        parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
     } else {
-        let lines = vec![
-            "model changed:".magenta().bold().into(),
-            format!("requested: {}", config.model).into(),
-            format!("used: {model}").into(),
-        ];
-        CompositeHistoryCell {
-            parts: vec![Box::new(PlainHistoryCell { lines })],
+        if config.show_tooltips
+            && let Some(tooltips) = tooltips::random_tooltip().map(TooltipHistoryCell::new)
+        {
+            parts.push(Box::new(tooltips));
         }
-    })
+        if config.model != model {
+            let lines = vec![
+                "model changed:".magenta().bold().into(),
+                format!("requested: {}", config.model).into(),
+                format!("used: {model}").into(),
+            ];
+            parts.push(Box::new(PlainHistoryCell { lines }));
+        }
+    }
+
+    SessionInfoCell(CompositeHistoryCell { parts })
 }
 
 pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
@@ -1376,9 +1420,9 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
 
 pub(crate) fn new_reasoning_summary_block(
     full_reasoning_buffer: String,
-    config: &Config,
+    reasoning_summary_format: ReasoningSummaryFormat,
 ) -> Box<dyn HistoryCell> {
-    if config.model_family.reasoning_summary_format == ReasoningSummaryFormat::Experimental {
+    if reasoning_summary_format == ReasoningSummaryFormat::Experimental {
         // Experimental format is following:
         // ** header **
         //
@@ -1473,6 +1517,7 @@ mod tests {
     use codex_core::config::ConfigToml;
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
+    use codex_core::openai_models::models_manager::ModelsManager;
     use codex_core::protocol::McpAuthStatus;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
@@ -2276,12 +2321,13 @@ mod tests {
     }
     #[test]
     fn reasoning_summary_block() {
-        let mut config = test_config();
-        config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
-
+        let config = test_config();
+        let reasoning_format =
+            ModelsManager::construct_model_family_offline(&config.model, &config)
+                .reasoning_summary_format;
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-            &config,
+            reasoning_format,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -2293,24 +2339,49 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
-        let mut config = test_config();
-        config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
-
-        let cell =
-            new_reasoning_summary_block("Detailed reasoning goes here.".to_string(), &config);
+        let config = test_config();
+        let reasoning_format =
+            ModelsManager::construct_model_family_offline(&config.model, &config)
+                .reasoning_summary_format;
+        let cell = new_reasoning_summary_block(
+            "Detailed reasoning goes here.".to_string(),
+            reasoning_format,
+        );
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• Detailed reasoning goes here."]);
     }
 
     #[test]
-    fn reasoning_summary_block_falls_back_when_header_is_missing() {
+    fn reasoning_summary_block_respects_config_overrides() {
         let mut config = test_config();
-        config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
+        config.model = "gpt-3.5-turbo".to_string();
+        config.model_supports_reasoning_summaries = Some(true);
+        config.model_reasoning_summary_format = Some(ReasoningSummaryFormat::Experimental);
+        let model_family = ModelsManager::construct_model_family_offline(&config.model, &config);
+        assert_eq!(
+            model_family.reasoning_summary_format,
+            ReasoningSummaryFormat::Experimental
+        );
 
         let cell = new_reasoning_summary_block(
+            "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
+            model_family.reasoning_summary_format,
+        );
+
+        let rendered_display = render_lines(&cell.display_lines(80));
+        assert_eq!(rendered_display, vec!["• Detailed reasoning goes here."]);
+    }
+
+    #[test]
+    fn reasoning_summary_block_falls_back_when_header_is_missing() {
+        let config = test_config();
+        let reasoning_format =
+            ModelsManager::construct_model_family_offline(&config.model, &config)
+                .reasoning_summary_format;
+        let cell = new_reasoning_summary_block(
             "**High level reasoning without closing".to_string(),
-            &config,
+            reasoning_format,
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -2319,12 +2390,13 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_falls_back_when_summary_is_missing() {
-        let mut config = test_config();
-        config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
-
+        let config = test_config();
+        let reasoning_format =
+            ModelsManager::construct_model_family_offline(&config.model, &config)
+                .reasoning_summary_format;
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**".to_string(),
-            &config,
+            reasoning_format.clone(),
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -2332,7 +2404,7 @@ mod tests {
 
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**\n\n  ".to_string(),
-            &config,
+            reasoning_format,
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -2341,12 +2413,13 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_splits_header_and_summary_when_present() {
-        let mut config = test_config();
-        config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
-
+        let config = test_config();
+        let reasoning_format =
+            ModelsManager::construct_model_family_offline(&config.model, &config)
+                .reasoning_summary_format;
         let cell = new_reasoning_summary_block(
             "**High level plan**\n\nWe should fix the bug next.".to_string(),
-            &config,
+            reasoning_format,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));

@@ -6,7 +6,6 @@ use crate::codex::TurnContext;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use crate::shell::Shell;
-use crate::shell::default_user_shell;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -95,7 +94,7 @@ impl EnvironmentContext {
             && self.writable_roots == *writable_roots
     }
 
-    pub fn diff(before: &TurnContext, after: &TurnContext) -> Self {
+    pub fn diff(before: &TurnContext, after: &TurnContext, shell: &Shell) -> Self {
         let cwd = if before.cwd != after.cwd {
             Some(after.cwd.clone())
         } else {
@@ -111,18 +110,15 @@ impl EnvironmentContext {
         } else {
             None
         };
-        EnvironmentContext::new(cwd, approval_policy, sandbox_policy, default_user_shell())
+        EnvironmentContext::new(cwd, approval_policy, sandbox_policy, shell.clone())
     }
-}
 
-impl From<&TurnContext> for EnvironmentContext {
-    fn from(turn_context: &TurnContext) -> Self {
+    pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
         Self::new(
             Some(turn_context.cwd.clone()),
             Some(turn_context.approval_policy),
             Some(turn_context.sandbox_policy.clone()),
-            // Shell is not configurable from turn to turn
-            default_user_shell(),
+            shell.clone(),
         )
     }
 }
@@ -201,6 +197,7 @@ mod tests {
         Shell {
             shell_type: ShellType::Bash,
             shell_path: PathBuf::from("/bin/bash"),
+            shell_snapshot: None,
         }
     }
 
@@ -338,6 +335,7 @@ mod tests {
             Shell {
                 shell_type: ShellType::Bash,
                 shell_path: "/bin/bash".into(),
+                shell_snapshot: None,
             },
         );
         let context2 = EnvironmentContext::new(
@@ -347,6 +345,7 @@ mod tests {
             Shell {
                 shell_type: ShellType::Zsh,
                 shell_path: "/bin/zsh".into(),
+                shell_snapshot: None,
             },
         );
 

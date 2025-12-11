@@ -10,6 +10,7 @@ use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
+use codex_core::openai_models::models_manager::ModelsManager;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ReasoningItemContent;
@@ -70,14 +71,14 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
-
+    let model_family = ModelsManager::construct_model_family_offline(&config.model, &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
-        config.model_family.slug.as_str(),
+        model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        Some(AuthMode::ChatGPT),
+        Some(AuthMode::ApiKey),
         false,
         "test".to_string(),
     );
@@ -85,6 +86,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
+        model_family,
         otel_event_manager,
         provider,
         effort,

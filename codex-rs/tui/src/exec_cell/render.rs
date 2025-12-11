@@ -14,6 +14,7 @@ use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
+use codex_core::bash::extract_bash_command;
 use codex_core::protocol::ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 use itertools::Itertools;
@@ -58,7 +59,11 @@ pub(crate) fn new_active_exec_command(
 }
 
 fn format_unified_exec_interaction(command: &[String], input: Option<&str>) -> String {
-    let command_display = command.join(" ");
+    let command_display = if let Some((_, script)) = extract_bash_command(command) {
+        script.to_string()
+    } else {
+        command.join(" ")
+    };
     match input {
         Some(data) if !data.is_empty() => {
             let preview = summarize_interaction_input(data);
@@ -219,7 +224,12 @@ impl HistoryCell for ExecCell {
 
             if let Some(output) = call.output.as_ref() {
                 if !call.is_unified_exec_interaction() {
-                    lines.extend(output.formatted_output.lines().map(ansi_escape_line));
+                    let wrap_width = width.max(1) as usize;
+                    let wrap_opts = RtOptions::new(wrap_width);
+                    for unwrapped in output.formatted_output.lines().map(ansi_escape_line) {
+                        let wrapped = word_wrap_line(&unwrapped, wrap_opts.clone());
+                        push_owned_lines(&wrapped, &mut lines);
+                    }
                 }
                 let duration = call
                     .duration
@@ -451,26 +461,26 @@ impl ExecCell {
                     ));
                 }
             } else {
-                let trimmed_output = Self::truncate_lines_middle(
-                    &raw_output.lines,
-                    display_limit,
-                    raw_output.omitted,
-                );
-
+                // Wrap first so that truncation is applied to on-screen lines
+                // rather than logical lines. This ensures that a small number
+                // of very long lines cannot flood the viewport.
                 let mut wrapped_output: Vec<Line<'static>> = Vec::new();
                 let output_wrap_width = layout.output_block.wrap_width(width);
                 let output_opts =
                     RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
-                for line in trimmed_output {
+                for line in &raw_output.lines {
                     push_owned_lines(
-                        &word_wrap_line(&line, output_opts.clone()),
+                        &word_wrap_line(line, output_opts.clone()),
                         &mut wrapped_output,
                     );
                 }
 
-                if !wrapped_output.is_empty() {
+                let trimmed_output =
+                    Self::truncate_lines_middle(&wrapped_output, display_limit, raw_output.omitted);
+
+                if !trimmed_output.is_empty() {
                     lines.extend(prefix_lines(
-                        wrapped_output,
+                        trimmed_output,
                         Span::from(layout.output_block.initial_prefix).dim(),
                         Span::from(layout.output_block.subsequent_prefix),
                     ));
@@ -597,3 +607,99 @@ const EXEC_DISPLAY_LAYOUT: ExecDisplayLayout = ExecDisplayLayout::new(
     PrefixedBlock::new("  └ ", "    "),
     5,
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::protocol::ExecCommandSource;
+
+    #[test]
+    fn user_shell_output_is_limited_by_screen_lines() {
+        // Construct a user shell exec cell whose aggregated output consists of a
+        // small number of very long logical lines. These will wrap into many
+        // on-screen lines at narrow widths.
+        //
+        // Use a short marker so it survives wrapping intact inside each
+        // rendered screen line; the previous test used a marker longer than
+        // the wrap width, so it was split across lines and the assertion
+        // never actually saw it.
+        let marker = "Z";
+        let long_chunk = marker.repeat(800);
+        let aggregated_output = format!("{long_chunk}\n{long_chunk}\n");
+
+        // Baseline: how many screen lines would we get if we simply wrapped
+        // all logical lines without any truncation?
+        let output = CommandOutput {
+            exit_code: 0,
+            aggregated_output,
+            formatted_output: String::new(),
+        };
+        let width = 20;
+        let layout = EXEC_DISPLAY_LAYOUT;
+        let raw_output = output_lines(
+            Some(&output),
+            OutputLinesParams {
+                // Large enough to include all logical lines without
+                // triggering the ellipsis in `output_lines`.
+                line_limit: 100,
+                only_err: false,
+                include_angle_pipe: false,
+                include_prefix: false,
+            },
+        );
+        let output_wrap_width = layout.output_block.wrap_width(width);
+        let output_opts =
+            RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
+        let mut full_wrapped_output: Vec<Line<'static>> = Vec::new();
+        for line in &raw_output.lines {
+            push_owned_lines(
+                &word_wrap_line(line, output_opts.clone()),
+                &mut full_wrapped_output,
+            );
+        }
+        let full_screen_lines = full_wrapped_output
+            .iter()
+            .filter(|line| line.spans.iter().any(|span| span.content.contains(marker)))
+            .count();
+
+        // Sanity check: this scenario should produce more screen lines than
+        // the user shell per-call limit when no truncation is applied. If
+        // this ever fails, the test no longer exercises the regression.
+        assert!(
+            full_screen_lines > USER_SHELL_TOOL_CALL_MAX_LINES,
+            "expected unbounded wrapping to produce more than {USER_SHELL_TOOL_CALL_MAX_LINES} screen lines, got {full_screen_lines}",
+        );
+
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "echo long".into()],
+            parsed: Vec::new(),
+            output: Some(output),
+            source: ExecCommandSource::UserShell,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+
+        let cell = ExecCell::new(call, false);
+
+        // Use a narrow width so each logical line wraps into many on-screen lines.
+        let lines = cell.command_display_lines(width);
+
+        // Count how many rendered lines contain our marker text. This approximates
+        // the number of visible output "screen lines" for this command.
+        let output_screen_lines = lines
+            .iter()
+            .filter(|line| line.spans.iter().any(|span| span.content.contains(marker)))
+            .count();
+
+        // Regression guard: previously this scenario could render hundreds of
+        // wrapped lines because truncation happened before wrapping. Now the
+        // truncation is applied after wrapping, so the number of visible
+        // screen lines is bounded by USER_SHELL_TOOL_CALL_MAX_LINES.
+        assert!(
+            output_screen_lines <= USER_SHELL_TOOL_CALL_MAX_LINES,
+            "expected at most {USER_SHELL_TOOL_CALL_MAX_LINES} screen lines of user shell output, got {output_screen_lines}",
+        );
+    }
+}

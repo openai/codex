@@ -32,6 +32,12 @@ pub(crate) enum UpdatePromptOutcome {
     RunUpdate(UpdateAction),
 }
 
+pub(crate) const AUTO_UPDATE_ENV_VAR: &str = "CODEX_AUTO_UPDATE";
+
+pub(crate) fn auto_update_enabled() -> bool {
+    std::env::var_os(AUTO_UPDATE_ENV_VAR).is_some()
+}
+
 pub(crate) async fn run_update_prompt_if_needed(
     tui: &mut Tui,
     config: &Config,
@@ -42,6 +48,9 @@ pub(crate) async fn run_update_prompt_if_needed(
     let Some(update_action) = crate::update_action::get_update_action() else {
         return Ok(UpdatePromptOutcome::Continue);
     };
+    if auto_update_enabled() {
+        return Ok(UpdatePromptOutcome::RunUpdate(update_action));
+    }
 
     let mut screen =
         UpdatePromptScreen::new(tui.frame_requester(), latest_version.clone(), update_action);

@@ -11,6 +11,7 @@ use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RateLimitWindow;
 use codex_app_server_protocol::RequestId;
 use codex_core::auth::AuthCredentialsStoreMode;
+use codex_protocol::account::PlanType as AccountPlanType;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::Path;
@@ -153,6 +154,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                 resets_at: Some(secondary_reset_timestamp),
             }),
             credits: None,
+            plan_type: Some(AccountPlanType::Pro),
         },
     };
     assert_eq!(received, expected);

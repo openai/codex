@@ -57,6 +57,7 @@ pub mod live_wrap;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+mod mermaid;
 mod model_migration;
 pub mod onboarding;
 mod oss_selection;
@@ -64,9 +65,13 @@ mod pager_overlay;
 pub mod public_widgets;
 mod render;
 mod resume_picker;
+mod security_prompts;
+mod security_report_viewer;
+mod security_review;
 mod selection_list;
 mod session_log;
 mod shimmer;
+mod skill_error_prompt;
 mod slash_command;
 mod status;
 mod status_indicator_widget;
@@ -74,6 +79,7 @@ mod streaming;
 mod style;
 mod terminal_palette;
 mod text_formatting;
+mod tooltips;
 mod tui;
 mod ui_consts;
 pub mod update_action;
@@ -94,6 +100,24 @@ pub use cli::Cli;
 pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
+pub use security_review::BugValidationState;
+pub use security_review::BugValidationStatus;
+pub use security_review::RunningSecurityReviewCandidate;
+pub use security_review::SecurityReviewBug;
+pub use security_review::SecurityReviewCheckpoint;
+pub use security_review::SecurityReviewFailure;
+pub use security_review::SecurityReviewLogSink;
+pub use security_review::SecurityReviewMetadata;
+pub use security_review::SecurityReviewMode;
+pub use security_review::SecurityReviewRequest;
+pub use security_review::SecurityReviewResult;
+pub use security_review::SecurityReviewSetupResult;
+pub use security_review::latest_running_review_candidate;
+pub use security_review::prepare_security_review_output_root;
+pub use security_review::run_security_review;
+pub use security_review::run_security_review_setup;
+pub use security_review::sanitize_repo_slug;
+pub use security_review::security_review_storage_root;
 use std::io::Write as _;
 
 // (tests access modules directly within the crate)
@@ -363,8 +387,9 @@ async fn run_ratatui_app(
     {
         use crate::update_prompt::UpdatePromptOutcome;
 
+        let allow_auto_update = update_prompt::auto_update_enabled();
         let skip_update_prompt = cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
-        if !skip_update_prompt {
+        if !skip_update_prompt || allow_auto_update {
             match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
                 UpdatePromptOutcome::Continue => {}
                 UpdatePromptOutcome::RunUpdate(action) => {
@@ -504,6 +529,7 @@ async fn run_ratatui_app(
         images,
         resume_selection,
         feedback,
+        should_show_trust_screen, // Proxy to: is it a first run in this directory?
     )
     .await;
 

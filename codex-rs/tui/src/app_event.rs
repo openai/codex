@@ -1,18 +1,37 @@
 use std::path::PathBuf;
 
 use codex_common::approval_presets::ApprovalPreset;
-use codex_common::model_presets::ModelPreset;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
+use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
+use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ReasoningEffort;
+use tokio::sync::oneshot;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
+use crate::security_review::SecurityReviewFailure;
+use crate::security_review::SecurityReviewMetadata;
+use crate::security_review::SecurityReviewMode;
+use crate::security_review::SecurityReviewResult;
 
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort;
+#[derive(Clone, Debug)]
+pub(crate) struct SecurityReviewAutoScopeSelection {
+    pub display_path: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SecurityReviewCommandState {
+    #[allow(dead_code)]
+    Running,
+    Matches,
+    NoMatches,
+    Error,
+}
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
@@ -21,6 +40,9 @@ pub(crate) enum AppEvent {
 
     /// Start a new session.
     NewSession,
+
+    /// Open the resume picker inside the running TUI session.
+    OpenResumePicker,
 
     /// Request to exit the application gracefully.
     ExitRequest,
@@ -69,6 +91,11 @@ pub(crate) enum AppEvent {
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
+    },
+
+    /// Open the full model picker (non-auto models).
+    OpenAllModelsPopup {
+        models: Vec<ModelPreset>,
     },
 
     /// Open the confirmation prompt before enabling full access mode.
@@ -155,7 +182,6 @@ pub(crate) enum AppEvent {
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
-
     /// Open the feedback note entry overlay after the user selects a category.
     OpenFeedbackNote {
         category: FeedbackCategory,
@@ -165,6 +191,80 @@ pub(crate) enum AppEvent {
     /// Open the upload consent popup for feedback after selecting a category.
     OpenFeedbackConsent {
         category: FeedbackCategory,
+    },
+
+    /// Open the scoped path input for security reviews.
+    OpenSecurityReviewPathPrompt(SecurityReviewMode),
+
+    /// Begin running a security review with the given mode and optional scoped paths.
+    StartSecurityReview {
+        mode: SecurityReviewMode,
+        include_paths: Vec<String>,
+        scope_prompt: Option<String>,
+        /// Optional Linear ticket reference (URL or ISSUE-123 key) to sync status.
+        linear_issue: Option<String>,
+        force_new: bool,
+        resume_from: Option<PathBuf>,
+    },
+
+    /// Prepare required connectors for the security review.
+    StartSecurityReviewSetup,
+
+    /// Resume a previously generated security review from disk.
+    ResumeSecurityReview {
+        output_root: PathBuf,
+        metadata: SecurityReviewMetadata,
+    },
+
+    /// Prompt the user to confirm auto-detected scope selections.
+    SecurityReviewAutoScopeConfirm {
+        mode: SecurityReviewMode,
+        prompt: String,
+        selections: Vec<SecurityReviewAutoScopeSelection>,
+        responder: oneshot::Sender<bool>,
+    },
+
+    /// Prompt the user to register at least two accounts and paste credentials.
+    /// The responder receives `Some(raw_input)` when the user submits text, or `None` if dismissed.
+    OpenRegistrationPrompt {
+        url: Option<String>,
+        responder: oneshot::Sender<Option<String>>,
+    },
+
+    /// Notify that the security review scope has been resolved to specific paths.
+    SecurityReviewScopeResolved {
+        paths: Vec<String>,
+    },
+
+    /// Update the command status display for running security review shell commands.
+    SecurityReviewCommandStatus {
+        id: u64,
+        summary: String,
+        state: SecurityReviewCommandState,
+        preview: Vec<String>,
+    },
+
+    /// Append a progress log emitted during the security review.
+    SecurityReviewLog(String),
+
+    /// Security review completed successfully.
+    SecurityReviewComplete {
+        result: SecurityReviewResult,
+    },
+
+    /// Security review setup completed successfully.
+    SecurityReviewSetupComplete {
+        logs: Vec<String>,
+    },
+
+    /// Security review setup failed.
+    SecurityReviewSetupFailed {
+        error: SecurityReviewFailure,
+    },
+
+    /// Security review failed prior to completion.
+    SecurityReviewFailed {
+        error: SecurityReviewFailure,
     },
 }
 

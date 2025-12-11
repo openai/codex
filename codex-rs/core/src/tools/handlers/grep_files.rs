@@ -117,6 +117,7 @@ async fn run_rg_search(
     limit: usize,
     cwd: &Path,
 ) -> Result<Vec<String>, FunctionCallError> {
+    // First attempt: regex search
     let mut command = Command::new("rg");
     command
         .current_dir(cwd)
@@ -148,8 +149,49 @@ async fn run_rg_search(
         Some(1) => Ok(Vec::new()),
         _ => {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr_trimmed = stderr.trim();
+            // Retry with fixed-strings if the regex failed to parse.
+            if stderr_trimmed.contains("regex parse error")
+                || stderr_trimmed.contains("error parsing regex")
+                || stderr_trimmed.contains("unclosed group")
+            {
+                let mut fixed = Command::new("rg");
+                fixed
+                    .current_dir(cwd)
+                    .arg("--files-with-matches")
+                    .arg("--sortr=modified")
+                    .arg("--fixed-strings")
+                    .arg(pattern)
+                    .arg("--no-messages");
+                if let Some(glob) = include {
+                    fixed.arg("--glob").arg(glob);
+                }
+                fixed.arg("--").arg(search_path);
+                let second = timeout(COMMAND_TIMEOUT, fixed.output())
+                    .await
+                    .map_err(|_| {
+                        FunctionCallError::RespondToModel(
+                            "rg timed out after 30 seconds".to_string(),
+                        )
+                    })?
+                    .map_err(|err| {
+                        FunctionCallError::RespondToModel(format!(
+                            "failed to launch rg: {err}. Ensure ripgrep is installed and on PATH."
+                        ))
+                    })?;
+                return match second.status.code() {
+                    Some(0) => Ok(parse_results(&second.stdout, limit)),
+                    Some(1) => Ok(Vec::new()),
+                    _ => {
+                        let second_stderr = String::from_utf8_lossy(&second.stderr);
+                        Err(FunctionCallError::RespondToModel(format!(
+                            "rg failed: {second_stderr}"
+                        )))
+                    }
+                };
+            }
             Err(FunctionCallError::RespondToModel(format!(
-                "rg failed: {stderr}"
+                "rg failed: {stderr_trimmed}"
             )))
         }
     }

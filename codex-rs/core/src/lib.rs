@@ -5,10 +5,10 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+pub mod api_bridge;
 mod apply_patch;
 pub mod auth;
 pub mod bash;
-mod chat_completions;
 mod client;
 mod client_common;
 pub mod codex;
@@ -32,6 +32,7 @@ pub mod git_info;
 pub mod landlock;
 pub mod mcp;
 mod mcp_connection_manager;
+pub mod openai_models;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_CAPABILITY;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_NOTIFICATION;
 pub use mcp_connection_manager::SandboxState;
@@ -40,8 +41,8 @@ mod message_history;
 mod model_provider_info;
 pub mod parse_command;
 pub mod powershell;
-mod response_processing;
 pub mod sandboxing;
+mod stream_events_utils;
 mod text_encoding;
 pub mod token_data;
 mod truncate;
@@ -58,6 +59,7 @@ pub use model_provider_info::create_oss_provider_with_base_url;
 mod conversation_manager;
 mod event_mapping;
 pub mod review_format;
+pub mod review_prompts;
 pub use codex_protocol::protocol::InitialHistory;
 pub use conversation_manager::ConversationManager;
 pub use conversation_manager::NewConversation;
@@ -65,13 +67,13 @@ pub use conversation_manager::NewConversation;
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
 pub mod default_client;
-pub mod model_family;
-mod openai_model_info;
 pub mod project_doc;
 mod rollout;
 pub(crate) mod safety;
 pub mod seatbelt;
 pub mod shell;
+pub mod shell_snapshot;
+pub mod skills;
 pub mod spawn;
 pub mod terminal;
 mod tools;
@@ -94,8 +96,16 @@ mod user_notification;
 mod user_shell_command;
 pub mod util;
 
+/// Shared jittered exponential backoff used across Codex retries.
+pub fn default_retry_backoff(attempt: u64) -> std::time::Duration {
+    util::backoff(attempt)
+}
+
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
+pub use command_safety::is_dangerous_command;
 pub use command_safety::is_safe_command;
+pub use exec_policy::ExecPolicyError;
+pub use exec_policy::load_exec_policy;
 pub use safety::get_platform_sandbox;
 pub use safety::set_windows_sandbox_enabled;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing

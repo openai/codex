@@ -41,21 +41,25 @@ members = [
     "utils/pty",
     "utils/readiness",
     "utils/string",
+    "codex-client",
+    "codex-api",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.0"
+version = "0.0.1"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
 # crates created with `cargo new -w ...` automatically inherit the 2024
 # edition.
 edition = "2024"
+license = "Apache-2.0"
 
 [workspace.dependencies]
 # Internal
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
+codex-api = { path = "codex-api" }
 codex-app-server = { path = "app-server" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-apply-patch = { path = "apply-patch" }
@@ -63,6 +67,7 @@ codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
+codex-client = { path = "codex-client" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
@@ -91,6 +96,7 @@ codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
+exec_server_test_support = { path = "exec-server/tests/common" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
@@ -131,14 +137,14 @@ icu_decimal = "2.1"
 icu_locale_core = "2.1"
 icu_provider = { version = "2.1", features = ["sync"] }
 ignore = "0.4.23"
-image = { version = "^0.25.8", default-features = false }
+image = { version = "^0.25.9", default-features = false }
 indexmap = "2.12.0"
-insta = "1.43.2"
+insta = "1.44.3"
 itertools = "0.14.0"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.1"
 lazy_static = "1"
-libc = "0.2.175"
+libc = "0.2.177"
 log = "0.4"
 lru = "0.12.5"
 maplit = "1.0.2"
@@ -164,15 +170,17 @@ pulldown-cmark = "0.10"
 rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
+regex = "1.12.2"
 regex-lite = "0.1.7"
-regex = "1.11.1"
 reqwest = "0.12"
-rmcp = { version = "0.9.0", default-features = false }
+rmcp = { version = "0.10.0", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
+sentry = "0.34.0"
 serde = "1"
 serde_json = "1"
-serde_with = "3.14"
+serde_with = "3.16"
+serde_yaml = "0.9"
 serial_test = "3.2.0"
 sha1 = "0.10.6"
 sha2 = "0.10"
@@ -195,9 +203,9 @@ tokio-stream = "0.1.17"
 tokio-test = "0.4"
 tokio-util = "0.7.16"
 toml = "0.9.5"
-toml_edit = "0.23.4"
+toml_edit = "0.23.5"
 tonic = "0.13.1"
-tracing = "0.1.41"
+tracing = "0.1.43"
 tracing-appender = "0.2.3"
 tracing-subscriber = "0.3.20"
 tracing-test = "0.2.5"
@@ -215,7 +223,7 @@ vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "6"
-wildmatch = "2.5.0"
+wildmatch = "2.6.1"
 
 wiremock = "0.6"
 zeroize = "1.8.2"
@@ -282,7 +290,6 @@ opt-level = 0
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
-rmcp = { git = "https://github.com/bolinfest/rust-sdk", branch = "pr556" }
 
 # Uncomment to debug local changes.
 # rmcp = { path = "../../rust-sdk/crates/rmcp" }

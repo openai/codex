@@ -8,6 +8,8 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
+use codex_core::features::Features;
+use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -27,6 +29,7 @@ mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod prompt_args;
+mod skill_popup;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
 pub(crate) use feedback_view::feedback_selection_params;
@@ -35,9 +38,12 @@ mod paste_burst;
 pub mod popup_consts;
 mod queued_user_messages;
 mod scroll_state;
+mod security_review_scope_confirm_view;
 mod selection_popup_common;
 mod textarea;
 pub(crate) use feedback_view::FeedbackNoteView;
+
+pub(crate) use security_review_scope_confirm_view::SecurityReviewScopeConfirmView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
@@ -50,6 +56,7 @@ pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
+pub(crate) use crate::status_indicator_widget::StatusSnapshot;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
 
@@ -75,7 +82,10 @@ pub(crate) struct BottomPane {
     status: Option<StatusIndicatorWidget>,
     /// Queued user messages to show above the composer while a turn is running.
     queued_user_messages: QueuedUserMessages,
+    /// Recent log messages shown beneath the status header.
+    status_logs: Vec<String>,
     context_window_percent: Option<i64>,
+    context_window_used_tokens: Option<i64>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -86,6 +96,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) placeholder_text: String,
     pub(crate) disable_paste_burst: bool,
     pub(crate) animations_enabled: bool,
+    pub(crate) skills: Option<Vec<SkillMetadata>>,
 }
 
 impl BottomPane {
@@ -98,15 +109,19 @@ impl BottomPane {
             placeholder_text,
             disable_paste_burst,
             animations_enabled,
+            skills,
         } = params;
+        let mut composer = ChatComposer::new(
+            has_input_focus,
+            app_event_tx.clone(),
+            enhanced_keys_supported,
+            placeholder_text,
+            disable_paste_burst,
+        );
+        composer.set_skill_mentions(skills);
+
         Self {
-            composer: ChatComposer::new(
-                has_input_focus,
-                app_event_tx.clone(),
-                enhanced_keys_supported,
-                placeholder_text,
-                disable_paste_burst,
-            ),
+            composer,
             view_stack: Vec::new(),
             app_event_tx,
             frame_requester,
@@ -115,9 +130,11 @@ impl BottomPane {
             ctrl_c_quit_hint: false,
             status: None,
             queued_user_messages: QueuedUserMessages::new(),
+            status_logs: Vec::new(),
             esc_backtrack_hint: false,
             animations_enabled,
             context_window_percent: None,
+            context_window_used_tokens: None,
         }
     }
 
@@ -128,6 +145,11 @@ impl BottomPane {
     #[cfg(test)]
     pub(crate) fn context_window_percent(&self) -> Option<i64> {
         self.context_window_percent
+    }
+
+    #[cfg(test)]
+    pub(crate) fn context_window_used_tokens(&self) -> Option<i64> {
+        self.context_window_used_tokens
     }
 
     fn active_view(&self) -> Option<&dyn BottomPaneView> {
@@ -232,6 +254,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_placeholder_text(&mut self, text: String) {
+        self.composer.set_placeholder_text(text);
+        self.request_redraw();
+    }
+
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
         self.composer.clear_for_ctrl_c();
         self.request_redraw();
@@ -249,6 +276,22 @@ impl BottomPane {
         if let Some(status) = self.status.as_mut() {
             status.update_header(header);
             self.request_redraw();
+        }
+    }
+
+    pub(crate) fn update_status_snapshot(&mut self, snapshot: StatusSnapshot) {
+        self.status_logs = snapshot.logs.clone();
+        if let Some(status) = self.status.as_mut() {
+            status.update_snapshot(snapshot);
+        } else {
+            self.update_status_header(snapshot.header);
+        }
+    }
+
+    pub(crate) fn update_status_logs(&mut self, logs: Vec<String>) {
+        self.status_logs = logs.clone();
+        if let Some(status) = self.status.as_mut() {
+            status.set_logs(logs);
         }
     }
 
@@ -300,22 +343,25 @@ impl BottomPane {
         self.composer.set_task_running(running);
 
         if running {
+            if self.status.is_none() {
+                self.status_logs.clear();
+                self.status = Some(StatusIndicatorWidget::new(
+                    self.app_event_tx.clone(),
+                    self.frame_requester.clone(),
+                    self.animations_enabled,
+                ));
+            }
+            if let Some(status) = self.status.as_mut() {
+                status.set_logs(self.status_logs.clone());
+                status.set_interrupt_hint_visible(true);
+            }
             if !was_running {
-                if self.status.is_none() {
-                    self.status = Some(StatusIndicatorWidget::new(
-                        self.app_event_tx.clone(),
-                        self.frame_requester.clone(),
-                        self.animations_enabled,
-                    ));
-                }
-                if let Some(status) = self.status.as_mut() {
-                    status.set_interrupt_hint_visible(true);
-                }
                 self.request_redraw();
             }
         } else {
             // Hide the status indicator when a task completes, but keep other modal views.
             self.hide_status_indicator();
+            self.status_logs.clear();
         }
     }
 
@@ -344,13 +390,16 @@ impl BottomPane {
         }
     }
 
-    pub(crate) fn set_context_window_percent(&mut self, percent: Option<i64>) {
-        if self.context_window_percent == percent {
+    pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
+        if self.context_window_percent == percent && self.context_window_used_tokens == used_tokens
+        {
             return;
         }
 
         self.context_window_percent = percent;
-        self.composer.set_context_window_percent(percent);
+        self.context_window_used_tokens = used_tokens;
+        self.composer
+            .set_context_window(percent, self.context_window_used_tokens);
         self.request_redraw();
     }
 
@@ -392,7 +441,7 @@ impl BottomPane {
     }
 
     /// Called when the agent requests user approval.
-    pub fn push_approval_request(&mut self, request: ApprovalRequest) {
+    pub fn push_approval_request(&mut self, request: ApprovalRequest, features: &Features) {
         let request = if let Some(view) = self.view_stack.last_mut() {
             match view.try_consume_approval_request(request) {
                 Some(request) => request,
@@ -406,7 +455,7 @@ impl BottomPane {
         };
 
         // Otherwise create a new approval modal overlay.
-        let modal = ApprovalOverlay::new(request, self.app_event_tx.clone());
+        let modal = ApprovalOverlay::new(request, self.app_event_tx.clone(), features.clone());
         self.pause_status_timer_for_modal();
         self.push_view(Box::new(modal));
     }
@@ -553,6 +602,7 @@ mod tests {
             command: vec!["echo".into(), "ok".into()],
             reason: None,
             risk: None,
+            proposed_execpolicy_amendment: None,
         }
     }
 
@@ -560,6 +610,7 @@ mod tests {
     fn ctrl_c_on_modal_consumes_and_shows_quit_hint() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
             frame_requester: FrameRequester::test_dummy(),
@@ -568,8 +619,9 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            skills: Some(Vec::new()),
         });
-        pane.push_approval_request(exec_request());
+        pane.push_approval_request(exec_request(), &features);
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
         assert!(pane.ctrl_c_quit_hint_visible());
         assert_eq!(CancellationEvent::NotHandled, pane.on_ctrl_c());
@@ -581,6 +633,7 @@ mod tests {
     fn overlay_not_shown_above_approval_modal() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
             frame_requester: FrameRequester::test_dummy(),
@@ -589,10 +642,11 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            skills: Some(Vec::new()),
         });
 
         // Create an approval modal (active view).
-        pane.push_approval_request(exec_request());
+        pane.push_approval_request(exec_request(), &features);
 
         // Render and verify the top row does not include an overlay.
         let area = Rect::new(0, 0, 60, 6);
@@ -613,6 +667,7 @@ mod tests {
     fn composer_shown_after_denied_while_task_running() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
             frame_requester: FrameRequester::test_dummy(),
@@ -621,13 +676,14 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            skills: Some(Vec::new()),
         });
 
         // Start a running task so the status indicator is active above the composer.
         pane.set_task_running(true);
 
         // Push an approval modal (e.g., command approval) which should hide the status view.
-        pane.push_approval_request(exec_request());
+        pane.push_approval_request(exec_request(), &features);
 
         // Simulate pressing 'n' (No) on the modal.
         use crossterm::event::KeyCode;
@@ -687,6 +743,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            skills: Some(Vec::new()),
         });
 
         // Begin a task: show initial status.
@@ -713,6 +770,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            skills: Some(Vec::new()),
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
@@ -743,6 +801,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            skills: Some(Vec::new()),
         });
 
         pane.set_task_running(true);
@@ -770,6 +829,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: true,
+            skills: Some(Vec::new()),
         });
 
         pane.set_task_running(true);
