@@ -230,7 +230,9 @@ fn format_program_name(path: &Path, preserve_program_paths: bool) -> Option<Stri
 
 async fn load_exec_policy() -> anyhow::Result<Policy> {
     let codex_home = find_codex_home().context("failed to resolve codex_home for execpolicy")?;
-    codex_core::load_exec_policy(&codex_home)
+    let cwd = std::env::current_dir().ok();
+
+    codex_core::load_exec_policy(&codex_home, cwd.as_deref())
         .await
         .map_err(anyhow::Error::from)
 }

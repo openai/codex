@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
@@ -15,6 +16,7 @@ use codex_execpolicy::blocking_append_allow_prefix_rule;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use futures::future::try_join_all;
 use thiserror::Error;
 use tokio::fs;
 use tokio::sync::RwLock;
@@ -23,6 +25,7 @@ use tokio::task::spawn_blocking;
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::git_info::resolve_root_git_project_for_trust;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 
@@ -83,17 +86,33 @@ pub enum ExecPolicyUpdateError {
 pub(crate) async fn load_exec_policy_for_features(
     features: &Features,
     codex_home: &Path,
+    cwd: &Path,
 ) -> Result<Policy, ExecPolicyError> {
     if !features.enabled(Feature::ExecPolicy) {
         Ok(Policy::empty())
     } else {
-        load_exec_policy(codex_home).await
+        load_exec_policy(codex_home, Some(cwd)).await
     }
 }
 
-pub async fn load_exec_policy(codex_home: &Path) -> Result<Policy, ExecPolicyError> {
-    let policy_dir = codex_home.join(POLICY_DIR_NAME);
-    let policy_paths = collect_policy_files(&policy_dir).await?;
+pub async fn load_exec_policy(
+    codex_home: &Path,
+    cwd: Option<&Path>,
+) -> Result<Policy, ExecPolicyError> {
+    let cwd = cwd
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok());
+
+    let policy_dirs = execpolicy_directories(codex_home, cwd.as_deref());
+    let policy_paths = try_join_all(
+        policy_dirs
+            .iter()
+            .map(|policy_dir| collect_policy_files(policy_dir.as_path())),
+    )
+    .await?
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
 
     let mut parser = PolicyParser::new();
     for policy_path in &policy_paths {
@@ -115,9 +134,10 @@ pub async fn load_exec_policy(codex_home: &Path) -> Result<Policy, ExecPolicyErr
 
     let policy = parser.build();
     tracing::debug!(
-        "loaded execpolicy from {} files in {}",
+        policy_dirs = ?policy_dirs,
+        "loaded execpolicy from {} files across {} policy directories",
         policy_paths.len(),
-        policy_dir.display()
+        policy_dirs.len()
     );
 
     Ok(policy)
@@ -270,6 +290,23 @@ pub(crate) async fn create_exec_approval_requirement_for_command(
     }
 }
 
+fn execpolicy_directories(codex_home: &Path, cwd: Option<&Path>) -> Vec<PathBuf> {
+    let mut policy_dirs = HashSet::new();
+
+    // ~/.codex/policy
+    policy_dirs.insert(codex_home.join(POLICY_DIR_NAME));
+
+    // <repo_root>/.codex/policy
+    if let Some(repo_root) = cwd.and_then(resolve_root_git_project_for_trust) {
+        policy_dirs.insert(repo_root.join(".codex").join(POLICY_DIR_NAME));
+    }
+
+    // /etc/codex/policy
+    policy_dirs.insert(PathBuf::from("/etc/codex").join(POLICY_DIR_NAME));
+
+    policy_dirs.into_iter().collect()
+}
+
 async fn collect_policy_files(dir: &Path) -> Result<Vec<PathBuf>, ExecPolicyError> {
     let mut read_dir = match fs::read_dir(dir).await {
         Ok(read_dir) => read_dir,
@@ -325,6 +362,8 @@ mod tests {
     use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::Arc;
     use tempfile::tempdir;
 
@@ -334,7 +373,7 @@ mod tests {
         features.disable(Feature::ExecPolicy);
         let temp_dir = tempdir().expect("create temp dir");
 
-        let policy = load_exec_policy_for_features(&features, temp_dir.path())
+        let policy = load_exec_policy_for_features(&features, temp_dir.path(), temp_dir.path())
             .await
             .expect("policy result");
 
@@ -364,6 +403,16 @@ mod tests {
         assert!(files.is_empty());
     }
 
+    #[test]
+    fn execpolicy_directories_include_system_policy_dir() {
+        let codex_home = PathBuf::from("/tmp/codex-home");
+
+        let dirs = execpolicy_directories(&codex_home, None);
+
+        assert!(dirs.contains(&codex_home.join(POLICY_DIR_NAME)));
+        assert!(dirs.contains(&PathBuf::from("/etc/codex").join(POLICY_DIR_NAME)));
+    }
+
     #[tokio::test]
     async fn loads_policies_from_policy_subdirectory() {
         let temp_dir = tempdir().expect("create temp dir");
@@ -375,7 +424,7 @@ mod tests {
         )
         .expect("write policy file");
 
-        let policy = load_exec_policy(temp_dir.path())
+        let policy = load_exec_policy(temp_dir.path(), Some(temp_dir.path()))
             .await
             .expect("policy result");
         let command = [vec!["rm".to_string()]];
@@ -400,7 +449,7 @@ mod tests {
         )
         .expect("write policy file");
 
-        let policy = load_exec_policy(temp_dir.path())
+        let policy = load_exec_policy(temp_dir.path(), Some(temp_dir.path()))
             .await
             .expect("policy result");
         let command = [vec!["ls".to_string()]];
@@ -413,6 +462,54 @@ mod tests {
                 }],
             },
             policy.check_multiple(command.iter(), &|_| Decision::Allow)
+        );
+    }
+
+    #[tokio::test]
+    async fn loads_policies_from_git_repo_codex_dir() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let codex_home = temp_dir.path().join("home");
+        let repo_root = temp_dir.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("create repo dir");
+        let git_init_status = Command::new("git")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .arg("init")
+            .current_dir(&repo_root)
+            .status()
+            .expect("initialize git repo");
+        assert!(
+            git_init_status.success(),
+            "git init failed: {git_init_status:?}"
+        );
+
+        let nested_cwd = repo_root.join("nested");
+        fs::create_dir_all(&nested_cwd).expect("create nested cwd");
+
+        let repo_policy_dir = repo_root.join(".codex").join(POLICY_DIR_NAME);
+        fs::create_dir_all(&repo_policy_dir).expect("create repo policy dir");
+        fs::write(
+            repo_policy_dir.join("deny.codexpolicy"),
+            r#"prefix_rule(pattern=["git-policy"], decision="forbidden")"#,
+        )
+        .expect("write repo policy file");
+
+        let policy = load_exec_policy(&codex_home, Some(nested_cwd.as_path()))
+            .await
+            .expect("policy result");
+        let command = [vec!["git-policy".to_string()]];
+        let evaluation = policy.check_multiple(command.iter(), &|_| Decision::Allow);
+
+        assert_eq!(evaluation.decision, Decision::Forbidden);
+        assert!(
+            evaluation.matched_rules.iter().any(|rule_match| matches!(
+                rule_match,
+                RuleMatch::PrefixRuleMatch {
+                    matched_prefix,
+                    decision: Decision::Forbidden
+                } if matched_prefix == &vec!["git-policy".to_string()]
+            )),
+            "expected git repo execpolicy rule to match: {evaluation:?}"
         );
     }
 
