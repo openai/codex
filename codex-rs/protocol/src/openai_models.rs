@@ -168,67 +168,25 @@ pub struct ClientVersion(pub i32, pub i32, pub i32);
 pub struct ModelInfo {
     pub slug: String,
     pub display_name: String,
-    #[serde(default)]
     pub description: Option<String>,
     pub default_reasoning_level: ReasoningEffort,
     pub supported_reasoning_levels: Vec<ReasoningEffortPreset>,
     pub shell_type: ConfigShellToolType,
-    #[serde(default = "default_visibility")]
     pub visibility: ModelVisibility,
     pub minimal_client_version: ClientVersion,
-    #[serde(default)]
     pub supported_in_api: bool,
-    #[serde(default)]
     pub priority: i32,
-    #[serde(default)]
     pub upgrade: Option<String>,
-    #[serde(default)]
     pub base_instructions: Option<String>,
-    #[serde(default)]
     pub supports_reasoning_summaries: bool,
-    #[serde(default)]
     pub support_verbosity: bool,
-    #[serde(default)]
     pub default_verbosity: Option<Verbosity>,
-    #[serde(default)]
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub truncation_policy: TruncationPolicyConfig,
-    #[serde(default)]
     pub supports_parallel_tool_calls: bool,
-    #[serde(default)]
     pub context_window: Option<i64>,
-    #[serde(default)]
     pub reasoning_summary_format: ReasoningSummaryFormat,
-    #[serde(default)]
     pub experimental_supported_tools: Vec<String>,
-}
-
-impl Default for ModelInfo {
-    fn default() -> Self {
-        Self {
-            slug: String::new(),
-            display_name: String::new(),
-            description: None,
-            default_reasoning_level: ReasoningEffort::Medium,
-            supported_reasoning_levels: Vec::new(),
-            shell_type: ConfigShellToolType::Default,
-            visibility: default_visibility(),
-            minimal_client_version: ClientVersion(0, 0, 0),
-            supported_in_api: false,
-            priority: 0,
-            upgrade: None,
-            base_instructions: None,
-            supports_reasoning_summaries: false,
-            support_verbosity: false,
-            default_verbosity: None,
-            apply_patch_tool_type: None,
-            truncation_policy: TruncationPolicyConfig::bytes(10_000),
-            supports_parallel_tool_calls: false,
-            context_window: None,
-            reasoning_summary_format: ReasoningSummaryFormat::None,
-            experimental_supported_tools: Vec::new(),
-        }
-    }
 }
 
 /// Response wrapper for `/models`.
@@ -237,10 +195,6 @@ pub struct ModelsResponse {
     pub models: Vec<ModelInfo>,
     #[serde(default)]
     pub etag: String,
-}
-
-fn default_visibility() -> ModelVisibility {
-    ModelVisibility::None
 }
 
 // convert ModelInfo to ModelPreset
