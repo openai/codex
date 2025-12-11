@@ -2,10 +2,6 @@
 
 use anyhow::Context;
 use anyhow::Result;
-#[allow(unused_imports)]
-use base64::engine::general_purpose::STANDARD as BASE64;
-#[allow(unused_imports)]
-use base64::Engine;
 use codex_windows_sandbox::allow_null_device;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::create_process_as_user;
@@ -40,15 +36,11 @@ use windows_sys::Win32::System::Threading::INFINITE;
 #[derive(Debug, Deserialize)]
 struct RunnerRequest {
     policy_json_or_preset: String,
-    #[allow(dead_code)]
-    sandbox_policy_cwd: PathBuf,
     // Writable location for logs (sandbox user's .codex).
     codex_home: PathBuf,
     // Real user's CODEX_HOME for shared data (caps, config).
     real_codex_home: PathBuf,
     cap_sid: String,
-    #[allow(dead_code)]
-    request_file: Option<PathBuf>,
     command: Vec<String>,
     cwd: PathBuf,
     env_map: HashMap<String, String>,
@@ -60,7 +52,6 @@ struct RunnerRequest {
 
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
 
-// Best-effort early marker to detect image load before main.
 unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
     let h = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
     if h == 0 {
@@ -119,7 +110,6 @@ pub fn main() -> Result<()> {
         }
     };
     let (h_token, psid_to_use) = token_res?;
-    log_note(&format!("runner token ready policy={:?}", policy), log_dir);
     unsafe {
         CloseHandle(base);
     }
@@ -154,13 +144,6 @@ pub fn main() -> Result<()> {
     let h_stdin = open_pipe(&req.stdin_pipe, FILE_GENERIC_READ)?;
     let h_stdout = open_pipe(&req.stdout_pipe, FILE_GENERIC_WRITE)?;
     let h_stderr = open_pipe(&req.stderr_pipe, FILE_GENERIC_WRITE)?;
-    log_note(
-        &format!(
-            "runner pipes open stdin={} stdout={} stderr={}",
-            req.stdin_pipe, req.stdout_pipe, req.stderr_pipe
-        ),
-        log_dir,
-    );
 
     // Build command and env, spawn with CreateProcessAsUserW.
     let spawn_result = unsafe {
@@ -186,10 +169,6 @@ pub fn main() -> Result<()> {
             return Err(e);
         }
     };
-    log_note(
-        &format!("runner spawn ok pid={}", proc_info.hProcess),
-        log_dir,
-    );
 
     // Optional job kill on close.
     let h_job = unsafe { create_job_kill_on_close().ok() };
@@ -207,13 +186,6 @@ pub fn main() -> Result<()> {
         )
     };
     let timed_out = wait_res == WAIT_TIMEOUT;
-    log_note(
-        &format!(
-            "runner wait done pid={} wait_res={}",
-            proc_info.hProcess, wait_res
-        ),
-        log_dir,
-    );
 
     let exit_code: i32;
     unsafe {
