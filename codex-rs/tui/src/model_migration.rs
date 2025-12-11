@@ -62,7 +62,7 @@ pub(crate) fn migration_copy_for_models(
     target_description: Option<String>,
     can_opt_out: bool,
 ) -> ModelMigrationCopy {
-    let heading_text = format!("Try {target_display_name}");
+    let heading_text = Span::from(format!("Try {target_display_name}")).bold();
     let description_line = target_description
         .filter(|desc| !desc.is_empty())
         .map(Line::from)
@@ -88,7 +88,7 @@ pub(crate) fn migration_copy_for_models(
     }
 
     ModelMigrationCopy {
-        heading: vec![heading_text.bold()],
+        heading: vec![heading_text],
         content,
         can_opt_out,
     }
@@ -98,26 +98,7 @@ pub(crate) async fn run_model_migration_prompt(
     tui: &mut Tui,
     copy: ModelMigrationCopy,
 ) -> ModelMigrationOutcome {
-    // Render the prompt on the terminal's alternate screen so exiting or cancelling
-    // does not leave a large blank region in the normal scrollback. This does not
-    // change the prompt's appearance – only where it is drawn.
-    struct AltScreenGuard<'a> {
-        tui: &'a mut Tui,
-    }
-    impl<'a> AltScreenGuard<'a> {
-        fn enter(tui: &'a mut Tui) -> Self {
-            let _ = tui.enter_alt_screen();
-            Self { tui }
-        }
-    }
-    impl Drop for AltScreenGuard<'_> {
-        fn drop(&mut self) {
-            let _ = self.tui.leave_alt_screen();
-        }
-    }
-
     let alt = AltScreenGuard::enter(tui);
-
     let mut screen = ModelMigrationScreen::new(alt.tui.frame_requester(), copy);
 
     let _ = alt.tui.draw(u16::MAX, |frame| {
@@ -207,39 +188,15 @@ impl ModelMigrationScreen {
             return;
         }
 
-        if key_event.modifiers.contains(KeyModifiers::CONTROL)
-            && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('d'))
-        {
+        if is_ctrl_exit_combo(key_event) {
             self.exit();
             return;
         }
 
-        if !self.copy.can_opt_out {
-            if matches!(key_event.code, KeyCode::Esc | KeyCode::Enter) {
-                self.accept();
-            }
-            return;
-        }
-
-        match key_event.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.highlight_option(MigrationMenuOption::TryNewModel);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.highlight_option(MigrationMenuOption::UseExistingModel);
-            }
-            KeyCode::Char('1') => {
-                self.highlight_option(MigrationMenuOption::TryNewModel);
-                self.accept();
-            }
-            KeyCode::Char('2') => {
-                self.highlight_option(MigrationMenuOption::UseExistingModel);
-                self.reject();
-            }
-            KeyCode::Enter | KeyCode::Esc => {
-                self.confirm_selection();
-            }
-            _ => {}
+        if self.copy.can_opt_out {
+            self.handle_menu_key(key_event.code);
+        } else if matches!(key_event.code, KeyCode::Esc | KeyCode::Enter) {
+            self.accept();
         }
     }
 
@@ -257,13 +214,47 @@ impl WidgetRef for &ModelMigrationScreen {
         Clear.render(area, buf);
 
         let mut column = ColumnRenderable::new();
-
         column.push("");
-        let mut heading = vec![Span::raw("> ")];
-        heading.extend(self.copy.heading.clone());
-        column.push(Line::from(heading));
+        column.push(self.heading_line());
         column.push(Line::from(""));
+        self.render_content(&mut column);
+        if self.copy.can_opt_out {
+            self.render_menu(&mut column);
+        }
 
+        column.render(area, buf);
+    }
+}
+
+impl ModelMigrationScreen {
+    fn handle_menu_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.highlight_option(MigrationMenuOption::TryNewModel);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.highlight_option(MigrationMenuOption::UseExistingModel);
+            }
+            KeyCode::Char('1') => {
+                self.highlight_option(MigrationMenuOption::TryNewModel);
+                self.accept();
+            }
+            KeyCode::Char('2') => {
+                self.highlight_option(MigrationMenuOption::UseExistingModel);
+                self.reject();
+            }
+            KeyCode::Enter | KeyCode::Esc => self.confirm_selection(),
+            _ => {}
+        }
+    }
+
+    fn heading_line(&self) -> Line<'static> {
+        let mut heading = vec![Span::raw("> ")];
+        heading.extend(self.copy.heading.iter().cloned());
+        Line::from(heading)
+    }
+
+    fn render_content(&self, column: &mut ColumnRenderable) {
         for (idx, line) in self.copy.content.iter().enumerate() {
             if idx != 0 {
                 column.push(Line::from(""));
@@ -275,41 +266,64 @@ impl WidgetRef for &ModelMigrationScreen {
                     .inset(Insets::tlbr(0, 2, 0, 0)),
             );
         }
+    }
 
-        if self.copy.can_opt_out {
-            column.push(Line::from(""));
-            column.push(
-                Paragraph::new("Choose how you'd like Codex to proceed.")
-                    .wrap(Wrap { trim: false })
-                    .inset(Insets::tlbr(0, 2, 0, 0)),
-            );
-            column.push(Line::from(""));
-
-            for (idx, option) in MigrationMenuOption::all().into_iter().enumerate() {
-                column.push(selection_option_row(
-                    idx,
-                    option.label().to_string(),
-                    self.highlighted_option == option,
-                ));
-            }
-
-            column.push(Line::from(""));
-            column.push(
-                Line::from(vec![
-                    "Use ".dim(),
-                    key_hint::plain(KeyCode::Up).into(),
-                    "/".dim(),
-                    key_hint::plain(KeyCode::Down).into(),
-                    " to move, press ".dim(),
-                    key_hint::plain(KeyCode::Enter).into(),
-                    " to confirm".dim(),
-                ])
+    fn render_menu(&self, column: &mut ColumnRenderable) {
+        column.push(Line::from(""));
+        column.push(
+            Paragraph::new("Choose how you'd like Codex to proceed.")
+                .wrap(Wrap { trim: false })
                 .inset(Insets::tlbr(0, 2, 0, 0)),
-            );
+        );
+        column.push(Line::from(""));
+
+        for (idx, option) in MigrationMenuOption::all().into_iter().enumerate() {
+            column.push(selection_option_row(
+                idx,
+                option.label().to_string(),
+                self.highlighted_option == option,
+            ));
         }
 
-        column.render(area, buf);
+        column.push(Line::from(""));
+        column.push(
+            Line::from(vec![
+                "Use ".dim(),
+                key_hint::plain(KeyCode::Up).into(),
+                "/".dim(),
+                key_hint::plain(KeyCode::Down).into(),
+                " to move, press ".dim(),
+                key_hint::plain(KeyCode::Enter).into(),
+                " to confirm".dim(),
+            ])
+            .inset(Insets::tlbr(0, 2, 0, 0)),
+        );
     }
+}
+
+// Render the prompt on the terminal's alternate screen so exiting or cancelling
+// does not leave a large blank region in the normal scrollback. This does not
+// change the prompt's appearance – only where it is drawn.
+struct AltScreenGuard<'a> {
+    tui: &'a mut Tui,
+}
+
+impl<'a> AltScreenGuard<'a> {
+    fn enter(tui: &'a mut Tui) -> Self {
+        let _ = tui.enter_alt_screen();
+        Self { tui }
+    }
+}
+
+impl Drop for AltScreenGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.tui.leave_alt_screen();
+    }
+}
+
+fn is_ctrl_exit_combo(key_event: KeyEvent) -> bool {
+    key_event.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('d'))
 }
 
 #[cfg(test)]
