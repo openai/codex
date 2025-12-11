@@ -36,6 +36,7 @@ pub fn set_windows_elevated_sandbox_enabled(enabled: bool) {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
 pub fn set_windows_elevated_sandbox_enabled(_enabled: bool) {}
 
 #[cfg(target_os = "windows")]
