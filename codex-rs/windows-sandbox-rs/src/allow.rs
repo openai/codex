@@ -68,7 +68,7 @@ pub fn compute_allow_paths(
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
             for root in writable_roots {
                 add_writable_root(
-                    root.clone(),
+                    root.clone().into(),
                     policy_cwd,
                     &mut add_allow_path,
                     &mut add_deny_path,
