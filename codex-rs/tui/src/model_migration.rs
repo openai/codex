@@ -33,8 +33,6 @@ pub(crate) enum ModelMigrationOutcome {
 pub(crate) struct ModelMigrationCopy {
     pub heading: Vec<Span<'static>>,
     pub content: Vec<Line<'static>>,
-    pub preamble_heading: Option<Vec<Span<'static>>>,
-    pub preamble_body: Vec<Line<'static>>,
     pub can_opt_out: bool,
 }
 
@@ -65,15 +63,6 @@ pub(crate) fn migration_copy_for_models(
     can_opt_out: bool,
 ) -> ModelMigrationCopy {
     let heading_text = Span::from(format!("Try {target_display_name}")).bold();
-    let preamble_heading = Some(vec![
-        Span::from("Codex just got an upgrade. Introducing gpt-5.1-codex-max").bold(),
-    ]);
-    let preamble_body = vec![
-        Line::from("Codex is now powered by gpt-5.1-codex-max, our latest"),
-        Line::from("frontier agentic coding model. It is smarter and faster"),
-        Line::from("than its predecessors and capable of long-running"),
-        Line::from("project-scale work."),
-    ];
     let description_line = target_description
         .filter(|desc| !desc.is_empty())
         .map(Line::from)
@@ -103,8 +92,6 @@ pub(crate) fn migration_copy_for_models(
     ModelMigrationCopy {
         heading: vec![heading_text],
         content,
-        preamble_heading,
-        preamble_body,
         can_opt_out,
     }
 }
@@ -230,7 +217,6 @@ impl WidgetRef for &ModelMigrationScreen {
 
         let mut column = ColumnRenderable::new();
         column.push("");
-        self.render_preamble(&mut column);
         column.push(self.heading_line());
         column.push(Line::from(""));
         self.render_content(&mut column);
@@ -270,15 +256,6 @@ impl ModelMigrationScreen {
         Line::from(heading)
     }
 
-    fn render_preamble(&self, column: &mut ColumnRenderable) {
-        if let Some(preamble_heading) = &self.copy.preamble_heading {
-            column.push(self.render_heading_with(preamble_heading));
-            column.push(Line::from(""));
-            self.render_lines(&self.copy.preamble_body, column);
-            column.push(Line::from(""));
-        }
-    }
-
     fn render_content(&self, column: &mut ColumnRenderable) {
         self.render_lines(&self.copy.content, column);
     }
@@ -291,12 +268,6 @@ impl ModelMigrationScreen {
                     .inset(Insets::tlbr(0, 2, 0, 0)),
             );
         }
-    }
-
-    fn render_heading_with(&self, spans: &[Span<'static>]) -> Line<'static> {
-        let mut heading = vec![Span::raw("> ")];
-        heading.extend(spans.iter().cloned());
-        Line::from(heading)
     }
 
     fn render_menu(&self, column: &mut ColumnRenderable) {
