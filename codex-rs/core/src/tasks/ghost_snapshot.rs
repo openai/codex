@@ -25,7 +25,7 @@ pub(crate) struct GhostSnapshotTask {
     token: Token,
 }
 
-const SNAPSHOT_WARNING_THRESHOLD: Duration = Duration::from_mins(4);
+const SNAPSHOT_WARNING_THRESHOLD: Duration = Duration::from_secs(240);
 
 #[async_trait]
 impl SessionTask for GhostSnapshotTask {
