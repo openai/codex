@@ -48,6 +48,7 @@ pub mod token_data;
 mod truncate;
 mod unified_exec;
 mod user_instructions;
+pub use model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
 pub use model_provider_info::DEFAULT_LMSTUDIO_PORT;
 pub use model_provider_info::DEFAULT_OLLAMA_PORT;
 pub use model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;

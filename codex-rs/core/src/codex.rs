@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use crate::AuthManager;
 use crate::SandboxState;
@@ -65,6 +67,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::ModelProviderInfo;
+use crate::WireApi;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -80,6 +83,7 @@ use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
@@ -167,6 +171,31 @@ pub struct CodexSpawnOk {
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 64;
+static CHAT_WIRE_API_DEPRECATION_EMITTED: AtomicBool = AtomicBool::new(false);
+
+fn maybe_push_chat_wire_api_deprecation(
+    config: &Config,
+    post_session_configured_events: &mut Vec<Event>,
+) {
+    if config.model_provider.wire_api != WireApi::Chat {
+        return;
+    }
+
+    if CHAT_WIRE_API_DEPRECATION_EMITTED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+
+    post_session_configured_events.push(Event {
+        id: INITIAL_SUBMIT_ID.to_owned(),
+        msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
+            summary: CHAT_WIRE_API_DEPRECATION_SUMMARY.to_string(),
+            details: None,
+        }),
+    });
+}
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -584,6 +613,7 @@ impl Session {
                 msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }),
             });
         }
+        maybe_push_chat_wire_api_deprecation(&config, &mut post_session_configured_events);
 
         // todo(aibrahim): why are we passing model here while it can change?
         let otel_event_manager = OtelEventManager::new(

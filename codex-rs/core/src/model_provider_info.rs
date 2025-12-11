@@ -26,6 +26,7 @@ const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
 const MAX_STREAM_MAX_RETRIES: u64 = 100;
 /// Hard cap for user-configured `request_max_retries`.
 const MAX_REQUEST_MAX_RETRIES: u64 = 100;
+pub const CHAT_WIRE_API_DEPRECATION_SUMMARY: &str = r#"Support for the "chat" wire API is deprecated and will soon be removed. Update your model provider definition in config.toml to use wire_api = "responses"."#;
 
 /// Wire protocol that the provider speaks. Most third-party services only
 /// implement the classic OpenAI Chat Completions JSON schema, whereas OpenAI
