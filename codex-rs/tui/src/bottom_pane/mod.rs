@@ -136,10 +136,6 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
-        self.status.as_ref()
-    }
-
     pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
         self.composer.skills()
     }
