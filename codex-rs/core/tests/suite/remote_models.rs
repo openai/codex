@@ -17,6 +17,7 @@ use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ClientVersion;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -25,6 +26,7 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::ReasoningSummaryFormat;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
@@ -75,6 +77,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         priority: 1,
         upgrade: None,
         base_instructions: None,
+        ..ModelInfo::default()
     };
 
     let models_mock = mount_models_once(
@@ -206,6 +209,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         priority: 1,
         upgrade: None,
         base_instructions: Some(remote_base.to_string()),
+        ..ModelInfo::default()
     };
     mount_models_once(
         &server,

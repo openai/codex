@@ -1,12 +1,15 @@
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::openai_models::ApplyPatchToolType;
+use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningSummaryFormat;
 
 use crate::config::Config;
-use crate::config::types::ReasoningSummaryFormat;
-use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 use crate::truncate::TruncationPolicy;
-use codex_protocol::openai_models::ConfigShellToolType;
+
+#[cfg(test)]
+use codex_protocol::openai_models::TruncationPolicyConfig;
 
 /// The `instructions` field in the payload sent to a model should always start
 /// with this content.
@@ -100,12 +103,51 @@ impl ModelFamily {
     pub fn with_remote_overrides(mut self, remote_models: Vec<ModelInfo>) -> Self {
         for model in remote_models {
             if model.slug == self.slug {
-                self.default_reasoning_effort = Some(model.default_reasoning_level);
-                self.shell_type = model.shell_type;
-                self.base_instructions = model.base_instructions.unwrap_or(self.base_instructions);
+                self.apply_remote_overrides(model);
             }
         }
         self
+    }
+
+    fn apply_remote_overrides(&mut self, model: ModelInfo) {
+        let ModelInfo {
+            default_reasoning_level,
+            shell_type,
+            base_instructions,
+            supports_reasoning_summaries,
+            support_verbosity,
+            default_verbosity,
+            apply_patch_tool_type,
+            truncation_policy,
+            supports_parallel_tool_calls,
+            context_window,
+            reasoning_summary_format,
+            experimental_supported_tools,
+            ..
+        } = model;
+
+        self.default_reasoning_effort = Some(default_reasoning_level);
+        self.shell_type = shell_type;
+        if let Some(base) = base_instructions {
+            self.base_instructions = base;
+        }
+        self.supports_reasoning_summaries = supports_reasoning_summaries;
+        self.support_verbosity = support_verbosity;
+        self.default_verbosity = default_verbosity;
+        self.apply_patch_tool_type = apply_patch_tool_type;
+        if let Some(policy) = truncation_policy {
+            self.truncation_policy = policy.into();
+        }
+        self.supports_parallel_tool_calls = supports_parallel_tool_calls;
+        if let Some(window) = context_window {
+            self.context_window = Some(window);
+        }
+        if let Some(format) = reasoning_summary_format {
+            self.reasoning_summary_format = format.into();
+        }
+        if !experimental_supported_tools.is_empty() {
+            self.experimental_supported_tools = experimental_supported_tools;
+        }
     }
 
     pub fn auto_compact_token_limit(&self) -> Option<i64> {
@@ -359,6 +401,7 @@ mod tests {
             priority: 1,
             upgrade: None,
             base_instructions: None,
+            ..ModelInfo::default()
         }
     }
 
@@ -406,5 +449,74 @@ mod tests {
             family.default_reasoning_effort
         );
         assert_eq!(updated.shell_type, family.shell_type);
+    }
+
+    #[test]
+    fn remote_overrides_apply_extended_metadata() {
+        let family = model_family!(
+            "gpt-5.1",
+            "gpt-5.1",
+            supports_reasoning_summaries: false,
+            support_verbosity: false,
+            default_verbosity: None,
+            apply_patch_tool_type: Some(ApplyPatchToolType::Function),
+            supports_parallel_tool_calls: false,
+            experimental_supported_tools: vec!["local".to_string()],
+            truncation_policy: TruncationPolicy::Bytes(10_000),
+            context_window: Some(100),
+            reasoning_summary_format: ReasoningSummaryFormat::None,
+        );
+
+        let updated = family.with_remote_overrides(vec![ModelInfo {
+            slug: "gpt-5.1".to_string(),
+            display_name: "gpt-5.1".to_string(),
+            description: Some("desc".to_string()),
+            default_reasoning_level: ReasoningEffort::High,
+            supported_reasoning_levels: vec![ReasoningEffortPreset {
+                effort: ReasoningEffort::High,
+                description: "High".to_string(),
+            }],
+            shell_type: ConfigShellToolType::ShellCommand,
+            visibility: ModelVisibility::List,
+            minimal_client_version: ClientVersion(0, 1, 0),
+            supported_in_api: true,
+            priority: 10,
+            upgrade: None,
+            base_instructions: Some("Remote instructions".to_string()),
+            supports_reasoning_summaries: true,
+            support_verbosity: true,
+            default_verbosity: Some(Verbosity::High),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            truncation_policy: Some(TruncationPolicyConfig::tokens(2_000)),
+            supports_parallel_tool_calls: true,
+            context_window: Some(400_000),
+            reasoning_summary_format: Some(ReasoningSummaryFormat::Experimental),
+            experimental_supported_tools: vec!["alpha".to_string(), "beta".to_string()],
+        }]);
+
+        assert_eq!(
+            updated.default_reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+        assert!(updated.supports_reasoning_summaries);
+        assert!(updated.support_verbosity);
+        assert_eq!(updated.default_verbosity, Some(Verbosity::High));
+        assert_eq!(updated.shell_type, ConfigShellToolType::ShellCommand);
+        assert_eq!(
+            updated.apply_patch_tool_type,
+            Some(ApplyPatchToolType::Freeform)
+        );
+        assert_eq!(updated.truncation_policy, TruncationPolicy::Tokens(2_000));
+        assert!(updated.supports_parallel_tool_calls);
+        assert_eq!(updated.context_window, Some(400_000));
+        assert_eq!(
+            updated.reasoning_summary_format,
+            ReasoningSummaryFormat::Experimental
+        );
+        assert_eq!(
+            updated.experimental_supported_tools,
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+        assert_eq!(updated.base_instructions, "Remote instructions");
     }
 }

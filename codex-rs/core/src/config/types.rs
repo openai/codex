@@ -522,14 +522,6 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq, Default, Hash)]
-#[serde(rename_all = "kebab-case")]
-pub enum ReasoningSummaryFormat {
-    #[default]
-    None,
-    Experimental,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

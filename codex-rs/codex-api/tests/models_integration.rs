@@ -4,6 +4,7 @@ use codex_api::provider::Provider;
 use codex_api::provider::RetryConfig;
 use codex_api::provider::WireApi;
 use codex_client::ReqwestTransport;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ClientVersion;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
