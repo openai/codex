@@ -6,7 +6,7 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_mock_chat_completions_server_unchecked;
 use app_test_support::create_shell_command_sse_response;
-use app_test_support::format_with_current_shell_display;
+use app_test_support::format_with_current_shell_display_non_login;
 use app_test_support::to_response;
 use codex_app_server_protocol::ApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
@@ -601,7 +601,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         unreachable!("loop ensures we break on command execution items");
     };
     assert_eq!(cwd, second_cwd);
-    let expected_command = format_with_current_shell_display("echo second turn");
+    let expected_command = format_with_current_shell_display_non_login("echo second turn");
     assert_eq!(command, expected_command);
     assert_eq!(status, CommandExecutionStatus::InProgress);
 
