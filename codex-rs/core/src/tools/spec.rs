@@ -1121,26 +1121,13 @@ pub(crate) fn build_specs(
 #[cfg(test)]
 mod tests {
     use crate::client_common::tools::FreeformTool;
-    use crate::config::Config;
-    use crate::config::ConfigOverrides;
-    use crate::config::ConfigToml;
+    use crate::config::test_config;
     use crate::openai_models::models_manager::ModelsManager;
     use crate::tools::registry::ConfiguredToolSpec;
     use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
-    use tempfile::TempDir;
 
     use super::*;
-
-    fn test_config() -> Config {
-        let codex_home = TempDir::new().expect("create temp dir");
-        Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config")
-    }
 
     fn tool_name(tool: &ToolSpec) -> &str {
         match tool {

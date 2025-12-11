@@ -50,6 +50,8 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(test)]
+use tempfile::tempdir;
 
 use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
@@ -67,6 +69,17 @@ const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex-max";
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+
+#[cfg(test)]
+pub(crate) fn test_config() -> Config {
+    let codex_home = tempdir().expect("create temp dir");
+    Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )
+    .expect("load default test config")
+}
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
