@@ -273,7 +273,7 @@ impl McpConnectionManager {
         auth_entries: HashMap<String, McpAuthStatusEntry>,
         tx_event: Sender<Event>,
         cancel_token: CancellationToken,
-        sandbox_state: SandboxState,
+        initial_sandbox_state: SandboxState,
     ) {
         if cancel_token.is_cancelled() {
             return;
@@ -313,8 +313,7 @@ impl McpConnectionManager {
                         // Send sandbox state notification immediately after Ready
                         if let Err(e) = managed_client.notify_sandbox_state(&sandbox_state).await {
                             warn!(
-                                "Failed to notify sandbox state to MCP server {}: {e:#}",
-                                server_name
+                                "Failed to notify sandbox state to MCP server {server_name}: {e:#}",
                             );
                         }
                         McpStartupStatus::Ready
