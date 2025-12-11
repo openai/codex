@@ -389,8 +389,7 @@ mod tests {
             .collect();
         assert!(
             cmds.contains(&"compact") && cmds.contains(&"feedback"),
-            "expected fuzzy search for '/ac' to include compact and feedback, got {:?}",
-            cmds
+            "expected fuzzy search for '/ac' to include compact and feedback, got {cmds:?}"
         );
     }
 }
