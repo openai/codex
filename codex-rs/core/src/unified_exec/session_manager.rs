@@ -141,15 +141,12 @@ impl UnifiedExecSessionManager {
         };
 
         let transcript = Arc::new(tokio::sync::Mutex::new(CommandTranscript::default()));
-        start_streaming_output(&session, context, Arc::clone(&transcript));
-
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
 
         let start = Instant::now();
-        // For the initial exec_command call, we both stream output to events
-        // (via start_streaming_output above) and collect a snapshot here for
-        // the tool response body.
+        // For the initial exec_command call, collect a snapshot for the tool response
+        // body, then only start streaming output if the process stays alive.
         let OutputHandles {
             output_buffer,
             output_notify,
@@ -197,6 +194,9 @@ impl UnifiedExecSessionManager {
             // it, and register a background watcher that will emit
             // ExecCommandEnd when the PTY eventually exits (even if no further
             // tool calls are made).
+            // Early-exit commands should not emit ExecCommandOutputDelta events,
+            // so we only stream output once the session is confirmed alive.
+            start_streaming_output(&session, context, Arc::clone(&transcript));
             self.store_session(
                 Arc::clone(&session),
                 context,
@@ -525,6 +525,7 @@ impl UnifiedExecSessionManager {
         cancellation_token: &CancellationToken,
         deadline: Instant,
     ) -> Vec<u8> {
+        const INITIAL_OUTPUT_GRACE: Duration = Duration::from_millis(200);
         const POST_EXIT_OUTPUT_GRACE: Duration = Duration::from_millis(50);
 
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
@@ -549,7 +550,14 @@ impl UnifiedExecSessionManager {
 
                 let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
                 if exit_signal_received {
-                    let grace = remaining.min(POST_EXIT_OUTPUT_GRACE);
+                    // Short-lived commands can exit before stdout is buffered. Wait briefly for
+                    // initial output (or only whitespace), but avoid stalling turns when the
+                    // command is silent.
+                    let grace = if collected.iter().all(u8::is_ascii_whitespace) {
+                        remaining.min(INITIAL_OUTPUT_GRACE)
+                    } else {
+                        remaining.min(POST_EXIT_OUTPUT_GRACE)
+                    };
                     if tokio::time::timeout(grace, notified).await.is_err() {
                         break;
                     }
