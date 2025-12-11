@@ -5068,14 +5068,11 @@ fn build_linear_create_tickets_prompt(issue_ref: &str, bugs_markdown: &str) -> S
         "No structured findings were produced; do not create any child tickets.".to_string()
     } else {
         format!(
-            "Source findings markdown (full content):\n```markdown\n{bugs}\n```",
-            bugs = bugs_preview
+            "Source findings markdown (full content):\n```markdown\n{bugs_preview}\n```"
         )
     };
     format!(
-        "Create Linear child tickets for validated security findings and link them to the review ticket `{issue}`.\n\n{bugs_block}\n\nInstructions:\n- Work only from the findings markdown above plus the main review ticket context; do NOT invent findings.\n- For each HIGH-severity finding, first search for existing sub-issues or clearly related tickets (matching severity + component/file + summary) using Linear MCP. If a closely matching ticket already exists, link that ticket to `{issue}` and **do not** create a duplicate.\n- Only create new tickets for findings that have no similar existing ticket.\n- When creating a new ticket, keep it unassigned and in the initial TODO/backlog state; do **not** auto-assign owners or move tickets to triaged/in-progress/done.\n- Parse the bugs markdown to create concise titles that include severity and the most important component/file.\n- Include reproduction/verification details and recommendations in each ticket body.\n- If the finding includes blame information or a suggested owner (for example, a `Suggested owner:` line derived from git blame), copy that line into the ticket body but do **not** set an assignee.\n- Add links back to the review ticket `{issue}` so engineers can reach the full report and artifacts.\n- Do **not** post comments on the review ticket; this step is only for creating/linking child tickets. The final summary comment is handled separately.\n- Keep everything within the Linear MCP; do not use external network calls.",
-        issue = issue_ref,
-        bugs_block = bugs_block,
+        "Create Linear child tickets for validated security findings and link them to the review ticket `{issue_ref}`.\n\n{bugs_block}\n\nInstructions:\n- Work only from the findings markdown above plus the main review ticket context; do NOT invent findings.\n- For each HIGH-severity finding, first search for existing sub-issues or clearly related tickets (matching severity + component/file + summary) using Linear MCP. If a closely matching ticket already exists, link that ticket to `{issue_ref}` and **do not** create a duplicate.\n- Only create new tickets for findings that have no similar existing ticket.\n- When creating a new ticket, keep it unassigned and in the initial TODO/backlog state; do **not** auto-assign owners or move tickets to triaged/in-progress/done.\n- Parse the bugs markdown to create concise titles that include severity and the most important component/file.\n- Include reproduction/verification details and recommendations in each ticket body.\n- If the finding includes blame information or a suggested owner (for example, a `Suggested owner:` line derived from git blame), copy that line into the ticket body but do **not** set an assignee.\n- Add links back to the review ticket `{issue_ref}` so engineers can reach the full report and artifacts.\n- Do **not** post comments on the review ticket; this step is only for creating/linking child tickets. The final summary comment is handled separately.\n- Keep everything within the Linear MCP; do not use external network calls.",
     )
 }
 
@@ -11633,8 +11630,7 @@ fn build_bugs_user_prompt(
             let scope_summary = truncate_text(&normalized, BUG_SCOPE_PROMPT_MAX_GRAPHEMES);
             if scope_summary.len() < normalized.len() {
                 logs.push(format!(
-                    "User scope prompt truncated to {} graphemes for bug analysis.",
-                    BUG_SCOPE_PROMPT_MAX_GRAPHEMES
+                    "User scope prompt truncated to {BUG_SCOPE_PROMPT_MAX_GRAPHEMES} graphemes for bug analysis."
                 ));
             }
             Some(format!("- User scope prompt: {scope_summary}\n- After reading the file, if it does not meaningfully relate to that scope, skip it and move on (respond with `no bugs found` for this file).\n"))
