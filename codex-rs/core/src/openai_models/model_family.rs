@@ -8,9 +8,6 @@ use codex_protocol::openai_models::ReasoningSummaryFormat;
 use crate::config::Config;
 use crate::truncate::TruncationPolicy;
 
-#[cfg(test)]
-use codex_protocol::openai_models::TruncationPolicyConfig;
-
 /// The `instructions` field in the payload sent to a model should always start
 /// with this content.
 const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
@@ -383,6 +380,7 @@ mod tests {
     use codex_protocol::openai_models::ClientVersion;
     use codex_protocol::openai_models::ModelVisibility;
     use codex_protocol::openai_models::ReasoningEffortPreset;
+    use codex_protocol::openai_models::TruncationPolicyConfig;
 
     fn remote(slug: &str, effort: ReasoningEffort, shell: ConfigShellToolType) -> ModelInfo {
         ModelInfo {
@@ -405,10 +403,10 @@ mod tests {
             support_verbosity: false,
             default_verbosity: None,
             apply_patch_tool_type: None,
-            truncation_policy: None,
+            truncation_policy: TruncationPolicyConfig::bytes(10_000),
             supports_parallel_tool_calls: false,
             context_window: None,
-            reasoning_summary_format: None,
+            reasoning_summary_format: ReasoningSummaryFormat::None,
             experimental_supported_tools: Vec::new(),
         }
     }
@@ -495,10 +493,10 @@ mod tests {
             support_verbosity: true,
             default_verbosity: Some(Verbosity::High),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
-            truncation_policy: Some(TruncationPolicyConfig::tokens(2_000)),
+            truncation_policy: TruncationPolicyConfig::tokens(2_000),
             supports_parallel_tool_calls: true,
             context_window: Some(400_000),
-            reasoning_summary_format: Some(ReasoningSummaryFormat::Experimental),
+            reasoning_summary_format: ReasoningSummaryFormat::Experimental,
             experimental_supported_tools: vec!["alpha".to_string(), "beta".to_string()],
         }]);
 
