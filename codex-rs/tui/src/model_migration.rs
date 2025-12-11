@@ -7,8 +7,6 @@ use crate::selection_list::selection_option_row;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use codex_core::openai_models::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
-use codex_core::openai_models::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -57,11 +55,42 @@ impl MigrationMenuOption {
     }
 }
 
-pub(crate) fn migration_copy_for_config(migration_config_key: &str) -> ModelMigrationCopy {
-    match migration_config_key {
-        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => gpt5_migration_copy(),
-        HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => gpt_5_1_codex_max_migration_copy(),
-        _ => gpt_5_1_codex_max_migration_copy(),
+pub(crate) fn migration_copy_for_models(
+    current_model: &str,
+    target_model: &str,
+    target_display_name: String,
+    target_description: Option<String>,
+    can_opt_out: bool,
+) -> ModelMigrationCopy {
+    let heading_text = format!("Try {target_display_name}");
+    let description_line = target_description
+        .filter(|desc| !desc.is_empty())
+        .map(Line::from)
+        .unwrap_or_else(|| {
+            Line::from(format!(
+                "{target_display_name} is recommended for better performance and reliability."
+            ))
+        });
+
+    let mut content = vec![
+        Line::from(format!(
+            "We recommend switching from {current_model} to {target_model}."
+        )),
+        description_line,
+    ];
+
+    if can_opt_out {
+        content.push(Line::from(format!(
+            "You can continue using {current_model} if you prefer."
+        )));
+    } else {
+        content.push(Line::from("Press enter to continue".dim()));
+    }
+
+    ModelMigrationCopy {
+        heading: vec![heading_text.bold()],
+        content,
+        can_opt_out,
     }
 }
 
@@ -283,55 +312,13 @@ impl WidgetRef for &ModelMigrationScreen {
     }
 }
 
-fn gpt_5_1_codex_max_migration_copy() -> ModelMigrationCopy {
-    ModelMigrationCopy {
-        heading: vec!["Codex just got an upgrade. Introducing gpt-5.1-codex-max".bold()],
-        content: vec![
-            Line::from(
-                "Codex is now powered by gpt-5.1-codex-max, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work.",
-            ),
-            Line::from(vec![
-                "Learn more at ".into(),
-                "https://openai.com/index/gpt-5-1-codex-max/"
-                    .cyan()
-                    .underlined(),
-                ".".into(),
-            ]),
-        ],
-        can_opt_out: true,
-    }
-}
-
-fn gpt5_migration_copy() -> ModelMigrationCopy {
-    ModelMigrationCopy {
-        heading: vec!["Introducing our gpt-5.1 models".bold()],
-        content: vec![
-            Line::from(
-                "We've upgraded our family of models supported in Codex to gpt-5.1, gpt-5.1-codex and gpt-5.1-codex-mini.",
-            ),
-            Line::from(
-                "You can continue using legacy models by specifying them directly with the -m option or in your config.toml.",
-            ),
-            Line::from(vec![
-                "Learn more at ".into(),
-                "https://openai.com/index/gpt-5-1/".cyan().underlined(),
-                ".".into(),
-            ]),
-            Line::from(vec!["Press enter to continue".dim()]),
-        ],
-        can_opt_out: false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::ModelMigrationScreen;
-    use super::gpt_5_1_codex_max_migration_copy;
-    use super::migration_copy_for_config;
+    use super::migration_copy_for_models;
     use crate::custom_terminal::Terminal;
     use crate::test_backend::VT100Backend;
     use crate::tui::FrameRequester;
-    use codex_core::openai_models::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use insta::assert_snapshot;
@@ -347,7 +334,13 @@ mod tests {
 
         let screen = ModelMigrationScreen::new(
             FrameRequester::test_dummy(),
-            gpt_5_1_codex_max_migration_copy(),
+            migration_copy_for_models(
+                "gpt-old",
+                "gpt-new",
+                "gpt-new".to_string(),
+                Some("Latest recommended model for better performance.".to_string()),
+                true,
+            ),
         );
 
         {
@@ -367,7 +360,13 @@ mod tests {
 
         let screen = ModelMigrationScreen::new(
             FrameRequester::test_dummy(),
-            migration_copy_for_config(HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG),
+            migration_copy_for_models(
+                "gpt-legacy",
+                "gpt-latest",
+                "gpt-latest".to_string(),
+                Some("Upgraded capabilities with improved latency.".to_string()),
+                false,
+            ),
         );
         {
             let mut frame = terminal.get_frame();
@@ -385,7 +384,13 @@ mod tests {
 
         let screen = ModelMigrationScreen::new(
             FrameRequester::test_dummy(),
-            migration_copy_for_config(HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG),
+            migration_copy_for_models(
+                "gpt-foo",
+                "gpt-bar",
+                "gpt-bar".to_string(),
+                Some("Improved coding assistance.".to_string()),
+                false,
+            ),
         );
         {
             let mut frame = terminal.get_frame();
@@ -403,7 +408,13 @@ mod tests {
 
         let screen = ModelMigrationScreen::new(
             FrameRequester::test_dummy(),
-            migration_copy_for_config(HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG),
+            migration_copy_for_models(
+                "gpt-mini",
+                "gpt-mini-plus",
+                "gpt-mini-plus".to_string(),
+                Some("Familiar pricing with better quality.".to_string()),
+                false,
+            ),
         );
         {
             let mut frame = terminal.get_frame();
@@ -417,7 +428,13 @@ mod tests {
     fn escape_key_accepts_prompt() {
         let mut screen = ModelMigrationScreen::new(
             FrameRequester::test_dummy(),
-            gpt_5_1_codex_max_migration_copy(),
+            migration_copy_for_models(
+                "gpt-old",
+                "gpt-new",
+                "gpt-new".to_string(),
+                Some("Latest recommended model for better performance.".to_string()),
+                true,
+            ),
         );
 
         // Simulate pressing Escape
@@ -437,7 +454,13 @@ mod tests {
     fn selecting_use_existing_model_rejects_upgrade() {
         let mut screen = ModelMigrationScreen::new(
             FrameRequester::test_dummy(),
-            gpt_5_1_codex_max_migration_copy(),
+            migration_copy_for_models(
+                "gpt-old",
+                "gpt-new",
+                "gpt-new".to_string(),
+                Some("Latest recommended model for better performance.".to_string()),
+                true,
+            ),
         );
 
         screen.handle_key(KeyEvent::new(
