@@ -317,6 +317,8 @@ pub(crate) struct Session {
     features: Features,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
+    agents_config: Option<Arc<crate::agents::AgentsConfig>>,
+    default_sandbox_policy: SandboxPolicy,
     collaboration: Mutex<CollaborationState>,
     collaboration_supervisor: Mutex<Option<CollaborationSupervisor>>,
     next_internal_sub_id: AtomicU64,
@@ -443,8 +445,30 @@ impl SessionConfiguration {
         self.user_instructions.clone()
     }
 
+    pub(crate) fn with_instructions(
+        mut self,
+        developer_instructions: Option<String>,
+        user_instructions: Option<String>,
+    ) -> Self {
+        self.developer_instructions = developer_instructions;
+        self.user_instructions = user_instructions;
+        self
+    }
+
+    pub(crate) fn approval_policy(&self) -> AskForApproval {
+        self.approval_policy
+    }
+
     pub(crate) fn sandbox_policy(&self) -> SandboxPolicy {
         self.sandbox_policy.clone()
+    }
+
+    pub(crate) fn cwd(&self) -> &PathBuf {
+        &self.cwd
+    }
+
+    pub(crate) fn model(&self) -> &str {
+        self.model.as_str()
     }
 }
 
@@ -541,7 +565,7 @@ impl Session {
             .models_manager
             .construct_model_family(agent.config.model.as_str(), &per_turn_config)
             .await;
-        Arc::new(Self::make_turn_context(
+        let mut turn_context = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.otel_event_manager,
             agent.config.provider.clone(),
@@ -551,7 +575,16 @@ impl Session {
             self.conversation_id,
             sub_id,
             agent.id,
-        ))
+        );
+        if let Some(agents_config) = self.agents_config() {
+            if let Some(agent_config) = agents_config.agent(agent.name.as_str()) {
+                let allowlist = agent_config.sub_agents.clone();
+                if !allowlist.is_empty() {
+                    turn_context.tools_config.collaboration_agent_allowlist = Some(allowlist);
+                }
+            }
+        }
+        Arc::new(turn_context)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -565,6 +598,22 @@ impl Session {
         session_source: SessionSource,
         skills: Option<SkillLoadOutcome>,
     ) -> anyhow::Result<Arc<Self>> {
+        let agents_config = crate::agents::AgentsConfig::try_load(&config.codex_home).await;
+
+        let default_sandbox_policy = session_configuration.sandbox_policy.clone();
+        let mut session_configuration = session_configuration;
+        if let Some(agents_config) = agents_config.as_ref() {
+            let main = agents_config.main();
+            session_configuration.developer_instructions = main.prompt.clone();
+            session_configuration.user_instructions = None;
+            if let Some(model) = main.model.clone() {
+                session_configuration.model = model;
+            }
+            if main.read_only {
+                session_configuration.sandbox_policy = SandboxPolicy::ReadOnly;
+            }
+        }
+
         debug!(
             "Configuring session: model={}; provider={:?}",
             session_configuration.model, session_configuration.provider
@@ -693,6 +742,8 @@ impl Session {
             features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
+            agents_config: agents_config.map(Arc::new),
+            default_sandbox_policy,
             collaboration: Mutex::new(collaboration),
             collaboration_supervisor: Mutex::new(None),
             next_internal_sub_id: AtomicU64::new(0),
@@ -766,6 +817,14 @@ impl Session {
 
     pub(crate) fn collaboration_state(&self) -> &Mutex<CollaborationState> {
         &self.collaboration
+    }
+
+    pub(crate) fn agents_config(&self) -> Option<&crate::agents::AgentsConfig> {
+        self.agents_config.as_deref()
+    }
+
+    pub(crate) fn default_sandbox_policy(&self) -> &SandboxPolicy {
+        &self.default_sandbox_policy
     }
 
     pub(crate) async fn ensure_collaboration_supervisor(
@@ -908,6 +967,12 @@ impl Session {
         if let Some(final_schema) = updates.final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
+        if let Some(agents_config) = self.agents_config() {
+            let allowlist = agents_config.main().sub_agents.clone();
+            if !allowlist.is_empty() {
+                turn_context.tools_config.collaboration_agent_allowlist = Some(allowlist);
+            }
+        }
 
         let session_history = self.clone_history().await;
         let mut collab = self.collaboration.lock().await;
@@ -997,7 +1062,6 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
-        tracing::info!("sending event: {:?}", event);
         if let Some(agent_idx) = event.agent_idx
             && agent_idx != 0
             && !Self::should_emit_event_for_agent(AgentId(agent_idx), &event.msg)

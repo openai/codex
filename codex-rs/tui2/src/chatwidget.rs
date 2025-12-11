@@ -1777,7 +1777,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
-        let Event {id, msg, .. } = event;
+        let Event { id, msg, .. } = event;
         self.dispatch_event_msg(Some(id), msg, false);
     }
 

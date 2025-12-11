@@ -77,7 +77,11 @@ impl CollaborationSupervisor {
                                 events_tx.clone(),
                             );
                         }
-                        run_agents(&runners, targets, max_duration);
+                        for target in targets {
+                            if let Some(tx) = runners.get(&target) {
+                                let _ = tx.send(AgentCommand::Run { max_duration }).await;
+                            }
+                        }
                     }
                     SupervisorCommand::CloseAgents { targets } => {
                         for agent in targets {
@@ -113,15 +117,7 @@ impl CollaborationSupervisor {
     }
 
     pub(crate) async fn kick_agent(&self, agent: AgentId) {
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let _ = tx
-                .send(SupervisorCommand::RunAgents {
-                    targets: vec![agent],
-                    max_duration: i32::MAX,
-                })
-                .await;
-        });
+        let _ = self.start_agents(vec![agent], i32::MAX).await;
     }
 
     pub(crate) async fn close_agents(&self, targets: Vec<AgentId>) {
@@ -146,8 +142,8 @@ fn ensure_runner(
     runners.insert(agent, tx);
 
     tokio::spawn(async move {
-        let mut pending_run = true;
-        let mut next_budget = i32::MAX;
+        let mut pending_run = false;
+        let mut next_budget = 0;
         loop {
             if !pending_run {
                 match rx.recv().await {
@@ -186,18 +182,6 @@ fn ensure_runner(
             }
         }
     });
-}
-
-fn run_agents(
-    runners: &HashMap<AgentId, mpsc::Sender<AgentCommand>>,
-    targets: Vec<AgentId>,
-    max_duration: i32,
-) {
-    for target in targets {
-        if let Some(tx) = runners.get(&target) {
-            let _ = tx.try_send(AgentCommand::Run { max_duration });
-        }
-    }
 }
 
 async fn run_agent_turns(

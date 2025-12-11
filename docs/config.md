@@ -5,6 +5,7 @@ Codex configuration gives you fine-grained control over the model, execution env
 ## Quick navigation
 
 - [Feature flags](#feature-flags)
+- [Agent profiles](#agent-profiles)
 - [Model selection](#model-selection)
 - [Execution environment](#execution-environment)
 - [MCP integration](#mcp-integration)
@@ -54,6 +55,34 @@ Notes:
 
 - Omit a key to accept its default.
 - Legacy booleans such as `experimental_use_exec_command_tool`, `experimental_use_unified_exec_tool`, `include_apply_patch_tool`, and similar `experimental_use_*` keys are deprecated; setting the corresponding `[features].<key>` avoids repeated warnings.
+
+## Agent profiles
+
+Codex can optionally load multi-agent profiles from `$CODEX_HOME/agents.toml`. When this file exists and is valid, Codex starts as the `main` profile (agent 0) and, on supported models, exposes the `collaboration_*` tools. Each profile can control which sub-agents it can spawn.
+
+Example:
+
+```toml
+[main]
+prompt = "You're the director..."
+sub_agents = ["worker", "verifier"]
+read_only = true
+model = "gpt-5.1-codex-max"
+
+[worker]
+prompt = "You must solve a task."
+read_only = false
+
+[verifier]
+prompt = "Check if a task is correctly solved."
+read_only = true
+```
+
+Notes:
+
+- `model` is optional for any profile; if omitted, Codex uses the main model.
+- `prompt` is optional; if omitted, Codex uses the standard model prompt for that model family.
+- `read_only = true` maps to a read-only sandbox; `read_only = false` uses the session default sandbox policy.
 
 ## Model selection
 

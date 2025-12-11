@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use serde::Deserialize;
 use serde::Serialize;
@@ -10,7 +11,28 @@ use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
 use crate::protocol::TokenUsageInfo;
 use crate::truncate::TruncationPolicy;
-use tracing::info;
+use tracing::warn;
+
+fn content_for_log(message: &ResponseItem) -> String {
+    match message {
+        ResponseItem::Message { content, .. } => {
+            let mut rendered = String::new();
+            let mut is_first = true;
+            for item in content {
+                if !is_first {
+                    rendered.push('\n');
+                }
+                is_first = false;
+                match item {
+                    ContentItem::InputText { text } => rendered.push_str(text),
+                    _ => rendered.push_str("<non-text content>"),
+                }
+            }
+            rendered
+        }
+        _ => "<non-message item>".to_string(),
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct AgentId(pub i32);
@@ -43,6 +65,7 @@ impl Default for ContextStrategy {
 #[derive(Clone, Debug)]
 pub(crate) struct AgentState {
     pub(crate) id: AgentId,
+    pub(crate) name: String,
     pub(crate) parent: Option<AgentId>,
     pub(crate) depth: i32,
     pub(crate) config: SessionConfiguration,
@@ -53,12 +76,14 @@ pub(crate) struct AgentState {
 
 impl AgentState {
     pub(crate) fn new_root(
+        name: String,
         config: SessionConfiguration,
         history: ContextManager,
         instructions: Option<String>,
     ) -> Self {
         Self {
             id: AgentId(0),
+            name,
             parent: None,
             depth: 0,
             config,
@@ -72,6 +97,7 @@ impl AgentState {
 
     pub(crate) fn new_child(
         id: AgentId,
+        name: String,
         parent: AgentId,
         depth: i32,
         config: SessionConfiguration,
@@ -80,6 +106,7 @@ impl AgentState {
     ) -> Self {
         Self {
             id,
+            name,
             parent: Some(parent),
             depth,
             config,
@@ -137,6 +164,7 @@ impl CollaborationState {
     ) -> AgentId {
         if self.agents.is_empty() {
             let root = AgentState::new_root(
+                "main".to_string(),
                 session_configuration.clone(),
                 session_history.clone(),
                 session_configuration
@@ -196,14 +224,26 @@ impl CollaborationState {
             ResponseItem::Message { role, .. } => role.as_str(),
             _ => "other",
         };
-        info!(
-            "collaboration: queued message for agent {} (role={role})",
-            id.0
-        );
+        let content = content_for_log(&message);
         if let Some(agent) = self.agent_mut(id) {
+            warn!(
+                agent_idx = id.0,
+                agent_name = agent.name.as_str(),
+                role,
+                content,
+                "collaboration: agent received message"
+            );
             agent
                 .history
                 .record_items([message].iter(), TruncationPolicy::Bytes(10_000));
+        } else {
+            warn!(
+                agent_idx = id.0,
+                agent_name = "<unknown>",
+                role,
+                content,
+                "collaboration: message delivered to unknown agent"
+            );
         }
     }
 
