@@ -111,8 +111,17 @@ impl ModelFamily {
 
     fn apply_remote_overrides(&mut self, model: ModelInfo) {
         let ModelInfo {
+            slug: _,
+            display_name: _,
+            description: _,
             default_reasoning_level,
+            supported_reasoning_levels: _,
             shell_type,
+            visibility: _,
+            minimal_client_version: _,
+            supported_in_api: _,
+            priority: _,
+            upgrade: _,
             base_instructions,
             supports_reasoning_summaries,
             support_verbosity,
@@ -123,7 +132,6 @@ impl ModelFamily {
             context_window,
             reasoning_summary_format,
             experimental_supported_tools,
-            ..
         } = model;
 
         self.default_reasoning_effort = Some(default_reasoning_level);
@@ -401,7 +409,15 @@ mod tests {
             priority: 1,
             upgrade: None,
             base_instructions: None,
-            ..ModelInfo::default()
+            supports_reasoning_summaries: false,
+            support_verbosity: false,
+            default_verbosity: None,
+            apply_patch_tool_type: None,
+            truncation_policy: None,
+            supports_parallel_tool_calls: false,
+            context_window: None,
+            reasoning_summary_format: None,
+            experimental_supported_tools: Vec::new(),
         }
     }
 
