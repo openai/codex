@@ -206,7 +206,11 @@ impl ModelClient {
         let reasoning = if model_family.supports_reasoning_summaries {
             Some(Reasoning {
                 effort: self.effort.or(model_family.default_reasoning_effort),
-                summary: Some(self.summary),
+                summary: if self.summary == ReasoningSummaryConfig::None {
+                    None
+                } else {
+                    Some(self.summary)
+                },
             })
         } else {
             None

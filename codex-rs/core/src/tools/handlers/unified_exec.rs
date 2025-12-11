@@ -34,8 +34,8 @@ struct ExecCommandArgs {
     workdir: Option<String>,
     #[serde(default)]
     shell: Option<String>,
-    #[serde(default)]
-    login: Option<bool>,
+    #[serde(default = "default_login")]
+    login: bool,
     #[serde(default = "default_exec_yield_time_ms")]
     yield_time_ms: u64,
     #[serde(default)]
@@ -64,6 +64,10 @@ fn default_exec_yield_time_ms() -> u64 {
 
 fn default_write_stdin_yield_time_ms() -> u64 {
     250
+}
+
+fn default_login() -> bool {
+    true
 }
 
 #[async_trait]
@@ -125,11 +129,10 @@ impl ToolHandler for UnifiedExecHandler {
                     ))
                 })?;
                 let process_id = manager.allocate_process_id().await;
+                let command = get_command(&args, session.user_shell());
 
-                let command_for_intercept = get_command(&args, session.user_shell());
                 let ExecCommandArgs {
                     workdir,
-                    login,
                     yield_time_ms,
                     max_output_tokens,
                     sandbox_permissions,
@@ -156,7 +159,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
 
                 if let Some(output) = intercept_apply_patch(
-                    &command_for_intercept,
+                    &command,
                     &cwd,
                     Some(yield_time_ms),
                     context.session.as_ref(),
@@ -177,14 +180,6 @@ impl ToolHandler for UnifiedExecHandler {
                     &context.call_id,
                     None,
                 );
-                let command = if login.is_none() {
-                    context
-                        .session
-                        .user_shell()
-                        .wrap_command_with_snapshot(&command_for_intercept)
-                } else {
-                    command_for_intercept
-                };
                 let emitter = ToolEmitter::unified_exec(
                     &command,
                     cwd.clone(),
@@ -258,14 +253,15 @@ impl ToolHandler for UnifiedExecHandler {
 }
 
 fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String> {
-    if let Some(shell_str) = &args.shell {
+    let model_shell = args.shell.as_ref().map(|shell_str| {
         let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
         shell.shell_snapshot = None;
-        return shell.derive_exec_args(&args.cmd, args.login.unwrap_or(true));
-    }
+        shell
+    });
 
-    let use_login_shell = args.login.unwrap_or(session_shell.shell_snapshot.is_none());
-    session_shell.derive_exec_args(&args.cmd, use_login_shell)
+    let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
+
+    shell.derive_exec_args(&args.cmd, args.login)
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {
@@ -329,7 +325,13 @@ mod tests {
 
         let command = get_command(&args, Arc::new(default_user_shell()));
 
-        assert_eq!(command[2], "echo hello");
+        assert_eq!(command.last(), Some(&"echo hello".to_string()));
+        if command
+            .iter()
+            .any(|arg| arg.eq_ignore_ascii_case("-Command"))
+        {
+            assert!(command.contains(&"-NoProfile".to_string()));
+        }
     }
 
     #[test]

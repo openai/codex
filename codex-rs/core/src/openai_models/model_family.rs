@@ -14,6 +14,7 @@ const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
 
 const GPT_5_CODEX_INSTRUCTIONS: &str = include_str!("../../gpt_5_codex_prompt.md");
 const GPT_5_1_INSTRUCTIONS: &str = include_str!("../../gpt_5_1_prompt.md");
+const GPT_5_2_INSTRUCTIONS: &str = include_str!("../../gpt_5_2_prompt.md");
 const GPT_5_1_CODEX_MAX_INSTRUCTIONS: &str = include_str!("../../gpt-5.1-codex-max_prompt.md");
 pub(crate) const CONTEXT_WINDOW_272K: i64 = 272_000;
 
@@ -195,10 +196,9 @@ macro_rules! model_family {
     }};
 }
 
-// todo(aibrahim): remove this function
-/// Returns a `ModelFamily` for the given model slug, or `None` if the slug
-/// does not match any known model family.
-pub fn find_family_for_model(slug: &str) -> ModelFamily {
+/// Internal offline helper for `ModelsManager` that returns a `ModelFamily` for the given
+/// model slug.
+pub(in crate::openai_models) fn find_family_for_model(slug: &str) -> ModelFamily {
     if slug.starts_with("o3") {
         model_family!(
             slug, "o3",
@@ -323,6 +323,20 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
             truncation_policy: TruncationPolicy::Tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
         )
+    } else if slug.starts_with("gpt-5.2") {
+        model_family!(
+            slug, slug,
+            supports_reasoning_summaries: true,
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            support_verbosity: true,
+            default_verbosity: Some(Verbosity::Low),
+            base_instructions: GPT_5_2_INSTRUCTIONS.to_string(),
+            default_reasoning_effort: Some(ReasoningEffort::Medium),
+            truncation_policy: TruncationPolicy::Bytes(10_000),
+            shell_type: ConfigShellToolType::ShellCommand,
+            supports_parallel_tool_calls: true,
+            context_window: Some(CONTEXT_WINDOW_272K),
+        )
     } else if slug.starts_with("gpt-5.1") {
         model_family!(
             slug, "gpt-5.1",
@@ -353,6 +367,7 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
 }
 
 fn derive_default_model_family(model: &str) -> ModelFamily {
+    tracing::warn!("Unknown model {model} is used. This will degrade the performance of Codex.");
     ModelFamily {
         slug: model.to_string(),
         family: model.to_string(),

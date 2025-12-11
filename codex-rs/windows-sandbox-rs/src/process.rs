@@ -30,6 +30,7 @@ use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
 
+#[allow(dead_code)]
 pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     let mut items: Vec<(String, String)> =
         env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -49,6 +50,7 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     w
 }
 
+#[allow(dead_code)]
 fn quote_arg(a: &str) -> String {
     let needs_quote = a.is_empty() || a.chars().any(|ch| ch.is_whitespace() || ch == '"');
     if !needs_quote {
@@ -79,6 +81,7 @@ fn quote_arg(a: &str) -> String {
     out.push('"');
     out
 }
+
 #[allow(dead_code)]
 unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
     for kind in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
@@ -100,6 +103,7 @@ unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
 /// # Safety
 /// Caller must provide a valid primary token handle (`h_token`) with appropriate access,
 /// and the `argv`, `cwd`, and `env_map` must remain valid for the duration of the call.
+#[allow(dead_code)]
 pub unsafe fn create_process_as_user(
     h_token: HANDLE,
     argv: &[String],
@@ -156,7 +160,7 @@ pub unsafe fn create_process_as_user(
         CREATE_UNICODE_ENVIRONMENT,
         env_block.as_ptr() as *mut c_void,
         to_wide(cwd).as_ptr(),
-        &mut si,
+        &si,
         &mut pi,
     );
     if ok == 0 {

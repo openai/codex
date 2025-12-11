@@ -24,7 +24,6 @@ use windows_sys::Win32::Security::TOKEN_DUPLICATE;
 use windows_sys::Win32::Security::TOKEN_PRIVILEGES;
 use windows_sys::Win32::Security::TOKEN_QUERY;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
-use windows_sys::Win32::System::Threading::OpenProcessToken;
 
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
 const LUA_TOKEN: u32 = 0x04;
@@ -192,7 +191,14 @@ unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     tp.PrivilegeCount = 1;
     tp.Privileges[0].Luid = luid;
     tp.Privileges[0].Attributes = 0x00000002; // SE_PRIVILEGE_ENABLED
-    let ok2 = AdjustTokenPrivileges(h_token, 0, &tp, 0, std::ptr::null_mut(), std::ptr::null_mut());
+    let ok2 = AdjustTokenPrivileges(
+        h_token,
+        0,
+        &tp,
+        0,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
     if ok2 == 0 {
         return Err(anyhow!("AdjustTokenPrivileges failed: {}", GetLastError()));
     }
@@ -201,24 +207,6 @@ unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
         return Err(anyhow!("AdjustTokenPrivileges error {}", err));
     }
     Ok(())
-}
-
-/// # Safety
-/// Opens the current process token and adjusts privileges; caller should ensure this is needed in the current context.
-#[allow(dead_code)]
-pub unsafe fn enable_privilege_on_current(name: &str) -> Result<()> {
-    let mut h: HANDLE = 0;
-    let ok = OpenProcessToken(
-        GetCurrentProcess(),
-        TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
-        &mut h,
-    );
-    if ok == 0 {
-        return Err(anyhow!("OpenProcessToken failed: {}", GetLastError()));
-    }
-    let res = enable_single_privilege(h, name);
-    CloseHandle(h);
-    res
 }
 
 /// # Safety
