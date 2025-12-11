@@ -94,9 +94,9 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             show_in_picker: true,
         },
         ModelPreset {
-            id: "robin".to_string(),
-            model: "robin".to_string(),
-            display_name: "robin".to_string(),
+            id: "gpt-5.2".to_string(),
+            model: "gpt-5.2".to_string(),
+            display_name: "gpt-5.2".to_string(),
             description: "Robin".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: vec![
