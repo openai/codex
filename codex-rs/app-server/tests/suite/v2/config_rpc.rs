@@ -135,29 +135,40 @@ view_image = false
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_read_includes_system_layer_and_overrides() -> Result<()> {
     let codex_home = TempDir::new()?;
+    let (user_dir, system_dir) = if cfg!(windows) {
+        (r"C:\Users\user", r"C:\System")
+    } else {
+        ("/user", "/system")
+    };
     write_config(
         &codex_home,
-        r#"
+        &format!(
+            r#"
 model = "gpt-user"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
-writable_roots = ["/user"]
+writable_roots = [{}]
 network_access = true
 "#,
+            serde_json::json!(user_dir)
+        ),
     )?;
 
     let managed_path = codex_home.path().join("managed_config.toml");
     std::fs::write(
         &managed_path,
-        r#"
+        format!(
+            r#"
 model = "gpt-system"
 approval_policy = "never"
 
 [sandbox_workspace_write]
-writable_roots = ["/system"]
+writable_roots = [{}]
 "#,
+            serde_json::json!(system_dir)
+        ),
     )?;
 
     let managed_path_str = managed_path.display().to_string();
@@ -207,7 +218,7 @@ writable_roots = ["/system"]
         .sandbox_workspace_write
         .as_ref()
         .expect("sandbox workspace write");
-    assert_eq!(sandbox.writable_roots, vec![PathBuf::from("/system")]);
+    assert_eq!(sandbox.writable_roots, vec![PathBuf::from(system_dir)]);
     assert_eq!(
         origins
             .get("sandbox_workspace_write.writable_roots.0")
@@ -350,6 +361,11 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
+    let writable_root = if cfg!(windows) {
+        r"C:\Users\codex\AppData\Local\Temp"
+    } else {
+        "/tmp"
+    };
     let batch_id = mcp
         .send_config_batch_write_request(ConfigBatchWriteParams {
             file_path: Some(codex_home.path().join("config.toml").display().to_string()),
@@ -362,7 +378,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
                 ConfigEdit {
                     key_path: "sandbox_workspace_write".to_string(),
                     value: json!({
-                        "writable_roots": ["/tmp"],
+                        "writable_roots": [writable_root],
                         "network_access": false
                     }),
                     merge_strategy: MergeStrategy::Replace,
@@ -404,7 +420,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
         .sandbox_workspace_write
         .as_ref()
         .expect("sandbox workspace write");
-    assert_eq!(sandbox.writable_roots, vec![PathBuf::from("/tmp")]);
+    assert_eq!(sandbox.writable_roots, vec![PathBuf::from(writable_root)]);
     assert!(!sandbox.network_access);
 
     Ok(())

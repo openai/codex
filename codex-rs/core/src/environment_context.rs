@@ -1,3 +1,4 @@
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display as DeriveDisplay;
@@ -27,7 +28,7 @@ pub(crate) struct EnvironmentContext {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub network_access: Option<NetworkAccess>,
-    pub writable_roots: Option<Vec<PathBuf>>,
+    pub writable_roots: Option<Vec<AbsolutePathBuf>>,
     pub shell: Shell,
 }
 
@@ -203,7 +204,10 @@ mod tests {
 
     fn workspace_write_policy(writable_roots: Vec<&str>, network_access: bool) -> SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {
-            writable_roots: writable_roots.into_iter().map(PathBuf::from).collect(),
+            writable_roots: writable_roots
+                .into_iter()
+                .map(|s| AbsolutePathBuf::try_from(s).unwrap())
+                .collect(),
             network_access,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -212,24 +216,28 @@ mod tests {
 
     #[test]
     fn serialize_workspace_write_environment_context() {
+        let cwd = if cfg!(windows) { "C:\\repo" } else { "/repo" };
+        let writable_root = if cfg!(windows) { "C:\\tmp" } else { "/tmp" };
         let context = EnvironmentContext::new(
-            Some(PathBuf::from("/repo")),
+            Some(PathBuf::from(cwd)),
             Some(AskForApproval::OnRequest),
-            Some(workspace_write_policy(vec!["/repo", "/tmp"], false)),
+            Some(workspace_write_policy(vec![cwd, writable_root], false)),
             fake_shell(),
         );
 
-        let expected = r#"<environment_context>
-  <cwd>/repo</cwd>
+        let expected = format!(
+            r#"<environment_context>
+  <cwd>{cwd}</cwd>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>workspace-write</sandbox_mode>
   <network_access>restricted</network_access>
   <writable_roots>
-    <root>/repo</root>
-    <root>/tmp</root>
+    <root>{cwd}</root>
+    <root>{writable_root}</root>
   </writable_roots>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }

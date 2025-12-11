@@ -837,6 +837,7 @@ dependencies = [
  "codex-login",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-utils-absolute-path",
  "codex-utils-json-to-toml",
  "core_test_support",
  "mcp-types",
@@ -865,6 +866,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "mcp-types",
  "pretty_assertions",
  "schemars 0.8.22",
@@ -1183,6 +1185,7 @@ dependencies = [
  "codex-common",
  "codex-core",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "core_test_support",
  "libc",
  "mcp-types",
@@ -1322,6 +1325,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "codex-core",
+ "codex-utils-absolute-path",
  "landlock",
  "libc",
  "seccompiler",
@@ -1446,6 +1450,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-git",
+ "codex-utils-absolute-path",
  "codex-utils-image",
  "icu_decimal",
  "icu_locale_core",
@@ -1544,6 +1549,7 @@ dependencies = [
  "codex-file-search",
  "codex-login",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "codex-windows-sandbox",
  "color-eyre",
  "crossterm",
@@ -1613,6 +1619,7 @@ dependencies = [
  "codex-login",
  "codex-protocol",
  "codex-tui",
+ "codex-utils-absolute-path",
  "codex-windows-sandbox",
  "color-eyre",
  "crossterm",
@@ -1665,9 +1672,11 @@ name = "codex-utils-absolute-path"
 version = "0.0.0"
 dependencies = [
  "path-absolutize",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "tempfile",
+ "ts-rs",
 ]
 
 [[package]]
@@ -1737,6 +1746,7 @@ dependencies = [
  "base64",
  "chrono",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "dirs-next",
  "dunce",
  "rand 0.8.5",

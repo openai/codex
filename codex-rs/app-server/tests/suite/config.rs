@@ -14,6 +14,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::Path;
@@ -23,10 +24,16 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
+    let writable_root = if cfg!(windows) {
+        r"C:\Users\codex\AppData\Local\Temp"
+    } else {
+        "/tmp"
+    };
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
-        r#"
+        format!(
+            r#"
 model = "gpt-5.1-codex-max"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
@@ -38,7 +45,7 @@ forced_chatgpt_workspace_id = "12345678-0000-0000-0000-000000000000"
 forced_login_method = "chatgpt"
 
 [sandbox_workspace_write]
-writable_roots = ["/tmp"]
+writable_roots = [{}]
 network_access = true
 exclude_tmpdir_env_var = true
 exclude_slash_tmp = true
@@ -56,6 +63,8 @@ model_verbosity = "medium"
 model_provider = "openai"
 chatgpt_base_url = "https://api.chatgpt.com"
 "#,
+            serde_json::json!(writable_root)
+        ),
     )
 }
 
@@ -75,12 +84,18 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
     .await??;
 
     let config: GetUserSavedConfigResponse = to_response(resp)?;
+    let writable_root = if cfg!(windows) {
+        r"C:\Users\codex\AppData\Local\Temp"
+    } else {
+        "/tmp"
+    };
+    let writable_root = AbsolutePathBuf::from_absolute_path(writable_root)?;
     let expected = GetUserSavedConfigResponse {
         config: UserSavedConfig {
             approval_policy: Some(AskForApproval::OnRequest),
             sandbox_mode: Some(SandboxMode::WorkspaceWrite),
             sandbox_settings: Some(SandboxSettings {
-                writable_roots: vec!["/tmp".into()],
+                writable_roots: vec![writable_root],
                 network_access: Some(true),
                 exclude_tmpdir_env_var: Some(true),
                 exclude_slash_tmp: Some(true),

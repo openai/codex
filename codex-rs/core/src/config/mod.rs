@@ -40,9 +40,9 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningSummaryFormat;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dirs::home_dir;
-use dunce::canonicalize;
 use serde::Deserialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
@@ -1035,13 +1035,10 @@ impl Config {
                 }
             }
         };
-        let additional_writable_roots: Vec<PathBuf> = additional_writable_roots
+        let additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
-            .map(|path| {
-                let absolute = resolve_path(&resolved_cwd, &path);
-                canonicalize(&absolute).unwrap_or(absolute)
-            })
-            .collect();
+            .map(|path| AbsolutePathBuf::resolve_path_against_base(path, &resolved_cwd))
+            .collect::<Result<Vec<_>, _>>()?;
         let active_project = cfg
             .get_active_project(&resolved_cwd)
             .unwrap_or(ProjectConfig { trust_level: None });
@@ -1469,18 +1466,26 @@ network_access = true  # This should be ignored.
             }
         );
 
-        let sandbox_workspace_write = r#"
+        let writable_root = if cfg!(windows) {
+            "C:\\my\\workspace"
+        } else {
+            "/my/workspace"
+        };
+        let sandbox_workspace_write = format!(
+            r#"
 sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
 writable_roots = [
-    "/my/workspace",
+    {},
 ]
 exclude_tmpdir_env_var = true
 exclude_slash_tmp = true
-"#;
+"#,
+            serde_json::json!(writable_root.to_string_lossy())
+        );
 
-        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
+        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(&sandbox_workspace_write)
             .expect("TOML deserialization should succeed");
         let sandbox_mode_override = None;
         let resolution = sandbox_workspace_write_cfg.derive_sandbox_policy(
@@ -1501,7 +1506,7 @@ exclude_slash_tmp = true
                 resolution,
                 SandboxPolicyResolution {
                     policy: SandboxPolicy::WorkspaceWrite {
-                        writable_roots: vec![PathBuf::from("/my/workspace")],
+                        writable_roots: vec!["/my/workspace".try_into().unwrap()],
                         network_access: false,
                         exclude_tmpdir_env_var: true,
                         exclude_slash_tmp: true,
@@ -1511,21 +1516,24 @@ exclude_slash_tmp = true
             );
         }
 
-        let sandbox_workspace_write = r#"
+        let sandbox_workspace_write = format!(
+            r#"
 sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
 writable_roots = [
-    "/my/workspace",
+    {},
 ]
 exclude_tmpdir_env_var = true
 exclude_slash_tmp = true
 
 [projects."/tmp/test"]
 trust_level = "trusted"
-"#;
+"#,
+            serde_json::json!(writable_root.to_string_lossy())
+        );
 
-        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
+        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(&sandbox_workspace_write)
             .expect("TOML deserialization should succeed");
         let sandbox_mode_override = None;
         let resolution = sandbox_workspace_write_cfg.derive_sandbox_policy(
@@ -1546,7 +1554,10 @@ trust_level = "trusted"
                 resolution,
                 SandboxPolicyResolution {
                     policy: SandboxPolicy::WorkspaceWrite {
-                        writable_roots: vec![PathBuf::from("/my/workspace")],
+                        writable_roots: vec![
+                            AbsolutePathBuf::from_absolute_path("/my/workspace")
+                                .expect("absolute path")
+                        ],
                         network_access: false,
                         exclude_tmpdir_env_var: true,
                         exclude_slash_tmp: true,
@@ -1578,7 +1589,7 @@ trust_level = "trusted"
             temp_dir.path().to_path_buf(),
         )?;
 
-        let expected_backend = canonicalize(&backend).expect("canonicalize backend directory");
+        let expected_backend = AbsolutePathBuf::try_from(backend).unwrap();
         if cfg!(target_os = "windows") {
             assert!(
                 config.forced_auto_mode_downgraded_on_windows,
