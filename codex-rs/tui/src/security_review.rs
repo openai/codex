@@ -116,6 +116,7 @@ const MODEL_REASONING_LOG_MAX_GRAPHEMES: usize = 240;
 const BUG_SCOPE_PROMPT_MAX_GRAPHEMES: usize = 600;
 const ANALYSIS_CONTEXT_MAX_CHARS: usize = 6_000;
 const AUTO_SCOPE_MODEL: &str = "gpt-5-codex";
+const FILE_TRIAGE_MODEL: &str = "gpt-5-codex-mini";
 const SPEC_GENERATION_MODEL: &str = "gpt-5-codex";
 const THREAT_MODEL_MODEL: &str = "gpt-5-codex";
 const CLASSIFICATION_PROMPT_SPEC_LIMIT: usize = 16_000;
@@ -3551,6 +3552,12 @@ pub async fn run_security_review(
             });
         }
 
+        let triage_model = if request.triage_model.trim().is_empty() {
+            FILE_TRIAGE_MODEL
+        } else {
+            request.triage_model.as_str()
+        };
+
         // First prune at the directory level to keep triage manageable.
         let mut directories: HashMap<PathBuf, Vec<FileSnippet>> = HashMap::new();
         for snippet in collection.snippets {
@@ -3598,7 +3605,7 @@ pub async fn run_security_review(
             &model_client,
             &request.provider,
             &request.auth,
-            &request.triage_model,
+            triage_model,
             auto_scope_prompt.clone(),
             pruned_snippets,
             progress_sender.clone(),
@@ -5422,6 +5429,11 @@ async fn triage_files_for_bug_analysis(
 ) -> Result<FileTriageResult, SecurityReviewFailure> {
     let total = snippets.len();
     let mut logs: Vec<String> = Vec::new();
+    let triage_model = if triage_model.trim().is_empty() {
+        FILE_TRIAGE_MODEL
+    } else {
+        triage_model
+    };
 
     if total == 0 {
         return Ok(FileTriageResult {
