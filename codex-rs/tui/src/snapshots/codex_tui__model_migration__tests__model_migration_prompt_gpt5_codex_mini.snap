@@ -1,12 +1,16 @@
 ---
 source: tui/src/model_migration.rs
+assertion_line: 471
 expression: terminal.backend()
 ---
 
+> Codex just got an upgrade. Introducing gpt-5.1-codex-max
+
+  Codex is now powered by gpt-5.1-codex-max, our latest
+  frontier agentic coding model. It is smarter and faster
+  than its predecessors and capable of long-running
+  project-scale work.
+
 > Try gpt-mini-plus
 
-  We recommend switching from gpt-mini to gpt-mini-plus.
-
-  Familiar pricing with better quality.
-
-  Press enter to continue
+  Learn more at https://openai.com/index/gpt-5-1-codex-max.
