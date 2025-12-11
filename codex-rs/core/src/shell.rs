@@ -86,9 +86,10 @@ fn get_user_shell_path() -> Option<PathBuf> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn get_user_shell_path() -> Option<PathBuf> {
-    None
+    use crate::powershell::try_find_powershellish_executable_blocking;
+    try_find_powershellish_executable_blocking().map(PathBuf::from)
 }
 
 fn file_exists(path: &PathBuf) -> Option<PathBuf> {
