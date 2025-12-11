@@ -40,6 +40,8 @@ use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use super::onboarding_screen::StepState;
 
@@ -156,6 +158,7 @@ pub(crate) struct AuthModeWidget {
     pub forced_chatgpt_workspace_id: Option<String>,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub animations_enabled: bool,
+    pub suppress_animations: Arc<AtomicBool>,
 }
 
 impl AuthModeWidget {
@@ -262,10 +265,23 @@ impl AuthModeWidget {
     fn render_continue_in_browser(&self, area: Rect, buf: &mut Buffer) {
         let mut spans = vec!["  ".into()];
         if self.animations_enabled {
-            // Schedule a follow-up frame to keep the shimmer animation going.
-            self.request_frame
-                .schedule_frame_in(std::time::Duration::from_millis(100));
-            spans.extend(shimmer_spans("Finish signing in via your browser"));
+            let sign_in_state = self.sign_in_state.read().unwrap();
+            let should_animate =
+                if let SignInState::ChatGptContinueInBrowser(state) = &*sign_in_state {
+                    state.auth_url.is_empty()
+                } else {
+                    true
+                };
+
+            if should_animate {
+                // Schedule a follow-up frame to keep the shimmer animation going.
+                self.request_frame
+                    .schedule_frame_in(std::time::Duration::from_millis(100));
+                spans.extend(shimmer_spans("Finish signing in via your browser"));
+            } else {
+                self.suppress_animations.store(true, Ordering::Relaxed);
+                spans.push("Finish signing in via your browser".into());
+            }
         } else {
             spans.push("Finish signing in via your browser".into());
         }
@@ -625,6 +641,10 @@ impl StepStateProvider for AuthModeWidget {
 
 impl WidgetRef for AuthModeWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        // Reset suppression state at the start of each render pass.
+        // It will be re-enabled if render_continue_in_browser decides it's needed.
+        self.suppress_animations.store(false, Ordering::Relaxed);
+
         let sign_in_state = self.sign_in_state.read().unwrap();
         match &*sign_in_state {
             SignInState::PickMode => {
@@ -676,6 +696,7 @@ mod tests {
             forced_chatgpt_workspace_id: None,
             forced_login_method: Some(ForcedLoginMethod::Chatgpt),
             animations_enabled: true,
+            suppress_animations: Arc::new(AtomicBool::new(false)),
         };
         (widget, codex_home)
     }
@@ -705,5 +726,51 @@ mod tests {
             SignInState::PickMode
         ));
         assert_eq!(widget.login_status, LoginStatus::NotAuthenticated);
+    }
+    #[test]
+    fn shimmer_disabled_when_url_present() {
+        let (mut widget, _tmp) = widget_forced_chatgpt();
+        let (requester, mut rx) = FrameRequester::test_spy();
+        widget.request_frame = requester;
+
+        // Set state to ChatGptContinueInBrowser with a URL
+        {
+            let mut guard = widget.sign_in_state.write().unwrap();
+            *guard = SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
+                auth_url: "https://example.com".to_string(),
+                shutdown_flag: None,
+            });
+        }
+
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, 10));
+        widget.render_continue_in_browser(Rect::new(0, 0, 100, 10), &mut buf);
+
+        // Verify NO frame was scheduled (rx should be empty)
+        assert!(
+            rx.try_recv().is_err(),
+            "Frame should not be scheduled when URL is present"
+        );
+        // Verify suppression flag is set to TRUE
+        assert!(widget.suppress_animations.load(Ordering::Relaxed));
+
+        // Now clear the URL and verify frame IS scheduled
+        {
+            let mut guard = widget.sign_in_state.write().unwrap();
+            *guard = SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
+                auth_url: "".to_string(),
+                shutdown_flag: None,
+            });
+        }
+
+        // Simulate the start of a new frame (which render_ref does)
+        widget.suppress_animations.store(false, Ordering::Relaxed);
+
+        widget.render_continue_in_browser(Rect::new(0, 0, 100, 10), &mut buf);
+        assert!(
+            rx.try_recv().is_ok(),
+            "Frame should be scheduled when URL is empty"
+        );
+        // Verify suppression flag is set to FALSE
+        assert!(!widget.suppress_animations.load(Ordering::Relaxed));
     }
 }

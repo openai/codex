@@ -18,6 +18,9 @@ use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::tui::FrameRequester;
 
 use super::onboarding_screen::StepState;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 const MIN_ANIMATION_HEIGHT: u16 = 20;
 const MIN_ANIMATION_WIDTH: u16 = 60;
@@ -26,6 +29,7 @@ pub(crate) struct WelcomeWidget {
     pub is_logged_in: bool,
     animation: AsciiAnimation,
     animations_enabled: bool,
+    suppress_animations: Arc<AtomicBool>,
 }
 
 impl KeyboardHandler for WelcomeWidget {
@@ -48,11 +52,13 @@ impl WelcomeWidget {
         is_logged_in: bool,
         request_frame: FrameRequester,
         animations_enabled: bool,
+        suppress_animations: Arc<AtomicBool>,
     ) -> Self {
         Self {
             is_logged_in,
             animation: AsciiAnimation::new(request_frame),
             animations_enabled,
+            suppress_animations,
         }
     }
 }
@@ -60,7 +66,7 @@ impl WelcomeWidget {
 impl WidgetRef for &WelcomeWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        if self.animations_enabled {
+        if self.animations_enabled && !self.suppress_animations.load(Ordering::Relaxed) {
             self.animation.schedule_next_frame();
         }
 
@@ -108,7 +114,12 @@ mod tests {
 
     #[test]
     fn welcome_renders_animation_on_first_draw() {
-        let widget = WelcomeWidget::new(false, FrameRequester::test_dummy(), true);
+        let widget = WelcomeWidget::new(
+            false,
+            FrameRequester::test_dummy(),
+            true,
+            Arc::new(AtomicBool::new(false)),
+        );
         let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
         let mut buf = Buffer::empty(area);
         (&widget).render(area, &mut buf);
@@ -139,6 +150,7 @@ mod tests {
             is_logged_in: false,
             animation: AsciiAnimation::with_variants(FrameRequester::test_dummy(), &VARIANTS, 0),
             animations_enabled: true,
+            suppress_animations: Arc::new(AtomicBool::new(false)),
         };
 
         let before = widget.animation.current_frame();

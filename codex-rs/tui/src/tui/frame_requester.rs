@@ -63,6 +63,17 @@ impl FrameRequester {
             frame_schedule_tx: tx,
         }
     }
+
+    /// Create a spy frame requester that exposes the receiver for verification.
+    pub(crate) fn test_spy() -> (Self, mpsc::UnboundedReceiver<Instant>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (
+            FrameRequester {
+                frame_schedule_tx: tx,
+            },
+            rx,
+        )
+    }
 }
 
 /// A scheduler for coalescing frame draw requests and notifying the TUI event loop.
