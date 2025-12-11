@@ -9,7 +9,6 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::run_collaboration_turn;
-use crate::response_processing::process_items;
 use crate::state::AgentId;
 use crate::state::AgentLifecycleState;
 use crate::state::TaskKind;
@@ -246,8 +245,9 @@ async fn run_agent_turns(
 
             collab.next_sub_id(target)
         };
-        let turn_context =
-            Arc::new(session.make_collaboration_turn_context(&agent_snapshot, sub_id.clone()));
+        let turn_context = session
+            .make_collaboration_turn_context(&agent_snapshot, sub_id.clone())
+            .await;
         session.register_sub_id(target, sub_id.clone()).await;
         let tracker: SharedTurnDiffTracker =
             Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -259,25 +259,22 @@ async fn run_agent_turns(
             Arc::clone(&session),
             Arc::clone(&turn_context),
             tracker,
-            agent_history.get_history(),
+            agent_history.get_history_for_prompt(),
             CancellationToken::new(),
         )
         .await;
 
         let (delta_tokens, continue_running) = match run_result {
-            Ok(processed_items) => {
-                let (responses, items_to_record) =
-                    process_items(processed_items, session.as_ref(), turn_context.as_ref()).await;
+            Ok((needs_follow_up, last)) => {
                 let new_history = session.clone_history_for_agent(target).await;
                 let after_tokens = new_history.get_total_token_usage();
                 let delta_tokens = after_tokens
                     .saturating_sub(before_tokens)
                     .clamp(0, i32::MAX as i64) as i32;
-                let last = crate::codex::get_last_assistant_message_from_turn(&items_to_record);
                 {
                     let mut collab = session.collaboration_state().lock().await;
                     if let Some(agent) = collab.agent_mut(target) {
-                        if !responses.is_empty() {
+                        if needs_follow_up {
                             agent_status = AgentLifecycleState::Running;
                         } else {
                             agent_status = AgentLifecycleState::Idle {
@@ -289,7 +286,7 @@ async fn run_agent_turns(
                     }
                 }
                 last_message = last;
-                (delta_tokens, !responses.is_empty())
+                (delta_tokens, needs_follow_up)
             }
             Err(err) => {
                 {

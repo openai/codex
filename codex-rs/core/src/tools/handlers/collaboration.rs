@@ -746,9 +746,9 @@ async fn handle_wait(
         targets
             .iter()
             .filter(|id| {
-                collab.agent(**id).is_some_and(|agent| {
-                    matches!(agent.status, AgentLifecycleState::Running)
-                })
+                collab
+                    .agent(**id)
+                    .is_some_and(|agent| matches!(agent.status, AgentLifecycleState::Running))
             })
             .map(|id| id.0)
             .collect()

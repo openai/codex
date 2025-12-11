@@ -530,20 +530,28 @@ impl Session {
         }
     }
 
-    pub(crate) fn make_collaboration_turn_context(
+    pub(crate) async fn make_collaboration_turn_context(
         &self,
         agent: &AgentState,
         sub_id: String,
-    ) -> TurnContext {
-        Self::make_turn_context(
+    ) -> Arc<TurnContext> {
+        let per_turn_config = Self::build_per_turn_config(&agent.config);
+        let model_family = self
+            .services
+            .models_manager
+            .construct_model_family(agent.config.model.as_str(), &per_turn_config)
+            .await;
+        Arc::new(Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.otel_event_manager,
             agent.config.provider.clone(),
             &agent.config,
+            per_turn_config,
+            model_family,
             self.conversation_id,
             sub_id,
             agent.id,
-        )
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1954,6 +1962,7 @@ mod handlers {
             let warning = EventMsg::Warning(WarningEvent { message });
             sess.send_event_raw(Event {
                 id: id.clone(),
+                agent_idx: Some(0),
                 msg: warning,
             })
             .await;
@@ -2537,15 +2546,19 @@ pub(crate) async fn run_collaboration_turn(
     turn_diff_tracker: SharedTurnDiffTracker,
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
-) -> CodexResult<Vec<ProcessedResponseItem>> {
-    run_turn(
+) -> CodexResult<(bool, Option<String>)> {
+    let TurnRunResult {
+        needs_follow_up,
+        last_agent_message,
+    } = run_turn(
         sess,
         turn_context,
         turn_diff_tracker,
         input,
         cancellation_token,
     )
-    .await
+    .await?;
+    Ok((needs_follow_up, last_agent_message))
 }
 
 /// When the model is prompted, it returns a stream of events. Some of these
