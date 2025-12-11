@@ -5,6 +5,8 @@ use regex::Regex;
 use shlex::split as shlex_split;
 use url::Url;
 
+use crate::powershell::strip_utf8_output_prefix;
+
 pub fn is_dangerous_command_windows(command: &[String]) -> bool {
     // Prefer structured parsing for PowerShell/CMD so we can spot URL-bearing
     // invocations of ShellExecute-style entry points before falling back to
@@ -225,6 +227,7 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
                 if idx + 2 != args.len() {
                     return None;
                 }
+                let script = strip_utf8_output_prefix(script);
                 let tokens = shlex_split(script)?;
                 return Some(ParsedPowershell { tokens });
             }
@@ -233,6 +236,7 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
                     return None;
                 }
                 let (_, script) = arg.split_once(':')?;
+                let script = strip_utf8_output_prefix(script);
                 let tokens = shlex_split(script)?;
                 return Some(ParsedPowershell { tokens });
             }
@@ -255,6 +259,7 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
 #[cfg(test)]
 mod tests {
     use super::is_dangerous_command_windows;
+    use crate::powershell::UTF8_OUTPUT_PREFIX;
 
     fn vec_str(items: &[&str]) -> Vec<String> {
         items.iter().map(std::string::ToString::to_string).collect()
@@ -285,6 +290,16 @@ mod tests {
             "powershell",
             "-Command",
             "Start-Process notepad.exe"
+        ])));
+    }
+
+    #[test]
+    fn powershell_direct_browser_url_is_dangerous_even_with_utf8_prefix() {
+        let script = format!("{UTF8_OUTPUT_PREFIX}msedge.exe https://example.com");
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            &script
         ])));
     }
 

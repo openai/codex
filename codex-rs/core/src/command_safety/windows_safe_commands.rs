@@ -7,6 +7,8 @@ use std::sync::LazyLock;
 
 const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
 
+use crate::powershell::strip_utf8_output_prefix;
+
 /// On Windows, we conservatively allow only clearly read-only PowerShell invocations
 /// that match a small safelist. Anything else (including direct CMD commands) is unsafe.
 pub fn is_safe_command_windows(command: &[String]) -> bool {
@@ -98,6 +100,7 @@ fn parse_powershell_invocation(executable: &str, args: &[String]) -> Option<Vec<
 /// Tokenizes an inline PowerShell script and delegates to the command splitter.
 /// Examples of when this is called: pwsh.exe -Command '<script>' or pwsh.exe -Command:<script>
 fn parse_powershell_script(executable: &str, script: &str) -> Option<Vec<Vec<String>>> {
+    let script = strip_utf8_output_prefix(script);
     if let PowershellParseOutcome::Commands(commands) =
         parse_with_powershell_ast(executable, script)
     {
@@ -347,6 +350,7 @@ fn is_safe_git_command(words: &[String]) -> bool {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    use crate::powershell::UTF8_OUTPUT_PREFIX;
     use crate::powershell::try_find_pwsh_executable_blocking;
     use std::string::ToString;
 
@@ -386,6 +390,17 @@ mod tests {
                 "Get-ChildItem".to_string(),
             ]));
         }
+    }
+
+    #[test]
+    fn recognizes_safe_powershell_wrappers_with_utf8_prefix() {
+        let script = format!("{UTF8_OUTPUT_PREFIX}Get-ChildItem -Path .");
+        assert!(is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            &script,
+        ])));
     }
 
     #[test]
