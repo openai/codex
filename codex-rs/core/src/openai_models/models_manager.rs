@@ -276,6 +276,15 @@ mod tests {
             "priority": priority,
             "upgrade": null,
             "base_instructions": null,
+            "supports_reasoning_summaries": false,
+            "support_verbosity": false,
+            "default_verbosity": null,
+            "apply_patch_tool_type": null,
+            "truncation_policy": {"mode": "bytes", "limit": 10_000},
+            "supports_parallel_tool_calls": false,
+            "context_window": null,
+            "reasoning_summary_format": "none",
+            "experimental_supported_tools": [],
         }))
         .expect("valid model")
     }
