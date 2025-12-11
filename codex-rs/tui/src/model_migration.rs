@@ -380,10 +380,10 @@ mod tests {
         let screen = ModelMigrationScreen::new(
             FrameRequester::test_dummy(),
             migration_copy_for_models(
-                "gpt-old",
-                "gpt-new",
-                "gpt-new".to_string(),
-                Some("Latest recommended model for better performance.".to_string()),
+                "gpt-5.1-codex-mini",
+                "gpt-5.1-codex-max",
+                "gpt-5.1-codex-max".to_string(),
+                Some("Latest Codex-optimized flagship for deep and fast reasoning.".to_string()),
                 true,
             ),
         );
@@ -406,10 +406,10 @@ mod tests {
         let screen = ModelMigrationScreen::new(
             FrameRequester::test_dummy(),
             migration_copy_for_models(
-                "gpt-legacy",
-                "gpt-latest",
-                "gpt-latest".to_string(),
-                Some("Upgraded capabilities with improved latency.".to_string()),
+                "gpt-5",
+                "gpt-5.1",
+                "gpt-5.1".to_string(),
+                Some("Broad world knowledge with strong general reasoning.".to_string()),
                 false,
             ),
         );
@@ -430,10 +430,10 @@ mod tests {
         let screen = ModelMigrationScreen::new(
             FrameRequester::test_dummy(),
             migration_copy_for_models(
-                "gpt-foo",
-                "gpt-bar",
-                "gpt-bar".to_string(),
-                Some("Improved coding assistance.".to_string()),
+                "gpt-5-codex",
+                "gpt-5.1-codex-max",
+                "gpt-5.1-codex-max".to_string(),
+                Some("Latest Codex-optimized flagship for deep and fast reasoning.".to_string()),
                 false,
             ),
         );
@@ -454,10 +454,10 @@ mod tests {
         let screen = ModelMigrationScreen::new(
             FrameRequester::test_dummy(),
             migration_copy_for_models(
-                "gpt-mini",
-                "gpt-mini-plus",
-                "gpt-mini-plus".to_string(),
-                Some("Familiar pricing with better quality.".to_string()),
+                "gpt-5-codex-mini",
+                "gpt-5.1-codex-mini",
+                "gpt-5.1-codex-mini".to_string(),
+                Some("Optimized for codex. Cheaper, faster, but less capable.".to_string()),
                 false,
             ),
         );

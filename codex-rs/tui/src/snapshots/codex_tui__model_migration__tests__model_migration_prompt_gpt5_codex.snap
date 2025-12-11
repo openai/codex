@@ -11,10 +11,12 @@ expression: terminal.backend()
   than its predecessors and capable of long-running
   project-scale work.
 
-> Try gpt-bar
+> Try gpt-5.1-codex-max
 
-  We recommend switching from gpt-foo to gpt-bar.
+  We recommend switching from gpt-5-codex to
+  gpt-5.1-codex-max.
 
-  Improved coding assistance.
+  Latest Codex-optimized flagship for deep and fast
+  reasoning.
 
   Press enter to continue

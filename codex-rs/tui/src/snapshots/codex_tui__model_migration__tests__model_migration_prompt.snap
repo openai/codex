@@ -11,13 +11,15 @@ expression: terminal.backend()
   than its predecessors and capable of long-running
   project-scale work.
 
-> Try gpt-new
+> Try gpt-5.1-codex-max
 
-  We recommend switching from gpt-old to gpt-new.
+  We recommend switching from gpt-5.1-codex-mini to
+  gpt-5.1-codex-max.
 
-  Latest recommended model for better performance.
+  Latest Codex-optimized flagship for deep and fast
+  reasoning.
 
-  You can continue using gpt-old if you prefer.
+  You can continue using gpt-5.1-codex-mini if you prefer.
 
   Choose how you'd like Codex to proceed.
 

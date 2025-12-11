@@ -11,10 +11,11 @@ expression: terminal.backend()
   than its predecessors and capable of long-running
   project-scale work.
 
-> Try gpt-mini-plus
+> Try gpt-5.1-codex-mini
 
-  We recommend switching from gpt-mini to gpt-mini-plus.
+  We recommend switching from gpt-5-codex-mini to
+  gpt-5.1-codex-mini.
 
-  Familiar pricing with better quality.
+  Optimized for codex. Cheaper, faster, but less capable.
 
   Press enter to continue

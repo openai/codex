@@ -11,10 +11,10 @@ expression: terminal.backend()
   than its predecessors and capable of long-running
   project-scale work.
 
-> Try gpt-latest
+> Try gpt-5.1
 
-  We recommend switching from gpt-legacy to gpt-latest.
+  We recommend switching from gpt-5 to gpt-5.1.
 
-  Upgraded capabilities with improved latency.
+  Broad world knowledge with strong general reasoning.
 
   Press enter to continue
