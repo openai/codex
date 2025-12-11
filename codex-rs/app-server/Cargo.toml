@@ -35,6 +35,7 @@ sha2 = { workspace = true }
 mcp-types = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",

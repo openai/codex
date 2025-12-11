@@ -47,7 +47,7 @@ pub enum ConfigEdit {
 }
 
 // TODO(jif) move to a dedicated file
-mod document_helpers {
+pub mod document_helpers {
     use crate::config::types::McpServerConfig;
     use crate::config::types::McpServerTransportConfig;
     use toml_edit::Array as TomlArray;
@@ -56,7 +56,7 @@ mod document_helpers {
     use toml_edit::Table as TomlTable;
     use toml_edit::value;
 
-    pub(super) fn ensure_table_for_write(item: &mut TomlItem) -> Option<&mut TomlTable> {
+    pub fn ensure_table_for_write(item: &mut TomlItem) -> Option<&mut TomlTable> {
         match item {
             TomlItem::Table(table) => Some(table),
             TomlItem::Value(value) => {
@@ -76,7 +76,7 @@ mod document_helpers {
         }
     }
 
-    pub(super) fn ensure_table_for_read(item: &mut TomlItem) -> Option<&mut TomlTable> {
+    pub fn ensure_table_for_read(item: &mut TomlItem) -> Option<&mut TomlTable> {
         match item {
             TomlItem::Table(table) => Some(table),
             TomlItem::Value(value) => {
@@ -162,7 +162,7 @@ mod document_helpers {
         TomlItem::Table(entry)
     }
 
-    fn table_from_inline(inline: &InlineTable) -> TomlTable {
+    pub fn table_from_inline(inline: &InlineTable) -> TomlTable {
         let mut table = new_implicit_table();
         for (key, value) in inline.iter() {
             let mut value = value.clone();
@@ -173,7 +173,7 @@ mod document_helpers {
         table
     }
 
-    pub(super) fn new_implicit_table() -> TomlTable {
+    pub fn new_implicit_table() -> TomlTable {
         let mut table = TomlTable::new();
         table.set_implicit(true);
         table

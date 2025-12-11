@@ -16,6 +16,9 @@ use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::OverriddenMetadata;
 use codex_app_server_protocol::WriteStatus;
 use codex_core::config::ConfigToml;
+use codex_core::config::edit::document_helpers::ensure_table_for_read;
+use codex_core::config::edit::document_helpers::ensure_table_for_write;
+use codex_core::config::edit::document_helpers::new_implicit_table;
 use codex_core::config_loader::LoadedConfigLayers;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::load_config_layers_with_overrides;
@@ -30,6 +33,12 @@ use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tokio::task;
 use toml::Value as TomlValue;
+use toml_edit::Array as TomlArray;
+use toml_edit::DocumentMut;
+use toml_edit::InlineTable;
+use toml_edit::Item as TomlItem;
+use toml_edit::Table as TomlTable;
+use toml_edit::Value as TomlEditValue;
 
 const SESSION_FLAGS_SOURCE: &str = "--config";
 const MDM_SOURCE: &str = "com.openai.codex/config_toml_base64";
@@ -145,7 +154,7 @@ impl ConfigApi {
 
         let mut user_config = layers.user.config.clone();
         let mut mutated = false;
-        let mut parsed_segments = Vec::new();
+        let mut parsed_edits = Vec::new();
 
         for (key_path, value, strategy) in edits.into_iter() {
             let segments = parse_key_path(&key_path).map_err(|message| {
@@ -155,19 +164,27 @@ impl ConfigApi {
                 config_write_error(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
 
-            let changed = apply_merge(&mut user_config, &segments, parsed_value.as_ref(), strategy)
-                .map_err(|err| match err {
-                    MergeError::PathNotFound => config_write_error(
-                        ConfigWriteErrorCode::ConfigPathNotFound,
-                        "Path not found",
-                    ),
-                    MergeError::Validation(message) => {
-                        config_write_error(ConfigWriteErrorCode::ConfigValidationError, message)
-                    }
-                })?;
+            let changed = apply_merge(
+                &mut user_config,
+                &segments,
+                parsed_value.as_ref(),
+                strategy.clone(),
+            )
+            .map_err(|err| match err {
+                MergeError::PathNotFound => {
+                    config_write_error(ConfigWriteErrorCode::ConfigPathNotFound, "Path not found")
+                }
+                MergeError::Validation(message) => {
+                    config_write_error(ConfigWriteErrorCode::ConfigValidationError, message)
+                }
+            })?;
 
             mutated |= changed;
-            parsed_segments.push(segments);
+            parsed_edits.push(ParsedEdit {
+                segments,
+                value: parsed_value,
+                strategy,
+            });
         }
 
         validate_config(&user_config).map_err(|err| {
@@ -187,11 +204,15 @@ impl ConfigApi {
         })?;
 
         if mutated {
-            self.persist_user_config(&user_config)
+            self.persist_user_config(&user_config, &parsed_edits)
                 .await
                 .map_err(|err| internal_error("failed to persist config.toml", err))?;
         }
 
+        let parsed_segments: Vec<Vec<String>> = parsed_edits
+            .iter()
+            .map(|edit| edit.segments.clone())
+            .collect();
         let overridden = first_overridden_edit(&updated_layers, &effective, &parsed_segments);
         let status = overridden
             .as_ref()
@@ -257,16 +278,25 @@ impl ConfigApi {
         })
     }
 
-    async fn persist_user_config(&self, user_config: &TomlValue) -> anyhow::Result<()> {
+    async fn persist_user_config(
+        &self,
+        user_config: &TomlValue,
+        edits: &[ParsedEdit],
+    ) -> anyhow::Result<()> {
         let codex_home = self.codex_home.clone();
         let serialized = toml::to_string_pretty(user_config)?;
+        let edits = edits.to_vec();
 
         task::spawn_blocking(move || -> anyhow::Result<()> {
             std::fs::create_dir_all(&codex_home)?;
 
             let target = codex_home.join(CONFIG_FILE_NAME);
+            let mut document = read_user_config_document(&target, &serialized)?;
+            apply_edits_to_document(&mut document, &edits).map_err(|err| {
+                anyhow!("failed to update config.toml with comments intact: {err:?}")
+            })?;
             let tmp = NamedTempFile::new_in(&codex_home)?;
-            std::fs::write(tmp.path(), serialized.as_bytes())?;
+            std::fs::write(tmp.path(), document.to_string().as_bytes())?;
             tmp.persist(&target)?;
             Ok(())
         })
@@ -275,6 +305,28 @@ impl ConfigApi {
 
         Ok(())
     }
+}
+
+/// loads the user config.toml into a toml_edit::DocumentMut while preserving comments/
+/// formatting
+fn read_user_config_document(path: &Path, serialized: &str) -> anyhow::Result<DocumentMut> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => serialized.to_string(),
+        Err(err) => return Err(err.into()),
+    };
+
+    if contents.trim().is_empty() {
+        return if serialized.trim().is_empty() {
+            Ok(DocumentMut::new())
+        } else {
+            serialized.parse::<DocumentMut>().map_err(Into::into)
+        };
+    }
+
+    contents
+        .parse::<DocumentMut>()
+        .or_else(|_| serialized.parse::<DocumentMut>().map_err(Into::into))
 }
 
 fn parse_value(value: JsonValue) -> Result<Option<TomlValue>, String> {
@@ -336,6 +388,13 @@ fn apply_override(target: &mut TomlValue, path: &str, value: TomlValue) {
             }
         }
     }
+}
+
+#[derive(Clone)]
+struct ParsedEdit {
+    segments: Vec<String>,
+    value: Option<TomlValue>,
+    strategy: MergeStrategy,
 }
 
 #[derive(Debug)]
@@ -423,6 +482,163 @@ fn clear_path(root: &mut TomlValue, segments: &[String]) -> Result<bool, MergeEr
     };
 
     Ok(parent.remove(last).is_some())
+}
+
+fn apply_edits_to_document(doc: &mut DocumentMut, edits: &[ParsedEdit]) -> Result<(), MergeError> {
+    for edit in edits {
+        apply_merge_to_document(
+            doc,
+            &edit.segments,
+            edit.value.as_ref(),
+            edit.strategy.clone(),
+        )?;
+    }
+    Ok(())
+}
+
+fn apply_merge_to_document(
+    doc: &mut DocumentMut,
+    segments: &[String],
+    value: Option<&TomlValue>,
+    strategy: MergeStrategy,
+) -> Result<(), MergeError> {
+    if value.is_none() {
+        return clear_path_in_document(doc, segments);
+    }
+
+    let Some(value) = value else {
+        return Err(MergeError::Validation(
+            "keyPath must not be empty".to_string(),
+        ));
+    };
+
+    let Some((last, parents)) = segments.split_last() else {
+        return Err(MergeError::Validation(
+            "keyPath must not be empty".to_string(),
+        ));
+    };
+
+    let mut current = doc.as_table_mut();
+
+    for segment in parents {
+        if !current.contains_key(segment.as_str()) {
+            current.insert(segment, TomlItem::Table(new_implicit_table()));
+        }
+
+        let item = current
+            .get_mut(segment.as_str())
+            .ok_or(MergeError::PathNotFound)?;
+        current = ensure_table_for_write(item).ok_or_else(|| {
+            MergeError::Validation("cannot set value on non-table parent".to_string())
+        })?;
+    }
+
+    if matches!(strategy, MergeStrategy::Upsert)
+        && let Some(existing) = current.get_mut(last.as_str())
+        && existing.as_table_mut().is_some()
+        && matches!(value, TomlValue::Table(_))
+    {
+        merge_item_with_toml_value(existing, value);
+        return Ok(());
+    }
+
+    if let Some(existing) = current.get_mut(last.as_str())
+        && let Some(existing_value) = existing.as_value_mut()
+    {
+        let mut new_value = toml_value_to_value(value);
+        *new_value.decor_mut() = existing_value.decor().clone();
+        *existing_value = new_value;
+        return Ok(());
+    }
+
+    current.insert(last, toml_value_to_item(value));
+    Ok(())
+}
+
+fn clear_path_in_document(doc: &mut DocumentMut, segments: &[String]) -> Result<(), MergeError> {
+    let Some((last, parents)) = segments.split_last() else {
+        return Err(MergeError::Validation(
+            "keyPath must not be empty".to_string(),
+        ));
+    };
+
+    let mut current = doc.as_table_mut();
+
+    for segment in parents {
+        let item = current
+            .get_mut(segment.as_str())
+            .ok_or(MergeError::PathNotFound)?;
+        current = ensure_table_for_read(item).ok_or(MergeError::PathNotFound)?;
+    }
+
+    current
+        .remove(last.as_str())
+        .map(|_| ())
+        .ok_or(MergeError::PathNotFound)
+}
+
+/// Merge `overlay` into `target`, recursing into tables and overwriting non-table values.
+fn merge_item_with_toml_value(target: &mut TomlItem, overlay: &TomlValue) {
+    if let Some(existing) = target.as_table_mut()
+        && let TomlValue::Table(overlay_table) = overlay
+    {
+        for (key, value) in overlay_table {
+            if let Some(existing_item) = existing.get_mut(key)
+                && existing_item.as_table_mut().is_some()
+                && matches!(value, TomlValue::Table(_))
+            {
+                merge_item_with_toml_value(existing_item, value);
+            } else if let Some(existing_item) = existing.get_mut(key)
+                && let Some(existing_value) = existing_item.as_value_mut()
+            {
+                let mut new_value = toml_value_to_value(value);
+                *new_value.decor_mut() = existing_value.decor().clone();
+                *existing_value = new_value;
+            } else {
+                existing.insert(key, toml_value_to_item(value));
+            }
+        }
+        return;
+    }
+
+    *target = toml_value_to_item(overlay);
+}
+
+fn toml_value_to_item(value: &TomlValue) -> TomlItem {
+    match value {
+        TomlValue::Table(entries) => {
+            let mut table = TomlTable::new();
+            for (key, val) in entries {
+                table.insert(key, toml_value_to_item(val));
+            }
+            TomlItem::Table(table)
+        }
+        _ => TomlItem::Value(toml_value_to_value(value)),
+    }
+}
+
+fn toml_value_to_value(value: &TomlValue) -> TomlEditValue {
+    match value {
+        TomlValue::String(val) => TomlEditValue::from(val.clone()),
+        TomlValue::Integer(val) => TomlEditValue::from(*val),
+        TomlValue::Float(val) => TomlEditValue::from(*val),
+        TomlValue::Boolean(val) => TomlEditValue::from(*val),
+        TomlValue::Datetime(val) => TomlEditValue::from(*val),
+        TomlValue::Array(items) => {
+            let mut array = TomlArray::new();
+            for item in items {
+                array.push(toml_value_to_value(item));
+            }
+            TomlEditValue::Array(array)
+        }
+        TomlValue::Table(entries) => {
+            let mut table = InlineTable::new();
+            for (key, val) in entries {
+                table.insert(key, toml_value_to_value(val));
+            }
+            TomlEditValue::InlineTable(table)
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -740,8 +956,231 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use codex_app_server_protocol::AskForApproval;
+    use codex_app_server_protocol::ConfigEdit as RpcConfigEdit;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn write_value_preserves_comments_above_keys() -> Result<()> {
+        let tmp = tempdir().expect("tempdir");
+        let original = r#"# hi
+approval_policy = "on-request"
+"#;
+        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), original)?;
+
+        let api = ConfigApi::new(tmp.path().to_path_buf(), vec![]);
+        api.write_value(ConfigValueWriteParams {
+            file_path: Some(tmp.path().join(CONFIG_FILE_NAME).display().to_string()),
+            key_path: "approval_policy".to_string(),
+            value: json!("never"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("write succeeds");
+
+        let updated =
+            std::fs::read_to_string(tmp.path().join(CONFIG_FILE_NAME)).expect("read config");
+        assert!(
+            updated.contains("# hi"),
+            "comment should be preserved when updating value:\n{updated}"
+        );
+        assert!(
+            updated.contains("approval_policy = \"never\""),
+            "value should be updated:\n{updated}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn batch_write_preserves_comments_between_tables() -> Result<()> {
+        let tmp = tempdir().expect("tempdir");
+        let original = r#"approval_policy = "never"
+model = "gpt-5.1-codex-max"
+model_reasoning_effort = "high"
+sandbox_mode = "danger-full-access"
+type = "danger-full-access"
+
+# ok
+
+[features]
+rmcp_client = false
+
+[mcp_servers.linear]
+bearer_token_env_var = "sdafa"
+name = "linear"
+url = "https://mcp.linear.app/mcp"
+
+[mcp_servers.linear.env_http_headers]
+aaa = "aa"
+
+[mcp_servers.linear.http_headers]
+fadsfs = "fasdfsda"
+
+[notice]
+hide_full_access_warning = true
+"#;
+        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), original)?;
+
+        let api = ConfigApi::new(tmp.path().to_path_buf(), vec![]);
+        api.batch_write(ConfigBatchWriteParams {
+            edits: vec![
+                RpcConfigEdit {
+                    key_path: "features.rmcp_client".to_string(),
+                    value: json!(true),
+                    merge_strategy: MergeStrategy::Upsert,
+                },
+                RpcConfigEdit {
+                    key_path: "mcp_servers.linear.http_headers.fadsfs".to_string(),
+                    value: json!("updated"),
+                    merge_strategy: MergeStrategy::Upsert,
+                },
+            ],
+            file_path: Some(tmp.path().join(CONFIG_FILE_NAME).display().to_string()),
+            expected_version: None,
+        })
+        .await
+        .expect("write succeeds");
+
+        let updated =
+            std::fs::read_to_string(tmp.path().join(CONFIG_FILE_NAME)).expect("read config");
+        assert!(
+            updated.contains("# ok"),
+            "comment should be preserved after batch write:\n{updated}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn batch_write_table_upsert_preserves_inline_comments() -> Result<()> {
+        let tmp = tempdir().expect("tempdir");
+        let original = r#"approval_policy = "never"
+
+[mcp_servers.linear]
+name = "linear"
+# ok
+url = "https://linear.example"
+
+[mcp_servers.linear.http_headers]
+foo = "bar"
+"#;
+        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), original)?;
+
+        let api = ConfigApi::new(tmp.path().to_path_buf(), vec![]);
+        api.batch_write(ConfigBatchWriteParams {
+            edits: vec![RpcConfigEdit {
+                key_path: "mcp_servers.linear".to_string(),
+                value: json!({
+                    "url": "https://linear.example/v2"
+                }),
+                merge_strategy: MergeStrategy::Upsert,
+            }],
+            file_path: Some(tmp.path().join(CONFIG_FILE_NAME).display().to_string()),
+            expected_version: None,
+        })
+        .await
+        .expect("write succeeds");
+
+        let updated =
+            std::fs::read_to_string(tmp.path().join(CONFIG_FILE_NAME)).expect("read config");
+        assert!(
+            updated.contains("# ok"),
+            "comment should be preserved when upserting table:\n{updated}"
+        );
+        assert!(
+            updated.contains("url = \"https://linear.example/v2\""),
+            "value should be updated:\n{updated}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_merges_tables_replace_overwrites() -> Result<()> {
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join(CONFIG_FILE_NAME);
+        let base = r#"[mcp_servers.linear]
+bearer_token_env_var = "TOKEN"
+name = "linear"
+url = "https://linear.example"
+
+[mcp_servers.linear.env_http_headers]
+existing = "keep"
+
+[mcp_servers.linear.http_headers]
+alpha = "a"
+"#;
+
+        let overlay = json!({
+            "bearer_token_env_var": "NEW_TOKEN",
+            "http_headers": {
+                "alpha": "updated",
+                "beta": "b"
+            },
+            "name": "linear",
+            "url": "https://linear.example"
+        });
+
+        std::fs::write(&path, base)?;
+
+        let api = ConfigApi::new(tmp.path().to_path_buf(), vec![]);
+        api.write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "mcp_servers.linear".to_string(),
+            value: overlay.clone(),
+            merge_strategy: MergeStrategy::Upsert,
+            expected_version: None,
+        })
+        .await
+        .expect("upsert succeeds");
+
+        let upserted: TomlValue = toml::from_str(&std::fs::read_to_string(&path)?)?;
+        let expected_upsert: TomlValue = toml::from_str(
+            r#"[mcp_servers.linear]
+bearer_token_env_var = "NEW_TOKEN"
+name = "linear"
+url = "https://linear.example"
+
+[mcp_servers.linear.env_http_headers]
+existing = "keep"
+
+[mcp_servers.linear.http_headers]
+alpha = "updated"
+beta = "b"
+"#,
+        )?;
+        assert_eq!(upserted, expected_upsert);
+
+        std::fs::write(&path, base)?;
+
+        api.write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "mcp_servers.linear".to_string(),
+            value: overlay,
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("replace succeeds");
+
+        let replaced: TomlValue = toml::from_str(&std::fs::read_to_string(&path)?)?;
+        let expected_replace: TomlValue = toml::from_str(
+            r#"[mcp_servers.linear]
+bearer_token_env_var = "NEW_TOKEN"
+name = "linear"
+url = "https://linear.example"
+
+[mcp_servers.linear.http_headers]
+alpha = "updated"
+beta = "b"
+"#,
+        )?;
+        assert_eq!(replaced, expected_replace);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn read_includes_origins_and_layers() {
