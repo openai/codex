@@ -7,14 +7,13 @@ the session manager to spawn PTYs once an ExecEnv is prepared.
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecExpiration;
+use crate::sandboxing::SandboxPermissions;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
-use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxOverride;
-use crate::tools::sandboxing::SandboxRetryData;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
@@ -34,25 +33,16 @@ pub struct UnifiedExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
-    pub with_escalated_permissions: Option<bool>,
+    pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
-}
-
-impl ProvidesSandboxRetryData for UnifiedExecRequest {
-    fn sandbox_retry_data(&self) -> Option<SandboxRetryData> {
-        Some(SandboxRetryData {
-            command: self.command.clone(),
-            cwd: self.cwd.clone(),
-        })
-    }
 }
 
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct UnifiedExecApprovalKey {
     pub command: Vec<String>,
     pub cwd: PathBuf,
-    pub escalated: bool,
+    pub sandbox_permissions: SandboxPermissions,
 }
 
 pub struct UnifiedExecRuntime<'a> {
@@ -64,7 +54,7 @@ impl UnifiedExecRequest {
         command: Vec<String>,
         cwd: PathBuf,
         env: HashMap<String, String>,
-        with_escalated_permissions: Option<bool>,
+        sandbox_permissions: SandboxPermissions,
         justification: Option<String>,
         exec_approval_requirement: ExecApprovalRequirement,
     ) -> Self {
@@ -72,7 +62,7 @@ impl UnifiedExecRequest {
             command,
             cwd,
             env,
-            with_escalated_permissions,
+            sandbox_permissions,
             justification,
             exec_approval_requirement,
         }
@@ -102,7 +92,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         UnifiedExecApprovalKey {
             command: req.command.clone(),
             cwd: req.cwd.clone(),
-            escalated: req.with_escalated_permissions.unwrap_or(false),
+            sandbox_permissions: req.sandbox_permissions,
         }
     }
 
@@ -121,7 +111,6 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             .retry_reason
             .clone()
             .or_else(|| req.justification.clone());
-        let risk = ctx.risk.clone();
         Box::pin(async move {
             with_cached_approval(&session.services, key, || async move {
                 session
@@ -131,7 +120,6 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         command,
                         cwd,
                         reason,
-                        risk,
                         req.exec_approval_requirement
                             .proposed_execpolicy_amendment()
                             .cloned(),
@@ -150,11 +138,12 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
-        if req.with_escalated_permissions.unwrap_or(false)
+        if req.sandbox_permissions.requires_escalated_permissions()
             || matches!(
                 req.exec_approval_requirement,
                 ExecApprovalRequirement::Skip {
-                    bypass_sandbox: true
+                    bypass_sandbox: true,
+                    ..
                 }
             )
         {
@@ -177,7 +166,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecSession> for UnifiedExecRunt
             &req.cwd,
             &req.env,
             ExecExpiration::DefaultTimeout,
-            req.with_escalated_permissions,
+            req.sandbox_permissions,
             req.justification.clone(),
         )
         .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;

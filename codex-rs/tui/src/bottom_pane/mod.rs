@@ -131,8 +131,18 @@ impl BottomPane {
         }
     }
 
+    pub fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
+        self.composer.set_skill_mentions(skills);
+        self.request_redraw();
+    }
+
+    #[cfg(test)]
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
         self.status.as_ref()
+    }
+
+    pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
+        self.composer.skills()
     }
 
     #[cfg(test)]
@@ -570,7 +580,6 @@ mod tests {
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
             reason: None,
-            risk: None,
             proposed_execpolicy_amendment: None,
         }
     }

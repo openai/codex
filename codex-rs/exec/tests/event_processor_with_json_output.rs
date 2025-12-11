@@ -48,6 +48,8 @@ use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+use codex_protocol::protocol::ExecOutputStream;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::TextContent;
@@ -83,6 +85,7 @@ fn session_configured_produces_thread_started_event() {
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
+            skill_load_outcome: None,
             rollout_path,
         }),
     );
@@ -691,6 +694,93 @@ fn exec_command_end_success_produces_completed_command_item() {
                 details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                     command: "bash -lc 'echo hi'".to_string(),
                     aggregated_output: "hi\n".to_string(),
+                    exit_code: Some(0),
+                    status: CommandExecutionStatus::Completed,
+                }),
+            },
+        })]
+    );
+}
+
+#[test]
+fn command_execution_output_delta_updates_item_progress() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "echo delta".to_string(),
+    ];
+    let cwd = std::env::current_dir().unwrap();
+    let parsed_cmd = Vec::new();
+
+    let begin = event(
+        "d1",
+        EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "delta-1".to_string(),
+            process_id: Some("42".to_string()),
+            turn_id: "turn-1".to_string(),
+            command: command.clone(),
+            cwd: cwd.clone(),
+            parsed_cmd: parsed_cmd.clone(),
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+        }),
+    );
+    let out_begin = ep.collect_thread_events(&begin);
+    assert_eq!(
+        out_begin,
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                    command: "bash -lc 'echo delta'".to_string(),
+                    aggregated_output: String::new(),
+                    exit_code: None,
+                    status: CommandExecutionStatus::InProgress,
+                }),
+            },
+        })]
+    );
+
+    let delta = event(
+        "d2",
+        EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+            call_id: "delta-1".to_string(),
+            stream: ExecOutputStream::Stdout,
+            chunk: b"partial output\n".to_vec(),
+        }),
+    );
+    let out_delta = ep.collect_thread_events(&delta);
+    assert_eq!(out_delta, Vec::<ThreadEvent>::new());
+
+    let end = event(
+        "d3",
+        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "delta-1".to_string(),
+            process_id: Some("42".to_string()),
+            turn_id: "turn-1".to_string(),
+            command,
+            cwd,
+            parsed_cmd,
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            aggregated_output: String::new(),
+            exit_code: 0,
+            duration: Duration::from_millis(3),
+            formatted_output: String::new(),
+        }),
+    );
+    let out_end = ep.collect_thread_events(&end);
+    assert_eq!(
+        out_end,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                    command: "bash -lc 'echo delta'".to_string(),
+                    aggregated_output: String::new(),
                     exit_code: Some(0),
                     status: CommandExecutionStatus::Completed,
                 }),

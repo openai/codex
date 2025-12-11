@@ -10,6 +10,7 @@ use anyhow::Result;
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::sandboxing::SandboxPermissions;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -105,7 +106,7 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
     let first_args = json!({
         "command": command,
         "timeout_ms": 1_000,
-        "with_escalated_permissions": true,
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
     });
     let second_args = json!({
         "command": command,

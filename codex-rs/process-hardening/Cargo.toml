@@ -13,3 +13,6 @@ workspace = true
 
 [dependencies]
 libc = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

@@ -43,6 +43,7 @@ use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
+use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
@@ -799,6 +800,10 @@ impl ChatComposer {
 
     fn skills_enabled(&self) -> bool {
         self.skills.as_ref().is_some_and(|s| !s.is_empty())
+    }
+
+    pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
+        self.skills.as_ref()
     }
 
     /// Extract a token prefixed with `prefix` under the cursor, if any.
@@ -1579,6 +1584,56 @@ impl ChatComposer {
         }
     }
 
+    /// If the cursor is currently within a slash command on the first line,
+    /// extract the command name and the rest of the line after it.
+    /// Returns None if the cursor is outside a slash command.
+    fn slash_command_under_cursor(first_line: &str, cursor: usize) -> Option<(&str, &str)> {
+        if !first_line.starts_with('/') {
+            return None;
+        }
+
+        let name_start = 1usize;
+        let name_end = first_line[name_start..]
+            .find(char::is_whitespace)
+            .map(|idx| name_start + idx)
+            .unwrap_or_else(|| first_line.len());
+
+        if cursor > name_end {
+            return None;
+        }
+
+        let name = &first_line[name_start..name_end];
+        let rest_start = first_line[name_end..]
+            .find(|c: char| !c.is_whitespace())
+            .map(|idx| name_end + idx)
+            .unwrap_or(name_end);
+        let rest = &first_line[rest_start..];
+
+        Some((name, rest))
+    }
+
+    /// Heuristic for whether the typed slash command looks like a valid
+    /// prefix for any known command (built-in or custom prompt).
+    /// Empty names only count when there is no extra content after the '/'.
+    fn looks_like_slash_prefix(&self, name: &str, rest_after_name: &str) -> bool {
+        if name.is_empty() {
+            return rest_after_name.is_empty();
+        }
+
+        let builtin_match = built_in_slash_commands()
+            .into_iter()
+            .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
+
+        if builtin_match {
+            return true;
+        }
+
+        let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
+        self.custom_prompts
+            .iter()
+            .any(|p| fuzzy_match(&format!("{prompt_prefix}{}", p.name), name).is_some())
+    }
+
     /// Synchronize `self.command_popup` with the current text in the
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
@@ -1596,17 +1651,10 @@ impl ChatComposer {
         let cursor = self.textarea.cursor();
         let caret_on_first_line = cursor <= first_line_end;
 
-        let is_editing_slash_command_name = if first_line.starts_with('/') && caret_on_first_line {
-            // Compute the end of the initial '/name' token (name may be empty yet).
-            let token_end = first_line
-                .char_indices()
-                .find(|(_, c)| c.is_whitespace())
-                .map(|(i, _)| i)
-                .unwrap_or(first_line.len());
-            cursor <= token_end
-        } else {
-            false
-        };
+        let is_editing_slash_command_name = caret_on_first_line
+            && Self::slash_command_under_cursor(first_line, cursor)
+                .is_some_and(|(name, rest)| self.looks_like_slash_prefix(name, rest));
+
         // If the cursor is currently positioned within an `@token`, prefer the
         // file-search popup over the slash popup so users can insert a file path
         // as an argument to the command (e.g., "/review @docs/...").
@@ -3872,5 +3920,83 @@ mod tests {
 
         assert_eq!(composer.textarea.text(), "z".repeat(count));
         assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
+    fn slash_popup_not_activated_for_slash_space_text_history_like_input() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Simulate history-like content: "/ test"
+        composer.set_text_content("/ test".to_string());
+
+        // After set_text_content -> sync_popups is called; popup should NOT be Command.
+        assert!(
+            matches!(composer.active_popup, ActivePopup::None),
+            "expected no slash popup for '/ test'"
+        );
+
+        // Up should be handled by history navigation path, not slash popup handler.
+        let (result, _redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+    }
+
+    #[test]
+    fn slash_popup_activated_for_bare_slash_and_valid_prefixes() {
+        // use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Case 1: bare "/"
+        composer.set_text_content("/".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "bare '/' should activate slash popup"
+        );
+
+        // Case 2: valid prefix "/re" (matches /review, /resume, etc.)
+        composer.set_text_content("/re".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "'/re' should activate slash popup via prefix match"
+        );
+
+        // Case 3: fuzzy match "/ac" (subsequence of /compact and /feedback)
+        composer.set_text_content("/ac".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "'/ac' should activate slash popup via fuzzy match"
+        );
+
+        // Case 4: invalid prefix "/zzz" – still allowed to open popup if it
+        // matches no built-in command; our current logic will not open popup.
+        // Verify that explicitly.
+        composer.set_text_content("/zzz".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::None),
+            "'/zzz' should not activate slash popup because it is not a prefix of any built-in command"
+        );
     }
 }

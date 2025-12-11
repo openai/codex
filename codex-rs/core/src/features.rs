@@ -48,8 +48,6 @@ pub enum Feature {
     WebSearchRequest,
     /// Gate the execpolicy enforcement for shell/unified exec.
     ExecPolicy,
-    /// Enable the model-based risk assessments for sandboxed commands.
-    SandboxCommandAssessment,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
     /// Remote compaction enabled (only for ChatGPT auth)
@@ -60,6 +58,10 @@ pub enum Feature {
     ParallelToolCalls,
     /// Experimental skills injection (CLI flag-driven).
     Skills,
+    /// Experimental shell snapshotting.
+    ShellSnapshot,
+    /// Experimental TUI v2 (viewport) implementation.
+    Tui2,
 }
 
 impl Feature {
@@ -100,7 +102,6 @@ pub struct Features {
 pub struct FeatureOverrides {
     pub include_apply_patch_tool: Option<bool>,
     pub web_search_request: Option<bool>,
-    pub experimental_sandbox_command_assessment: Option<bool>,
 }
 
 impl FeatureOverrides {
@@ -192,7 +193,6 @@ impl Features {
         let mut features = Features::with_defaults();
 
         let base_legacy = LegacyFeatureToggles {
-            experimental_sandbox_command_assessment: cfg.experimental_sandbox_command_assessment,
             experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
             experimental_use_rmcp_client: cfg.experimental_use_rmcp_client,
@@ -208,8 +208,6 @@ impl Features {
 
         let profile_legacy = LegacyFeatureToggles {
             include_apply_patch_tool: config_profile.include_apply_patch_tool,
-            experimental_sandbox_command_assessment: config_profile
-                .experimental_sandbox_command_assessment,
             experimental_use_freeform_apply_patch: config_profile
                 .experimental_use_freeform_apply_patch,
 
@@ -269,6 +267,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::ParallelToolCalls,
+        key: "parallel",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
         id: Feature::ViewImageTool,
         key: "view_image_tool",
         stage: Stage::Stable,
@@ -318,12 +322,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
-        id: Feature::SandboxCommandAssessment,
-        key: "experimental_sandbox_command_assessment",
-        stage: Stage::Experimental,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::WindowsSandbox,
         key: "enable_experimental_windows_sandbox",
         stage: Stage::Experimental,
@@ -342,14 +340,20 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ParallelToolCalls,
-        key: "parallel",
+        id: Feature::Skills,
+        key: "skills",
         stage: Stage::Experimental,
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::Skills,
-        key: "skills",
+        id: Feature::ShellSnapshot,
+        key: "shell_snapshot",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Tui2,
+        key: "tui2",
         stage: Stage::Experimental,
         default_enabled: false,
     },

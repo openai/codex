@@ -19,6 +19,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthStatusChangeNotification;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
+use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecParams;
@@ -55,6 +56,9 @@ use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::LogoutChatGptResponse;
 use codex_app_server_protocol::McpServer;
+use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
+use codex_app_server_protocol::McpServerOauthLoginParams;
+use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
@@ -115,6 +119,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config_loader::load_config_as_toml;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
@@ -132,6 +137,7 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget as CoreReviewTarget;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::read_head_for_summary;
+use codex_core::sandboxing::SandboxPermissions;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
@@ -147,6 +153,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
+use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -161,6 +168,7 @@ use std::time::Duration;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
+use toml::Value as TomlValue;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -178,11 +186,19 @@ pub(crate) struct TurnSummary {
 
 pub(crate) type TurnSummaryStore = Arc<Mutex<HashMap<ConversationId, TurnSummary>>>;
 
+const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
+const THREAD_LIST_MAX_LIMIT: usize = 100;
+
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 struct ActiveLogin {
     shutdown_handle: ShutdownHandle,
     login_id: Uuid,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CancelLoginError {
+    NotFound(Uuid),
 }
 
 impl Drop for ActiveLogin {
@@ -198,6 +214,7 @@ pub(crate) struct CodexMessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     config: Arc<Config>,
+    cli_overrides: Vec<(String, TomlValue)>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
@@ -244,6 +261,7 @@ impl CodexMessageProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         codex_linux_sandbox_exe: Option<PathBuf>,
         config: Arc<Config>,
+        cli_overrides: Vec<(String, TomlValue)>,
         feedback: CodexFeedback,
     ) -> Self {
         Self {
@@ -252,6 +270,7 @@ impl CodexMessageProcessor {
             outgoing,
             codex_linux_sandbox_exe,
             config,
+            cli_overrides,
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
@@ -259,6 +278,16 @@ impl CodexMessageProcessor {
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             feedback,
         }
+    }
+
+    async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
+        Config::load_with_cli_overrides(self.cli_overrides.clone(), ConfigOverrides::default())
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to reload config: {err}"),
+                data: None,
+            })
     }
 
     fn review_request_from_target(
@@ -368,6 +397,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ModelList { request_id, params } => {
                 self.list_models(request_id, params).await;
+            }
+            ClientRequest::McpServerOauthLogin { request_id, params } => {
+                self.mcp_server_oauth_login(request_id, params).await;
             }
             ClientRequest::McpServersList { request_id, params } => {
                 self.list_mcp_servers(request_id, params).await;
@@ -802,7 +834,7 @@ impl CodexMessageProcessor {
     async fn cancel_login_chatgpt_common(
         &mut self,
         login_id: Uuid,
-    ) -> std::result::Result<(), JSONRPCErrorError> {
+    ) -> std::result::Result<(), CancelLoginError> {
         let mut guard = self.active_login.lock().await;
         if guard.as_ref().map(|l| l.login_id) == Some(login_id) {
             if let Some(active) = guard.take() {
@@ -810,11 +842,7 @@ impl CodexMessageProcessor {
             }
             Ok(())
         } else {
-            Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("login id not found: {login_id}"),
-                data: None,
-            })
+            Err(CancelLoginError::NotFound(login_id))
         }
     }
 
@@ -825,7 +853,12 @@ impl CodexMessageProcessor {
                     .send_response(request_id, CancelLoginChatGptResponse {})
                     .await;
             }
-            Err(error) => {
+            Err(CancelLoginError::NotFound(missing_login_id)) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("login id not found: {missing_login_id}"),
+                    data: None,
+                };
                 self.outgoing.send_error(request_id, error).await;
             }
         }
@@ -834,16 +867,14 @@ impl CodexMessageProcessor {
     async fn cancel_login_v2(&mut self, request_id: RequestId, params: CancelLoginAccountParams) {
         let login_id = params.login_id;
         match Uuid::parse_str(&login_id) {
-            Ok(uuid) => match self.cancel_login_chatgpt_common(uuid).await {
-                Ok(()) => {
-                    self.outgoing
-                        .send_response(request_id, CancelLoginAccountResponse {})
-                        .await;
-                }
-                Err(error) => {
-                    self.outgoing.send_error(request_id, error).await;
-                }
-            },
+            Ok(uuid) => {
+                let status = match self.cancel_login_chatgpt_common(uuid).await {
+                    Ok(()) => CancelLoginAccountStatus::Canceled,
+                    Err(CancelLoginError::NotFound(_)) => CancelLoginAccountStatus::NotFound,
+                };
+                let response = CancelLoginAccountResponse { status };
+                self.outgoing.send_response(request_id, response).await;
+            }
             Err(_) => {
                 let error = JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,
@@ -1169,7 +1200,7 @@ impl CodexMessageProcessor {
             cwd,
             expiration: timeout_ms.into(),
             env,
-            with_escalated_permissions: None,
+            sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
             arg0: None,
         };
@@ -1485,10 +1516,12 @@ impl CodexMessageProcessor {
             model_providers,
         } = params;
 
-        let page_size = limit.unwrap_or(25).max(1) as usize;
-
+        let requested_page_size = limit
+            .map(|value| value as usize)
+            .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
+            .clamp(1, THREAD_LIST_MAX_LIMIT);
         let (summaries, next_cursor) = match self
-            .list_conversations_common(page_size, cursor, model_providers)
+            .list_conversations_common(requested_page_size, cursor, model_providers)
             .await
         {
             Ok(r) => r,
@@ -1499,7 +1532,6 @@ impl CodexMessageProcessor {
         };
 
         let data = summaries.into_iter().map(summary_to_thread).collect();
-
         let response = ThreadListResponse { data, next_cursor };
         self.outgoing.send_response(request_id, response).await;
     }
@@ -1777,10 +1809,12 @@ impl CodexMessageProcessor {
             cursor,
             model_providers,
         } = params;
-        let page_size = page_size.unwrap_or(25).max(1);
+        let requested_page_size = page_size
+            .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
+            .clamp(1, THREAD_LIST_MAX_LIMIT);
 
         match self
-            .list_conversations_common(page_size, cursor, model_providers)
+            .list_conversations_common(requested_page_size, cursor, model_providers)
             .await
         {
             Ok((items, next_cursor)) => {
@@ -1795,12 +1829,15 @@ impl CodexMessageProcessor {
 
     async fn list_conversations_common(
         &self,
-        page_size: usize,
+        requested_page_size: usize,
         cursor: Option<String>,
         model_providers: Option<Vec<String>>,
     ) -> Result<(Vec<ConversationSummary>, Option<String>), JSONRPCErrorError> {
-        let cursor_obj: Option<RolloutCursor> = cursor.as_ref().and_then(|s| parse_cursor(s));
-        let cursor_ref = cursor_obj.as_ref();
+        let mut cursor_obj: Option<RolloutCursor> = cursor.as_ref().and_then(|s| parse_cursor(s));
+        let mut last_cursor = cursor_obj.clone();
+        let mut remaining = requested_page_size;
+        let mut items = Vec::with_capacity(requested_page_size);
+        let mut next_cursor: Option<String> = None;
 
         let model_provider_filter = match model_providers {
             Some(providers) => {
@@ -1814,55 +1851,76 @@ impl CodexMessageProcessor {
         };
         let fallback_provider = self.config.model_provider_id.clone();
 
-        let page = match RolloutRecorder::list_conversations(
-            &self.config.codex_home,
-            page_size,
-            cursor_ref,
-            INTERACTIVE_SESSION_SOURCES,
-            model_provider_filter.as_deref(),
-            fallback_provider.as_str(),
-        )
-        .await
-        {
-            Ok(p) => p,
-            Err(err) => {
-                return Err(JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to list conversations: {err}"),
-                    data: None,
-                });
+        while remaining > 0 {
+            let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
+            let page = RolloutRecorder::list_conversations(
+                &self.config.codex_home,
+                page_size,
+                cursor_obj.as_ref(),
+                INTERACTIVE_SESSION_SOURCES,
+                model_provider_filter.as_deref(),
+                fallback_provider.as_str(),
+            )
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to list conversations: {err}"),
+                data: None,
+            })?;
+
+            let mut filtered = page
+                .items
+                .into_iter()
+                .filter_map(|it| {
+                    let session_meta_line = it.head.first().and_then(|first| {
+                        serde_json::from_value::<SessionMetaLine>(first.clone()).ok()
+                    })?;
+                    extract_conversation_summary(
+                        it.path,
+                        &it.head,
+                        &session_meta_line.meta,
+                        session_meta_line.git.as_ref(),
+                        fallback_provider.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if filtered.len() > remaining {
+                filtered.truncate(remaining);
             }
-        };
+            items.extend(filtered);
+            remaining = requested_page_size.saturating_sub(items.len());
 
-        let items = page
-            .items
-            .into_iter()
-            .filter_map(|it| {
-                let session_meta_line = it.head.first().and_then(|first| {
-                    serde_json::from_value::<SessionMetaLine>(first.clone()).ok()
-                })?;
-                extract_conversation_summary(
-                    it.path,
-                    &it.head,
-                    &session_meta_line.meta,
-                    session_meta_line.git.as_ref(),
-                    fallback_provider.as_str(),
-                )
-            })
-            .collect::<Vec<_>>();
+            // Encode RolloutCursor into the JSON-RPC string form returned to clients.
+            let next_cursor_value = page.next_cursor.clone();
+            next_cursor = next_cursor_value
+                .as_ref()
+                .and_then(|cursor| serde_json::to_value(cursor).ok())
+                .and_then(|value| value.as_str().map(str::to_owned));
+            if remaining == 0 {
+                break;
+            }
 
-        // Encode next_cursor as a plain string
-        let next_cursor = page
-            .next_cursor
-            .and_then(|cursor| serde_json::to_value(&cursor).ok())
-            .and_then(|value| value.as_str().map(str::to_owned));
+            match next_cursor_value {
+                Some(cursor_val) if remaining > 0 => {
+                    // Break if our pagination would reuse the same cursor again; this avoids
+                    // an infinite loop when filtering drops everything on the page.
+                    if last_cursor.as_ref() == Some(&cursor_val) {
+                        next_cursor = None;
+                        break;
+                    }
+                    last_cursor = Some(cursor_val.clone());
+                    cursor_obj = Some(cursor_val);
+                }
+                _ => break,
+            }
+        }
 
         Ok((items, next_cursor))
     }
 
     async fn list_models(&self, request_id: RequestId, params: ModelListParams) {
         let ModelListParams { limit, cursor } = params;
-        let models = supported_models(self.conversation_manager.clone()).await;
+        let models = supported_models(self.conversation_manager.clone(), &self.config).await;
         let total = models.len();
 
         if total == 0 {
@@ -1914,6 +1972,110 @@ impl CodexMessageProcessor {
             next_cursor,
         };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn mcp_server_oauth_login(
+        &self,
+        request_id: RequestId,
+        params: McpServerOauthLoginParams,
+    ) {
+        let config = match self.load_latest_config().await {
+            Ok(config) => config,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        if !config.features.enabled(Feature::RmcpClient) {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "OAuth login is only supported when [features].rmcp_client is true in config.toml".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let McpServerOauthLoginParams {
+            name,
+            scopes,
+            timeout_secs,
+        } = params;
+
+        let Some(server) = config.mcp_servers.get(&name) else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("No MCP server named '{name}' found."),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+
+        let (url, http_headers, env_http_headers) = match &server.transport {
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                http_headers,
+                env_http_headers,
+                ..
+            } => (url.clone(), http_headers.clone(), env_http_headers.clone()),
+            _ => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: "OAuth login is only supported for streamable HTTP servers."
+                        .to_string(),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match perform_oauth_login_return_url(
+            &name,
+            &url,
+            config.mcp_oauth_credentials_store_mode,
+            http_headers,
+            env_http_headers,
+            scopes.as_deref().unwrap_or_default(),
+            timeout_secs,
+        )
+        .await
+        {
+            Ok(handle) => {
+                let authorization_url = handle.authorization_url().to_string();
+                let notification_name = name.clone();
+                let outgoing = Arc::clone(&self.outgoing);
+
+                tokio::spawn(async move {
+                    let (success, error) = match handle.wait().await {
+                        Ok(()) => (true, None),
+                        Err(err) => (false, Some(err.to_string())),
+                    };
+
+                    let notification = ServerNotification::McpServerOauthLoginCompleted(
+                        McpServerOauthLoginCompletedNotification {
+                            name: notification_name,
+                            success,
+                            error,
+                        },
+                    );
+                    outgoing.send_server_notification(notification).await;
+                });
+
+                let response = McpServerOauthLoginResponse { authorization_url };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to login to MCP server '{name}': {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
     }
 
     async fn list_mcp_servers(&self, request_id: RequestId, params: ListMcpServersParams) {
@@ -2669,7 +2831,7 @@ impl CodexMessageProcessor {
         })?;
 
         let mut config = self.config.as_ref().clone();
-        config.model = self.config.review_model.clone();
+        config.model = Some(self.config.review_model.clone());
 
         let NewConversation {
             conversation_id,
