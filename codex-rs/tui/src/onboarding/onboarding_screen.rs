@@ -265,6 +265,7 @@ impl WidgetRef for &OnboardingScreen {
 
         // Check if any active step requires animation suppression (e.g. Auth with URL visible)
         for step in self.current_steps() {
+            #[allow(clippy::collapsible_if)]
             if let Step::Auth(auth_widget) = step {
                 if auth_widget.should_suppress_animations() {
                     self.suppress_animations.store(true, Ordering::Relaxed);
