@@ -27,6 +27,7 @@ use color_eyre::eyre::Result;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 #[allow(clippy::large_enum_variant)]
 enum Step {
@@ -56,6 +57,7 @@ pub(crate) struct OnboardingScreen {
     steps: Vec<Step>,
     is_done: bool,
     should_exit: bool,
+    suppress_animations: Arc<AtomicBool>,
 }
 
 pub(crate) struct OnboardingScreenArgs {
@@ -110,7 +112,6 @@ impl OnboardingScreen {
                 forced_chatgpt_workspace_id,
                 forced_login_method,
                 animations_enabled: config.animations,
-                suppress_animations: suppress_animations.clone(),
             }))
         }
         let is_git_repo = get_git_repo_root(&cwd).is_some();
@@ -136,6 +137,7 @@ impl OnboardingScreen {
             steps,
             is_done: false,
             should_exit: false,
+            suppress_animations,
         }
     }
 
@@ -258,6 +260,19 @@ impl KeyboardHandler for OnboardingScreen {
 
 impl WidgetRef for &OnboardingScreen {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        // Reset suppression state at the start of each render pass.
+        self.suppress_animations.store(false, Ordering::Relaxed);
+
+        // Check if any active step requires animation suppression (e.g. Auth with URL visible)
+        for step in self.current_steps() {
+            if let Step::Auth(auth_widget) = step {
+                if auth_widget.should_suppress_animations() {
+                    self.suppress_animations.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+        }
+
         Clear.render(area, buf);
         // Render steps top-to-bottom, measuring each step's height dynamically.
         let mut y = area.y;
