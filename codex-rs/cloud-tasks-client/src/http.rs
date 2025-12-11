@@ -63,6 +63,10 @@ impl CloudBackend for HttpClient {
         self.tasks_api().list(env).await
     }
 
+    async fn get_task_summary(&self, id: TaskId) -> Result<TaskSummary> {
+        self.tasks_api().summary(id).await
+    }
+
     async fn get_task_diff(&self, id: TaskId) -> Result<Option<String>> {
         self.tasks_api().diff(id).await
     }
@@ -147,6 +151,75 @@ mod api {
                 tasks.len()
             ));
             Ok(tasks)
+        }
+
+        pub(crate) async fn summary(&self, id: TaskId) -> Result<TaskSummary> {
+            let id_str = id.0.clone();
+            let (details, body, ct) = self
+                .details_with_body(&id.0)
+                .await
+                .map_err(|e| CloudTaskError::Http(format!("get_task_details failed: {e}")))?;
+            let parsed: Value = serde_json::from_str(&body).map_err(|e| {
+                CloudTaskError::Http(format!(
+                    "Decode error for {}: {e}; content-type={ct}; body={body}",
+                    id.0
+                ))
+            })?;
+            let task_obj = parsed
+                .get("task")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    CloudTaskError::Http(format!("Task metadata missing from details for {id_str}"))
+                })?;
+            let status_display = parsed
+                .get("task_status_display")
+                .or_else(|| task_obj.get("task_status_display"))
+                .and_then(Value::as_object)
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect::<HashMap<String, Value>>()
+                });
+            let status = map_status(status_display.as_ref());
+            let mut summary = diff_summary_from_status_display(status_display.as_ref());
+            if summary.files_changed == 0
+                && summary.lines_added == 0
+                && summary.lines_removed == 0
+                && let Some(diff) = details.unified_diff()
+            {
+                summary = diff_summary_from_diff(&diff);
+            }
+            let updated_at_raw = task_obj
+                .get("updated_at")
+                .and_then(Value::as_f64)
+                .or_else(|| task_obj.get("created_at").and_then(Value::as_f64))
+                .or_else(|| latest_turn_timestamp(status_display.as_ref()));
+            let environment_id = task_obj
+                .get("environment_id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let environment_label = env_label_from_status_display(status_display.as_ref());
+            let attempt_total = attempt_total_from_status_display(status_display.as_ref());
+            let title = task_obj
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("<untitled>")
+                .to_string();
+            let is_review = task_obj
+                .get("is_review")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            Ok(TaskSummary {
+                id,
+                title,
+                status,
+                updated_at: parse_updated_at(updated_at_raw.as_ref()),
+                environment_id,
+                environment_label,
+                summary,
+                is_review,
+                attempt_total,
+            })
         }
 
         pub(crate) async fn diff(&self, id: TaskId) -> Result<Option<String>> {
@@ -679,6 +752,34 @@ mod api {
             .map(str::to_string)
     }
 
+    fn diff_summary_from_diff(diff: &str) -> DiffSummary {
+        let mut files_changed = 0usize;
+        let mut lines_added = 0usize;
+        let mut lines_removed = 0usize;
+        for line in diff.lines() {
+            if line.starts_with("diff --git ") {
+                files_changed += 1;
+                continue;
+            }
+            if line.starts_with("+++") || line.starts_with("---") || line.starts_with("@@") {
+                continue;
+            }
+            match line.as_bytes().first() {
+                Some(b'+') => lines_added += 1,
+                Some(b'-') => lines_removed += 1,
+                _ => {}
+            }
+        }
+        if files_changed == 0 && !diff.trim().is_empty() {
+            files_changed = 1;
+        }
+        DiffSummary {
+            files_changed,
+            lines_added,
+            lines_removed,
+        }
+    }
+
     fn diff_summary_from_status_display(v: Option<&HashMap<String, Value>>) -> DiffSummary {
         let mut out = DiffSummary::default();
         let Some(map) = v else { return out };
@@ -698,6 +799,17 @@ mod api {
             }
         }
         out
+    }
+
+    fn latest_turn_timestamp(v: Option<&HashMap<String, Value>>) -> Option<f64> {
+        let map = v?;
+        let latest = map
+            .get("latest_turn_status_display")
+            .and_then(Value::as_object)?;
+        latest
+            .get("updated_at")
+            .or_else(|| latest.get("created_at"))
+            .and_then(Value::as_f64)
     }
 
     fn attempt_total_from_status_display(v: Option<&HashMap<String, Value>>) -> Option<usize> {

@@ -239,7 +239,7 @@ mod tests {
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ConversationId;
-    use codex_protocol::config_types::ReasoningEffort;
+    use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::NamedTempFile;
@@ -267,6 +267,7 @@ mod tests {
                 history_log_id: 1,
                 history_entry_count: 1000,
                 initial_messages: None,
+                skill_load_outcome: None,
                 rollout_path: rollout_file.path().to_path_buf(),
             }),
         };
@@ -306,6 +307,7 @@ mod tests {
             history_log_id: 1,
             history_entry_count: 1000,
             initial_messages: None,
+            skill_load_outcome: None,
             rollout_path: rollout_file.path().to_path_buf(),
         };
         let event = Event {

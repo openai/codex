@@ -46,7 +46,7 @@ impl ToolHandler for ApplyPatchHandler {
         )
     }
 
-    fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         true
     }
 

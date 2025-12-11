@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use codex_core::sandboxing::SandboxPermissions;
+use codex_execpolicy::Policy;
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
 use rmcp::model::CreateElicitationRequestParam;
@@ -11,21 +13,16 @@ use rmcp::service::RequestContext;
 use crate::posix::escalate_protocol::EscalateAction;
 use crate::posix::escalation_policy::EscalationPolicy;
 use crate::posix::stopwatch::Stopwatch;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
-/// This is the policy which decides how to handle an exec() call.
-///
-/// `file` is the absolute, canonical path to the executable to run, i.e. the first arg to exec.
-/// `argv` is the argv, including the program name (`argv[0]`).
-/// `workdir` is the absolute, canonical path to the working directory in which to execute the
-/// command.
-pub(crate) type ExecPolicy = fn(file: &Path, argv: &[String], workdir: &Path) -> ExecPolicyOutcome;
-
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ExecPolicyOutcome {
     Allow {
-        run_with_escalated_permissions: bool,
+        sandbox_permissions: SandboxPermissions,
     },
     Prompt {
-        run_with_escalated_permissions: bool,
+        sandbox_permissions: SandboxPermissions,
     },
     Forbidden,
 }
@@ -33,21 +30,25 @@ pub(crate) enum ExecPolicyOutcome {
 /// ExecPolicy with access to the MCP RequestContext so that it can leverage
 /// elicitations.
 pub(crate) struct McpEscalationPolicy {
-    policy: ExecPolicy,
+    /// In-memory execpolicy rules that drive how to handle an exec() call.
+    policy: Arc<RwLock<Policy>>,
     context: RequestContext<RoleServer>,
     stopwatch: Stopwatch,
+    preserve_program_paths: bool,
 }
 
 impl McpEscalationPolicy {
     pub(crate) fn new(
-        policy: ExecPolicy,
+        policy: Arc<RwLock<Policy>>,
         context: RequestContext<RoleServer>,
         stopwatch: Stopwatch,
+        preserve_program_paths: bool,
     ) -> Self {
         Self {
             policy,
             context,
             stopwatch,
+            preserve_program_paths,
         }
     }
 
@@ -103,19 +104,21 @@ impl EscalationPolicy for McpEscalationPolicy {
         argv: &[String],
         workdir: &Path,
     ) -> Result<EscalateAction, rmcp::ErrorData> {
-        let outcome = (self.policy)(file, argv, workdir);
+        let policy = self.policy.read().await;
+        let outcome =
+            crate::posix::evaluate_exec_policy(&policy, file, argv, self.preserve_program_paths)?;
         let action = match outcome {
             ExecPolicyOutcome::Allow {
-                run_with_escalated_permissions,
+                sandbox_permissions,
             } => {
-                if run_with_escalated_permissions {
+                if sandbox_permissions.requires_escalated_permissions() {
                     EscalateAction::Escalate
                 } else {
                     EscalateAction::Run
                 }
             }
             ExecPolicyOutcome::Prompt {
-                run_with_escalated_permissions,
+                sandbox_permissions,
             } => {
                 let result = self
                     .prompt(file, argv, workdir, self.context.clone())
@@ -123,7 +126,7 @@ impl EscalationPolicy for McpEscalationPolicy {
                 // TODO: Extract reason from `result.content`.
                 match result.action {
                     ElicitationAction::Accept => {
-                        if run_with_escalated_permissions {
+                        if sandbox_permissions.requires_escalated_permissions() {
                             EscalateAction::Escalate
                         } else {
                             EscalateAction::Run

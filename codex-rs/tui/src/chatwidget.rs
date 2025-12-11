@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
@@ -11,6 +12,8 @@ use codex_core::config::Config;
 use codex_core::config::types::Notifications;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
+use codex_core::openai_models::model_family::ModelFamily;
+use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -42,8 +45,10 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
+use codex_core::protocol::SkillLoadOutcomeInfo;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
+use codex_core::protocol::TerminalInteractionEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
 use codex_core::protocol::TurnAbortReason;
@@ -55,7 +60,9 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::skills::model::SkillMetadata;
 use codex_protocol::ConversationId;
+use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::user_input::UserInput;
@@ -122,15 +129,14 @@ use std::path::Path;
 use chrono::Local;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
-use codex_common::model_presets::ModelPreset;
-use codex_common::model_presets::builtin_model_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
+use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
@@ -196,8 +202,9 @@ impl RateLimitWarningState {
                 let limit_label = secondary_window_minutes
                     .map(get_limits_duration)
                     .unwrap_or_else(|| "weekly".to_string());
+                let remaining_percent = 100.0 - threshold;
                 warnings.push(format!(
-                    "Heads up, you've used over {threshold:.0}% of your {limit_label} limit. Run /status for a breakdown."
+                    "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
                 ));
             }
         }
@@ -214,8 +221,9 @@ impl RateLimitWarningState {
                 let limit_label = primary_window_minutes
                     .map(get_limits_duration)
                     .unwrap_or_else(|| "5h".to_string());
+                let remaining_percent = 100.0 - threshold;
                 warnings.push(format!(
-                    "Heads up, you've used over {threshold:.0}% of your {limit_label} limit. Run /status for a breakdown."
+                    "Heads up, you have less than {remaining_percent:.0}% of your {limit_label} limit left. Run /status for a breakdown."
                 ));
             }
         }
@@ -255,7 +263,10 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_images: Vec<PathBuf>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
+    pub(crate) is_first_run: bool,
+    pub(crate) model_family: ModelFamily,
 }
 
 #[derive(Default)]
@@ -272,11 +283,14 @@ pub(crate) struct ChatWidget {
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
     config: Config,
+    model_family: ModelFamily,
     auth_manager: Arc<AuthManager>,
+    models_manager: Arc<ModelsManager>,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
+    plan_type: Option<PlanType>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     rate_limit_poller: Option<JoinHandle<()>>,
@@ -320,6 +334,8 @@ pub(crate) struct ChatWidget {
     feedback: codex_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
+    // Current task start time
+    task_started_at: Option<Instant>,
 }
 
 struct UserMessage {
@@ -367,10 +383,19 @@ impl ChatWidget {
         self.bottom_pane.update_status_header(header);
     }
 
+    fn restore_retry_status_header_if_present(&mut self) {
+        if let Some(header) = self.retry_status_header.take()
+            && self.current_status_header != header
+        {
+            self.set_status_header(header);
+        }
+    }
+
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
+        self.set_skills_from_outcome(event.skill_load_outcome.as_ref());
         self.conversation_id = Some(event.session_id);
         self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
@@ -378,6 +403,7 @@ impl ChatWidget {
         self.session_header.set_model(&model_for_header);
         self.add_to_history(history_cell::new_session_info(
             &self.config,
+            &model_for_header,
             event,
             self.show_welcome_banner,
         ));
@@ -392,6 +418,11 @@ impl ChatWidget {
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
+    }
+
+    fn set_skills_from_outcome(&mut self, outcome: Option<&SkillLoadOutcomeInfo>) {
+        let skills = outcome.map(skills_from_outcome);
+        self.bottom_pane.set_skills(skills);
     }
 
     pub(crate) fn open_feedback_note(
@@ -458,12 +489,13 @@ impl ChatWidget {
     }
 
     fn on_agent_reasoning_final(&mut self) {
+        let reasoning_summary_format = self.get_model_family().reasoning_summary_format;
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         if !self.full_reasoning_buffer.is_empty() {
             let cell = history_cell::new_reasoning_summary_block(
                 self.full_reasoning_buffer.clone(),
-                &self.config,
+                reasoning_summary_format,
             );
             self.add_boxed_history(cell);
         }
@@ -489,17 +521,20 @@ impl ChatWidget {
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
+        self.task_started_at = Some(Instant::now());
         self.request_redraw();
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
+        self.add_final_message_separator();
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
+        self.task_started_at = None;
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -531,7 +566,7 @@ impl ChatWidget {
 
     fn context_remaining_percent(&self, info: &TokenUsageInfo) -> Option<i64> {
         info.model_context_window
-            .or(self.config.model_context_window)
+            .or(self.model_family.context_window)
             .map(|window| {
                 info.last_token_usage
                     .percent_of_context_window_remaining(window)
@@ -572,6 +607,8 @@ impl ChatWidget {
                     });
             }
 
+            self.plan_type = snapshot.plan_type.or(self.plan_type);
+
             let warnings = self.rate_limit_warnings.take_warnings(
                 snapshot
                     .secondary
@@ -601,7 +638,7 @@ impl ChatWidget {
 
             if high_usage
                 && !self.rate_limit_switch_prompt_hidden()
-                && self.config.model != NUDGE_MODEL_SLUG
+                && self.model_family.get_model_slug() != NUDGE_MODEL_SLUG
                 && !matches!(
                     self.rate_limit_switch_prompt,
                     RateLimitSwitchPromptState::Shown
@@ -633,7 +670,11 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.stream_controller = None;
+        self.task_started_at = None;
         self.maybe_show_pending_rate_limit_prompt();
+    }
+    pub(crate) fn get_model_family(&self) -> ModelFamily {
+        self.model_family.clone()
     }
 
     fn on_error(&mut self, message: String) {
@@ -797,6 +838,10 @@ impl ChatWidget {
         _ev: codex_core::protocol::ExecCommandOutputDeltaEvent,
     ) {
         // TODO: Handle streaming exec output if/when implemented
+    }
+
+    fn on_terminal_interaction(&mut self, _ev: TerminalInteractionEvent) {
+        // TODO: Handle once design is ready
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
@@ -969,14 +1014,6 @@ impl ChatWidget {
         self.flush_active_cell();
 
         if self.stream_controller.is_none() {
-            if self.needs_final_message_separator {
-                let elapsed_seconds = self
-                    .bottom_pane
-                    .status_widget()
-                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
-                self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
-                self.needs_final_message_separator = false;
-            }
             self.stream_controller = Some(StreamController::new(
                 self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
             ));
@@ -989,6 +1026,16 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn add_final_message_separator(&mut self) {
+        if self.needs_final_message_separator {
+            let elapsed_seconds = self
+                .task_started_at
+                .map(|start_time| start_time.elapsed().as_secs());
+            self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
+            self.needs_final_message_separator = false;
+        }
+    }
+
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
         if self.suppressed_exec_calls.remove(&ev.call_id) {
@@ -996,11 +1043,7 @@ impl ChatWidget {
         }
         let (command, parsed, source) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd, rc.source),
-            None => (
-                vec![ev.call_id.clone()],
-                Vec::new(),
-                ExecCommandSource::Agent,
-            ),
+            None => (ev.command.clone(), ev.parsed_cmd.clone(), ev.source),
         };
         let is_unified_exec_interaction =
             matches!(source, ExecCommandSource::UnifiedExecInteraction);
@@ -1017,7 +1060,7 @@ impl ChatWidget {
                 command,
                 parsed,
                 source,
-                None,
+                ev.interaction_input.clone(),
                 self.config.animations,
             )));
         }
@@ -1068,9 +1111,10 @@ impl ChatWidget {
             id,
             command: ev.command,
             reason: ev.reason,
-            risk: ev.risk,
+            proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
         };
-        self.bottom_pane.push_approval_request(request);
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
         self.request_redraw();
     }
 
@@ -1087,7 +1131,8 @@ impl ChatWidget {
             changes: ev.changes.clone(),
             cwd: self.config.cwd.clone(),
         };
-        self.bottom_pane.push_approval_request(request);
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
         self.request_redraw();
         self.notify(Notification::EditApprovalRequested {
             cwd: self.config.cwd.clone(),
@@ -1107,7 +1152,8 @@ impl ChatWidget {
             request_id: ev.id,
             message: ev.message,
         };
-        self.bottom_pane.push_approval_request(request);
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
         self.request_redraw();
     }
 
@@ -1229,8 +1275,14 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            models_manager,
             feedback,
+            is_first_run,
+            model_family,
         } = common;
+        let model_slug = model_family.get_model_slug().to_string();
+        let mut config = config;
+        config.model = Some(model_slug.clone());
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
@@ -1247,17 +1299,21 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
+                skills: None,
             }),
             active_cell: None,
-            config: config.clone(),
+            config,
+            model_family,
             auth_manager,
-            session_header: SessionHeader::new(config.model),
+            models_manager,
+            session_header: SessionHeader::new(model_slug),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
             token_info: None,
             rate_limit_snapshot: None,
+            plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
@@ -1274,7 +1330,7 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
-            show_welcome_banner: true,
+            show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
@@ -1283,6 +1339,7 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
+            task_started_at: None,
         };
 
         widget.prefetch_rate_limits();
@@ -1304,8 +1361,12 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            models_manager,
             feedback,
+            model_family,
+            ..
         } = common;
+        let model_slug = model_family.get_model_slug().to_string();
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
 
@@ -1324,17 +1385,21 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
+                skills: None,
             }),
             active_cell: None,
-            config: config.clone(),
+            config,
+            model_family,
             auth_manager,
-            session_header: SessionHeader::new(config.model),
+            models_manager,
+            session_header: SessionHeader::new(model_slug),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
             token_info: None,
             rate_limit_snapshot: None,
+            plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
@@ -1351,7 +1416,7 @@ impl ChatWidget {
             retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
-            show_welcome_banner: true,
+            show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
@@ -1360,6 +1425,7 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
+            task_started_at: None,
         };
 
         widget.prefetch_rate_limits();
@@ -1479,6 +1545,9 @@ impl ChatWidget {
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
+            SlashCommand::Resume => {
+                self.app_event_tx.send(AppEvent::OpenResumePicker);
+            }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
                 if init_target.exists() {
@@ -1538,6 +1607,9 @@ impl ChatWidget {
             }
             SlashCommand::Mention => {
                 self.insert_str("@");
+            }
+            SlashCommand::Skills => {
+                self.insert_str("$");
             }
             SlashCommand::Status => {
                 self.add_status_output();
@@ -1682,6 +1754,16 @@ impl ChatWidget {
             items.push(UserInput::LocalImage { path });
         }
 
+        if let Some(skills) = self.bottom_pane.skills() {
+            let skill_mentions = find_skill_mentions(&text, skills);
+            for skill in skill_mentions {
+                items.push(UserInput::Skill {
+                    name: skill.name.clone(),
+                    path: skill.path.clone(),
+                });
+            }
+        }
+
         self.codex_op_tx
             .send(Op::UserInput { items })
             .unwrap_or_else(|e| {
@@ -1734,9 +1816,15 @@ impl ChatWidget {
     /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
     /// that must not be used to correlate follow-up actions.
     fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, from_replay: bool) {
+        let is_stream_error = matches!(&msg, EventMsg::StreamError(_));
+        if !is_stream_error {
+            self.restore_retry_status_header_if_present();
+        }
+
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
+            | EventMsg::TerminalInteraction(_)
             | EventMsg::ExecCommandOutputDelta(_) => {}
             _ => {
                 tracing::trace!("handle_codex_event: {:?}", msg);
@@ -1756,7 +1844,7 @@ impl ChatWidget {
             EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => self.on_agent_reasoning_final(),
             EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
                 self.on_agent_reasoning_delta(text);
-                self.on_agent_reasoning_final()
+                self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TaskStarted(_) => self.on_task_started(),
@@ -1794,6 +1882,7 @@ impl ChatWidget {
                 self.on_elicitation_request(ev);
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
+            EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
@@ -1974,11 +2063,14 @@ impl ChatWidget {
         self.add_to_history(crate::status::new_status_output(
             &self.config,
             self.auth_manager.as_ref(),
+            &self.model_family,
             total_usage,
             context_usage,
             &self.conversation_id,
             self.rate_limit_snapshot.as_ref(),
+            self.plan_type,
             Local::now(),
+            self.model_family.get_model_slug(),
         ));
     }
     fn stop_rate_limit_poller(&mut self) {
@@ -2015,10 +2107,11 @@ impl ChatWidget {
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
-        builtin_model_presets(auth_mode)
-            .into_iter()
+        let models = self.models_manager.try_list_models().ok()?;
+        models
+            .iter()
             .find(|preset| preset.model == NUDGE_MODEL_SLUG)
+            .cloned()
     }
 
     fn rate_limit_switch_prompt_hidden(&self) -> bool {
@@ -2073,7 +2166,7 @@ impl ChatWidget {
         let description = if preset.description.is_empty() {
             Some("Uses fewer credits for upcoming turns.".to_string())
         } else {
-            Some(preset.description.to_string())
+            Some(preset.description)
         };
 
         let items = vec![
@@ -2117,20 +2210,122 @@ impl ChatWidget {
         });
     }
 
-    /// Open a popup to choose the model (stage 1). After selecting a model,
-    /// a second popup is shown to choose the reasoning effort.
+    /// Open a popup to choose a quick auto model. Selecting "All models"
+    /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
-        let current_model = self.config.model.clone();
-        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
-        let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
+        let current_model = self.model_family.get_model_slug().to_string();
+        let presets: Vec<ModelPreset> =
+            // todo(aibrahim): make this async function
+            match self.models_manager.try_list_models() {
+                Ok(models) => models,
+                Err(_) => {
+                    self.add_info_message(
+                        "Models are being updated; please try /model again in a moment."
+                            .to_string(),
+                        None,
+                    );
+                    return;
+                }
+            };
 
+        let current_label = presets
+            .iter()
+            .find(|preset| preset.model == current_model)
+            .map(|preset| preset.display_name.to_string())
+            .unwrap_or_else(|| current_model.clone());
+
+        let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
+            .into_iter()
+            .partition(|preset| Self::is_auto_model(&preset.model));
+
+        if auto_presets.is_empty() {
+            self.open_all_models_popup(other_presets);
+            return;
+        }
+
+        auto_presets.sort_by_key(|preset| Self::auto_model_order(&preset.model));
+
+        let mut items: Vec<SelectionItem> = auto_presets
+            .into_iter()
+            .map(|preset| {
+                let description =
+                    (!preset.description.is_empty()).then_some(preset.description.clone());
+                let model = preset.model.clone();
+                let actions = Self::model_selection_actions(
+                    model.clone(),
+                    Some(preset.default_reasoning_effort),
+                );
+                SelectionItem {
+                    name: preset.display_name.clone(),
+                    description,
+                    is_current: model == current_model,
+                    is_default: preset.is_default,
+                    actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        if !other_presets.is_empty() {
+            let all_models = other_presets;
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenAllModelsPopup {
+                    models: all_models.clone(),
+                });
+            })];
+
+            let is_current = !items.iter().any(|item| item.is_current);
+            let description = Some(format!(
+                "Choose a specific model and reasoning level (current: {current_label})"
+            ));
+
+            items.push(SelectionItem {
+                name: "All models".to_string(),
+                description,
+                is_current,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Select Model".to_string()),
+            subtitle: Some("Pick a quick auto mode or browse all models.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn is_auto_model(model: &str) -> bool {
+        model.starts_with("codex-auto-")
+    }
+
+    fn auto_model_order(model: &str) -> usize {
+        match model {
+            "codex-auto-fast" => 0,
+            "codex-auto-balanced" => 1,
+            "codex-auto-thorough" => 2,
+            _ => 3,
+        }
+    }
+
+    pub(crate) fn open_all_models_popup(&mut self, presets: Vec<ModelPreset>) {
+        if presets.is_empty() {
+            self.add_info_message(
+                "No additional models are available right now.".to_string(),
+                None,
+            );
+            return;
+        }
+
+        let current_model = self.model_family.get_model_slug().to_string();
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {
-            let description = if preset.description.is_empty() {
-                None
-            } else {
-                Some(preset.description.to_string())
-            };
+            let description =
+                (!preset.description.is_empty()).then_some(preset.description.to_string());
             let is_current = preset.model == current_model;
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
@@ -2141,9 +2336,10 @@ impl ChatWidget {
                 });
             })];
             items.push(SelectionItem {
-                name: preset.display_name.to_string(),
+                name: preset.display_name.clone(),
                 description,
                 is_current,
+                is_default: preset.is_default,
                 actions,
                 dismiss_on_select: single_supported_effort,
                 ..Default::default()
@@ -2160,6 +2356,36 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+    }
+
+    fn model_selection_actions(
+        model_for_action: String,
+        effort_for_action: Option<ReasoningEffortConfig>,
+    ) -> Vec<SelectionAction> {
+        vec![Box::new(move |tx| {
+            let effort_label = effort_for_action
+                .map(|effort| effort.to_string())
+                .unwrap_or_else(|| "default".to_string());
+            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model: Some(model_for_action.clone()),
+                effort: Some(effort_for_action),
+                summary: None,
+            }));
+            tx.send(AppEvent::UpdateModel(model_for_action.clone()));
+            tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
+            tx.send(AppEvent::PersistModelSelection {
+                model: model_for_action.clone(),
+                effort: effort_for_action,
+            });
+            tracing::info!(
+                "Selected model: {}, Selected effort: {}",
+                model_for_action,
+                effort_label
+            );
+        })]
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
@@ -2209,9 +2435,9 @@ impl ChatWidget {
 
         if choices.len() == 1 {
             if let Some(effort) = choices.first().and_then(|c| c.stored) {
-                self.apply_model_and_effort(preset.model.to_string(), Some(effort));
+                self.apply_model_and_effort(preset.model, Some(effort));
             } else {
-                self.apply_model_and_effort(preset.model.to_string(), None);
+                self.apply_model_and_effort(preset.model, None);
             }
             return;
         }
@@ -2225,7 +2451,7 @@ impl ChatWidget {
             .or(Some(default_effort));
 
         let model_slug = preset.model.to_string();
-        let is_current_model = self.config.model == preset.model;
+        let is_current_model = self.model_family.get_model_slug() == preset.model;
         let highlight_choice = if is_current_model {
             self.config.model_reasoning_effort
         } else {
@@ -2270,30 +2496,7 @@ impl ChatWidget {
             };
 
             let model_for_action = model_slug.clone();
-            let effort_for_action = choice.stored;
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                    cwd: None,
-                    approval_policy: None,
-                    sandbox_policy: None,
-                    model: Some(model_for_action.clone()),
-                    effort: Some(effort_for_action),
-                    summary: None,
-                }));
-                tx.send(AppEvent::UpdateModel(model_for_action.clone()));
-                tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
-                tx.send(AppEvent::PersistModelSelection {
-                    model: model_for_action.clone(),
-                    effort: effort_for_action,
-                });
-                tracing::info!(
-                    "Selected model: {}, Selected effort: {}",
-                    model_for_action,
-                    effort_for_action
-                        .map(|e| e.to_string())
-                        .unwrap_or_else(|| "default".to_string())
-                );
-            })];
+            let actions = Self::model_selection_actions(model_for_action, choice.stored);
 
             items.push(SelectionItem {
                 name: effort_label,
@@ -2803,9 +3006,9 @@ impl ChatWidget {
     }
 
     /// Set the model in the widget's config copy.
-    pub(crate) fn set_model(&mut self, model: &str) {
+    pub(crate) fn set_model(&mut self, model: &str, model_family: ModelFamily) {
         self.session_header.set_model(model);
-        self.config.model = model.to_string();
+        self.model_family = model_family;
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
@@ -3286,6 +3489,34 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Type to search commits".to_string()),
         ..Default::default()
     });
+}
+
+fn skills_from_outcome(outcome: &SkillLoadOutcomeInfo) -> Vec<SkillMetadata> {
+    outcome
+        .skills
+        .iter()
+        .map(|skill| SkillMetadata {
+            name: skill.name.clone(),
+            description: skill.description.clone(),
+            path: skill.path.clone(),
+        })
+        .collect()
+}
+
+fn find_skill_mentions(text: &str, skills: &[SkillMetadata]) -> Vec<SkillMetadata> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut matches: Vec<SkillMetadata> = Vec::new();
+    for skill in skills {
+        if seen.contains(&skill.name) {
+            continue;
+        }
+        let needle = format!("${}", skill.name);
+        if text.contains(&needle) {
+            seen.insert(skill.name.clone());
+            matches.push(skill.clone());
+        }
+    }
+    matches
 }
 
 #[cfg(test)]

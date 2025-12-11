@@ -75,6 +75,7 @@ mod streaming;
 mod style;
 mod terminal_palette;
 mod text_formatting;
+mod tooltips;
 mod tui;
 mod ui_consts;
 pub mod update_action;
@@ -217,7 +218,6 @@ pub async fn run_main(
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: None,
-        experimental_sandbox_command_assessment: None,
         additional_writable_roots: additional_dirs,
     };
 
@@ -269,6 +269,7 @@ pub async fn run_main(
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_target(false)
+        .with_ansi(false)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_filter(env_filter());
 
@@ -505,6 +506,7 @@ async fn run_ratatui_app(
         images,
         resume_selection,
         feedback,
+        should_show_trust_screen, // Proxy to: is it a first run in this directory?
     )
     .await;
 

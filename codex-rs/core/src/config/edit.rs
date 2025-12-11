@@ -2,8 +2,8 @@ use crate::config::CONFIG_TOML_FILE;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use anyhow::Context;
-use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::TrustLevel;
+use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -555,6 +555,14 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn with_edits<I>(mut self, edits: I) -> Self
+    where
+        I: IntoIterator<Item = ConfigEdit>,
+    {
+        self.edits.extend(edits);
+        self
+    }
+
     /// Apply edits on a blocking thread.
     pub fn apply_blocking(self) -> anyhow::Result<()> {
         apply_blocking(&self.codex_home, self.profile.as_deref(), &self.edits)
@@ -574,7 +582,7 @@ impl ConfigEditsBuilder {
 mod tests {
     use super::*;
     use crate::config::types::McpServerTransportConfig;
-    use codex_protocol::config_types::ReasoningEffort;
+    use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
     use tokio::runtime::Builder;
@@ -601,6 +609,24 @@ mod tests {
 model_reasoning_effort = "high"
 "#;
         assert_eq!(contents, expected);
+    }
+
+    #[test]
+    fn builder_with_edits_applies_custom_paths() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+
+        ConfigEditsBuilder::new(codex_home)
+            .with_edits(vec![ConfigEdit::SetPath {
+                segments: vec!["enabled".to_string()],
+                value: value(true),
+            }])
+            .apply_blocking()
+            .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        assert_eq!(contents, "enabled = true\n");
     }
 
     #[test]
