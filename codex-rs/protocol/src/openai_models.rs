@@ -192,8 +192,7 @@ pub struct ModelInfo {
     pub default_verbosity: Option<Verbosity>,
     #[serde(default)]
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
-    #[serde(default)]
-    pub truncation_policy: Option<TruncationPolicyConfig>,
+    pub truncation_policy: TruncationPolicyConfig,
     #[serde(default)]
     pub supports_parallel_tool_calls: bool,
     #[serde(default)]
@@ -223,7 +222,7 @@ impl Default for ModelInfo {
             support_verbosity: false,
             default_verbosity: None,
             apply_patch_tool_type: None,
-            truncation_policy: None,
+            truncation_policy: TruncationPolicyConfig::bytes(10_000),
             supports_parallel_tool_calls: false,
             context_window: None,
             reasoning_summary_format: ReasoningSummaryFormat::None,
