@@ -20,7 +20,6 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
-use codex_app_server_protocol::AuthMode;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
@@ -155,7 +154,6 @@ async fn handle_model_migration_prompt_if_needed(
     config: &mut Config,
     model: &str,
     app_event_tx: &AppEventSender,
-    auth_mode: Option<AuthMode>,
     models_manager: Arc<ModelsManager>,
 ) -> Option<AppExitInfo> {
     let available_models = models_manager.list_models(config).await;
@@ -170,10 +168,6 @@ async fn handle_model_migration_prompt_if_needed(
         migration_config_key,
     }) = upgrade
     {
-        if !migration_prompt_allows_auth_mode(auth_mode, migration_config_key.as_str()) {
-            return None;
-        }
-
         if migration_prompt_hidden(config, migration_config_key.as_str()) {
             return None;
         }
@@ -325,7 +319,6 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
-        let auth_mode = auth_manager.auth().map(|auth| auth.mode);
         let conversation_manager = Arc::new(ConversationManager::new(
             auth_manager.clone(),
             SessionSource::Cli,
@@ -339,7 +332,6 @@ impl App {
             &mut config,
             model.as_str(),
             &app_event_tx,
-            auth_mode,
             conversation_manager.get_models_manager(),
         )
         .await;
@@ -1183,16 +1175,6 @@ impl App {
     }
 }
 
-fn migration_prompt_allows_auth_mode(
-    auth_mode: Option<AuthMode>,
-    _migration_config_key: &str,
-) -> bool {
-    match auth_mode {
-        None => true,
-        Some(_) => true,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1502,32 +1484,5 @@ mod tests {
             summary.resume_command,
             Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
-    }
-
-    #[test]
-    fn gpt5_migration_allows_api_key_and_chatgpt() {
-        assert!(migration_prompt_allows_auth_mode(
-            Some(AuthMode::ApiKey),
-            HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG,
-        ));
-        assert!(migration_prompt_allows_auth_mode(
-            Some(AuthMode::ChatGPT),
-            HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG,
-        ));
-    }
-
-    #[test]
-    fn gpt_5_1_codex_max_migration_limits_to_chatgpt() {
-        assert!(migration_prompt_allows_auth_mode(
-            Some(AuthMode::ChatGPT),
-            HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
-        ));
-    }
-
-    #[test]
-    fn other_migrations_allow_all_auth() {
-        for mode in [None, Some(AuthMode::ApiKey), Some(AuthMode::ChatGPT)] {
-            assert!(migration_prompt_allows_auth_mode(mode, "unknown"));
-        }
     }
 }
