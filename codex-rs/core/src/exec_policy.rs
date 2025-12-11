@@ -30,9 +30,9 @@ const FORBIDDEN_REASON: &str = "execpolicy forbids this command";
 const PROMPT_CONFLICT_REASON: &str =
     "execpolicy requires approval for this command, but AskForApproval is set to Never";
 const PROMPT_REASON: &str = "execpolicy requires approval for this command";
-const POLICY_DIR_NAME: &str = "policy";
-const POLICY_EXTENSION: &str = "codexpolicy";
-const DEFAULT_POLICY_FILE: &str = "default.codexpolicy";
+const RULES_DIR_NAME: &str = "rules";
+const RULE_EXTENSION: &str = "rules";
+const DEFAULT_POLICY_FILE: &str = "default.rules";
 
 fn is_policy_match(rule_match: &RuleMatch) -> bool {
     match rule_match {
@@ -92,7 +92,7 @@ pub(crate) async fn load_exec_policy_for_features(
 }
 
 pub async fn load_exec_policy(codex_home: &Path) -> Result<Policy, ExecPolicyError> {
-    let policy_dir = codex_home.join(POLICY_DIR_NAME);
+    let policy_dir = codex_home.join(RULES_DIR_NAME);
     let policy_paths = collect_policy_files(&policy_dir).await?;
 
     let mut parser = PolicyParser::new();
@@ -124,7 +124,7 @@ pub async fn load_exec_policy(codex_home: &Path) -> Result<Policy, ExecPolicyErr
 }
 
 pub(crate) fn default_policy_path(codex_home: &Path) -> PathBuf {
-    codex_home.join(POLICY_DIR_NAME).join(DEFAULT_POLICY_FILE)
+    codex_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
 }
 
 pub(crate) async fn append_execpolicy_amendment_and_update(
@@ -304,7 +304,7 @@ async fn collect_policy_files(dir: &Path) -> Result<Vec<PathBuf>, ExecPolicyErro
         if path
             .extension()
             .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext == POLICY_EXTENSION)
+            .is_some_and(|ext| ext == RULE_EXTENSION)
             && file_type.is_file()
         {
             policy_paths.push(path);
@@ -349,14 +349,14 @@ mod tests {
             },
             policy.check_multiple(commands.iter(), &|_| Decision::Allow)
         );
-        assert!(!temp_dir.path().join(POLICY_DIR_NAME).exists());
+        assert!(!temp_dir.path().join(RULES_DIR_NAME).exists());
     }
 
     #[tokio::test]
     async fn collect_policy_files_returns_empty_when_dir_missing() {
         let temp_dir = tempdir().expect("create temp dir");
 
-        let policy_dir = temp_dir.path().join(POLICY_DIR_NAME);
+        let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
         let files = collect_policy_files(&policy_dir)
             .await
             .expect("collect policy files");
@@ -367,10 +367,10 @@ mod tests {
     #[tokio::test]
     async fn loads_policies_from_policy_subdirectory() {
         let temp_dir = tempdir().expect("create temp dir");
-        let policy_dir = temp_dir.path().join(POLICY_DIR_NAME);
+        let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
         fs::create_dir_all(&policy_dir).expect("create policy dir");
         fs::write(
-            policy_dir.join("deny.codexpolicy"),
+            policy_dir.join("deny.rules"),
             r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
         )
         .expect("write policy file");
@@ -395,7 +395,7 @@ mod tests {
     async fn ignores_policies_outside_policy_dir() {
         let temp_dir = tempdir().expect("create temp dir");
         fs::write(
-            temp_dir.path().join("root.codexpolicy"),
+            temp_dir.path().join("root.rules"),
             r#"prefix_rule(pattern=["ls"], decision="prompt")"#,
         )
         .expect("write policy file");
@@ -423,7 +423,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
 "#;
         let mut parser = PolicyParser::new();
         parser
-            .parse("test.codexpolicy", policy_src)
+            .parse("test.rules", policy_src)
             .expect("parse policy");
         let policy = Arc::new(RwLock::new(parser.build()));
 
@@ -456,7 +456,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
         let mut parser = PolicyParser::new();
         parser
-            .parse("test.codexpolicy", policy_src)
+            .parse("test.rules", policy_src)
             .expect("parse policy");
         let policy = Arc::new(RwLock::new(parser.build()));
         let command = vec!["rm".to_string()];
@@ -485,7 +485,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
         let mut parser = PolicyParser::new();
         parser
-            .parse("test.codexpolicy", policy_src)
+            .parse("test.rules", policy_src)
             .expect("parse policy");
         let policy = Arc::new(RwLock::new(parser.build()));
         let command = vec!["rm".to_string()];
@@ -537,7 +537,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let policy_src = r#"prefix_rule(pattern=["apple"], decision="allow")"#;
         let mut parser = PolicyParser::new();
         parser
-            .parse("test.codexpolicy", policy_src)
+            .parse("test.rules", policy_src)
             .expect("parse policy");
         let policy = Arc::new(RwLock::new(parser.build()));
         let command = vec![
@@ -668,7 +668,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
         let mut parser = PolicyParser::new();
         parser
-            .parse("test.codexpolicy", policy_src)
+            .parse("test.rules", policy_src)
             .expect("parse policy");
         let policy = Arc::new(RwLock::new(parser.build()));
         let command = vec!["rm".to_string()];
@@ -726,7 +726,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let policy_src = r#"prefix_rule(pattern=["cat"], decision="allow")"#;
         let mut parser = PolicyParser::new();
         parser
-            .parse("test.codexpolicy", policy_src)
+            .parse("test.rules", policy_src)
             .expect("parse policy");
         let policy = Arc::new(RwLock::new(parser.build()));
 
@@ -783,7 +783,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let policy_src = r#"prefix_rule(pattern=["echo"], decision="allow")"#;
         let mut parser = PolicyParser::new();
         parser
-            .parse("test.codexpolicy", policy_src)
+            .parse("test.rules", policy_src)
             .expect("parse policy");
         let policy = Arc::new(RwLock::new(parser.build()));
         let command = vec!["echo".to_string(), "safe".to_string()];

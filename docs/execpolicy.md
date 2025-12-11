@@ -1,6 +1,6 @@
 # Execpolicy quickstart
 
-Codex can enforce your own rules-based execution policy before it runs shell commands. Policies live in `.codexpolicy` files under `~/.codex/policy`.
+Codex can enforce your own rules-based execution policy before it runs shell commands. Policies live in `.rules` files under `~/.codex/rules`.
 
 ## How to create and edit rules
 
@@ -12,12 +12,12 @@ Codex CLI will present the option to whitelist commands when a command causes a 
 
 Whitelisted commands will no longer require your permission to run in current and subsequent sessions.
 
-Under the hood, when you approve and whitelist a command, codex will edit `~/.codex/policy/default.codexpolicy`.
+Under the hood, when you approve and whitelist a command, codex will edit `~/.codex/rules/default.rules`.
 
-### Editing `.codexpolicy` files
+### Editing `.rules` files
 
-1. Create a policy directory: `mkdir -p ~/.codex/policy`.
-2. Add one or more `.codexpolicy` files in that folder. Codex automatically loads every `.codexpolicy` file in there on startup.
+1. Create a policy directory: `mkdir -p ~/.codex/rules`.
+2. Add one or more `.rules` files in that folder. Codex automatically loads every `.rules` file in there on startup.
 3. Write `prefix_rule` entries to describe the commands you want to allow, prompt, or block:
 
 ```starlark
@@ -40,10 +40,10 @@ In this example rule, if Codex wants to run commands with the prefix `git push` 
 Use the `codex execpolicy check` subcommand to preview decisions before you save a rule (see the [`codex-execpolicy` README](../codex-rs/execpolicy/README.md) for syntax details):
 
 ```shell
-codex execpolicy check --policy ~/.codex/policy/default.codexpolicy git push origin main
+codex execpolicy check --rules ~/.codex/rules/default.rules git push origin main
 ```
 
-Pass multiple `--policy` flags to test how several files combine, and use `--pretty` for formatted JSON output. See the [`codex-rs/execpolicy` README](../codex-rs/execpolicy/README.md) for a more detailed walkthrough of the available syntax.
+Pass multiple `--rules` flags to test how several files combine, and use `--pretty` for formatted JSON output. See the [`codex-rs/execpolicy` README](../codex-rs/execpolicy/README.md) for a more detailed walkthrough of the available syntax.
 
 Example output when a rule matches:
 

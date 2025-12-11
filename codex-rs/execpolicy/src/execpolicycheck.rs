@@ -14,9 +14,9 @@ use crate::RuleMatch;
 /// Arguments for evaluating a command against one or more execpolicy files.
 #[derive(Debug, Parser, Clone)]
 pub struct ExecPolicyCheckCommand {
-    /// Paths to execpolicy files to evaluate (repeatable).
-    #[arg(short = 'p', long = "policy", value_name = "PATH", required = true)]
-    pub policies: Vec<PathBuf>,
+    /// Paths to execpolicy rule files to evaluate (repeatable).
+    #[arg(short = 'r', long = "rules", value_name = "PATH", required = true)]
+    pub rules: Vec<PathBuf>,
 
     /// Pretty-print the JSON output.
     #[arg(long)]
@@ -35,7 +35,7 @@ pub struct ExecPolicyCheckCommand {
 impl ExecPolicyCheckCommand {
     /// Load the policies for this command, evaluate the command, and render JSON output.
     pub fn run(&self) -> Result<()> {
-        let policy = load_policies(&self.policies)?;
+        let policy = load_policies(&self.rules)?;
         let matched_rules = policy.matches_for_command(&self.command, None);
 
         let json = format_matches_json(&matched_rules, self.pretty)?;
