@@ -1,3 +1,4 @@
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display as DeriveDisplay;
@@ -27,7 +28,7 @@ pub(crate) struct EnvironmentContext {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub network_access: Option<NetworkAccess>,
-    pub writable_roots: Option<Vec<PathBuf>>,
+    pub writable_roots: Option<Vec<AbsolutePathBuf>>,
     pub shell: Shell,
 }
 
@@ -203,7 +204,10 @@ mod tests {
 
     fn workspace_write_policy(writable_roots: Vec<&str>, network_access: bool) -> SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {
-            writable_roots: writable_roots.into_iter().map(PathBuf::from).collect(),
+            writable_roots: writable_roots
+                .into_iter()
+                .map(|s| AbsolutePathBuf::try_from(s).unwrap())
+                .collect(),
             network_access,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
