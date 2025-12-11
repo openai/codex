@@ -63,9 +63,6 @@ use tokio::sync::mpsc::unbounded_channel;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
 
-const GPT_5_1_MIGRATION_AUTH_MODES: [AuthMode; 2] = [AuthMode::ChatGPT, AuthMode::ApiKey];
-const GPT_5_1_CODEX_MIGRATION_AUTH_MODES: [AuthMode; 2] = [AuthMode::ChatGPT, AuthMode::ApiKey];
-
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
@@ -1186,25 +1183,13 @@ impl App {
     }
 }
 
-fn migration_prompt_allowed_auth_modes(migration_config_key: &str) -> Option<&'static [AuthMode]> {
-    match migration_config_key {
-        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => Some(&GPT_5_1_MIGRATION_AUTH_MODES),
-        HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => Some(&GPT_5_1_CODEX_MIGRATION_AUTH_MODES),
-        _ => None,
-    }
-}
-
 fn migration_prompt_allows_auth_mode(
     auth_mode: Option<AuthMode>,
-    migration_config_key: &str,
+    _migration_config_key: &str,
 ) -> bool {
-    if let Some(allowed_modes) = migration_prompt_allowed_auth_modes(migration_config_key) {
-        match auth_mode {
-            None => true,
-            Some(mode) => allowed_modes.contains(&mode),
-        }
-    } else {
-        true
+    match auth_mode {
+        None => true,
+        Some(_) => true,
     }
 }
 
@@ -1537,21 +1522,12 @@ mod tests {
             Some(AuthMode::ChatGPT),
             HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
         ));
-        assert!(migration_prompt_allows_auth_mode(
-            Some(AuthMode::ApiKey),
-            HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
-        ));
     }
 
     #[test]
-    fn other_migrations_block_api_key() {
-        assert!(migration_prompt_allows_auth_mode(
-            Some(AuthMode::ApiKey),
-            "unknown"
-        ));
-        assert!(migration_prompt_allows_auth_mode(
-            Some(AuthMode::ChatGPT),
-            "unknown"
-        ));
+    fn other_migrations_allow_all_auth() {
+        for mode in [None, Some(AuthMode::ApiKey), Some(AuthMode::ChatGPT)] {
+            assert!(migration_prompt_allows_auth_mode(mode, "unknown"));
+        }
     }
 }
