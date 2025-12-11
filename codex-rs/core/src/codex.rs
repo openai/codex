@@ -763,12 +763,35 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> Arc<TurnContext> {
-        let session_configuration = {
+        let (session_configuration, sandbox_policy_changed) = {
             let mut state = self.state.lock().await;
             let session_configuration = state.session_configuration.clone().apply(&updates);
+            let sandbox_policy_changed =
+                state.session_configuration.sandbox_policy != session_configuration.sandbox_policy;
             state.session_configuration = session_configuration.clone();
-            session_configuration
+            (session_configuration, sandbox_policy_changed)
         };
+
+        if sandbox_policy_changed {
+            let sandbox_state = SandboxState {
+                sandbox_policy: session_configuration.sandbox_policy.clone(),
+                codex_linux_sandbox_exe: session_configuration
+                    .original_config_do_not_use
+                    .codex_linux_sandbox_exe
+                    .clone(),
+                sandbox_cwd: session_configuration.cwd.clone(),
+            };
+            if let Err(e) = self
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .notify_sandbox_state_change(&sandbox_state)
+                .await
+            {
+                warn!("Failed to notify sandbox state change to MCP servers: {e:#}");
+            }
+        }
 
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
         let model_family = self

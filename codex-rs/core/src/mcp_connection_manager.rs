@@ -626,7 +626,6 @@ impl McpConnectionManager {
             .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
     }
 
-    #[allow(dead_code)]
     pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
         let mut join_set = JoinSet::new();
 
