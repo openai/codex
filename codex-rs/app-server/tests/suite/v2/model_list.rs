@@ -117,6 +117,37 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             is_default: false,
         },
         Model {
+            id: "robin".to_string(),
+            model: "robin".to_string(),
+            display_name: "robin".to_string(),
+            description: "Robin".to_string(),
+            supported_reasoning_efforts: vec![
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Low,
+                    description: "Balances speed with some reasoning; useful for straightforward \
+                                   queries and short explanations"
+                        .to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Medium,
+                    description: "Provides a solid balance of reasoning depth and latency for \
+                         general-purpose tasks"
+                        .to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Maximizes reasoning depth for complex or ambiguous problems"
+                        .to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::XHigh,
+                    description: "Extra high reasoning for complex problems".to_string(),
+                },
+            ],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            is_default: false,
+        },
+        Model {
             id: "gpt-5.1".to_string(),
             model: "gpt-5.1".to_string(),
             display_name: "gpt-5.1".to_string(),
@@ -243,8 +274,30 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(fourth_response)?;
 
     assert_eq!(fourth_items.len(), 1);
-    assert_eq!(fourth_items[0].id, "gpt-5.1");
-    assert!(fourth_cursor.is_none());
+    assert_eq!(fourth_items[0].id, "robin");
+    let fifth_cursor = fourth_cursor.ok_or_else(|| anyhow!("cursor for fifth page"))?;
+
+    let fifth_request = mcp
+        .send_list_models_request(ModelListParams {
+            limit: Some(1),
+            cursor: Some(fifth_cursor.clone()),
+        })
+        .await?;
+
+    let fifth_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fifth_request)),
+    )
+    .await??;
+
+    let ModelListResponse {
+        data: fifth_items,
+        next_cursor: fifth_cursor,
+    } = to_response::<ModelListResponse>(fifth_response)?;
+
+    assert_eq!(fifth_items.len(), 1);
+    assert_eq!(fifth_items[0].id, "gpt-5.1");
+    assert!(fifth_cursor.is_none());
     Ok(())
 }
 

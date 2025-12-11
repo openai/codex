@@ -46,6 +46,7 @@ fn expected_models_for_api_key() -> Vec<ModelPreset> {
         gpt_5_1_codex_max(),
         gpt_5_1_codex(),
         gpt_5_1_codex_mini(),
+        robin(),
         gpt_5_1(),
     ]
 }
@@ -55,6 +56,7 @@ fn expected_models_for_chatgpt() -> Vec<ModelPreset> {
         gpt_5_1_codex_max(),
         gpt_5_1_codex(),
         gpt_5_1_codex_mini(),
+        robin(),
         gpt_5_1(),
     ]
 }
@@ -136,6 +138,37 @@ fn gpt_5_1_codex_mini() -> ModelPreset {
         ],
         is_default: false,
         upgrade: Some(gpt_5_1_codex_max_upgrade()),
+        show_in_picker: true,
+    }
+}
+
+fn robin() -> ModelPreset {
+    ModelPreset {
+        id: "robin".to_string(),
+        model: "robin".to_string(),
+        display_name: "robin".to_string(),
+        description: "Robin".to_string(),
+        default_reasoning_effort: ReasoningEffort::Medium,
+        supported_reasoning_efforts: vec![
+            effort(
+                ReasoningEffort::Low,
+                "Balances speed with some reasoning; useful for straightforward queries and short explanations",
+            ),
+            effort(
+                ReasoningEffort::Medium,
+                "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
+            ),
+            effort(
+                ReasoningEffort::High,
+                "Maximizes reasoning depth for complex or ambiguous problems",
+            ),
+            effort(
+                ReasoningEffort::XHigh,
+                "Extra high reasoning for complex problems",
+            ),
+        ],
+        is_default: false,
+        upgrade: None,
         show_in_picker: true,
     }
 }

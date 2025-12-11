@@ -284,7 +284,7 @@ pub fn find_family_for_model(slug: &str) -> ModelFamily {
             truncation_policy: TruncationPolicy::Tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
         )
-    } else if slug.starts_with("robin-") {
+    } else if slug.starts_with("robin") {
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,
