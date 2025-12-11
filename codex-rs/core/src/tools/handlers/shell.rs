@@ -356,7 +356,7 @@ mod tests {
         let sandbox_permissions = SandboxPermissions::RequireEscalated;
         let justification = Some("because tests".to_string());
 
-        let expected_command = session.user_shell().derive_exec_args(&command, true);
+        let expected_command = session.user_shell().derive_exec_args(&command, false);
         let expected_cwd = turn_context.resolve_path(workdir.clone());
         let expected_env = create_env(&turn_context.shell_environment_policy);
 

@@ -340,7 +340,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     })
     .await;
 
-    assert_command(&begin_event.command, "-lc", "/bin/echo hello unified exec");
+    assert_command(&begin_event.command, "-c", "/bin/echo hello unified exec");
 
     assert_eq!(begin_event.cwd, cwd.path());
 
@@ -1166,7 +1166,7 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
 
     let open_event = &begin_events[0];
 
-    assert_command(&open_event.command, "-lc", "sleep 0.1");
+    assert_command(&open_event.command, "-c", "sleep 0.1");
 
     assert!(
         open_event.interaction_input.is_none(),

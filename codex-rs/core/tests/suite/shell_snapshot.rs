@@ -208,7 +208,7 @@ async fn linux_unified_exec_uses_shell_snapshot() -> Result<()> {
     let run = run_snapshot_command(command).await?;
     let stdout = normalize_newlines(&run.end.stdout);
 
-    assert_eq!(run.begin.command.get(1).map(String::as_str), Some("-c"));
+    assert_eq!(run.begin.command.get(1).map(String::as_str), Some("-lc"));
     assert_eq!(run.begin.command.get(2).map(String::as_str), Some(command));
     assert_eq!(run.begin.command.len(), 3);
     assert!(run.snapshot_path.starts_with(&run.codex_home));
@@ -228,7 +228,7 @@ async fn linux_shell_command_uses_shell_snapshot() -> Result<()> {
     let command = "echo shell-command-snapshot-linux";
     let run = run_shell_command_snapshot(command).await?;
 
-    assert_eq!(run.begin.command.get(1).map(String::as_str), Some("-c"));
+    assert_eq!(run.begin.command.get(1).map(String::as_str), Some("-lc"));
     assert_eq!(run.begin.command.get(2).map(String::as_str), Some(command));
     assert_eq!(run.begin.command.len(), 3);
     assert!(run.snapshot_path.starts_with(&run.codex_home));
