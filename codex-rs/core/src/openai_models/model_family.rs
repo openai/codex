@@ -143,19 +143,11 @@ impl ModelFamily {
         self.support_verbosity = support_verbosity;
         self.default_verbosity = default_verbosity;
         self.apply_patch_tool_type = apply_patch_tool_type;
-        if let Some(policy) = truncation_policy {
-            self.truncation_policy = policy.into();
-        }
+        self.truncation_policy = truncation_policy.into();
         self.supports_parallel_tool_calls = supports_parallel_tool_calls;
-        if let Some(window) = context_window {
-            self.context_window = Some(window);
-        }
-        if let Some(format) = reasoning_summary_format {
-            self.reasoning_summary_format = format.into();
-        }
-        if !experimental_supported_tools.is_empty() {
-            self.experimental_supported_tools = experimental_supported_tools;
-        }
+        self.context_window = context_window;
+        self.reasoning_summary_format = reasoning_summary_format;
+        self.experimental_supported_tools = experimental_supported_tools;
     }
 
     pub fn auto_compact_token_limit(&self) -> Option<i64> {

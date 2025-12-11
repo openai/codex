@@ -199,7 +199,7 @@ pub struct ModelInfo {
     #[serde(default)]
     pub context_window: Option<i64>,
     #[serde(default)]
-    pub reasoning_summary_format: Option<ReasoningSummaryFormat>,
+    pub reasoning_summary_format: ReasoningSummaryFormat,
     #[serde(default)]
     pub experimental_supported_tools: Vec<String>,
 }
@@ -226,7 +226,7 @@ impl Default for ModelInfo {
             truncation_policy: None,
             supports_parallel_tool_calls: false,
             context_window: None,
-            reasoning_summary_format: None,
+            reasoning_summary_format: ReasoningSummaryFormat::None,
             experimental_supported_tools: Vec::new(),
         }
     }
