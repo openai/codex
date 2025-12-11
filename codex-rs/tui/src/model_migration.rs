@@ -84,8 +84,6 @@ pub(crate) fn migration_copy_for_models(
         });
 
     let mut content = vec![
-        Line::from("Learn more at https://openai.com/index/gpt-5-1-codex-max."),
-        Line::from(""),
         Line::from(format!(
             "We recommend switching from {current_model} to {target_model}."
         )),

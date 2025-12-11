@@ -1,6 +1,6 @@
 ---
 source: tui/src/model_migration.rs
-assertion_line: 399
+assertion_line: 397
 expression: terminal.backend()
 ---
 
@@ -12,8 +12,6 @@ expression: terminal.backend()
   project-scale work.
 
 > Try gpt-new
-
-  Learn more at https://openai.com/index/gpt-5-1-codex-max.
 
   We recommend switching from gpt-old to gpt-new.
 

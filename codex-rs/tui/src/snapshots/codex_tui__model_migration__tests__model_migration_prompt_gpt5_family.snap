@@ -1,6 +1,6 @@
 ---
 source: tui/src/model_migration.rs
-assertion_line: 423
+assertion_line: 421
 expression: terminal.backend()
 ---
 
@@ -13,4 +13,8 @@ expression: terminal.backend()
 
 > Try gpt-latest
 
-  Learn more at https://openai.com/index/gpt-5-1-codex-max.
+  We recommend switching from gpt-legacy to gpt-latest.
+
+  Upgraded capabilities with improved latency.
+
+  Press enter to continue

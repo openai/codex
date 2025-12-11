@@ -1,6 +1,6 @@
 ---
 source: tui/src/model_migration.rs
-assertion_line: 447
+assertion_line: 445
 expression: terminal.backend()
 ---
 
@@ -13,4 +13,8 @@ expression: terminal.backend()
 
 > Try gpt-bar
 
-  Learn more at https://openai.com/index/gpt-5-1-codex-max.
+  We recommend switching from gpt-foo to gpt-bar.
+
+  Improved coding assistance.
+
+  Press enter to continue

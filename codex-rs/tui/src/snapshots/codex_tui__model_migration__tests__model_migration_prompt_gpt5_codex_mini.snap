@@ -1,6 +1,6 @@
 ---
 source: tui/src/model_migration.rs
-assertion_line: 471
+assertion_line: 469
 expression: terminal.backend()
 ---
 
@@ -13,4 +13,8 @@ expression: terminal.backend()
 
 > Try gpt-mini-plus
 
-  Learn more at https://openai.com/index/gpt-5-1-codex-max.
+  We recommend switching from gpt-mini to gpt-mini-plus.
+
+  Familiar pricing with better quality.
+
+  Press enter to continue
