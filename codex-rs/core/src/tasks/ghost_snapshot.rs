@@ -15,6 +15,8 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::Token;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing::warn;
@@ -22,6 +24,8 @@ use tracing::warn;
 pub(crate) struct GhostSnapshotTask {
     token: Token,
 }
+
+const SNAPSHOT_WARNING_THRESHOLD: Duration = Duration::from_secs(240);
 
 #[async_trait]
 impl SessionTask for GhostSnapshotTask {
@@ -38,7 +42,33 @@ impl SessionTask for GhostSnapshotTask {
     ) -> Option<String> {
         tokio::task::spawn(async move {
             let token = self.token;
-            let ctx_for_task = Arc::clone(&ctx);
+            // Channel used to signal when the snapshot work has finished so the
+            // timeout warning task can exit early without sending a warning.
+            let (snapshot_done_tx, snapshot_done_rx) = oneshot::channel::<()>();
+            let ctx_for_warning = ctx.clone();
+            let cancellation_token_for_warning = cancellation_token.clone();
+            let session_for_warning = session.clone();
+            // Fire a generic warning if the snapshot is still running after
+            // three minutes; this helps users discover large untracked files
+            // that might need to be added to .gitignore.
+            tokio::task::spawn(async move {
+                tokio::select! {
+                    _ = tokio::time::sleep(SNAPSHOT_WARNING_THRESHOLD) => {
+                        session_for_warning.session
+                            .send_event(
+                                &ctx_for_warning,
+                                EventMsg::Warning(WarningEvent {
+                                    message: "Repository snapshot is taking longer than expected. Large untracked or ignored files can slow snapshots; consider adding large files or directories to .gitignore or disabling `undo` in your config.".to_string()
+                                }),
+                            )
+                            .await;
+                    }
+                    _ = snapshot_done_rx => {}
+                    _ = cancellation_token_for_warning.cancelled() => {}
+                }
+            });
+
+            let ctx_for_task = ctx.clone();
             let cancelled = tokio::select! {
                 _ = cancellation_token.cancelled() => true,
                 _ = async {
@@ -108,6 +138,8 @@ impl SessionTask for GhostSnapshotTask {
                     }
                 } => false,
             };
+
+            let _ = snapshot_done_tx.send(());
 
             if cancelled {
                 info!("ghost snapshot task cancelled");

@@ -4,6 +4,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
+use app_test_support::write_models_cache;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::Model;
@@ -22,6 +23,7 @@ const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 #[tokio::test]
 async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
     let codex_home = TempDir::new()?;
+    write_models_cache(codex_home.path())?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -115,6 +117,39 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             is_default: false,
         },
         Model {
+            id: "gpt-5.2".to_string(),
+            model: "gpt-5.2".to_string(),
+            display_name: "gpt-5.2".to_string(),
+            description:
+                "Latest frontier model with improvements across knowledge, reasoning and coding"
+                    .to_string(),
+            supported_reasoning_efforts: vec![
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Low,
+                    description: "Balances speed with some reasoning; useful for straightforward \
+                                   queries and short explanations"
+                        .to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Medium,
+                    description: "Provides a solid balance of reasoning depth and latency for \
+                         general-purpose tasks"
+                        .to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Maximizes reasoning depth for complex or ambiguous problems"
+                        .to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::XHigh,
+                    description: "Extra high reasoning for complex problems".to_string(),
+                },
+            ],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            is_default: false,
+        },
+        Model {
             id: "gpt-5.1".to_string(),
             model: "gpt-5.1".to_string(),
             display_name: "gpt-5.1".to_string(),
@@ -151,6 +186,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
 #[tokio::test]
 async fn list_models_pagination_works() -> Result<()> {
     let codex_home = TempDir::new()?;
+    write_models_cache(codex_home.path())?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -240,14 +276,37 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(fourth_response)?;
 
     assert_eq!(fourth_items.len(), 1);
-    assert_eq!(fourth_items[0].id, "gpt-5.1");
-    assert!(fourth_cursor.is_none());
+    assert_eq!(fourth_items[0].id, "gpt-5.2");
+    let fifth_cursor = fourth_cursor.ok_or_else(|| anyhow!("cursor for fifth page"))?;
+
+    let fifth_request = mcp
+        .send_list_models_request(ModelListParams {
+            limit: Some(1),
+            cursor: Some(fifth_cursor.clone()),
+        })
+        .await?;
+
+    let fifth_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fifth_request)),
+    )
+    .await??;
+
+    let ModelListResponse {
+        data: fifth_items,
+        next_cursor: fifth_cursor,
+    } = to_response::<ModelListResponse>(fifth_response)?;
+
+    assert_eq!(fifth_items.len(), 1);
+    assert_eq!(fifth_items[0].id, "gpt-5.1");
+    assert!(fifth_cursor.is_none());
     Ok(())
 }
 
 #[tokio::test]
 async fn list_models_rejects_invalid_cursor() -> Result<()> {
     let codex_home = TempDir::new()?;
+    write_models_cache(codex_home.path())?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;

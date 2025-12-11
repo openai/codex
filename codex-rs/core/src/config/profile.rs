@@ -27,7 +27,6 @@ pub struct ConfigProfile {
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
-    pub experimental_sandbox_command_assessment: Option<bool>,
     pub tools_web_search: Option<bool>,
     pub tools_view_image: Option<bool>,
     /// Optional feature toggles scoped to this profile.

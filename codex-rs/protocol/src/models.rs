@@ -14,6 +14,25 @@ use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
+/// Controls whether a command should use the session sandbox or bypass it.
+#[derive(
+    Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxPermissions {
+    /// Run with the configured sandbox
+    #[default]
+    UseDefault,
+    /// Request to run outside the sandbox
+    RequireEscalated,
+}
+
+impl SandboxPermissions {
+    pub fn requires_escalated_permissions(self) -> bool {
+        matches!(self, SandboxPermissions::RequireEscalated)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseInputItem {
@@ -281,36 +300,37 @@ impl From<Vec<UserInput>> for ResponseInputItem {
             role: "user".to_string(),
             content: items
                 .into_iter()
-                .map(|c| match c {
-                    UserInput::Text { text } => ContentItem::InputText { text },
-                    UserInput::Image { image_url } => ContentItem::InputImage { image_url },
+                .filter_map(|c| match c {
+                    UserInput::Text { text } => Some(ContentItem::InputText { text }),
+                    UserInput::Image { image_url } => Some(ContentItem::InputImage { image_url }),
                     UserInput::LocalImage { path } => match load_and_resize_to_fit(&path) {
-                        Ok(image) => ContentItem::InputImage {
+                        Ok(image) => Some(ContentItem::InputImage {
                             image_url: image.into_data_url(),
-                        },
+                        }),
                         Err(err) => {
                             if matches!(&err, ImageProcessingError::Read { .. }) {
-                                local_image_error_placeholder(&path, &err)
+                                Some(local_image_error_placeholder(&path, &err))
                             } else if err.is_invalid_image() {
-                                invalid_image_error_placeholder(&path, &err)
+                                Some(invalid_image_error_placeholder(&path, &err))
                             } else {
                                 let Some(mime_guess) = mime_guess::from_path(&path).first() else {
-                                    return local_image_error_placeholder(
+                                    return Some(local_image_error_placeholder(
                                         &path,
                                         "unsupported MIME type (unknown)",
-                                    );
+                                    ));
                                 };
                                 let mime = mime_guess.essence_str().to_owned();
                                 if !mime.starts_with("image/") {
-                                    return local_image_error_placeholder(
+                                    return Some(local_image_error_placeholder(
                                         &path,
                                         format!("unsupported MIME type `{mime}`"),
-                                    );
+                                    ));
                                 }
-                                unsupported_image_error_placeholder(&path, &mime)
+                                Some(unsupported_image_error_placeholder(&path, &mime))
                             }
                         }
                     },
+                    UserInput::Skill { .. } => None, // Skill bodies are injected later in core
                 })
                 .collect::<Vec<ContentItem>>(),
         }
@@ -327,8 +347,9 @@ pub struct ShellToolCallParams {
     /// This is the maximum time in milliseconds that the command is allowed to run.
     #[serde(alias = "timeout")]
     pub timeout_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub with_escalated_permissions: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sandbox_permissions: Option<SandboxPermissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -346,8 +367,9 @@ pub struct ShellCommandToolCallParams {
     /// This is the maximum time in milliseconds that the command is allowed to run.
     #[serde(alias = "timeout")]
     pub timeout_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub with_escalated_permissions: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sandbox_permissions: Option<SandboxPermissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -742,7 +764,7 @@ mod tests {
                 command: vec!["ls".to_string(), "-l".to_string()],
                 workdir: Some("/tmp".to_string()),
                 timeout_ms: Some(1000),
-                with_escalated_permissions: None,
+                sandbox_permissions: None,
                 justification: None,
             },
             params

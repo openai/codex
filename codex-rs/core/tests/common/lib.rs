@@ -181,6 +181,16 @@ pub fn format_with_current_shell_display(command: &str) -> String {
     shlex::try_join(args.iter().map(String::as_str)).expect("serialize current shell command")
 }
 
+pub fn format_with_current_shell_non_login(command: &str) -> Vec<String> {
+    codex_core::shell::default_user_shell().derive_exec_args(command, false)
+}
+
+pub fn format_with_current_shell_display_non_login(command: &str) -> String {
+    let args = format_with_current_shell_non_login(command);
+    shlex::try_join(args.iter().map(String::as_str))
+        .expect("serialize current shell command without login")
+}
+
 pub mod fs_wait {
     use anyhow::Result;
     use anyhow::anyhow;

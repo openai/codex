@@ -412,14 +412,6 @@ jobs:
       - name: Install DotSlash
         uses: facebook/install-dotslash@v2
 
-      - name: Pre-fetch DotSlash artifacts
-        # The Bash wrapper is not available on Windows.
-        if: ${{ !startsWith(matrix.runner, 'windows') }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          dotslash -- fetch exec-server/tests/suite/bash
-
       - uses: dtolnay/rust-toolchain@1.90
         with:
           targets: ${{ matrix.target }}

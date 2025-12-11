@@ -4,8 +4,10 @@ use std::path::PathBuf;
 use crate::protocol::common::AuthMode;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
-use codex_protocol::approvals::SandboxCommandAssessment as CoreSandboxCommandAssessment;
+use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
+use codex_protocol::config_types::Verbosity;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::ResponseItem;
@@ -13,6 +15,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
+use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
@@ -123,17 +126,68 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
     }
 }
 
-v2_enum_from_core!(
-    pub enum AskForApproval from codex_protocol::protocol::AskForApproval {
-        UnlessTrusted, OnFailure, OnRequest, Never
-    }
-);
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum AskForApproval {
+    #[serde(rename = "untrusted")]
+    #[ts(rename = "untrusted")]
+    UnlessTrusted,
+    OnFailure,
+    OnRequest,
+    Never,
+}
 
-v2_enum_from_core!(
-    pub enum SandboxMode from codex_protocol::config_types::SandboxMode {
-        ReadOnly, WorkspaceWrite, DangerFullAccess
+impl AskForApproval {
+    pub fn to_core(self) -> CoreAskForApproval {
+        match self {
+            AskForApproval::UnlessTrusted => CoreAskForApproval::UnlessTrusted,
+            AskForApproval::OnFailure => CoreAskForApproval::OnFailure,
+            AskForApproval::OnRequest => CoreAskForApproval::OnRequest,
+            AskForApproval::Never => CoreAskForApproval::Never,
+        }
     }
-);
+}
+
+impl From<CoreAskForApproval> for AskForApproval {
+    fn from(value: CoreAskForApproval) -> Self {
+        match value {
+            CoreAskForApproval::UnlessTrusted => AskForApproval::UnlessTrusted,
+            CoreAskForApproval::OnFailure => AskForApproval::OnFailure,
+            CoreAskForApproval::OnRequest => AskForApproval::OnRequest,
+            CoreAskForApproval::Never => AskForApproval::Never,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum SandboxMode {
+    ReadOnly,
+    WorkspaceWrite,
+    DangerFullAccess,
+}
+
+impl SandboxMode {
+    pub fn to_core(self) -> CoreSandboxMode {
+        match self {
+            SandboxMode::ReadOnly => CoreSandboxMode::ReadOnly,
+            SandboxMode::WorkspaceWrite => CoreSandboxMode::WorkspaceWrite,
+            SandboxMode::DangerFullAccess => CoreSandboxMode::DangerFullAccess,
+        }
+    }
+}
+
+impl From<CoreSandboxMode> for SandboxMode {
+    fn from(value: CoreSandboxMode) -> Self {
+        match value {
+            CoreSandboxMode::ReadOnly => SandboxMode::ReadOnly,
+            CoreSandboxMode::WorkspaceWrite => SandboxMode::WorkspaceWrite,
+            CoreSandboxMode::DangerFullAccess => SandboxMode::DangerFullAccess,
+        }
+    }
+}
 
 v2_enum_from_core!(
     pub enum ReviewDelivery from codex_protocol::protocol::ReviewDelivery {
@@ -158,6 +212,72 @@ pub enum ConfigLayerName {
     System,
     SessionFlags,
     User,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct SandboxWorkspaceWrite {
+    #[serde(default)]
+    pub writable_roots: Vec<PathBuf>,
+    #[serde(default)]
+    pub network_access: bool,
+    #[serde(default)]
+    pub exclude_tmpdir_env_var: bool,
+    #[serde(default)]
+    pub exclude_slash_tmp: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct ToolsV2 {
+    #[serde(alias = "web_search_request")]
+    pub web_search: Option<bool>,
+    pub view_image: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct ProfileV2 {
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub model_reasoning_summary: Option<ReasoningSummary>,
+    pub model_verbosity: Option<Verbosity>,
+    pub chatgpt_base_url: Option<String>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct Config {
+    pub model: Option<String>,
+    pub review_model: Option<String>,
+    pub model_context_window: Option<i64>,
+    pub model_auto_compact_token_limit: Option<i64>,
+    pub model_provider: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub sandbox_mode: Option<SandboxMode>,
+    pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
+    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_login_method: Option<ForcedLoginMethod>,
+    pub tools: Option<ToolsV2>,
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub profiles: HashMap<String, ProfileV2>,
+    pub instructions: Option<String>,
+    pub developer_instructions: Option<String>,
+    pub compact_prompt: Option<String>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub model_reasoning_summary: Option<ReasoningSummary>,
+    pub model_verbosity: Option<Verbosity>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -238,7 +358,7 @@ pub struct ConfigReadParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigReadResponse {
-    pub config: JsonValue,
+    pub config: Config,
     pub origins: HashMap<String, ConfigLayerMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layers: Option<Vec<ConfigLayer>>,
@@ -274,14 +394,6 @@ pub struct ConfigEdit {
     pub value: JsonValue,
     pub merge_strategy: MergeStrategy,
 }
-
-v2_enum_from_core!(
-    pub enum CommandRiskLevel from codex_protocol::approvals::SandboxRiskLevel {
-        Low,
-        Medium,
-        High
-    }
-);
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -358,32 +470,6 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             },
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SandboxCommandAssessment {
-    pub description: String,
-    pub risk_level: CommandRiskLevel,
-}
-
-impl SandboxCommandAssessment {
-    pub fn into_core(self) -> CoreSandboxCommandAssessment {
-        CoreSandboxCommandAssessment {
-            description: self.description,
-            risk_level: self.risk_level.to_core(),
-        }
-    }
-}
-
-impl From<CoreSandboxCommandAssessment> for SandboxCommandAssessment {
-    fn from(value: CoreSandboxCommandAssessment) -> Self {
-        Self {
-            description: value.description,
-            risk_level: CommandRiskLevel::from(value.risk_level),
         }
     }
 }
@@ -582,10 +668,21 @@ pub struct CancelLoginAccountParams {
     pub login_id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum CancelLoginAccountStatus {
+    Canceled,
+    NotFound,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct CancelLoginAccountResponse {}
+pub struct CancelLoginAccountResponse {
+    pub status: CancelLoginAccountStatus,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -686,6 +783,26 @@ pub struct ListMcpServersResponse {
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// If None, there are no more items to return.
     pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerOauthLoginParams {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub scopes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub timeout_secs: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerOauthLoginResponse {
+    pub authorization_url: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1440,6 +1557,17 @@ pub struct ReasoningTextDeltaNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct TerminalInteractionNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub process_id: String,
+    pub stdin: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct CommandExecutionOutputDeltaNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -1470,6 +1598,17 @@ pub struct McpToolCallProgressNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct McpServerOauthLoginCompletedNotification {
+    pub name: String,
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct WindowsWorldWritableWarningNotification {
     pub sample_paths: Vec<String>,
     pub extra_count: usize,
@@ -1493,8 +1632,6 @@ pub struct CommandExecutionRequestApprovalParams {
     pub item_id: String,
     /// Optional explanatory reason (e.g. request for network access).
     pub reason: Option<String>,
-    /// Optional model-provided risk assessment describing the blocked command.
-    pub risk: Option<SandboxCommandAssessment>,
     /// Optional proposed execpolicy amendment to allow similar commands without prompting.
     pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
 }

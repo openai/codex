@@ -71,7 +71,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.features.disable(Feature::ApplyPatchFreeform);
-            config.model = "codex-mini-latest".to_string();
+            config.model = Some("codex-mini-latest".to_string());
         })
         .build(&server)
         .await?;
@@ -131,12 +131,19 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
+            config.model = Some("gpt-5.1-codex-max".to_string());
         })
         .build(&server)
         .await?;
     let base_instructions = conversation_manager
         .get_models_manager()
-        .construct_model_family(&config.model, &config)
+        .construct_model_family(
+            config
+                .model
+                .as_deref()
+                .expect("test config should have a model"),
+            &config,
+        )
         .await
         .base_instructions
         .clone();
@@ -572,7 +579,12 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
     let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
-    let TestCodex { codex, config, .. } = test_codex()
+    let TestCodex {
+        codex,
+        config,
+        session_configured,
+        ..
+    } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
         })
@@ -582,7 +594,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let default_cwd = config.cwd.clone();
     let default_approval_policy = config.approval_policy;
     let default_sandbox_policy = config.sandbox_policy.clone();
-    let default_model = config.model.clone();
+    let default_model = session_configured.model;
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
 
@@ -659,7 +671,12 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
 
     let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
     let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
-    let TestCodex { codex, config, .. } = test_codex()
+    let TestCodex {
+        codex,
+        config,
+        session_configured,
+        ..
+    } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
         })
@@ -669,7 +686,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let default_cwd = config.cwd.clone();
     let default_approval_policy = config.approval_policy;
     let default_sandbox_policy = config.sandbox_policy.clone();
-    let default_model = config.model.clone();
+    let default_model = session_configured.model;
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
 

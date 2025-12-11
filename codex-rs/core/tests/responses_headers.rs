@@ -61,14 +61,16 @@ async fn responses_stream_includes_subagent_header_on_review() {
     config.model_provider = provider.clone();
     let effort = config.model_reasoning_effort;
     let summary = config.model_reasoning_summary;
+    let model = ModelsManager::get_model_offline(config.model.as_deref());
+    config.model = Some(model.clone());
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
     let auth_mode = AuthMode::ChatGPT;
-    let model_family = ModelsManager::construct_model_family_offline(&config.model, &config);
+    let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
-        config.model.as_str(),
+        model.as_str(),
         model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
@@ -151,15 +153,17 @@ async fn responses_stream_includes_subagent_header_on_other() {
     config.model_provider = provider.clone();
     let effort = config.model_reasoning_effort;
     let summary = config.model_reasoning_summary;
+    let model = ModelsManager::get_model_offline(config.model.as_deref());
+    config.model = Some(model.clone());
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
     let auth_mode = AuthMode::ChatGPT;
-    let model_family = ModelsManager::construct_model_family_offline(&config.model, &config);
+    let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
 
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
-        config.model.as_str(),
+        model.as_str(),
         model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
@@ -235,7 +239,7 @@ async fn responses_respects_model_family_overrides_from_config() {
 
     let codex_home = TempDir::new().expect("failed to create TempDir");
     let mut config = load_default_config_for_test(&codex_home);
-    config.model = "gpt-3.5-turbo".to_string();
+    config.model = Some("gpt-3.5-turbo".to_string());
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
     config.model_supports_reasoning_summaries = Some(true);
@@ -243,15 +247,16 @@ async fn responses_respects_model_family_overrides_from_config() {
     config.model_reasoning_summary = ReasoningSummary::Detailed;
     let effort = config.model_reasoning_effort;
     let summary = config.model_reasoning_summary;
+    let model = config.model.clone().expect("model configured");
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
     let auth_mode =
         AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key")).get_auth_mode();
-    let model_family = ModelsManager::construct_model_family_offline(&config.model, &config);
+    let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
     let otel_event_manager = OtelEventManager::new(
         conversation_id,
-        config.model.as_str(),
+        model.as_str(),
         model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),

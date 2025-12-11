@@ -240,7 +240,6 @@ pub async fn run_main(
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: None,
-        experimental_sandbox_command_assessment: None,
         additional_writable_roots: additional_dirs,
     };
 
@@ -292,6 +291,7 @@ pub async fn run_main(
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_target(false)
+        .with_ansi(false)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_filter(env_filter());
 
