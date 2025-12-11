@@ -4,7 +4,6 @@ use codex_api::provider::Provider;
 use codex_api::provider::RetryConfig;
 use codex_api::provider::WireApi;
 use codex_client::ReqwestTransport;
-use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ClientVersion;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -79,6 +78,15 @@ async fn models_client_hits_models_endpoint() {
             priority: 1,
             upgrade: None,
             base_instructions: None,
+            supports_reasoning_summaries: false,
+            support_verbosity: false,
+            default_verbosity: None,
+            apply_patch_tool_type: None,
+            truncation_policy: None,
+            supports_parallel_tool_calls: false,
+            context_window: None,
+            reasoning_summary_format: None,
+            experimental_supported_tools: Vec::new(),
         }],
         etag: String::new(),
     };
