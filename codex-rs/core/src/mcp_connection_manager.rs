@@ -194,6 +194,10 @@ impl ManagedClient {
             )
             .await
     }
+
+    async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
+        self.notify_sandbox_state(sandbox_state).await
+    }
 }
 
 #[derive(Clone)]
@@ -241,6 +245,11 @@ impl AsyncManagedClient {
 
     async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
         self.client.clone().await
+    }
+
+    async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
+        let managed = self.client().await?;
+        managed.notify_sandbox_state_change(sandbox_state).await
     }
 }
 
@@ -302,16 +311,19 @@ impl McpConnectionManager {
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
-            let sandbox_state = sandbox_state.clone();
+            let sandbox_state = initial_sandbox_state.clone();
             join_set.spawn(async move {
                 let outcome = async_managed_client.client().await;
                 if cancel_token.is_cancelled() {
                     return (server_name, Err(StartupOutcomeError::Cancelled));
                 }
                 let status = match &outcome {
-                    Ok(managed_client) => {
+                    Ok(_) => {
                         // Send sandbox state notification immediately after Ready
-                        if let Err(e) = managed_client.notify_sandbox_state(&sandbox_state).await {
+                        if let Err(e) = async_managed_client
+                            .notify_sandbox_state_change(&sandbox_state)
+                            .await
+                        {
                             warn!(
                                 "Failed to notify sandbox state to MCP server {server_name}: {e:#}",
                             );
@@ -612,6 +624,35 @@ impl McpConnectionManager {
             .await
             .get(tool_name)
             .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
+    }
+
+    #[allow(dead_code)]
+    pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
+        let mut join_set = JoinSet::new();
+
+        for async_managed_client in self.clients.values() {
+            let sandbox_state = sandbox_state.clone();
+            let async_managed_client = async_managed_client.clone();
+            join_set.spawn(async move {
+                async_managed_client
+                    .notify_sandbox_state_change(&sandbox_state)
+                    .await
+            });
+        }
+
+        while let Some(join_res) = join_set.join_next().await {
+            match join_res {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    warn!("Failed to notify sandbox state change to MCP server: {err:#}");
+                }
+                Err(err) => {
+                    warn!("Task panic when notifying sandbox state change to MCP server: {err:#}");
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
