@@ -26,8 +26,6 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::spec::ApplyPatchToolArgs;
 use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
-use serde::Deserialize;
-use serde::Serialize;
 
 pub struct ApplyPatchHandler;
 
@@ -46,7 +44,7 @@ impl ToolHandler for ApplyPatchHandler {
         )
     }
 
-    fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         true
     }
 
@@ -159,13 +157,6 @@ impl ToolHandler for ApplyPatchHandler {
             }
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum ApplyPatchToolType {
-    Freeform,
-    Function,
 }
 
 #[allow(clippy::too_many_arguments)]

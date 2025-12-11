@@ -1,0 +1,8 @@
+---
+source: tui2/src/history_cell.rs
+expression: rendered
+---
+• Ran a_very_long_token_
+  │ without_spaces_to_
+  │ force_wrapping
+  └ (no output)

@@ -87,6 +87,7 @@ impl ContextManager {
 
         let items_tokens = self.items.iter().fold(0i64, |acc, item| {
             acc + match item {
+                ResponseItem::GhostSnapshot { .. } => 0,
                 ResponseItem::Reasoning {
                     encrypted_content: Some(content),
                     ..

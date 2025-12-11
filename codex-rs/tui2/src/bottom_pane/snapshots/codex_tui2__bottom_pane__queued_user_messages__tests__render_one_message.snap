@@ -1,0 +1,18 @@
+---
+source: tui2/src/bottom_pane/queued_user_messages.rs
+expression: "format!(\"{buf:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 40, height: 2 },
+    content: [
+        "  ↳ Hello, world!                       ",
+        "    ⌥ + ↑ edit                          ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 4, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 17, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 14, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

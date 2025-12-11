@@ -39,16 +39,16 @@ web_search_request = true        # allow the model to request web searches
 
 Supported features:
 
-| Key                                       | Default | Stage        | Description                                          |
-| ----------------------------------------- | :-----: | ------------ | ---------------------------------------------------- |
-| `unified_exec`                            |  false  | Experimental | Use the unified PTY-backed exec tool                 |
-| `rmcp_client`                             |  false  | Experimental | Enable oauth support for streamable HTTP MCP servers |
-| `apply_patch_freeform`                    |  false  | Beta         | Include the freeform `apply_patch` tool              |
-| `view_image_tool`                         |  true   | Stable       | Include the `view_image` tool                        |
-| `web_search_request`                      |  false  | Stable       | Allow the model to issue web searches                |
-| `experimental_sandbox_command_assessment` |  false  | Experimental | Enable model-based sandbox risk assessment           |
-| `ghost_commit`                            |  false  | Experimental | Create a ghost commit each turn                      |
-| `enable_experimental_windows_sandbox`     |  false  | Experimental | Use the Windows restricted-token sandbox             |
+| Key                                   | Default | Stage        | Description                                           |
+| ------------------------------------- | :-----: | ------------ | ----------------------------------------------------- |
+| `unified_exec`                        |  false  | Experimental | Use the unified PTY-backed exec tool                  |
+| `rmcp_client`                         |  false  | Experimental | Enable oauth support for streamable HTTP MCP servers  |
+| `apply_patch_freeform`                |  false  | Beta         | Include the freeform `apply_patch` tool               |
+| `view_image_tool`                     |  true   | Stable       | Include the `view_image` tool                         |
+| `web_search_request`                  |  false  | Stable       | Allow the model to issue web searches                 |
+| `ghost_commit`                        |  false  | Experimental | Create a ghost commit each turn                       |
+| `enable_experimental_windows_sandbox` |  false  | Experimental | Use the Windows restricted-token sandbox              |
+| `tui2`                                |  false  | Experimental | Use the experimental TUI v2 (viewport) implementation |
 
 Notes:
 
@@ -350,6 +350,8 @@ Though using this option may also be necessary if you try to use Codex in enviro
 
 ### tools.\*
 
+These `[tools]` configuration options are deprecated. Use `[features]` instead (see [Feature flags](#feature-flags)).
+
 Use the optional `[tools]` table to toggle built-in tools that the agent may call. `web_search` stays off unless you opt in, while `view_image` is now enabled by default:
 
 ```toml
@@ -357,8 +359,6 @@ Use the optional `[tools]` table to toggle built-in tools that the agent may cal
 web_search = true   # allow Codex to issue first-party web searches without prompting you (deprecated)
 view_image = false  # disable image uploads (they're enabled by default)
 ```
-
-`web_search` is deprecated; use the `web_search_request` feature flag instead.
 
 The `view_image` toggle is useful when you want to include screenshots or diagrams from your repo without pasting them manually. Codex still respects sandboxing: it can only attach files inside the workspace roots you allow.
 
@@ -464,10 +464,11 @@ http_headers = { "HEADER_NAME" = "HEADER_VALUE" }
 env_http_headers = { "HEADER_NAME" = "ENV_VAR" }
 ```
 
-Streamable HTTP connections always use the experimental Rust MCP client under the hood, so expect occasional rough edges. OAuth login flows are gated on the `experimental_use_rmcp_client = true` flag:
+Streamable HTTP connections always use the experimental Rust MCP client under the hood, so expect occasional rough edges. OAuth login flows are gated on the `rmcp_client = true` flag:
 
 ```toml
-experimental_use_rmcp_client = true
+[features]
+rmcp_client = true
 ```
 
 After enabling it, run `codex mcp login <server-name>` when the server supports OAuth.
@@ -488,17 +489,6 @@ disabled_tools = ["search"]
 ```
 
 When both `enabled_tools` and `disabled_tools` are specified, Codex first restricts the server to the allow-list and then removes any tools that appear in the deny-list.
-
-#### Experimental RMCP client
-
-This flag enables OAuth support for streamable HTTP servers.
-
-```toml
-experimental_use_rmcp_client = true
-
-[mcp_servers.server_name]
-…
-```
 
 #### MCP CLI commands
 
@@ -603,7 +593,7 @@ metadata above):
 - `codex.tool_decision`
   - `tool_name`
   - `call_id`
-  - `decision` (`approved`, `approved_for_session`, `denied`, or `abort`)
+  - `decision` (`approved`, `approved_execpolicy_amendment`, `approved_for_session`, `denied`, or `abort`)
   - `source` (`config` or `user`)
 - `codex.tool_result`
   - `tool_name`
@@ -625,12 +615,12 @@ Set `otel.exporter` to control where events go:
   endpoint, protocol, and headers your collector expects:
 
   ```toml
-  [otel]
-  exporter = { otlp-http = {
-    endpoint = "https://otel.example.com/v1/logs",
-    protocol = "binary",
-    headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" }
-  }}
+  [otel.exporter."otlp-http"]
+  endpoint = "https://otel.example.com/v1/logs"
+  protocol = "binary"
+
+  [otel.exporter."otlp-http".headers]
+  "x-otlp-api-key" = "${OTLP_TOKEN}"
   ```
 
 - `otlp-grpc` – streams OTLP log records over gRPC. Provide the endpoint and any
@@ -638,27 +628,24 @@ Set `otel.exporter` to control where events go:
 
   ```toml
   [otel]
-  exporter = { otlp-grpc = {
-    endpoint = "https://otel.example.com:4317",
-    headers = { "x-otlp-meta" = "abc123" }
-  }}
+  exporter = { otlp-grpc = {endpoint = "https://otel.example.com:4317",headers = { "x-otlp-meta" = "abc123" }}}
   ```
 
 Both OTLP exporters accept an optional `tls` block so you can trust a custom CA
 or enable mutual TLS. Relative paths are resolved against `~/.codex/`:
 
 ```toml
-[otel]
-exporter = { otlp-http = {
-  endpoint = "https://otel.example.com/v1/logs",
-  protocol = "binary",
-  headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" },
-  tls = {
-    ca-certificate = "certs/otel-ca.pem",
-    client-certificate = "/etc/codex/certs/client.pem",
-    client-private-key = "/etc/codex/certs/client-key.pem",
-  }
-}}
+[otel.exporter."otlp-http"]
+endpoint = "https://otel.example.com/v1/logs"
+protocol = "binary"
+
+[otel.exporter."otlp-http".headers]
+"x-otlp-api-key" = "${OTLP_TOKEN}"
+
+[otel.exporter."otlp-http".tls]
+ca-certificate = "certs/otel-ca.pem"
+client-certificate = "/etc/codex/certs/client.pem"
+client-private-key = "/etc/codex/certs/client-key.pem"
 ```
 
 If the exporter is `none` nothing is written anywhere; otherwise you must run or point to your
@@ -757,6 +744,8 @@ notify = ["python3", "/Users/mbolin/.codex/notify.py"]
 
 > [!NOTE]
 > Use `notify` for automation and integrations: Codex invokes your external program with a single JSON argument for each event, independent of the TUI. If you only want lightweight desktop notifications while using the TUI, prefer `tui.notifications`, which uses terminal escape codes and requires no external program. You can enable both; `tui.notifications` covers in‑TUI alerts (e.g., approval prompts), while `notify` is best for system‑level hooks or custom notifiers. Currently, `notify` emits only `agent-turn-complete`, whereas `tui.notifications` supports `agent-turn-complete` and `approval-requested` with optional filtering.
+
+When Codex detects WSL 2 inside Windows Terminal (the session exports `WT_SESSION`), `tui.notifications` automatically switches to a Windows toast backend by spawning `powershell.exe`. This ensures both approval prompts and completed turns trigger native toasts even though Windows Terminal ignores OSC 9 escape sequences. Terminals that advertise OSC 9 support (iTerm2, WezTerm, kitty, etc.) continue to use the existing escape-sequence backend, and the `notify` hook remains unchanged.
 
 ### hide_agent_reasoning
 

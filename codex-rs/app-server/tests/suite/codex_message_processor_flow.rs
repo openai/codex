@@ -23,10 +23,10 @@ use codex_app_server_protocol::SendUserTurnResponse;
 use codex_app_server_protocol::ServerRequest;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -271,7 +271,6 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
             command: format_with_current_shell("python3 -c 'print(42)'"),
             cwd: working_directory.clone(),
             reason: None,
-            risk: None,
             parsed_cmd: vec![ParsedCommand::Unknown {
                 cmd: "python3 -c 'print(42)'".to_string()
             }],

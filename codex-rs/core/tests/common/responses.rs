@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use anyhow::Result;
 use base64::Engine;
+use codex_protocol::openai_models::ModelsResponse;
 use serde_json::Value;
 use wiremock::BodyPrintLimit;
 use wiremock::Match;
@@ -190,6 +191,38 @@ impl ResponsesRequest {
             .query_pairs()
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelsMock {
+    requests: Arc<Mutex<Vec<wiremock::Request>>>,
+}
+
+impl ModelsMock {
+    fn new() -> Self {
+        Self {
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn requests(&self) -> Vec<wiremock::Request> {
+        self.requests.lock().unwrap().clone()
+    }
+
+    pub fn single_request_path(&self) -> String {
+        let requests = self.requests.lock().unwrap();
+        if requests.len() != 1 {
+            panic!("expected 1 request, got {}", requests.len());
+        }
+        requests.first().unwrap().url.path().to_string()
+    }
+}
+
+impl Match for ModelsMock {
+    fn matches(&self, request: &wiremock::Request) -> bool {
+        self.requests.lock().unwrap().push(request.clone());
+        true
     }
 }
 
@@ -560,6 +593,14 @@ fn compact_mock() -> (MockBuilder, ResponseMock) {
     (mock, response_mock)
 }
 
+fn models_mock() -> (MockBuilder, ModelsMock) {
+    let models_mock = ModelsMock::new();
+    let mock = Mock::given(method("GET"))
+        .and(path_regex(".*/models$"))
+        .and(models_mock.clone());
+    (mock, models_mock)
+}
+
 pub async fn mount_sse_once_match<M>(server: &MockServer, matcher: M, body: String) -> ResponseMock
 where
     M: wiremock::Match + Send + Sync + 'static,
@@ -616,11 +657,63 @@ pub async fn mount_compact_json_once(server: &MockServer, body: serde_json::Valu
     response_mock
 }
 
+pub async fn mount_models_once(server: &MockServer, body: ModelsResponse) -> ModelsMock {
+    let (mock, models_mock) = models_mock();
+    mock.respond_with(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_json(body.clone()),
+    )
+    .up_to_n_times(1)
+    .mount(server)
+    .await;
+    models_mock
+}
+
 pub async fn start_mock_server() -> MockServer {
-    MockServer::builder()
+    let server = MockServer::builder()
         .body_print_limit(BodyPrintLimit::Limited(80_000))
         .start()
+        .await;
+
+    // Provide a default `/models` response so tests remain hermetic when the client queries it.
+    let _ = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: Vec::new(),
+            etag: String::new(),
+        },
+    )
+    .await;
+
+    server
+}
+
+// todo(aibrahim): remove this and use our search matching patterns directly
+/// Get all POST requests to `/responses` endpoints from the mock server.
+/// Filters out GET requests (e.g., `/models`) .
+pub async fn get_responses_requests(server: &MockServer) -> Vec<wiremock::Request> {
+    server
+        .received_requests()
         .await
+        .expect("mock server should not fail")
+        .into_iter()
+        .filter(|req| req.method == "POST" && req.url.path().ends_with("/responses"))
+        .collect()
+}
+
+// todo(aibrahim): remove this and use our search matching patterns directly
+/// Get request bodies as JSON values from POST requests to `/responses` endpoints.
+/// Filters out GET requests (e.g., `/models`) .
+pub async fn get_responses_request_bodies(server: &MockServer) -> Vec<Value> {
+    get_responses_requests(server)
+        .await
+        .into_iter()
+        .map(|req| {
+            req.body_json::<Value>()
+                .expect("request body to be valid JSON")
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -703,6 +796,10 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> Res
 /// - Additionally, enforce symmetry: every `function_call`/`custom_tool_call`
 ///   in the `input` must have a matching output entry.
 fn validate_request_body_invariants(request: &wiremock::Request) {
+    // Skip GET requests (e.g., /models)
+    if request.method != "POST" || !request.url.path().ends_with("/responses") {
+        return;
+    }
     let Ok(body): Result<Value, _> = request.body_json() else {
         return;
     };

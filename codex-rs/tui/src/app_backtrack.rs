@@ -338,19 +338,23 @@ impl App {
     ) {
         let conv = new_conv.conversation;
         let session_configured = new_conv.session_configured;
+        let model_family = self.chat_widget.get_model_family();
         let init = crate::chatwidget::ChatWidgetInit {
             config: cfg,
+            model_family: model_family.clone(),
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             initial_prompt: None,
             initial_images: Vec::new(),
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
+            models_manager: self.server.get_models_manager(),
             feedback: self.feedback.clone(),
             is_first_run: false,
         };
         self.chat_widget =
             crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
+        self.current_model = model_family.get_model_slug().to_string();
         // Trim transcript up to the selected user message and re-render it.
         self.trim_transcript_for_backtrack(nth_user_message);
         self.render_transcript_once(tui);

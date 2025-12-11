@@ -36,7 +36,7 @@ async fn emits_deprecation_notice_for_legacy_feature_flag() -> anyhow::Result<()
     let DeprecationNoticeEvent { summary, details } = notice;
     assert_eq!(
         summary,
-        "`use_experimental_unified_exec_tool` is deprecated. Use `unified_exec` instead."
+        "`use_experimental_unified_exec_tool` is deprecated. Use `[features].unified_exec` instead."
             .to_string(),
     );
     assert_eq!(

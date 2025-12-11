@@ -241,7 +241,7 @@ async fn login_account_chatgpt_rejected_when_forced_api() -> Result<()> {
 #[tokio::test]
 // Serialize tests that launch the login server since it binds to a fixed port.
 #[serial(login_port)]
-async fn login_account_chatgpt_start() -> Result<()> {
+async fn login_account_chatgpt_start_can_be_cancelled() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 

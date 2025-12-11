@@ -16,6 +16,9 @@ use tracing::warn;
 
 use crate::error_code::INTERNAL_ERROR_CODE;
 
+#[cfg(test)]
+use codex_protocol::account::PlanType;
+
 /// Sends messages to the client and manages request callbacks.
 pub(crate) struct OutgoingMessageSender {
     next_request_id: AtomicI64,
@@ -230,6 +233,7 @@ mod tests {
                     }),
                     secondary: None,
                     credits: None,
+                    plan_type: Some(PlanType::Plus),
                 },
             });
 
@@ -245,7 +249,8 @@ mod tests {
                             "resetsAt": 123
                         },
                         "secondary": null,
-                        "credits": null
+                        "credits": null,
+                        "planType": "plus"
                     }
                 },
             }),

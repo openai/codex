@@ -42,8 +42,10 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
     let mut config = load_default_config_for_test(&codex_home);
     config.cwd = cwd.path().to_path_buf();
 
-    let conversation_manager =
-        ConversationManager::with_auth(codex_core::CodexAuth::from_api_key("dummy"));
+    let conversation_manager = ConversationManager::with_models_provider(
+        codex_core::CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
     let NewConversation {
         conversation: codex,
         ..
@@ -99,8 +101,10 @@ async fn user_shell_cmd_can_be_interrupted() {
     // Set up isolated config and conversation.
     let codex_home = TempDir::new().unwrap();
     let config = load_default_config_for_test(&codex_home);
-    let conversation_manager =
-        ConversationManager::with_auth(codex_core::CodexAuth::from_api_key("dummy"));
+    let conversation_manager = ConversationManager::with_models_provider(
+        codex_core::CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
     let NewConversation {
         conversation: codex,
         ..

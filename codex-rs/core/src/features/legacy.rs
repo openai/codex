@@ -10,10 +10,6 @@ struct Alias {
 
 const ALIASES: &[Alias] = &[
     Alias {
-        legacy_key: "experimental_sandbox_command_assessment",
-        feature: Feature::SandboxCommandAssessment,
-    },
-    Alias {
         legacy_key: "experimental_use_unified_exec_tool",
         feature: Feature::UnifiedExec,
     },
@@ -48,7 +44,6 @@ pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
 #[derive(Debug, Default)]
 pub struct LegacyFeatureToggles {
     pub include_apply_patch_tool: Option<bool>,
-    pub experimental_sandbox_command_assessment: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
@@ -63,12 +58,6 @@ impl LegacyFeatureToggles {
             Feature::ApplyPatchFreeform,
             self.include_apply_patch_tool,
             "include_apply_patch_tool",
-        );
-        set_if_some(
-            features,
-            Feature::SandboxCommandAssessment,
-            self.experimental_sandbox_command_assessment,
-            "experimental_sandbox_command_assessment",
         );
         set_if_some(
             features,
