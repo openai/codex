@@ -31,7 +31,7 @@ use mcp_test_support::create_apply_patch_sse_response;
 use mcp_test_support::create_final_assistant_message_sse_response;
 use mcp_test_support::create_mock_chat_completions_server;
 use mcp_test_support::create_shell_command_sse_response;
-use mcp_test_support::format_with_current_shell_non_login;
+use mcp_test_support::format_with_current_shell;
 
 // Allow ample time on slower CI or under load to avoid flakes.
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
@@ -72,7 +72,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         "-c".to_string(),
         format!("import pathlib; pathlib.Path('{created_filename}').touch()"),
     ];
-    let expected_shell_command = format_with_current_shell_non_login(&format!(
+    let expected_shell_command = format_with_current_shell(&format!(
         "python3 -c \"import pathlib; pathlib.Path('{created_filename}').touch()\""
     ));
 

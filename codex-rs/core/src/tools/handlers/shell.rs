@@ -44,7 +44,7 @@ impl ShellHandler {
 
 impl ShellCommandHandler {
     fn base_command(shell: &Shell, command: &str, login: Option<bool>) -> Vec<String> {
-        let use_login_shell = login.unwrap_or(shell.shell_snapshot.is_some());
+        let use_login_shell = login.unwrap_or(true);
         shell.derive_exec_args(command, use_login_shell)
     }
 
@@ -356,7 +356,7 @@ mod tests {
         let sandbox_permissions = SandboxPermissions::RequireEscalated;
         let justification = Some("because tests".to_string());
 
-        let expected_command = session.user_shell().derive_exec_args(&command, false);
+        let expected_command = session.user_shell().derive_exec_args(&command, true);
         let expected_cwd = turn_context.resolve_path(workdir.clone());
         let expected_env = create_env(&turn_context.shell_environment_policy);
 

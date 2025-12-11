@@ -34,8 +34,8 @@ struct ExecCommandArgs {
     workdir: Option<String>,
     #[serde(default)]
     shell: Option<String>,
-    #[serde(default)]
-    login: Option<bool>,
+    #[serde(default = "default_login")]
+    login: bool,
     #[serde(default = "default_exec_yield_time_ms")]
     yield_time_ms: u64,
     #[serde(default)]
@@ -64,6 +64,10 @@ fn default_exec_yield_time_ms() -> u64 {
 
 fn default_write_stdin_yield_time_ms() -> u64 {
     250
+}
+
+fn default_login() -> bool {
+    true
 }
 
 #[async_trait]
@@ -257,9 +261,7 @@ fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String>
 
     let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
 
-    let use_login_shell = args.login.unwrap_or(shell.shell_snapshot.is_some());
-
-    shell.derive_exec_args(&args.cmd, use_login_shell)
+    shell.derive_exec_args(&args.cmd, args.login)
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {
