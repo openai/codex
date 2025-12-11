@@ -19,6 +19,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthStatusChangeNotification;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
+use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecParams;
@@ -193,6 +194,11 @@ const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 struct ActiveLogin {
     shutdown_handle: ShutdownHandle,
     login_id: Uuid,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CancelLoginError {
+    NotFound(Uuid),
 }
 
 impl Drop for ActiveLogin {
@@ -828,7 +834,7 @@ impl CodexMessageProcessor {
     async fn cancel_login_chatgpt_common(
         &mut self,
         login_id: Uuid,
-    ) -> std::result::Result<(), JSONRPCErrorError> {
+    ) -> std::result::Result<(), CancelLoginError> {
         let mut guard = self.active_login.lock().await;
         if guard.as_ref().map(|l| l.login_id) == Some(login_id) {
             if let Some(active) = guard.take() {
@@ -836,11 +842,7 @@ impl CodexMessageProcessor {
             }
             Ok(())
         } else {
-            Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("login id not found: {login_id}"),
-                data: None,
-            })
+            Err(CancelLoginError::NotFound(login_id))
         }
     }
 
@@ -851,7 +853,12 @@ impl CodexMessageProcessor {
                     .send_response(request_id, CancelLoginChatGptResponse {})
                     .await;
             }
-            Err(error) => {
+            Err(CancelLoginError::NotFound(missing_login_id)) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("login id not found: {missing_login_id}"),
+                    data: None,
+                };
                 self.outgoing.send_error(request_id, error).await;
             }
         }
@@ -860,16 +867,14 @@ impl CodexMessageProcessor {
     async fn cancel_login_v2(&mut self, request_id: RequestId, params: CancelLoginAccountParams) {
         let login_id = params.login_id;
         match Uuid::parse_str(&login_id) {
-            Ok(uuid) => match self.cancel_login_chatgpt_common(uuid).await {
-                Ok(()) => {
-                    self.outgoing
-                        .send_response(request_id, CancelLoginAccountResponse {})
-                        .await;
-                }
-                Err(error) => {
-                    self.outgoing.send_error(request_id, error).await;
-                }
-            },
+            Ok(uuid) => {
+                let status = match self.cancel_login_chatgpt_common(uuid).await {
+                    Ok(()) => CancelLoginAccountStatus::Canceled,
+                    Err(CancelLoginError::NotFound(_)) => CancelLoginAccountStatus::NotFound,
+                };
+                let response = CancelLoginAccountResponse { status };
+                self.outgoing.send_response(request_id, response).await;
+            }
             Err(_) => {
                 let error = JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,

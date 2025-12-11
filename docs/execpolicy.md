@@ -1,6 +1,6 @@
 # Execpolicy quickstart
 
-Codex can enforce your own rules-based execution policy before it runs shell commands. Policies live in `.execpolicy` files under `~/.codex/policy`.
+Codex can enforce your own rules-based execution policy before it runs shell commands. Policies live in `.codexpolicy` files under `~/.codex/policy`.
 
 ## How to create and edit rules
 
@@ -12,12 +12,12 @@ Codex CLI will present the option to whitelist commands when a command causes a 
 
 Whitelisted commands will no longer require your permission to run in current and subsequent sessions.
 
-Under the hood, when you approve and whitelist a command, codex will edit `~/.codex/policy/default.execpolicy`.
+Under the hood, when you approve and whitelist a command, codex will edit `~/.codex/policy/default.codexpolicy`.
 
-### Editing `.execpolicy` files
+### Editing `.codexpolicy` files
 
 1. Create a policy directory: `mkdir -p ~/.codex/policy`.
-2. Add one or more `.execpolicy` files in that folder. Codex automatically loads every `.execpolicy` file in there on startup.
+2. Add one or more `.codexpolicy` files in that folder. Codex automatically loads every `.codexpolicy` file in there on startup.
 3. Write `prefix_rule` entries to describe the commands you want to allow, prompt, or block:
 
 ```starlark
