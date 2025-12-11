@@ -54,7 +54,7 @@ prefix_rule(
 )
     "#;
     let mut parser = PolicyParser::new();
-    parser.parse("test.codexpolicy", policy_src)?;
+    parser.parse("test.rules", policy_src)?;
     let policy = parser.build();
     let cmd = tokens(&["git", "status"]);
     let evaluation = policy.check(&cmd, &allow_all);
@@ -129,8 +129,8 @@ prefix_rule(
 )
     "#;
     let mut parser = PolicyParser::new();
-    parser.parse("first.codexpolicy", first_policy)?;
-    parser.parse("second.codexpolicy", second_policy)?;
+    parser.parse("first.rules", first_policy)?;
+    parser.parse("second.rules", second_policy)?;
     let policy = parser.build();
 
     let git_rules = rule_snapshots(policy.rules().get_vec("git").context("missing git rules")?);
@@ -194,7 +194,7 @@ prefix_rule(
 )
     "#;
     let mut parser = PolicyParser::new();
-    parser.parse("test.codexpolicy", policy_src)?;
+    parser.parse("test.rules", policy_src)?;
     let policy = parser.build();
 
     let bash_rules = rule_snapshots(
@@ -259,7 +259,7 @@ prefix_rule(
 )
     "#;
     let mut parser = PolicyParser::new();
-    parser.parse("test.codexpolicy", policy_src)?;
+    parser.parse("test.rules", policy_src)?;
     let policy = parser.build();
 
     let rules = rule_snapshots(policy.rules().get_vec("npm").context("missing npm rules")?);
@@ -323,7 +323,7 @@ prefix_rule(
 )
     "#;
     let mut parser = PolicyParser::new();
-    parser.parse("test.codexpolicy", policy_src)?;
+    parser.parse("test.rules", policy_src)?;
     let policy = parser.build();
     let match_eval = policy.check(&tokens(&["git", "status"]), &allow_all);
     assert_eq!(
@@ -367,7 +367,7 @@ prefix_rule(
 )
     "#;
     let mut parser = PolicyParser::new();
-    parser.parse("test.codexpolicy", policy_src)?;
+    parser.parse("test.rules", policy_src)?;
     let policy = parser.build();
 
     let commit = policy.check(&tokens(&["git", "commit", "-m", "hi"]), &allow_all);
@@ -403,7 +403,7 @@ prefix_rule(
 )
     "#;
     let mut parser = PolicyParser::new();
-    parser.parse("test.codexpolicy", policy_src)?;
+    parser.parse("test.rules", policy_src)?;
     let policy = parser.build();
 
     let commands = vec![
