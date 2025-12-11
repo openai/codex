@@ -11,6 +11,7 @@ use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::start_mock_server;
@@ -317,7 +318,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![writable.path().to_path_buf()],
+                writable_roots: vec![writable.path().try_into().unwrap()],
                 network_access: true,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
@@ -507,7 +508,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             cwd: new_cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![writable.path().to_path_buf()],
+                writable_roots: vec![AbsolutePathBuf::try_from(writable.path()).unwrap()],
                 network_access: true,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,

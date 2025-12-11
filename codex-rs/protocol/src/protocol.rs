@@ -23,6 +23,7 @@ use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::CallToolResult;
 use mcp_types::RequestId;
 use mcp_types::Resource as McpResource;
@@ -34,6 +35,7 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_with::serde_as;
 use strum_macros::Display;
+use tracing::error;
 use ts_rs::TS;
 
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
@@ -273,7 +275,7 @@ pub enum SandboxPolicy {
         /// Additional folders (beyond cwd and possibly TMPDIR) that should be
         /// writable from within the sandbox.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        writable_roots: Vec<PathBuf>,
+        writable_roots: Vec<AbsolutePathBuf>,
 
         /// When set to `true`, outbound network access is allowed. `false` by
         /// default.
@@ -299,11 +301,9 @@ pub enum SandboxPolicy {
 /// not modified by the agent.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
 pub struct WritableRoot {
-    /// Absolute path, by construction.
-    pub root: PathBuf,
+    pub root: AbsolutePathBuf,
 
-    /// Also absolute paths, by construction.
-    pub read_only_subpaths: Vec<PathBuf>,
+    pub read_only_subpaths: Vec<AbsolutePathBuf>,
 }
 
 impl WritableRoot {
@@ -385,16 +385,30 @@ impl SandboxPolicy {
                 network_access: _,
             } => {
                 // Start from explicitly configured writable roots.
-                let mut roots: Vec<PathBuf> = writable_roots.clone();
+                let mut roots: Vec<AbsolutePathBuf> = writable_roots.clone();
 
                 // Always include defaults: cwd, /tmp (if present on Unix), and
                 // on macOS, the per-user TMPDIR unless explicitly excluded.
-                roots.push(cwd.to_path_buf());
+                // TODO(mbolin): cwd param should be AbsolutePathBuf.
+                let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd);
+                match cwd_absolute {
+                    Ok(cwd) => {
+                        roots.push(cwd);
+                    }
+                    Err(e) => {
+                        error!(
+                            "Ignoring invalid cwd {:?} for sandbox writable root: {}",
+                            cwd, e
+                        );
+                    }
+                }
 
                 // Include /tmp on Unix unless explicitly excluded.
                 if cfg!(unix) && !exclude_slash_tmp {
-                    let slash_tmp = PathBuf::from("/tmp");
-                    if slash_tmp.is_dir() {
+                    #[allow(clippy::expect_used)]
+                    let slash_tmp =
+                        AbsolutePathBuf::from_absolute_path("/tmp").expect("/tmp is absolute");
+                    if slash_tmp.as_path().is_dir() {
                         roots.push(slash_tmp);
                     }
                 }
@@ -411,7 +425,15 @@ impl SandboxPolicy {
                     && let Some(tmpdir) = std::env::var_os("TMPDIR")
                     && !tmpdir.is_empty()
                 {
-                    roots.push(PathBuf::from(tmpdir));
+                    if let Ok(tmpdir_path) =
+                        AbsolutePathBuf::from_absolute_path(PathBuf::from(&tmpdir))
+                    {
+                        roots.push(tmpdir_path);
+                    } else {
+                        error!(
+                            "Ignoring invalid TMPDIR value {tmpdir:?} for sandbox writable root",
+                        );
+                    }
                 }
 
                 // For each root, compute subpaths that should remain read-only.
@@ -419,8 +441,11 @@ impl SandboxPolicy {
                     .into_iter()
                     .map(|writable_root| {
                         let mut subpaths = Vec::new();
-                        let top_level_git = writable_root.join(".git");
-                        if top_level_git.is_dir() {
+                        #[allow(clippy::expect_used)]
+                        let top_level_git = writable_root
+                            .join(".git")
+                            .expect(".git is a valid relative path");
+                        if top_level_git.as_path().is_dir() {
                             subpaths.push(top_level_git);
                         }
                         WritableRoot {
