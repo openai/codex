@@ -124,6 +124,16 @@ impl StatusIndicatorWidget {
         }
         elapsed
     }
+
+    #[cfg(test)]
+    fn elapsed_seconds_at(&self, now: Instant) -> u64 {
+        self.elapsed_duration_at(now).as_secs()
+    }
+
+    #[cfg(test)]
+    pub fn elapsed_seconds(&self) -> u64 {
+        self.elapsed_seconds_at(Instant::now())
+    }
 }
 
 impl Renderable for StatusIndicatorWidget {
@@ -173,7 +183,8 @@ mod tests {
     use crate::app_event_sender::AppEventSender;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-
+    use std::time::Duration;
+    use std::time::Instant;
     use tokio::sync::mpsc::unbounded_channel;
 
     use pretty_assertions::assert_eq;
@@ -218,5 +229,27 @@ mod tests {
             .draw(|f| w.render(f.area(), f.buffer_mut()))
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn timer_pauses_when_requested() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut widget =
+            StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+
+        let baseline = Instant::now();
+        widget.last_resume_at = baseline;
+
+        let before_pause = widget.elapsed_seconds_at(baseline + Duration::from_secs(5));
+        assert_eq!(before_pause, 5);
+
+        widget.pause_timer_at(baseline + Duration::from_secs(5));
+        let paused_elapsed = widget.elapsed_seconds_at(baseline + Duration::from_secs(10));
+        assert_eq!(paused_elapsed, before_pause);
+
+        widget.resume_timer_at(baseline + Duration::from_secs(10));
+        let after_resume = widget.elapsed_seconds_at(baseline + Duration::from_secs(13));
+        assert_eq!(after_resume, before_pause + 3);
     }
 }
