@@ -551,7 +551,14 @@ async fn handle_send(
     let session_history = session.clone_history().await;
     let sender_id = turn.collaboration_agent();
 
-    let (sender_name, valid_recipients, invalid_recipients, direct_children) = {
+    let (
+        sender_name,
+        valid_recipients,
+        invalid_recipients,
+        busy_recipients,
+        direct_children,
+        previous_statuses,
+    ) = {
         let mut collab = session.collaboration_state().lock().await;
         collab.ensure_root_agent(&session_configuration, &session_history);
 
@@ -578,49 +585,99 @@ async fn handle_send(
             .collect::<Vec<_>>();
 
         let mut invalid_recipients = Vec::new();
+        let mut busy_recipients = Vec::new();
         let mut valid_recipients = Vec::new();
+        let mut previous_statuses = Vec::new();
 
         for raw in &input.recipients {
             let candidate = AgentId(*raw);
             if let Some(agent) = collab.agent(candidate)
                 && collab.is_direct_child(sender_id, candidate)
-                && !matches!(
+            {
+                if matches!(
                     agent.status,
                     AgentLifecycleState::Closed
                         | AgentLifecycleState::Exhausted
                         | AgentLifecycleState::Error { .. }
-                )
-            {
+                ) {
+                    invalid_recipients.push(*raw);
+                    continue;
+                }
+
+                if matches!(
+                    agent.status,
+                    AgentLifecycleState::Running | AgentLifecycleState::WaitingForApproval { .. }
+                ) {
+                    busy_recipients.push(format!(
+                        "{} ({}) status={}",
+                        candidate.0,
+                        agent.name.as_str(),
+                        status_label(&agent.status)
+                    ));
+                    continue;
+                }
+
                 valid_recipients.push(candidate);
             } else {
                 invalid_recipients.push(*raw);
             }
         }
 
-        for recipient in &valid_recipients {
-            let text = format!("From agent {}: {}", sender_id.0, input.message);
-            collab.record_message_for_agent(
-                *recipient,
-                ResponseItem::Message {
-                    id: None,
-                    role: "user".to_string(),
-                    content: vec![ContentItem::InputText { text }],
-                },
-            );
-        }
+        if input.recipients.is_empty()
+            || !invalid_recipients.is_empty()
+            || !busy_recipients.is_empty()
+            || valid_recipients.is_empty()
+        {
+            (
+                sender_name,
+                valid_recipients,
+                invalid_recipients,
+                busy_recipients,
+                direct_children,
+                previous_statuses,
+            )
+        } else {
+            for recipient in &valid_recipients {
+                let text = format!("From agent {}: {}", sender_id.0, input.message);
+                collab.record_message_for_agent(
+                    *recipient,
+                    ResponseItem::Message {
+                        id: None,
+                        role: "user".to_string(),
+                        content: vec![ContentItem::InputText { text }],
+                    },
+                );
+                if let Some(agent) = collab.agent_mut(*recipient) {
+                    previous_statuses.push((*recipient, agent.status.clone()));
+                    agent.status = AgentLifecycleState::Running;
+                }
+            }
 
-        (
-            sender_name,
-            valid_recipients,
-            invalid_recipients,
-            direct_children,
-        )
+            (
+                sender_name,
+                valid_recipients,
+                invalid_recipients,
+                busy_recipients,
+                direct_children,
+                previous_statuses,
+            )
+        }
     };
 
-    if valid_recipients.is_empty() {
+    if input.recipients.is_empty()
+        || !invalid_recipients.is_empty()
+        || !busy_recipients.is_empty()
+        || valid_recipients.is_empty()
+    {
         let mut extra = HashMap::new();
         extra.insert("recipients".to_string(), json!(input.recipients));
         extra.insert("direct_children".to_string(), json!(direct_children));
+        if !invalid_recipients.is_empty() {
+            extra.insert("invalid_recipients".to_string(), json!(invalid_recipients));
+        }
+        if !busy_recipients.is_empty() {
+            extra.insert("busy_recipients".to_string(), json!(busy_recipients));
+        }
         let metadata = make_send_metadata(
             false,
             false,
@@ -628,20 +685,31 @@ async fn handle_send(
             &input.message,
             ExtraMetadata(extra),
         );
+
         let content = if input.recipients.is_empty() {
             "No recipients provided. You can only send to your direct child agents.".to_string()
-        } else if direct_children.is_empty() {
+        } else if !invalid_recipients.is_empty() {
+            if direct_children.is_empty() {
+                format!(
+                    "Invalid recipients {:?}. You have no direct child agents to send to.",
+                    input.recipients
+                )
+            } else {
+                format!(
+                    "Invalid recipients {:?}. You can only send to your direct child agents: {}.",
+                    input.recipients,
+                    direct_children.join(", ")
+                )
+            }
+        } else if !busy_recipients.is_empty() {
             format!(
-                "Invalid recipients {:?}. You have no direct child agents to send to.",
-                input.recipients
+                "Some recipients are busy: {}. Wait for them to finish (collaboration_wait) before sending another message.",
+                busy_recipients.join(", ")
             )
         } else {
-            format!(
-                "Invalid recipients {:?}. You can only send to your direct child agents: {}.",
-                input.recipients,
-                direct_children.join(", ")
-            )
+            "No eligible recipients.".to_string()
         };
+
         let output = CollaborationSendOutput { content, metadata };
         info!(
             "collaboration_send: sender={}, recipients={:?}, status=error: {}",
@@ -655,6 +723,17 @@ async fn handle_send(
         .start_agents(valid_recipients.clone(), i32::MAX)
         .await
     {
+        if !previous_statuses.is_empty() {
+            let mut collab = session.collaboration_state().lock().await;
+            for (id, prev) in previous_statuses {
+                if let Some(agent) = collab.agent_mut(id)
+                    && matches!(agent.status, AgentLifecycleState::Running)
+                {
+                    agent.status = prev;
+                }
+            }
+        }
+
         let mut extra = HashMap::new();
         extra.insert(
             "recipients".to_string(),
@@ -674,50 +753,11 @@ async fn handle_send(
         return serialize_function_output(&output, false);
     }
 
-    let start_deadline = Instant::now() + Duration::from_millis(1_000);
-    loop {
-        let all_running = {
-            let collab = session.collaboration_state().lock().await;
-            valid_recipients.iter().all(|id| {
-                collab
-                    .agent(*id)
-                    .is_some_and(|agent| matches!(agent.status, AgentLifecycleState::Running))
-            })
-        };
-        if all_running {
-            break;
-        }
-        if Instant::now() >= start_deadline {
-            let mut extra = HashMap::new();
-            extra.insert(
-                "recipients".to_string(),
-                json!(valid_recipients.iter().map(|id| id.0).collect::<Vec<i32>>()),
-            );
-            let metadata = make_send_metadata(
-                false,
-                false,
-                Some(false),
-                &input.message,
-                ExtraMetadata(extra),
-            );
-            let output = CollaborationSendOutput {
-                content: "Timed out waiting for child agents to start running.".to_string(),
-                metadata,
-            };
-            return serialize_function_output(&output, false);
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-
     let mut extra = HashMap::new();
     extra.insert(
         "recipients".to_string(),
         json!(valid_recipients.iter().map(|id| id.0).collect::<Vec<i32>>()),
     );
-    if !invalid_recipients.is_empty() {
-        extra.insert("invalid_recipients".to_string(), json!(invalid_recipients));
-        extra.insert("direct_children".to_string(), json!(direct_children));
-    }
 
     let metadata = make_send_metadata(
         true,
@@ -727,30 +767,10 @@ async fn handle_send(
         ExtraMetadata(extra),
     );
 
-    let content = if invalid_recipients.is_empty() {
-        "Message sent successfully.".to_string()
-    } else if direct_children.is_empty() {
-        format!(
-            "Message sent, but some recipients were invalid: {}.",
-            invalid_recipients
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    } else {
-        format!(
-            "Message sent, but some recipients were invalid: {}. You can only send to your direct child agents: {}.",
-            invalid_recipients
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", "),
-            direct_children.join(", ")
-        )
+    let output = CollaborationSendOutput {
+        content: "Message sent successfully.".to_string(),
+        metadata,
     };
-
-    let output = CollaborationSendOutput { content, metadata };
     info!(
         "collaboration_send: sender={} ({}), recipients={:?}, status={}",
         sender_id.0, sender_name, valid_recipients, output.content
@@ -1202,7 +1222,7 @@ pub(crate) fn create_collaboration_send_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "collaboration_send".to_string(),
         description:
-            "Send a textual message from the calling agent to one or more recipient agents."
+            "Send a textual message from the calling agent to one or more direct child agents."
                 .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
@@ -1219,7 +1239,8 @@ pub(crate) fn create_collaboration_wait_tool() -> ToolSpec {
         "max_duration".to_string(),
         JsonSchema::Number {
             description: Some(
-                "Maximum duration to wait in ms, measured in tokens. Must be >= 0. A good default value is 10.000".to_string(),
+                "Maximum duration to wait in milliseconds. Must be >= 0. A good default value is 10,000."
+                    .to_string(),
             ),
         },
     );
@@ -1251,9 +1272,8 @@ pub(crate) fn create_collaboration_wait_tool() -> ToolSpec {
 pub(crate) fn create_collaboration_get_state_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "collaboration_get_state".to_string(),
-        description:
-            "Return a high-level view of the collaboration graph (agents, statuses, depth)."
-                .to_string(),
+        description: "Return a high-level view of the calling agent's direct child agents."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties: std::collections::BTreeMap::new(),

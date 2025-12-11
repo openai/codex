@@ -24,9 +24,9 @@ If the `collaboration_*` tools are present, agent profiles are loaded from `$COD
 
 You can spawn and coordinate child agents using these tools (only on this model):
 - `collaboration_init_agent`: create a direct child by agent profile name. `agent` is required (and schema-enforced to the allowed `sub_agents` for the calling agent). No initial message is sent at this point.
-- `collaboration_send`: send a user-message to your direct children by id. You can only send message to previously initialized agents using `collaboration_init_agent`. 
-- `collaboration_wait`: run children for up to `max_duration` tokens and surface their last message/status. You can only wait previously initialized agents using `collaboration_init_agent`.
-- `collaboration_get_state`: see all agents, parents, statuses, and last messages. You can only get state of previously initialized agents using `collaboration_init_agent`.
+- `collaboration_send`: send a user-message to your direct children by id. You can only send messages to previously initialized agents using `collaboration_init_agent`. If the target child is already running, the call fails; `wait` first.
+- `collaboration_wait`: wait up to `max_duration` milliseconds (wall time) for running children to finish and surface their last message/status. You can only wait on direct child agents.
+- `collaboration_get_state`: see the calling agent’s direct children, their statuses, and last messages.
 - `collaboration_close`: close specific children (and their descendants). Only do that when you are done with a child agent.
 
 Each agent uses its own profile `prompt` (no prompt inheritance). An agent’s model and sandbox policy come from its profile (`model` defaults to the main model; `read_only` selects a read-only sandbox vs the session default). Always `wait` after `send` to drive children forward; keep communication concise and include the expected output format. Use `get_state` if unsure about child ids/status.

@@ -78,8 +78,14 @@ impl CollaborationSupervisor {
                             );
                         }
                         for target in targets {
-                            if let Some(tx) = runners.get(&target) {
-                                let _ = tx.send(AgentCommand::Run { max_duration }).await;
+                            let tx = runners.get(&target).cloned();
+                            if let Some(tx) = tx {
+                                match tx.try_send(AgentCommand::Run { max_duration }) {
+                                    Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
+                                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                                        runners.remove(&target);
+                                    }
+                                }
                             }
                         }
                     }
@@ -138,7 +144,7 @@ fn ensure_runner(
         return;
     }
 
-    let (tx, mut rx) = mpsc::channel::<AgentCommand>(4);
+    let (tx, mut rx) = mpsc::channel::<AgentCommand>(1);
     runners.insert(agent, tx);
 
     tokio::spawn(async move {
