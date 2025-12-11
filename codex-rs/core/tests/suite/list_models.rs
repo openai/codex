@@ -147,7 +147,9 @@ fn gpt_5_2() -> ModelPreset {
         id: "gpt-5.2".to_string(),
         model: "gpt-5.2".to_string(),
         display_name: "gpt-5.2".to_string(),
-        description: "Broad world knowledge with strong general reasoning.".to_string(),
+        description:
+            "Latest frontier model with improvements across knowledge, reasoning and coding"
+                .to_string(),
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: vec![
             effort(
@@ -178,7 +180,7 @@ fn gpt_5_1() -> ModelPreset {
         id: "gpt-5.1".to_string(),
         model: "gpt-5.1".to_string(),
         display_name: "gpt-5.1".to_string(),
-        description: "world knowledge with strong general reasoning.".to_string(),
+        description: "Broad world knowledge with strong general reasoning.".to_string(),
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: vec![
             effort(
