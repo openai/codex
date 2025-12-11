@@ -526,14 +526,15 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>) {
-        self.add_final_message_separator();
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
+        self.add_final_message_separator();
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
+        self.task_started_at = None;
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -669,6 +670,7 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.stream_controller = None;
+        self.task_started_at = None;
         self.maybe_show_pending_rate_limit_prompt();
     }
     pub(crate) fn get_model_family(&self) -> ModelFamily {
@@ -1026,8 +1028,9 @@ impl ChatWidget {
 
     fn add_final_message_separator(&mut self) {
         if self.needs_final_message_separator {
-            let elapsed_seconds = 
-            self.task_started_at.map(|start_time| start_time.elapsed().as_secs());
+            let elapsed_seconds = self
+                .task_started_at
+                .map(|start_time| start_time.elapsed().as_secs());
             self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
             self.needs_final_message_separator = false;
         }
