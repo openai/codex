@@ -44,6 +44,7 @@ pub fn is_windows_elevated_sandbox_enabled() -> bool {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
 pub fn is_windows_elevated_sandbox_enabled() -> bool {
     false
 }
