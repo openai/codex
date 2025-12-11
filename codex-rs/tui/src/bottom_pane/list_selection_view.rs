@@ -289,6 +289,15 @@ impl BottomPaneView for ListSelectionView {
                 ..
             } /* ^P */ => self.move_up(),
             KeyEvent {
+                code: KeyCode::BackTab,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.move_up(),
+            KeyEvent {
                 code: KeyCode::Char('k'),
                 modifiers: KeyModifiers::NONE,
                 ..
@@ -307,6 +316,11 @@ impl BottomPaneView for ListSelectionView {
                 modifiers: KeyModifiers::NONE,
                 ..
             } /* ^N */ => self.move_down(),
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.move_down(),
             KeyEvent {
                 code: KeyCode::Char('j'),
                 modifiers: KeyModifiers::NONE,
@@ -566,6 +580,48 @@ mod tests {
     fn renders_blank_line_between_subtitle_and_items() {
         let view = make_selection_view(Some("Switch between Codex approval presets"));
         assert_snapshot!("list_selection_spacing_with_subtitle", render_lines(&view));
+    }
+
+    #[test]
+    fn tab_and_backtab_navigate_selection() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![
+            SelectionItem {
+                name: "First".to_string(),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Second".to_string(),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Third".to_string(),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Navigate".to_string()),
+                items,
+                ..Default::default()
+            },
+            tx,
+        );
+
+        assert_eq!(view.state.selected_idx, Some(0));
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(view.state.selected_idx, Some(1));
+
+        view.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(view.state.selected_idx, Some(0));
+
+        view.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(view.state.selected_idx, Some(2));
     }
 
     #[test]
