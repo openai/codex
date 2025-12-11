@@ -6,6 +6,7 @@ use mcp_types::ContentBlock;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
+use serde::de::Error as DeError;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
@@ -15,9 +16,7 @@ use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
 /// Controls whether a command should use the session sandbox or bypass it.
-#[derive(
-    Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
-)]
+#[derive(Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxPermissions {
     /// Run with the configured sandbox
@@ -30,6 +29,33 @@ pub enum SandboxPermissions {
 impl SandboxPermissions {
     pub fn requires_escalated_permissions(self) -> bool {
         matches!(self, SandboxPermissions::RequireEscalated)
+    }
+}
+
+impl<'de> Deserialize<'de> for SandboxPermissions {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Input {
+            Bool(bool),
+            String(String),
+        }
+
+        match Input::deserialize(deserializer)? {
+            Input::Bool(true) => Ok(SandboxPermissions::RequireEscalated),
+            Input::Bool(false) => Ok(SandboxPermissions::UseDefault),
+            Input::String(value) => match value.as_str() {
+                "use_default" => Ok(SandboxPermissions::UseDefault),
+                "require_escalated" => Ok(SandboxPermissions::RequireEscalated),
+                other => Err(DeError::unknown_variant(
+                    other,
+                    &["use_default", "require_escalated", "true", "false"],
+                )),
+            },
+        }
     }
 }
 
@@ -347,7 +373,11 @@ pub struct ShellToolCallParams {
     /// This is the maximum time in milliseconds that the command is allowed to run.
     #[serde(alias = "timeout")]
     pub timeout_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "with_escalated_permissions",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
     pub sandbox_permissions: Option<SandboxPermissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -367,7 +397,11 @@ pub struct ShellCommandToolCallParams {
     /// This is the maximum time in milliseconds that the command is allowed to run.
     #[serde(alias = "timeout")]
     pub timeout_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "with_escalated_permissions",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
     pub sandbox_permissions: Option<SandboxPermissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -768,6 +802,21 @@ mod tests {
                 justification: None,
             },
             params
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_shell_tool_call_params_with_alias() -> Result<()> {
+        let json = r#"{
+            "command": ["ls"],
+            "with_escalated_permissions": true
+        }"#;
+
+        let params: ShellToolCallParams = serde_json::from_str(json)?;
+        assert_eq!(
+            Some(SandboxPermissions::RequireEscalated),
+            params.sandbox_permissions
         );
         Ok(())
     }
