@@ -56,7 +56,11 @@ use toml_edit::DocumentMut;
 
 pub mod edit;
 pub mod profile;
+pub mod service;
 pub mod types;
+
+pub use service::ConfigService;
+pub use service::ConfigServiceError;
 
 const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex-max";
 
