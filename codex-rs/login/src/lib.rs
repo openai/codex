@@ -9,6 +9,7 @@ pub use device_code_auth::run_device_code_login;
 pub use server::LoginServer;
 pub use server::ServerOptions;
 pub use server::ShutdownHandle;
+pub use server::build_login_http_client;
 pub use server::run_login_server;
 
 // Re-export commonly used auth types and helpers from codex-core for compatibility
