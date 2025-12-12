@@ -37,11 +37,19 @@ impl Shell {
     /// use with `exec()` to run the shell command.
     pub fn derive_exec_args(&self, command: &str, use_login_shell: bool) -> Vec<String> {
         match self.shell_type {
-            ShellType::Zsh | ShellType::Bash | ShellType::Sh => {
+            ShellType::Zsh | ShellType::Bash => {
                 let arg = if use_login_shell { "-lc" } else { "-c" };
                 vec![
                     self.shell_path.to_string_lossy().to_string(),
                     arg.to_string(),
+                    command.to_string(),
+                ]
+            }
+            ShellType::Sh => {
+                // POSIX sh (e.g., dash) doesn't accept -l, so always use -c.
+                vec![
+                    self.shell_path.to_string_lossy().to_string(),
+                    "-c".to_string(),
                     command.to_string(),
                 ]
             }
@@ -448,6 +456,20 @@ mod tests {
         assert_eq!(
             test_zsh_shell.derive_exec_args("echo hello", true),
             vec!["/bin/zsh", "-lc", "echo hello"]
+        );
+
+        let test_sh_shell = Shell {
+            shell_type: ShellType::Sh,
+            shell_path: PathBuf::from("/bin/sh"),
+            shell_snapshot: None,
+        };
+        assert_eq!(
+            test_sh_shell.derive_exec_args("echo hello", false),
+            vec!["/bin/sh", "-c", "echo hello"]
+        );
+        assert_eq!(
+            test_sh_shell.derive_exec_args("echo hello", true),
+            vec!["/bin/sh", "-c", "echo hello"]
         );
 
         let test_powershell_shell = Shell {
