@@ -101,6 +101,7 @@ jobs:
           sudo apt-get install -y musl-tools pkg-config
 
       - name: Cargo build
+        shell: bash
         run: |
           if [[ "${{ contains(matrix.target, 'windows') }}" == 'true' ]]; then
             cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup --bin codex-command-runner
