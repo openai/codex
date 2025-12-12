@@ -104,6 +104,7 @@ See the [Execpolicy quickstart](./docs/execpolicy.md) to set up rules that gover
   - [Build from source](./docs/install.md#build-from-source)
 - [**FAQ**](./docs/faq.md)
 - [**Open source fund**](./docs/open-source-fund.md)
+- [**中文文档（简体）**](./docs/zh/README.md)
 
 ---
 
