@@ -192,6 +192,8 @@ mod tests {
     use crate::shell::ShellType;
 
     use super::*;
+    use core_test_support::test_path_buf;
+    use core_test_support::test_tmp_path_buf;
     use pretty_assertions::assert_eq;
 
     fn fake_shell() -> Shell {
@@ -216,12 +218,19 @@ mod tests {
 
     #[test]
     fn serialize_workspace_write_environment_context() {
-        let cwd = if cfg!(windows) { "C:\\repo" } else { "/repo" };
-        let writable_root = if cfg!(windows) { "C:\\tmp" } else { "/tmp" };
+        let cwd = test_path_buf("/repo");
+        let writable_root = test_tmp_path_buf();
+        let cwd_str = cwd.to_str().expect("cwd is valid utf-8");
+        let writable_root_str = writable_root
+            .to_str()
+            .expect("writable root is valid utf-8");
         let context = EnvironmentContext::new(
-            Some(PathBuf::from(cwd)),
+            Some(cwd.clone()),
             Some(AskForApproval::OnRequest),
-            Some(workspace_write_policy(vec![cwd, writable_root], false)),
+            Some(workspace_write_policy(
+                vec![cwd_str, writable_root_str],
+                false,
+            )),
             fake_shell(),
         );
 
@@ -236,7 +245,9 @@ mod tests {
     <root>{writable_root}</root>
   </writable_roots>
   <shell>bash</shell>
-</environment_context>"#
+</environment_context>"#,
+            cwd = cwd.display(),
+            writable_root = writable_root.display(),
         );
 
         assert_eq!(context.serialize_to_xml(), expected);

@@ -1315,6 +1315,7 @@ mod tests {
     use crate::features::Feature;
 
     use super::*;
+    use core_test_support::test_absolute_path;
     use pretty_assertions::assert_eq;
 
     use std::time::Duration;
@@ -1413,11 +1414,7 @@ network_access = true  # This should be ignored.
             }
         );
 
-        let writable_root = if cfg!(windows) {
-            "C:\\my\\workspace"
-        } else {
-            "/my/workspace"
-        };
+        let writable_root = test_absolute_path("/my/workspace");
         let sandbox_workspace_write = format!(
             r#"
 sandbox_mode = "workspace-write"
@@ -1429,7 +1426,7 @@ writable_roots = [
 exclude_tmpdir_env_var = true
 exclude_slash_tmp = true
 "#,
-            serde_json::json!(writable_root.to_string_lossy())
+            serde_json::json!(writable_root)
         );
 
         let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(&sandbox_workspace_write)
@@ -1453,7 +1450,7 @@ exclude_slash_tmp = true
                 resolution,
                 SandboxPolicyResolution {
                     policy: SandboxPolicy::WorkspaceWrite {
-                        writable_roots: vec!["/my/workspace".try_into().unwrap()],
+                        writable_roots: vec![writable_root.clone()],
                         network_access: false,
                         exclude_tmpdir_env_var: true,
                         exclude_slash_tmp: true,
@@ -1477,7 +1474,7 @@ exclude_slash_tmp = true
 [projects."/tmp/test"]
 trust_level = "trusted"
 "#,
-            serde_json::json!(writable_root.to_string_lossy())
+            serde_json::json!(writable_root)
         );
 
         let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(&sandbox_workspace_write)
@@ -1501,10 +1498,7 @@ trust_level = "trusted"
                 resolution,
                 SandboxPolicyResolution {
                     policy: SandboxPolicy::WorkspaceWrite {
-                        writable_roots: vec![
-                            AbsolutePathBuf::from_absolute_path("/my/workspace")
-                                .expect("absolute path")
-                        ],
+                        writable_roots: vec![writable_root],
                         network_access: false,
                         exclude_tmpdir_env_var: true,
                         exclude_slash_tmp: true,
