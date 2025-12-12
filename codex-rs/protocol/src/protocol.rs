@@ -425,14 +425,15 @@ impl SandboxPolicy {
                     && let Some(tmpdir) = std::env::var_os("TMPDIR")
                     && !tmpdir.is_empty()
                 {
-                    if let Ok(tmpdir_path) =
-                        AbsolutePathBuf::from_absolute_path(PathBuf::from(&tmpdir))
-                    {
-                        roots.push(tmpdir_path);
-                    } else {
-                        error!(
-                            "Ignoring invalid TMPDIR value {tmpdir:?} for sandbox writable root",
-                        );
+                    match AbsolutePathBuf::from_absolute_path(PathBuf::from(&tmpdir)) {
+                        Ok(tmpdir_path) => {
+                            roots.push(tmpdir_path);
+                        }
+                        Err(e) => {
+                            error!(
+                                "Ignoring invalid TMPDIR value {tmpdir:?} for sandbox writable root: {e}",
+                            );
+                        }
                     }
                 }
 
