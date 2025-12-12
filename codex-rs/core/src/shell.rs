@@ -86,7 +86,7 @@ fn get_user_shell_path() -> Option<PathBuf> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn get_user_shell_path() -> Option<PathBuf> {
     None
 }
