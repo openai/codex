@@ -46,9 +46,10 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::EnteredReviewMode(_)
         | EventMsg::ExitedReviewMode(_)
         | EventMsg::UndoCompleted(_)
-        | EventMsg::TurnAborted(_) => true,
-        EventMsg::Error(_)
-        | EventMsg::Warning(_)
+        | EventMsg::TurnAborted(_)
+        | EventMsg::Error(_)
+        | EventMsg::StreamError(_) => true,
+        EventMsg::Warning(_)
         | EventMsg::TaskStarted(_)
         | EventMsg::TaskComplete(_)
         | EventMsg::AgentMessageDelta(_)
@@ -69,7 +70,6 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ElicitationRequest(_)
         | EventMsg::ApplyPatchApprovalRequest(_)
         | EventMsg::BackgroundEvent(_)
-        | EventMsg::StreamError(_)
         | EventMsg::PatchApplyBegin(_)
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::TurnDiff(_)
