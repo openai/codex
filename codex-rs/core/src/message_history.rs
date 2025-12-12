@@ -28,7 +28,7 @@ use tokio::fs;
 use tokio::io::AsyncReadExt;
 
 use crate::config::Config;
-use crate::config_types::HistoryPersistence;
+use crate::config::types::HistoryPersistence;
 
 use codex_protocol::ConversationId;
 #[cfg(unix)]

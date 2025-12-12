@@ -6,15 +6,11 @@ pub fn format_env_display(env: Option<&HashMap<String, String>>, env_vars: &[Str
     if let Some(map) = env {
         let mut pairs: Vec<_> = map.iter().collect();
         pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-        parts.extend(
-            pairs
-                .into_iter()
-                .map(|(key, value)| format!("{key}={value}")),
-        );
+        parts.extend(pairs.into_iter().map(|(key, _)| format!("{key}=*****")));
     }
 
     if !env_vars.is_empty() {
-        parts.extend(env_vars.iter().map(|var| format!("{var}=${var}")));
+        parts.extend(env_vars.iter().map(|var| format!("{var}=*****")));
     }
 
     if parts.is_empty() {
@@ -42,14 +38,14 @@ mod tests {
         env.insert("B".to_string(), "two".to_string());
         env.insert("A".to_string(), "one".to_string());
 
-        assert_eq!(format_env_display(Some(&env), &[]), "A=one, B=two");
+        assert_eq!(format_env_display(Some(&env), &[]), "A=*****, B=*****");
     }
 
     #[test]
     fn formats_env_vars_with_dollar_prefix() {
         let vars = vec!["TOKEN".to_string(), "PATH".to_string()];
 
-        assert_eq!(format_env_display(None, &vars), "TOKEN=$TOKEN, PATH=$PATH");
+        assert_eq!(format_env_display(None, &vars), "TOKEN=*****, PATH=*****");
     }
 
     #[test]
@@ -60,7 +56,7 @@ mod tests {
 
         assert_eq!(
             format_env_display(Some(&env), &vars),
-            "HOME=/tmp, TOKEN=$TOKEN"
+            "HOME=*****, TOKEN=*****"
         );
     }
 }

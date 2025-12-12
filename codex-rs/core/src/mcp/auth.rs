@@ -7,8 +7,8 @@ use codex_rmcp_client::determine_streamable_http_auth_status;
 use futures::future::join_all;
 use tracing::warn;
 
-use crate::config_types::McpServerConfig;
-use crate::config_types::McpServerTransportConfig;
+use crate::config::types::McpServerConfig;
+use crate::config::types::McpServerTransportConfig;
 
 #[derive(Debug, Clone)]
 pub struct McpAuthStatusEntry {

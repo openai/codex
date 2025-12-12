@@ -15,7 +15,6 @@ use crate::tools::context::ToolPayload;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToolKind {
     Function,
-    UnifiedExec,
     Mcp,
 }
 
@@ -27,7 +26,6 @@ pub trait ToolHandler: Send + Sync {
         matches!(
             (self.kind(), payload),
             (ToolKind::Function, ToolPayload::Function { .. })
-                | (ToolKind::UnifiedExec, ToolPayload::UnifiedExec { .. })
                 | (ToolKind::Mcp, ToolPayload::Mcp { .. })
         )
     }

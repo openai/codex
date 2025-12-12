@@ -61,7 +61,13 @@ pub(crate) async fn apply_patch(
             // that similar patches can be auto-approved in the future during
             // this session.
             let rx_approve = sess
-                .request_patch_approval(turn_context, call_id.to_owned(), &action, None, None)
+                .request_patch_approval(
+                    turn_context,
+                    call_id.to_owned(),
+                    convert_apply_patch_to_protocol(&action),
+                    None,
+                    None,
+                )
                 .await;
             match rx_approve.await.unwrap_or_default() {
                 ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {

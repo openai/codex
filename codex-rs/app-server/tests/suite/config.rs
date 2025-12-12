@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-use std::path::Path;
-
+use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
@@ -17,6 +15,8 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -60,31 +60,21 @@ chatgpt_base_url = "https://api.chatgpt.com"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn get_config_toml_parses_all_fields() {
-    let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
-    create_config_toml(codex_home.path()).expect("write config.toml");
+async fn get_config_toml_parses_all_fields() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .expect("init timeout")
-        .expect("init failed");
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp
-        .send_get_user_saved_config_request()
-        .await
-        .expect("send getUserSavedConfig");
+    let request_id = mcp.send_get_user_saved_config_request().await?;
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
-    .await
-    .expect("getUserSavedConfig timeout")
-    .expect("getUserSavedConfig response");
+    .await??;
 
-    let config: GetUserSavedConfigResponse = to_response(resp).expect("deserialize config");
+    let config: GetUserSavedConfigResponse = to_response(resp)?;
     let expected = GetUserSavedConfigResponse {
         config: UserSavedConfig {
             approval_policy: Some(AskForApproval::OnRequest),
@@ -122,33 +112,24 @@ async fn get_config_toml_parses_all_fields() {
     };
 
     assert_eq!(config, expected);
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn get_config_toml_empty() {
-    let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
+async fn get_config_toml_empty() -> Result<()> {
+    let codex_home = TempDir::new()?;
 
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .expect("init timeout")
-        .expect("init failed");
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp
-        .send_get_user_saved_config_request()
-        .await
-        .expect("send getUserSavedConfig");
+    let request_id = mcp.send_get_user_saved_config_request().await?;
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
-    .await
-    .expect("getUserSavedConfig timeout")
-    .expect("getUserSavedConfig response");
+    .await??;
 
-    let config: GetUserSavedConfigResponse = to_response(resp).expect("deserialize config");
+    let config: GetUserSavedConfigResponse = to_response(resp)?;
     let expected = GetUserSavedConfigResponse {
         config: UserSavedConfig {
             approval_policy: None,
@@ -167,4 +148,5 @@ async fn get_config_toml_empty() {
     };
 
     assert_eq!(config, expected);
+    Ok(())
 }

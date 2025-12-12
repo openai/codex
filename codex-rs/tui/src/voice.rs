@@ -1,5 +1,6 @@
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::config::find_codex_home;
 use codex_core::default_client::get_codex_user_agent;
 use codex_login::AuthMode;
@@ -328,7 +329,7 @@ fn encode_wav_normalized(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
 
 async fn resolve_auth() -> Result<(String, Option<String>), String> {
     let codex_home = find_codex_home().map_err(|e| format!("failed to find codex home: {e}"))?;
-    let auth = CodexAuth::from_codex_home(&codex_home)
+    let auth = CodexAuth::from_auth_storage(&codex_home, AuthCredentialsStoreMode::Auto)
         .map_err(|e| format!("failed to read auth.json: {e}"))?
         .ok_or_else(|| "No Codex auth is configured; please run `codex login`".to_string())?;
 

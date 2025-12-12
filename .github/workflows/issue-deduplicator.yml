@@ -16,7 +16,7 @@ jobs:
     outputs:
       codex_output: ${{ steps.codex.outputs.final-message }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Prepare Codex inputs
         env:
@@ -87,7 +87,7 @@ jobs:
       issues: write
     steps:
       - name: Comment on issue
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           CODEX_OUTPUT: ${{ needs.gather-duplicates.outputs.codex_output }}
         with:

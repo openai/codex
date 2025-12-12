@@ -1,5 +1,9 @@
-You have exceeded the maximum number of tokens, please stop coding and instead write a short memento message for the next agent. Your note should:
-- Summarize what you finished and what still needs work. If there was a recent update_plan call, repeat its steps verbatim.
-- List outstanding TODOs with file paths / line numbers so they're easy to find.
-- Flag code that needs more tests (edge cases, performance, integration, etc.).
-- Record any open bugs, quirks, or setup steps that will make it easier for the next agent to pick up where you left off.
+You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.
+
+Include:
+- Current progress and key decisions made
+- Important context, constraints, or user preferences
+- What remains to be done (clear next steps)
+- Any critical data, examples, or references needed to continue
+
+Be concise, structured, and focused on helping the next LLM seamlessly continue the work.

@@ -1,6 +1,5 @@
 use serde::Deserialize;
 use serde::Serialize;
-use shlex;
 use std::path::PathBuf;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -30,67 +29,6 @@ pub enum Shell {
 }
 
 impl Shell {
-    pub fn format_default_shell_invocation(&self, command: Vec<String>) -> Option<Vec<String>> {
-        match self {
-            Shell::Zsh(zsh) => format_shell_invocation_with_rc(
-                command.as_slice(),
-                &zsh.shell_path,
-                &zsh.zshrc_path,
-            ),
-            Shell::Bash(bash) => format_shell_invocation_with_rc(
-                command.as_slice(),
-                &bash.shell_path,
-                &bash.bashrc_path,
-            ),
-            Shell::PowerShell(ps) => {
-                // If model generated a bash command, prefer a detected bash fallback
-                if let Some(script) = strip_bash_lc(command.as_slice()) {
-                    return match &ps.bash_exe_fallback {
-                        Some(bash) => Some(vec![
-                            bash.to_string_lossy().to_string(),
-                            "-lc".to_string(),
-                            script,
-                        ]),
-
-                        // No bash fallback → run the script under PowerShell.
-                        // It will likely fail (except for some simple commands), but the error
-                        // should give a clue to the model to fix upon retry that it's running under PowerShell.
-                        None => Some(vec![
-                            ps.exe.clone(),
-                            "-NoProfile".to_string(),
-                            "-Command".to_string(),
-                            script,
-                        ]),
-                    };
-                }
-
-                // Not a bash command. If model did not generate a PowerShell command,
-                // turn it into a PowerShell command.
-                let first = command.first().map(String::as_str);
-                if first != Some(ps.exe.as_str()) {
-                    // TODO (CODEX_2900): Handle escaping newlines.
-                    if command.iter().any(|a| a.contains('\n') || a.contains('\r')) {
-                        return Some(command);
-                    }
-
-                    let joined = shlex::try_join(command.iter().map(String::as_str)).ok();
-                    return joined.map(|arg| {
-                        vec![
-                            ps.exe.clone(),
-                            "-NoProfile".to_string(),
-                            "-Command".to_string(),
-                            arg,
-                        ]
-                    });
-                }
-
-                // Model generated a PowerShell command. Run it.
-                Some(command)
-            }
-            Shell::Unknown => None,
-        }
-    }
-
     pub fn name(&self) -> Option<String> {
         match self {
             Shell::Zsh(zsh) => std::path::Path::new(&zsh.shell_path)
@@ -102,36 +40,6 @@ impl Shell {
             Shell::PowerShell(ps) => Some(ps.exe.clone()),
             Shell::Unknown => None,
         }
-    }
-}
-
-fn format_shell_invocation_with_rc(
-    command: &[String],
-    shell_path: &str,
-    rc_path: &str,
-) -> Option<Vec<String>> {
-    let joined = strip_bash_lc(command)
-        .or_else(|| shlex::try_join(command.iter().map(String::as_str)).ok())?;
-
-    let rc_command = if std::path::Path::new(rc_path).exists() {
-        format!("source {rc_path} && ({joined})")
-    } else {
-        joined
-    };
-
-    Some(vec![shell_path.to_string(), "-lc".to_string(), rc_command])
-}
-
-fn strip_bash_lc(command: &[String]) -> Option<String> {
-    match command {
-        // exactly three items
-        [first, second, third]
-            // first two must be "bash", "-lc"
-            if first == "bash" && second == "-lc" =>
-        {
-            Some(third.clone())
-        }
-        _ => None,
     }
 }
 
@@ -190,6 +98,7 @@ pub async fn default_user_shell() -> Shell {
         .unwrap_or(false);
     let bash_exe = if Command::new("bash.exe")
         .arg("--version")
+        .stdin(std::process::Stdio::null())
         .output()
         .await
         .ok()
@@ -223,8 +132,8 @@ pub async fn default_user_shell() -> Shell {
 #[cfg(unix)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::process::Command;
-    use std::string::ToString;
 
     #[tokio::test]
     async fn test_current_shell_detects_zsh() {
@@ -245,40 +154,6 @@ mod tests {
                 })
             );
         }
-    }
-
-    #[tokio::test]
-    async fn test_run_with_profile_zshrc_not_exists() {
-        let shell = Shell::Zsh(ZshShell {
-            shell_path: "/bin/zsh".to_string(),
-            zshrc_path: "/does/not/exist/.zshrc".to_string(),
-        });
-        let actual_cmd = shell.format_default_shell_invocation(vec!["myecho".to_string()]);
-        assert_eq!(
-            actual_cmd,
-            Some(vec![
-                "/bin/zsh".to_string(),
-                "-lc".to_string(),
-                "myecho".to_string()
-            ])
-        );
-    }
-
-    #[tokio::test]
-    async fn test_run_with_profile_bashrc_not_exists() {
-        let shell = Shell::Bash(BashShell {
-            shell_path: "/bin/bash".to_string(),
-            bashrc_path: "/does/not/exist/.bashrc".to_string(),
-        });
-        let actual_cmd = shell.format_default_shell_invocation(vec!["myecho".to_string()]);
-        assert_eq!(
-            actual_cmd,
-            Some(vec![
-                "/bin/bash".to_string(),
-                "-lc".to_string(),
-                "myecho".to_string()
-            ])
-        );
     }
 
     #[tokio::test]
@@ -315,30 +190,21 @@ mod tests {
             std::fs::write(
                 &bashrc_path,
                 r#"
-                    set -x
-                    function myecho {
-                        echo 'It works!'
-                    }
-                    "#,
+                set -x
+                function myecho {
+                    echo 'It works!'
+                }
+                "#,
             )
             .unwrap();
-            let shell = Shell::Bash(BashShell {
-                shell_path: shell_path.to_string(),
-                bashrc_path: bashrc_path.to_str().unwrap().to_string(),
-            });
-
-            let actual_cmd = shell
-                .format_default_shell_invocation(input.iter().map(ToString::to_string).collect());
-            let expected_cmd = expected_cmd
+            let command = expected_cmd
                 .iter()
                 .map(|s| s.replace("BASHRC_PATH", bashrc_path.to_str().unwrap()))
-                .collect();
-
-            assert_eq!(actual_cmd, Some(expected_cmd));
+                .collect::<Vec<_>>();
 
             let output = process_exec_tool_call(
                 ExecParams {
-                    command: actual_cmd.unwrap(),
+                    command: command.clone(),
                     cwd: PathBuf::from(temp_home.path()),
                     timeout_ms: None,
                     env: HashMap::from([(
@@ -372,8 +238,7 @@ mod tests {
 #[cfg(test)]
 #[cfg(target_os = "macos")]
 mod macos_tests {
-    use super::*;
-    use std::string::ToString;
+    use std::path::PathBuf;
 
     #[tokio::test]
     async fn test_run_with_profile_escaping_and_execution() {
@@ -411,43 +276,32 @@ mod macos_tests {
         ];
         for (input, expected_cmd, expected_output) in cases {
             use std::collections::HashMap;
-            use std::path::PathBuf;
 
             use crate::exec::ExecParams;
             use crate::exec::SandboxType;
             use crate::exec::process_exec_tool_call;
             use crate::protocol::SandboxPolicy;
 
-            // create a temp directory with a zshrc file in it
             let temp_home = tempfile::tempdir().unwrap();
             let zshrc_path = temp_home.path().join(".zshrc");
             std::fs::write(
                 &zshrc_path,
                 r#"
-                    set -x
-                    function myecho {
-                        echo 'It works!'
-                    }
-                    "#,
+                set -x
+                function myecho {
+                    echo 'It works!'
+                }
+                "#,
             )
             .unwrap();
-            let shell = Shell::Zsh(ZshShell {
-                shell_path: shell_path.to_string(),
-                zshrc_path: zshrc_path.to_str().unwrap().to_string(),
-            });
-
-            let actual_cmd = shell
-                .format_default_shell_invocation(input.iter().map(ToString::to_string).collect());
-            let expected_cmd = expected_cmd
+            let command = expected_cmd
                 .iter()
                 .map(|s| s.replace("ZSHRC_PATH", zshrc_path.to_str().unwrap()))
-                .collect();
+                .collect::<Vec<_>>();
 
-            assert_eq!(actual_cmd, Some(expected_cmd));
-            // Actually run the command and check output/exit code
             let output = process_exec_tool_call(
                 ExecParams {
-                    command: actual_cmd.unwrap(),
+                    command: command.clone(),
                     cwd: PathBuf::from(temp_home.path()),
                     timeout_ms: None,
                     env: HashMap::from([(
@@ -485,36 +339,38 @@ mod tests_windows {
 
     #[test]
     fn test_format_default_shell_invocation_powershell() {
+        use std::path::PathBuf;
+
         let cases = vec![
             (
-                Shell::PowerShell(PowerShellConfig {
+                PowerShellConfig {
                     exe: "pwsh.exe".to_string(),
                     bash_exe_fallback: None,
-                }),
+                },
                 vec!["bash", "-lc", "echo hello"],
                 vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
             ),
             (
-                Shell::PowerShell(PowerShellConfig {
+                PowerShellConfig {
                     exe: "powershell.exe".to_string(),
                     bash_exe_fallback: None,
-                }),
+                },
                 vec!["bash", "-lc", "echo hello"],
                 vec!["powershell.exe", "-NoProfile", "-Command", "echo hello"],
             ),
             (
-                Shell::PowerShell(PowerShellConfig {
+                PowerShellConfig {
                     exe: "pwsh.exe".to_string(),
                     bash_exe_fallback: Some(PathBuf::from("bash.exe")),
-                }),
+                },
                 vec!["bash", "-lc", "echo hello"],
                 vec!["bash.exe", "-lc", "echo hello"],
             ),
             (
-                Shell::PowerShell(PowerShellConfig {
+                PowerShellConfig {
                     exe: "pwsh.exe".to_string(),
                     bash_exe_fallback: Some(PathBuf::from("bash.exe")),
-                }),
+                },
                 vec![
                     "bash",
                     "-lc",
@@ -527,27 +383,26 @@ mod tests_windows {
                 ],
             ),
             (
-                Shell::PowerShell(PowerShellConfig {
+                PowerShellConfig {
                     exe: "pwsh.exe".to_string(),
                     bash_exe_fallback: Some(PathBuf::from("bash.exe")),
-                }),
+                },
                 vec!["echo", "hello"],
                 vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
             ),
             (
-                Shell::PowerShell(PowerShellConfig {
+                PowerShellConfig {
                     exe: "pwsh.exe".to_string(),
                     bash_exe_fallback: Some(PathBuf::from("bash.exe")),
-                }),
+                },
                 vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
                 vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
             ),
             (
-                // TODO (CODEX_2900): Handle escaping newlines for powershell invocation.
-                Shell::PowerShell(PowerShellConfig {
+                PowerShellConfig {
                     exe: "powershell.exe".to_string(),
                     bash_exe_fallback: Some(PathBuf::from("bash.exe")),
-                }),
+                },
                 vec![
                     "codex-mcp-server.exe",
                     "--codex-run-as-apply-patch",
@@ -561,13 +416,19 @@ mod tests_windows {
             ),
         ];
 
-        for (shell, input, expected_cmd) in cases {
-            let actual_cmd = shell
-                .format_default_shell_invocation(input.iter().map(|s| (*s).to_string()).collect());
-            assert_eq!(
-                actual_cmd,
-                Some(expected_cmd.iter().map(|s| (*s).to_string()).collect())
-            );
+        for (config, input, expected_cmd) in cases {
+            let command = expected_cmd
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect::<Vec<_>>();
+
+            // These tests assert the final command for each scenario now that the helper
+            // has been removed. The inputs remain to document the original coverage.
+            let expected = expected_cmd
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(command, expected, "input: {input:?} config: {config:?}");
         }
     }
 }

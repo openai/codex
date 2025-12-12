@@ -73,6 +73,7 @@ async fn retries_on_early_close() {
         // provider is not set.
         env_key: Some("PATH".into()),
         env_key_instructions: None,
+        experimental_bearer_token: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,

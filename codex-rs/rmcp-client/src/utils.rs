@@ -171,13 +171,33 @@ pub(crate) const DEFAULT_ENV_VARS: &[&str] = &[
 
 #[cfg(windows)]
 pub(crate) const DEFAULT_ENV_VARS: &[&str] = &[
+    // Core path resolution
     "PATH",
     "PATHEXT",
+    // Shell and system roots
+    "COMSPEC",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    // User context and profiles
     "USERNAME",
     "USERDOMAIN",
     "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    // Program locations
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMW6432",
+    "PROGRAMDATA",
+    // App data and caches
+    "LOCALAPPDATA",
+    "APPDATA",
+    // Temp locations
     "TEMP",
     "TMP",
+    // Common shells/pwsh hints
+    "POWERSHELL",
+    "PWSH",
 ];
 
 #[cfg(test)]

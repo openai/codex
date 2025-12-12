@@ -88,6 +88,7 @@ impl ToolHandler for PlanHandler {
 
         Ok(ToolOutput::Function {
             content,
+            content_items: None,
             success: Some(true),
         })
     }

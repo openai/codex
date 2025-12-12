@@ -163,6 +163,18 @@ impl PasteBurst {
         self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
     }
 
+    /// Try to append a char into the burst buffer only if a burst is already active.
+    ///
+    /// Returns true when the char was captured into the existing burst, false otherwise.
+    pub fn try_append_char_if_active(&mut self, ch: char, now: Instant) -> bool {
+        if self.active || !self.buffer.is_empty() {
+            self.append_char_to_buffer(ch, now);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Decide whether to begin buffering by retroactively capturing recent
     /// chars from the slice before the cursor.
     ///
@@ -198,12 +210,15 @@ impl PasteBurst {
 
     /// Before applying modified/non-char input: flush buffered burst immediately.
     pub fn flush_before_modified_input(&mut self) -> Option<String> {
-        if self.is_active() {
-            self.active = false;
-            Some(std::mem::take(&mut self.buffer))
-        } else {
-            None
+        if !self.is_active() {
+            return None;
         }
+        self.active = false;
+        let mut out = std::mem::take(&mut self.buffer);
+        if let Some((ch, _at)) = self.pending_first_char.take() {
+            out.push(ch);
+        }
+        Some(out)
     }
 
     /// Clear only the timing window and any pending first-char.

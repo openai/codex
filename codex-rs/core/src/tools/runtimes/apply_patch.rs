@@ -10,13 +10,16 @@ use crate::sandboxing::CommandSpec;
 use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
+use crate::tools::sandboxing::SandboxRetryData;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -29,6 +32,12 @@ pub struct ApplyPatchRequest {
     pub timeout_ms: Option<u64>,
     pub user_explicitly_approved: bool,
     pub codex_exe: Option<PathBuf>,
+}
+
+impl ProvidesSandboxRetryData for ApplyPatchRequest {
+    fn sandbox_retry_data(&self) -> Option<SandboxRetryData> {
+        None
+    }
 }
 
 #[derive(Default)]
@@ -105,9 +114,10 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let call_id = ctx.call_id.to_string();
         let cwd = req.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
+        let risk = ctx.risk.clone();
         let user_explicitly_approved = req.user_explicitly_approved;
         Box::pin(async move {
-            with_cached_approval(&session.services, key, || async move {
+            with_cached_approval(&session.services, key, move || async move {
                 if let Some(reason) = retry_reason {
                     session
                         .request_command_approval(
@@ -116,6 +126,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                             vec!["apply_patch".to_string()],
                             cwd,
                             Some(reason),
+                            risk,
                         )
                         .await
                 } else if user_explicitly_approved {
@@ -126,6 +137,10 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
             })
             .await
         })
+    }
+
+    fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
+        !matches!(policy, AskForApproval::Never)
     }
 }
 

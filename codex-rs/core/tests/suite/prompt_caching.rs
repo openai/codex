@@ -354,8 +354,10 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
             None => String::new(),
         }
     );
-    let expected_ui_text =
-        "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
+    let expected_ui_text = format!(
+        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>",
+        cwd.path().to_string_lossy()
+    );
 
     let expected_env_msg = serde_json::json!({
         "type": "message",
@@ -734,9 +736,11 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
     let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
 
     let shell = default_user_shell().await;
-    let expected_ui_text =
-        "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
-    let expected_ui_msg = text_user_input(expected_ui_text.to_string());
+    let expected_ui_text = format!(
+        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>",
+        default_cwd.to_string_lossy()
+    );
+    let expected_ui_msg = text_user_input(expected_ui_text);
 
     let expected_env_msg_1 = text_user_input(default_env_context_str(
         &cwd.path().to_string_lossy(),
@@ -848,8 +852,10 @@ async fn send_user_turn_with_changes_sends_environment_context() {
     let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
 
     let shell = default_user_shell().await;
-    let expected_ui_text =
-        "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
+    let expected_ui_text = format!(
+        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>",
+        default_cwd.to_string_lossy()
+    );
     let expected_ui_msg = serde_json::json!({
         "type": "message",
         "role": "user",

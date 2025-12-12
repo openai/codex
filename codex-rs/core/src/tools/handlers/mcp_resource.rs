@@ -297,7 +297,10 @@ async fn handle_list_resources(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function { content, success } = &output else {
+                let ToolOutput::Function {
+                    content, success, ..
+                } = &output
+                else {
                     unreachable!("MCP resource handler should return function output");
                 };
                 let duration = start.elapsed();
@@ -403,7 +406,10 @@ async fn handle_list_resource_templates(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function { content, success } = &output else {
+                let ToolOutput::Function {
+                    content, success, ..
+                } = &output
+                else {
                     unreachable!("MCP resource handler should return function output");
                 };
                 let duration = start.elapsed();
@@ -489,7 +495,10 @@ async fn handle_read_resource(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function { content, success } = &output else {
+                let ToolOutput::Function {
+                    content, success, ..
+                } = &output
+                else {
                     unreachable!("MCP resource handler should return function output");
                 };
                 let duration = start.elapsed();
@@ -618,6 +627,7 @@ where
 
     Ok(ToolOutput::Function {
         content,
+        content_items: None,
         success: Some(true),
     })
 }

@@ -37,6 +37,7 @@ pub async fn perform_oauth_login(
     store_mode: OAuthCredentialsStoreMode,
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
+    scopes: &[String],
 ) -> Result<()> {
     let server = Arc::new(Server::http("127.0.0.1:0").map_err(|err| anyhow!(err))?);
     let guard = CallbackServerGuard {
@@ -61,8 +62,9 @@ pub async fn perform_oauth_login(
     let http_client = apply_default_headers(ClientBuilder::new(), &default_headers).build()?;
 
     let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
+    let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
     oauth_state
-        .start_authorization(&[], &redirect_uri, Some("Codex"))
+        .start_authorization(&scope_refs, &redirect_uri, Some("Codex"))
         .await?;
     let auth_url = oauth_state.get_authorization_url().await?;
 

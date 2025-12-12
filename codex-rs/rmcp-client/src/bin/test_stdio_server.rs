@@ -40,7 +40,7 @@ pub fn stdio() -> (tokio::io::Stdin, tokio::io::Stdout) {
 }
 impl TestToolServer {
     fn new() -> Self {
-        let tools = vec![Self::echo_tool()];
+        let tools = vec![Self::echo_tool(), Self::image_tool()];
         let resources = vec![Self::memo_resource()];
         let resource_templates = vec![Self::memo_template()];
         Self {
@@ -66,6 +66,22 @@ impl TestToolServer {
         Tool::new(
             Cow::Borrowed("echo"),
             Cow::Borrowed("Echo back the provided message and include environment data."),
+            Arc::new(schema),
+        )
+    }
+
+    fn image_tool() -> Tool {
+        #[expect(clippy::expect_used)]
+        let schema: JsonObject = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .expect("image tool schema should deserialize");
+
+        Tool::new(
+            Cow::Borrowed("image"),
+            Cow::Borrowed("Return a single image content block."),
             Arc::new(schema),
         )
     }
@@ -213,6 +229,35 @@ impl ServerHandler for TestToolServer {
                     is_error: Some(false),
                     meta: None,
                 })
+            }
+            "image" => {
+                // Read a data URL (e.g. data:image/png;base64,AAA...) from env and convert to
+                // an MCP image content block. Tests set MCP_TEST_IMAGE_DATA_URL.
+                let data_url = std::env::var("MCP_TEST_IMAGE_DATA_URL").map_err(|_| {
+                    McpError::invalid_params(
+                        "missing MCP_TEST_IMAGE_DATA_URL env var for image tool",
+                        None,
+                    )
+                })?;
+
+                fn parse_data_url(url: &str) -> Option<(String, String)> {
+                    let rest = url.strip_prefix("data:")?;
+                    let (mime_and_opts, data) = rest.split_once(',')?;
+                    let (mime, _opts) =
+                        mime_and_opts.split_once(';').unwrap_or((mime_and_opts, ""));
+                    Some((mime.to_string(), data.to_string()))
+                }
+
+                let (mime_type, data_b64) = parse_data_url(&data_url).ok_or_else(|| {
+                    McpError::invalid_params(
+                        format!("invalid data URL for image tool: {data_url}"),
+                        None,
+                    )
+                })?;
+
+                Ok(CallToolResult::success(vec![rmcp::model::Content::image(
+                    data_b64, mime_type,
+                )]))
             }
             other => Err(McpError::invalid_params(
                 format!("unknown tool: {other}"),

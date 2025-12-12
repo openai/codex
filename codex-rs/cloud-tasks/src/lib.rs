@@ -58,7 +58,16 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
 
     let auth = match codex_core::config::find_codex_home()
         .ok()
-        .map(|home| codex_login::AuthManager::new(home, false))
+        .map(|home| {
+            let store_mode = codex_core::config::Config::load_from_base_config_with_overrides(
+                codex_core::config::ConfigToml::default(),
+                codex_core::config::ConfigOverrides::default(),
+                home.clone(),
+            )
+            .map(|cfg| cfg.cli_auth_credentials_store_mode)
+            .unwrap_or_default();
+            codex_login::AuthManager::new(home, false, store_mode)
+        })
         .and_then(|am| am.auth())
     {
         Some(auth) => auth,
@@ -1086,7 +1095,19 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                                 let backend = Arc::clone(&backend);
                                                 let best_of_n = page.best_of_n;
                                                 tokio::spawn(async move {
-                                                    let result = codex_cloud_tasks_client::CloudBackend::create_task(&*backend, &env, &text, "main", false, best_of_n).await;
+                                                    let git_ref = if let Ok(cwd) = std::env::current_dir() {
+                                                        if let Some(branch) = codex_core::git_info::default_branch_name(&cwd).await {
+                                                            branch
+                                                        } else if let Some(branch) = codex_core::git_info::current_branch_name(&cwd).await {
+                                                            branch
+                                                        } else {
+                                                            "main".to_string()
+                                                        }
+                                                    } else {
+                                                        "main".to_string()
+                                                    };
+
+                                                    let result = codex_cloud_tasks_client::CloudBackend::create_task(&*backend, &env, &text, &git_ref, false, best_of_n).await;
                                                     let evt = match result {
                                                         Ok(ok) => app::AppEvent::NewTaskSubmitted(Ok(ok)),
                                                         Err(e) => app::AppEvent::NewTaskSubmitted(Err(format!("{e}"))),

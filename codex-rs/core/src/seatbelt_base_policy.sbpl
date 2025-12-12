@@ -71,6 +71,10 @@
   (sysctl-name-prefix "net.routetable.")
 )
 
+; Allow Java to set CPU type grade when required
+(allow sysctl-write
+  (sysctl-name "kern.grade_cputype"))
+
 ; IOKit
 (allow iokit-open
   (iokit-registry-entry-class "RootDomainUserClient")

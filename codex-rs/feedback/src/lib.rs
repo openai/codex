@@ -12,7 +12,7 @@ use anyhow::anyhow;
 use codex_protocol::ConversationId;
 use tracing_subscriber::fmt::writer::MakeWriter;
 
-const DEFAULT_MAX_BYTES: usize = 2 * 1024 * 1024; // 2 MiB
+const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
 const SENTRY_DSN: &str =
     "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
 const UPLOAD_TIMEOUT_SECS: u64 = 10;
@@ -167,8 +167,16 @@ impl CodexLogSnapshot {
         Ok(path)
     }
 
-    pub fn upload_to_sentry(&self) -> Result<()> {
+    /// Upload feedback to Sentry with optional attachments.
+    pub fn upload_feedback(
+        &self,
+        classification: &str,
+        reason: Option<&str>,
+        include_logs: bool,
+        rollout_path: Option<&std::path::Path>,
+    ) -> Result<()> {
         use std::collections::BTreeMap;
+        use std::fs;
         use std::str::FromStr;
         use std::sync::Arc;
 
@@ -182,33 +190,88 @@ impl CodexLogSnapshot {
         use sentry::transports::DefaultTransportFactory;
         use sentry::types::Dsn;
 
+        // Build Sentry client
         let client = Client::from_config(ClientOptions {
-            dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {}", e))?),
+            dsn: Some(Dsn::from_str(SENTRY_DSN).map_err(|e| anyhow!("invalid DSN: {e}"))?),
             transport: Some(Arc::new(DefaultTransportFactory {})),
             ..Default::default()
         });
 
-        let tags = BTreeMap::from([(String::from("thread_id"), self.thread_id.to_string())]);
+        let cli_version = env!("CARGO_PKG_VERSION");
+        let mut tags = BTreeMap::from([
+            (String::from("thread_id"), self.thread_id.to_string()),
+            (String::from("classification"), classification.to_string()),
+            (String::from("cli_version"), cli_version.to_string()),
+        ]);
+        if let Some(r) = reason {
+            tags.insert(String::from("reason"), r.to_string());
+        }
 
-        let event = Event {
-            level: Level::Error,
-            message: Some("Codex Log Upload ".to_string() + &self.thread_id),
+        let level = match classification {
+            "bug" | "bad_result" => Level::Error,
+            _ => Level::Info,
+        };
+
+        let mut envelope = Envelope::new();
+        let title = format!(
+            "[{}]: Codex session {}",
+            display_classification(classification),
+            self.thread_id
+        );
+
+        let mut event = Event {
+            level,
+            message: Some(title.clone()),
             tags,
             ..Default::default()
         };
-        let mut envelope = Envelope::new();
+        if let Some(r) = reason {
+            use sentry::protocol::Exception;
+            use sentry::protocol::Values;
+
+            event.exception = Values::from(vec![Exception {
+                ty: title.clone(),
+                value: Some(r.to_string()),
+                ..Default::default()
+            }]);
+        }
         envelope.add_item(EnvelopeItem::Event(event));
-        envelope.add_item(EnvelopeItem::Attachment(Attachment {
-            buffer: self.bytes.clone(),
-            filename: String::from("codex-logs.log"),
-            content_type: Some("text/plain".to_string()),
-            ty: None,
-        }));
+
+        if include_logs {
+            envelope.add_item(EnvelopeItem::Attachment(Attachment {
+                buffer: self.bytes.clone(),
+                filename: String::from("codex-logs.log"),
+                content_type: Some("text/plain".to_string()),
+                ty: None,
+            }));
+        }
+
+        if let Some((path, data)) = rollout_path.and_then(|p| fs::read(p).ok().map(|d| (p, d))) {
+            let fname = path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "rollout.jsonl".to_string());
+            let content_type = "text/plain".to_string();
+            envelope.add_item(EnvelopeItem::Attachment(Attachment {
+                buffer: data,
+                filename: fname,
+                content_type: Some(content_type),
+                ty: None,
+            }));
+        }
 
         client.send_envelope(envelope);
         client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
-
         Ok(())
+    }
+}
+
+fn display_classification(classification: &str) -> String {
+    match classification {
+        "bug" => "Bug".to_string(),
+        "bad_result" => "Bad result".to_string(),
+        "good_result" => "Good result".to_string(),
+        _ => "Other".to_string(),
     }
 }
 

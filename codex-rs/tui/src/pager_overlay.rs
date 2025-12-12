@@ -719,13 +719,13 @@ mod tests {
             "exec-1".into(),
             vec!["bash".into(), "-lc".into(), "ls".into()],
             vec![ParsedCommand::Unknown { cmd: "ls".into() }],
+            false,
         );
         exec_cell.complete_call(
             "exec-1",
             CommandOutput {
                 exit_code: 0,
-                stdout: "src\nREADME.md\n".into(),
-                stderr: String::new(),
+                aggregated_output: "src\nREADME.md\n".into(),
                 formatted_output: "src\nREADME.md\n".into(),
             },
             Duration::from_millis(420),

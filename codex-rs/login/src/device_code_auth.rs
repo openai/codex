@@ -199,6 +199,7 @@ pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
         tokens.id_token,
         tokens.access_token,
         tokens.refresh_token,
+        opts.cli_auth_credentials_store_mode,
     )
     .await
 }

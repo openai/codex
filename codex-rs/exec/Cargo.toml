@@ -26,6 +26,7 @@ codex-common = { workspace = true, features = [
 codex-core = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
+mcp-types = { workspace = true }
 opentelemetry-appender-tracing = { workspace = true }
 owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

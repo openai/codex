@@ -2,6 +2,7 @@ use crate::chatwidget::get_limits_duration;
 
 use super::helpers::format_reset_timestamp;
 use chrono::DateTime;
+use chrono::Duration as ChronoDuration;
 use chrono::Local;
 use chrono::Utc;
 use codex_core::protocol::RateLimitSnapshot;
@@ -21,8 +22,11 @@ pub(crate) struct StatusRateLimitRow {
 #[derive(Debug, Clone)]
 pub(crate) enum StatusRateLimitData {
     Available(Vec<StatusRateLimitRow>),
+    Stale(Vec<StatusRateLimitRow>),
     Missing,
 }
+
+pub(crate) const RATE_LIMIT_STALE_THRESHOLD_MINUTES: i64 = 15;
 
 #[derive(Debug, Clone)]
 pub(crate) struct RateLimitWindowDisplay {
@@ -49,6 +53,7 @@ impl RateLimitWindowDisplay {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RateLimitSnapshotDisplay {
+    pub captured_at: DateTime<Local>,
     pub primary: Option<RateLimitWindowDisplay>,
     pub secondary: Option<RateLimitWindowDisplay>,
 }
@@ -58,6 +63,7 @@ pub(crate) fn rate_limit_snapshot_display(
     captured_at: DateTime<Local>,
 ) -> RateLimitSnapshotDisplay {
     RateLimitSnapshotDisplay {
+        captured_at,
         primary: snapshot
             .primary
             .as_ref()
@@ -71,6 +77,7 @@ pub(crate) fn rate_limit_snapshot_display(
 
 pub(crate) fn compose_rate_limit_data(
     snapshot: Option<&RateLimitSnapshotDisplay>,
+    now: DateTime<Local>,
 ) -> StatusRateLimitData {
     match snapshot {
         Some(snapshot) => {
@@ -102,8 +109,13 @@ pub(crate) fn compose_rate_limit_data(
                 });
             }
 
+            let is_stale = now.signed_duration_since(snapshot.captured_at)
+                > ChronoDuration::minutes(RATE_LIMIT_STALE_THRESHOLD_MINUTES);
+
             if rows.is_empty() {
                 StatusRateLimitData::Available(vec![])
+            } else if is_stale {
+                StatusRateLimitData::Stale(rows)
             } else {
                 StatusRateLimitData::Available(rows)
             }

@@ -46,6 +46,7 @@ pub(crate) async fn run_fuzzy_file_search(
                 threads,
                 cancel_flag,
                 COMPUTE_INDICES,
+                true,
             ) {
                 Ok(res) => Ok((root, res)),
                 Err(err) => Err((root, err)),

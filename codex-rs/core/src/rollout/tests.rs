@@ -24,7 +24,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::InputMessageKind;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
@@ -33,6 +32,14 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
 
 const NO_SOURCE_FILTER: &[SessionSource] = &[];
+const TEST_PROVIDER: &str = "test-provider";
+
+fn provider_vec(providers: &[&str]) -> Vec<String> {
+    providers
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect()
+}
 
 fn write_session_file(
     root: &Path,
@@ -40,6 +47,24 @@ fn write_session_file(
     uuid: Uuid,
     num_records: usize,
     source: Option<SessionSource>,
+) -> std::io::Result<(OffsetDateTime, Uuid)> {
+    write_session_file_with_provider(
+        root,
+        ts_str,
+        uuid,
+        num_records,
+        source,
+        Some("test-provider"),
+    )
+}
+
+fn write_session_file_with_provider(
+    root: &Path,
+    ts_str: &str,
+    uuid: Uuid,
+    num_records: usize,
+    source: Option<SessionSource>,
+    model_provider: Option<&str>,
 ) -> std::io::Result<(OffsetDateTime, Uuid)> {
     let format: &[FormatItem] =
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
@@ -68,6 +93,9 @@ fn write_session_file(
 
     if let Some(source) = source {
         payload["source"] = serde_json::to_value(source).unwrap();
+    }
+    if let Some(provider) = model_provider {
+        payload["model_provider"] = serde_json::Value::String(provider.to_string());
     }
 
     let meta = serde_json::json!({
@@ -135,9 +163,17 @@ async fn test_list_conversations_latest_first() {
     )
     .unwrap();
 
-    let page = get_conversations(home, 10, None, INTERACTIVE_SESSION_SOURCES)
-        .await
-        .unwrap();
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_conversations(
+        home,
+        10,
+        None,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
 
     // Build expected objects
     let p1 = home
@@ -167,6 +203,7 @@ async fn test_list_conversations_latest_first() {
         "originator": "test_originator",
         "cli_version": "test_version",
         "source": "vscode",
+        "model_provider": "test-provider",
     })];
     let head_2 = vec![serde_json::json!({
         "id": u2,
@@ -176,6 +213,7 @@ async fn test_list_conversations_latest_first() {
         "originator": "test_originator",
         "cli_version": "test_version",
         "source": "vscode",
+        "model_provider": "test-provider",
     })];
     let head_1 = vec![serde_json::json!({
         "id": u1,
@@ -185,10 +223,8 @@ async fn test_list_conversations_latest_first() {
         "originator": "test_originator",
         "cli_version": "test_version",
         "source": "vscode",
+        "model_provider": "test-provider",
     })];
-
-    let expected_cursor: Cursor =
-        serde_json::from_str(&format!("\"2025-01-01T12-00-00|{u1}\"")).unwrap();
 
     let expected = ConversationsPage {
         items: vec![
@@ -214,7 +250,7 @@ async fn test_list_conversations_latest_first() {
                 updated_at: Some("2025-01-01T12-00-00".into()),
             },
         ],
-        next_cursor: Some(expected_cursor),
+        next_cursor: None,
         num_scanned_files: 3,
         reached_scan_cap: false,
     };
@@ -276,9 +312,17 @@ async fn test_pagination_cursor() {
     )
     .unwrap();
 
-    let page1 = get_conversations(home, 2, None, INTERACTIVE_SESSION_SOURCES)
-        .await
-        .unwrap();
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page1 = get_conversations(
+        home,
+        2,
+        None,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
     let p5 = home
         .join("sessions")
         .join("2025")
@@ -299,6 +343,7 @@ async fn test_pagination_cursor() {
         "originator": "test_originator",
         "cli_version": "test_version",
         "source": "vscode",
+        "model_provider": "test-provider",
     })];
     let head_4 = vec![serde_json::json!({
         "id": u4,
@@ -308,6 +353,7 @@ async fn test_pagination_cursor() {
         "originator": "test_originator",
         "cli_version": "test_version",
         "source": "vscode",
+        "model_provider": "test-provider",
     })];
     let expected_cursor1: Cursor =
         serde_json::from_str(&format!("\"2025-03-04T09-00-00|{u4}\"")).unwrap();
@@ -339,6 +385,8 @@ async fn test_pagination_cursor() {
         2,
         page1.next_cursor.as_ref(),
         INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
     )
     .await
     .unwrap();
@@ -362,6 +410,7 @@ async fn test_pagination_cursor() {
         "originator": "test_originator",
         "cli_version": "test_version",
         "source": "vscode",
+        "model_provider": "test-provider",
     })];
     let head_2 = vec![serde_json::json!({
         "id": u2,
@@ -371,6 +420,7 @@ async fn test_pagination_cursor() {
         "originator": "test_originator",
         "cli_version": "test_version",
         "source": "vscode",
+        "model_provider": "test-provider",
     })];
     let expected_cursor2: Cursor =
         serde_json::from_str(&format!("\"2025-03-02T09-00-00|{u2}\"")).unwrap();
@@ -402,6 +452,8 @@ async fn test_pagination_cursor() {
         2,
         page2.next_cursor.as_ref(),
         INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
     )
     .await
     .unwrap();
@@ -419,9 +471,8 @@ async fn test_pagination_cursor() {
         "originator": "test_originator",
         "cli_version": "test_version",
         "source": "vscode",
+        "model_provider": "test-provider",
     })];
-    let expected_cursor3: Cursor =
-        serde_json::from_str(&format!("\"2025-03-01T09-00-00|{u1}\"")).unwrap();
     let expected_page3 = ConversationsPage {
         items: vec![ConversationItem {
             path: p1,
@@ -430,7 +481,7 @@ async fn test_pagination_cursor() {
             created_at: Some("2025-03-01T09-00-00".into()),
             updated_at: Some("2025-03-01T09-00-00".into()),
         }],
-        next_cursor: Some(expected_cursor3),
+        next_cursor: None,
         num_scanned_files: 5, // scanned 05, 04 (anchor), 03, 02 (anchor), 01
         reached_scan_cap: false,
     };
@@ -446,9 +497,17 @@ async fn test_get_conversation_contents() {
     let ts = "2025-04-01T10-30-00";
     write_session_file(home, ts, uuid, 2, Some(SessionSource::VSCode)).unwrap();
 
-    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES)
-        .await
-        .unwrap();
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_conversations(
+        home,
+        1,
+        None,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
     let path = &page.items[0].path;
 
     let content = get_conversation(path).await.unwrap();
@@ -468,8 +527,8 @@ async fn test_get_conversation_contents() {
         "originator": "test_originator",
         "cli_version": "test_version",
         "source": "vscode",
+        "model_provider": "test-provider",
     })];
-    let expected_cursor: Cursor = serde_json::from_str(&format!("\"{ts}|{uuid}\"")).unwrap();
     let expected_page = ConversationsPage {
         items: vec![ConversationItem {
             path: expected_path,
@@ -478,7 +537,7 @@ async fn test_get_conversation_contents() {
             created_at: Some(ts.into()),
             updated_at: Some(ts.into()),
         }],
-        next_cursor: Some(expected_cursor),
+        next_cursor: None,
         num_scanned_files: 1,
         reached_scan_cap: false,
     };
@@ -496,6 +555,7 @@ async fn test_get_conversation_contents() {
             "originator": "test_originator",
             "cli_version": "test_version",
             "source": "vscode",
+            "model_provider": "test-provider",
         }
     });
     let user_event = serde_json::json!({
@@ -533,6 +593,7 @@ async fn test_tail_includes_last_response_items() -> Result<()> {
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
                 source: SessionSource::VSCode,
+                model_provider: Some("test-provider".into()),
             },
             git: None,
         }),
@@ -543,7 +604,6 @@ async fn test_tail_includes_last_response_items() -> Result<()> {
         timestamp: ts.to_string(),
         item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             message: "hello".into(),
-            kind: Some(InputMessageKind::Plain),
             images: None,
         })),
     };
@@ -565,7 +625,16 @@ async fn test_tail_includes_last_response_items() -> Result<()> {
     }
     drop(file);
 
-    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES).await?;
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_conversations(
+        home,
+        1,
+        None,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await?;
     let item = page.items.first().expect("conversation item");
     let tail_len = item.tail.len();
     assert_eq!(tail_len, 10usize.min(total_messages));
@@ -617,6 +686,7 @@ async fn test_tail_handles_short_sessions() -> Result<()> {
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
                 source: SessionSource::VSCode,
+                model_provider: Some("test-provider".into()),
             },
             git: None,
         }),
@@ -627,7 +697,6 @@ async fn test_tail_handles_short_sessions() -> Result<()> {
         timestamp: ts.to_string(),
         item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             message: "hi".into(),
-            kind: Some(InputMessageKind::Plain),
             images: None,
         })),
     };
@@ -648,7 +717,16 @@ async fn test_tail_handles_short_sessions() -> Result<()> {
     }
     drop(file);
 
-    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES).await?;
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_conversations(
+        home,
+        1,
+        None,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await?;
     let tail = &page.items.first().expect("conversation item").tail;
 
     assert_eq!(tail.len(), 3);
@@ -702,6 +780,7 @@ async fn test_tail_skips_trailing_non_responses() -> Result<()> {
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
                 source: SessionSource::VSCode,
+                model_provider: Some("test-provider".into()),
             },
             git: None,
         }),
@@ -712,7 +791,6 @@ async fn test_tail_skips_trailing_non_responses() -> Result<()> {
         timestamp: ts.to_string(),
         item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             message: "hello".into(),
-            kind: Some(InputMessageKind::Plain),
             images: None,
         })),
     };
@@ -747,7 +825,16 @@ async fn test_tail_skips_trailing_non_responses() -> Result<()> {
     writeln!(file, "{}", serde_json::to_string(&shutdown_event)?)?;
     drop(file);
 
-    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES).await?;
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_conversations(
+        home,
+        1,
+        None,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await?;
     let tail = &page.items.first().expect("conversation item").tail;
 
     let expected: Vec<serde_json::Value> = (0..4)
@@ -789,9 +876,17 @@ async fn test_stable_ordering_same_second_pagination() {
     write_session_file(home, ts, u2, 0, Some(SessionSource::VSCode)).unwrap();
     write_session_file(home, ts, u3, 0, Some(SessionSource::VSCode)).unwrap();
 
-    let page1 = get_conversations(home, 2, None, INTERACTIVE_SESSION_SOURCES)
-        .await
-        .unwrap();
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page1 = get_conversations(
+        home,
+        2,
+        None,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
 
     let p3 = home
         .join("sessions")
@@ -814,6 +909,7 @@ async fn test_stable_ordering_same_second_pagination() {
             "originator": "test_originator",
             "cli_version": "test_version",
             "source": "vscode",
+            "model_provider": "test-provider",
         })]
     };
     let expected_cursor1: Cursor = serde_json::from_str(&format!("\"{ts}|{u2}\"")).unwrap();
@@ -845,6 +941,8 @@ async fn test_stable_ordering_same_second_pagination() {
         2,
         page1.next_cursor.as_ref(),
         INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
     )
     .await
     .unwrap();
@@ -854,7 +952,6 @@ async fn test_stable_ordering_same_second_pagination() {
         .join("07")
         .join("01")
         .join(format!("rollout-2025-07-01T00-00-00-{u1}.jsonl"));
-    let expected_cursor2: Cursor = serde_json::from_str(&format!("\"{ts}|{u1}\"")).unwrap();
     let expected_page2 = ConversationsPage {
         items: vec![ConversationItem {
             path: p1,
@@ -863,7 +960,7 @@ async fn test_stable_ordering_same_second_pagination() {
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
         }],
-        next_cursor: Some(expected_cursor2),
+        next_cursor: None,
         num_scanned_files: 3, // scanned u3, u2 (anchor), u1
         reached_scan_cap: false,
     };
@@ -895,9 +992,17 @@ async fn test_source_filter_excludes_non_matching_sessions() {
     )
     .unwrap();
 
-    let interactive_only = get_conversations(home, 10, None, INTERACTIVE_SESSION_SOURCES)
-        .await
-        .unwrap();
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let interactive_only = get_conversations(
+        home,
+        10,
+        None,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
     let paths: Vec<_> = interactive_only
         .items
         .iter()
@@ -909,7 +1014,7 @@ async fn test_source_filter_excludes_non_matching_sessions() {
         path.ends_with("rollout-2025-08-02T10-00-00-00000000-0000-0000-0000-00000000002a.jsonl")
     }));
 
-    let all_sessions = get_conversations(home, 10, None, NO_SOURCE_FILTER)
+    let all_sessions = get_conversations(home, 10, None, NO_SOURCE_FILTER, None, TEST_PROVIDER)
         .await
         .unwrap();
     let all_paths: Vec<_> = all_sessions
@@ -924,4 +1029,103 @@ async fn test_source_filter_excludes_non_matching_sessions() {
     assert!(all_paths.iter().any(|path| {
         path.ends_with("rollout-2025-08-01T10-00-00-00000000-0000-0000-0000-00000000004d.jsonl")
     }));
+}
+
+#[tokio::test]
+async fn test_model_provider_filter_selects_only_matching_sessions() -> Result<()> {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let openai_id = Uuid::from_u128(1);
+    let beta_id = Uuid::from_u128(2);
+    let none_id = Uuid::from_u128(3);
+
+    write_session_file_with_provider(
+        home,
+        "2025-09-01T12-00-00",
+        openai_id,
+        1,
+        Some(SessionSource::VSCode),
+        Some("openai"),
+    )?;
+    write_session_file_with_provider(
+        home,
+        "2025-09-01T11-00-00",
+        beta_id,
+        1,
+        Some(SessionSource::VSCode),
+        Some("beta"),
+    )?;
+    write_session_file_with_provider(
+        home,
+        "2025-09-01T10-00-00",
+        none_id,
+        1,
+        Some(SessionSource::VSCode),
+        None,
+    )?;
+
+    let openai_id_str = openai_id.to_string();
+    let none_id_str = none_id.to_string();
+    let openai_filter = provider_vec(&["openai"]);
+    let openai_sessions = get_conversations(
+        home,
+        10,
+        None,
+        NO_SOURCE_FILTER,
+        Some(openai_filter.as_slice()),
+        "openai",
+    )
+    .await?;
+    assert_eq!(openai_sessions.items.len(), 2);
+    let openai_ids: Vec<_> = openai_sessions
+        .items
+        .iter()
+        .filter_map(|item| {
+            item.head
+                .first()
+                .and_then(|value| value.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
+    assert!(openai_ids.contains(&openai_id_str));
+    assert!(openai_ids.contains(&none_id_str));
+
+    let beta_filter = provider_vec(&["beta"]);
+    let beta_sessions = get_conversations(
+        home,
+        10,
+        None,
+        NO_SOURCE_FILTER,
+        Some(beta_filter.as_slice()),
+        "openai",
+    )
+    .await?;
+    assert_eq!(beta_sessions.items.len(), 1);
+    let beta_id_str = beta_id.to_string();
+    let beta_head = beta_sessions
+        .items
+        .first()
+        .and_then(|item| item.head.first())
+        .and_then(|value| value.get("id"))
+        .and_then(serde_json::Value::as_str);
+    assert_eq!(beta_head, Some(beta_id_str.as_str()));
+
+    let unknown_filter = provider_vec(&["unknown"]);
+    let unknown_sessions = get_conversations(
+        home,
+        10,
+        None,
+        NO_SOURCE_FILTER,
+        Some(unknown_filter.as_slice()),
+        "openai",
+    )
+    .await?;
+    assert!(unknown_sessions.items.is_empty());
+
+    let all_sessions = get_conversations(home, 10, None, NO_SOURCE_FILTER, None, "openai").await?;
+    assert_eq!(all_sessions.items.len(), 3);
+
+    Ok(())
 }
