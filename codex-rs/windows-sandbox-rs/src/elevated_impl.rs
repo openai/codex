@@ -52,6 +52,7 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
     use windows_sys::Win32::System::Threading::STARTUPINFOW;
 
+    /// Ensures the parent directory of a path exists before writing to it.
     fn ensure_dir(p: &Path) -> Result<()> {
         if let Some(d) = p.parent() {
             std::fs::create_dir_all(d)?;
@@ -59,6 +60,7 @@ mod windows_impl {
         Ok(())
     }
 
+    /// Walks upward from `start` to locate the git worktree root, following gitfile redirects.
     fn find_git_root(start: &Path) -> Option<PathBuf> {
         let mut cur = dunce::canonicalize(start).ok()?;
         loop {
@@ -88,11 +90,15 @@ mod windows_impl {
         }
     }
 
+    /// Creates the sandbox user's Codex home directory if it does not already exist.
     fn ensure_codex_home_exists(p: &Path) -> Result<()> {
         std::fs::create_dir_all(p)?;
         Ok(())
     }
 
+    /// Adds a git safe.directory entry to the environment when running inside a repository.
+    /// git will not otherwise allow the Sandbox user to run git commands on the repo directory
+    /// which is owned by the primary user.
     fn inject_git_safe_directory(
         env_map: &mut HashMap<String, String>,
         cwd: &Path,
@@ -118,6 +124,7 @@ mod windows_impl {
         }
     }
 
+    /// Locates `codex-command-runner.exe` next to the current binary.
     fn find_runner_exe() -> PathBuf {
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {
@@ -125,24 +132,18 @@ mod windows_impl {
                 if candidate.exists() {
                     return candidate;
                 }
-                let release_candidate = dir
-                    .parent()
-                    .map(|p| p.join("release").join("codex-command-runner.exe"));
-                if let Some(rel) = release_candidate {
-                    if rel.exists() {
-                        return rel;
-                    }
-                }
             }
         }
         PathBuf::from("codex-command-runner.exe")
     }
 
+    /// Generates a unique named-pipe path used to communicate with the runner process.
     fn pipe_name(suffix: &str) -> String {
         let mut rng = SmallRng::from_entropy();
         format!(r"\\.\pipe\codex-runner-{:x}-{}", rng.gen::<u128>(), suffix)
     }
 
+    /// Creates a named pipe with permissive ACLs so the sandbox user can connect.
     fn create_named_pipe(name: &str, access: u32) -> io::Result<HANDLE> {
         // Allow sandbox users to connect by granting Everyone full access on the pipe.
         let sddl = to_wide("D:(A;;GA;;;WD)");
@@ -186,6 +187,7 @@ mod windows_impl {
         Ok(h)
     }
 
+    /// Waits for a client connection on the named pipe, tolerating an existing connection.
     fn connect_pipe(h: HANDLE) -> io::Result<()> {
         let ok = unsafe { ConnectNamedPipe(h, ptr::null_mut()) };
         if ok == 0 {
@@ -219,6 +221,7 @@ mod windows_impl {
         stderr_pipe: String,
     }
 
+    /// Launches the command runner under the sandbox user and captures its output.
     pub fn run_windows_sandbox_capture(
         policy_json_or_preset: &str,
         sandbox_policy_cwd: &Path,
@@ -244,7 +247,6 @@ mod windows_impl {
             require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, codex_home)?;
         log_note("cli creds ready", logs_base_dir);
         let cap_sid_path = cap_sid_file(codex_home);
-        let _is_workspace_write = matches!(&policy, SandboxPolicy::WorkspaceWrite { .. });
 
         // Build capability SID for ACL grants.
         let (psid_to_use, cap_sid_str) = match &policy {
@@ -317,6 +319,7 @@ mod windows_impl {
             .map(|s| s.to_string())
             .unwrap_or_else(|| "codex-command-runner.exe".to_string());
         // Write request to a file under the sandbox base dir for the runner to read.
+        // TODO(iceweasel) - use a different mechanism for invoking the runner.
         let base_tmp = sandbox_base.join("requests");
         std::fs::create_dir_all(&base_tmp)?;
         let mut rng = SmallRng::from_entropy();
@@ -567,6 +570,7 @@ mod stub {
         pub timed_out: bool,
     }
 
+    /// Stub implementation for non-Windows targets; sandboxing only works on Windows.
     pub fn run_windows_sandbox_capture(
         _policy_json_or_preset: &str,
         _sandbox_policy_cwd: &Path,
