@@ -1878,25 +1878,6 @@ impl ChatComposer {
         }
     }
 
-    pub(crate) fn footer_first_line_width(&self, area: Rect) -> Option<u16> {
-        let [_, _, popup_rect] = self.layout_areas(area);
-        let footer_props = self.footer_props();
-        let footer_hint_height = self
-            .custom_footer_height()
-            .unwrap_or_else(|| footer_height(footer_props));
-        let footer_spacing = Self::footer_spacing(footer_hint_height);
-        let hint_rect = Self::footer_hint_rect(popup_rect, footer_hint_height, footer_spacing);
-        let (rect, lines) = self.footer_render_data(hint_rect, footer_props)?;
-        let content_width = lines
-            .first()
-            .map(Line::width)
-            .unwrap_or(0)
-            .min(u16::MAX as usize) as u16;
-        let rendered_width = content_width.min(rect.width);
-        let start_offset = rect.x.saturating_sub(area.x);
-        Some(start_offset.saturating_add(rendered_width))
-    }
-
     fn footer_hint_rect(popup_rect: Rect, footer_hint_height: u16, footer_spacing: u16) -> Rect {
         if footer_spacing > 0 && footer_hint_height > 0 {
             let [_, hint_rect] = Layout::vertical([

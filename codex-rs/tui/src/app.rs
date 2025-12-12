@@ -45,12 +45,9 @@ use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
-use crossterm::cursor::MoveTo;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::terminal::Clear;
-use crossterm::terminal::ClearType;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -1208,13 +1205,8 @@ impl App {
         if let Err(err) = tui::set_modes() {
             tracing::warn!("failed to re-enable terminal modes after editor: {err}");
         }
-        // After the editor exits, reset terminal state, flush any buffered keypresses,
-        // and clear the area below the bottom pane, as it may have been scribbled over while the external editor was open.
+        // After the editor exits, reset terminal state and flush any buffered keypresses.
         Self::flush_terminal_input_buffer();
-        let clear_from_row = self
-            .pane_rows(tui)
-            .map(|(start, height)| start.saturating_add(height.saturating_sub(1)));
-        self.clear_bottom_pane_rows(tui, clear_from_row);
         self.reset_external_editor_state(tui);
 
         if was_alt_screen {
@@ -1271,48 +1263,6 @@ impl App {
 
     #[cfg(not(any(unix, windows)))]
     fn flush_terminal_input_buffer() {}
-
-    /// Clear the portion of the screen occupied by the bottom pane (or the provided row).
-    fn clear_bottom_pane_rows(&mut self, tui: &mut tui::Tui, from_row: Option<u16>) {
-        let Some((pane_start, _pane_height)) = self.pane_rows(tui) else {
-            return;
-        };
-        let Ok(area) = tui.terminal.size() else {
-            return;
-        };
-        let start_row = from_row
-            .unwrap_or(pane_start)
-            .min(area.height.saturating_sub(1));
-        let viewport_x = tui.terminal.viewport_area.x;
-        let backend = tui.terminal.backend_mut();
-        if let Err(err) = crossterm::execute!(
-            backend,
-            MoveTo(viewport_x, start_row),
-            Clear(ClearType::FromCursorDown)
-        ) {
-            tracing::warn!("failed to clear prompt area after editor: {err}");
-        }
-    }
-
-    /// Return the top row and height of the bottom pane within the current viewport.
-    fn pane_rows(&self, tui: &tui::Tui) -> Option<(u16, u16)> {
-        let area = tui.terminal.size().ok()?;
-        let viewport = tui.terminal.viewport_area;
-        if viewport.height == 0 || area.height == 0 {
-            return None;
-        }
-        let pane_height = self
-            .chat_widget
-            .bottom_pane_height(area.width)
-            .min(viewport.height);
-        if pane_height == 0 {
-            return None;
-        }
-        let pane_start = viewport
-            .y
-            .saturating_add(viewport.height.saturating_sub(pane_height));
-        Some((pane_start, pane_height))
-    }
 
     fn request_external_editor_launch(&mut self, tui: &mut tui::Tui) {
         self.chat_widget

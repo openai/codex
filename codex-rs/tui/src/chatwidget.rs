@@ -1684,14 +1684,6 @@ impl ChatWidget {
         self.bottom_pane.set_footer_hint_override(items);
     }
 
-    pub(crate) fn bottom_pane_height(&self, width: u16) -> u16 {
-        self.bottom_pane.desired_height(width)
-    }
-
-    pub(crate) fn footer_first_line_width(&self, area: Rect) -> Option<u16> {
-        self.bottom_pane.footer_first_line_width(area)
-    }
-
     pub(crate) fn can_launch_external_editor(&self) -> bool {
         self.bottom_pane.can_launch_external_editor()
     }
@@ -3547,33 +3539,6 @@ impl ChatWidget {
         );
         RenderableItem::Owned(Box::new(flex))
     }
-
-    fn external_editor_cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let pane_height: u16 = self.bottom_pane.desired_height(area.width).min(area.height);
-        if pane_height == 0 {
-            return None;
-        }
-        let pane_start = area
-            .y
-            .saturating_add(area.height.saturating_sub(pane_height));
-        let pane_bottom = pane_start.saturating_add(pane_height.saturating_sub(1));
-        let max_row = area.y.saturating_add(area.height.saturating_sub(1));
-        let mut row = pane_bottom.saturating_add(1);
-        if row > max_row {
-            row = pane_bottom.min(max_row);
-        }
-        let mut col = area.x;
-        if row == pane_bottom {
-            let max_col = area.x.saturating_add(area.width.saturating_sub(1));
-            let pane_rect = Rect::new(area.x, pane_start, area.width, pane_height);
-            if let Some(footer_width) = self.footer_first_line_width(pane_rect) {
-                let available = max_col.saturating_sub(col);
-                let offset = footer_width.min(available);
-                col = col.saturating_add(offset);
-            }
-        }
-        Some((col, row))
-    }
 }
 
 impl Drop for ChatWidget {
@@ -3593,12 +3558,7 @@ impl Renderable for ChatWidget {
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        match self.external_editor_state {
-            ExternalEditorState::Requested | ExternalEditorState::Active => {
-                self.external_editor_cursor_pos(area)
-            }
-            ExternalEditorState::Closed => self.as_renderable().cursor_pos(area),
-        }
+        self.as_renderable().cursor_pos(area)
     }
 }
 
