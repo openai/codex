@@ -83,7 +83,7 @@ pub struct ModelFamily {
 }
 
 impl ModelFamily {
-    pub fn with_config_overrides(mut self, config: &Config) -> Self {
+    pub(in crate::openai_models) fn with_config_overrides(mut self, config: &Config) -> Self {
         if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries {
             self.supports_reasoning_summaries = supports_reasoning_summaries;
         }
@@ -98,7 +98,10 @@ impl ModelFamily {
         }
         self
     }
-    pub fn with_remote_overrides(mut self, remote_models: Vec<ModelInfo>) -> Self {
+    pub(in crate::openai_models) fn with_remote_overrides(
+        mut self,
+        remote_models: Vec<ModelInfo>,
+    ) -> Self {
         for model in remote_models {
             if model.slug == self.slug {
                 self.apply_remote_overrides(model);
