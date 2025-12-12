@@ -1887,6 +1887,7 @@ dependencies = [
  "base64",
  "codex-core",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "notify",
  "regex-lite",
  "serde_json",

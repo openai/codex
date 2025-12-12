@@ -1,5 +1,7 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::test_path_buf_with_windows;
+use app_test_support::test_tmp_path_buf;
 use app_test_support::to_response;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -18,7 +20,6 @@ use codex_app_server_protocol::ToolsV2;
 use codex_app_server_protocol::WriteStatus;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -135,11 +136,8 @@ view_image = false
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_read_includes_system_layer_and_overrides() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let (user_dir, system_dir) = if cfg!(windows) {
-        (r"C:\Users\user", r"C:\System")
-    } else {
-        ("/user", "/system")
-    };
+    let user_dir = test_path_buf_with_windows("/user", Some(r"C:\Users\user"));
+    let system_dir = test_path_buf_with_windows("/system", Some(r"C:\System"));
     write_config(
         &codex_home,
         &format!(
@@ -167,7 +165,7 @@ approval_policy = "never"
 [sandbox_workspace_write]
 writable_roots = [{}]
 "#,
-            serde_json::json!(system_dir)
+            serde_json::json!(system_dir.clone())
         ),
     )?;
 
@@ -218,7 +216,7 @@ writable_roots = [{}]
         .sandbox_workspace_write
         .as_ref()
         .expect("sandbox workspace write");
-    assert_eq!(sandbox.writable_roots, vec![PathBuf::from(system_dir)]);
+    assert_eq!(sandbox.writable_roots, vec![system_dir]);
     assert_eq!(
         origins
             .get("sandbox_workspace_write.writable_roots.0")
@@ -361,11 +359,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let writable_root = if cfg!(windows) {
-        r"C:\Users\codex\AppData\Local\Temp"
-    } else {
-        "/tmp"
-    };
+    let writable_root = test_tmp_path_buf();
     let batch_id = mcp
         .send_config_batch_write_request(ConfigBatchWriteParams {
             file_path: Some(codex_home.path().join("config.toml").display().to_string()),
@@ -378,7 +372,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
                 ConfigEdit {
                     key_path: "sandbox_workspace_write".to_string(),
                     value: json!({
-                        "writable_roots": [writable_root],
+                        "writable_roots": [writable_root.clone()],
                         "network_access": false
                     }),
                     merge_strategy: MergeStrategy::Replace,
@@ -420,7 +414,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
         .sandbox_workspace_write
         .as_ref()
         .expect("sandbox workspace write");
-    assert_eq!(sandbox.writable_roots, vec![PathBuf::from(writable_root)]);
+    assert_eq!(sandbox.writable_roots, vec![writable_root]);
     assert!(!sandbox.network_access);
 
     Ok(())
