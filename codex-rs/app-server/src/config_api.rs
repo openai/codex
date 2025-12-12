@@ -2,7 +2,6 @@ use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use codex_app_server_protocol::Config;
 use codex_app_server_protocol::ConfigBatchWriteParams;
-use codex_app_server_protocol::ConfigLayer;
 use codex_app_server_protocol::ConfigLayerMetadata;
 use codex_app_server_protocol::ConfigLayerName;
 use codex_app_server_protocol::ConfigReadParams;
@@ -14,26 +13,21 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::OverriddenMetadata;
 use codex_app_server_protocol::WriteStatus;
+use codex_core::config::CONFIG_TOML_FILE;
 use codex_core::config::ConfigToml;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config_loader::LoadedConfigLayers;
+use codex_core::config_loader::ConfigLayerEntry;
+use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::LoaderOverrides;
-use codex_core::config_loader::load_config_layers_with_overrides;
+use codex_core::config_loader::load_config_layers_state;
 use codex_core::config_loader::merge_toml_values;
 use serde_json::Value as JsonValue;
 use serde_json::json;
-use sha2::Digest;
-use sha2::Sha256;
-use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 use toml_edit::Item as TomlItem;
-
-const SESSION_FLAGS_SOURCE: &str = "--config";
-const MDM_SOURCE: &str = "com.openai.codex/config_toml_base64";
-const CONFIG_FILE_NAME: &str = "config.toml";
 
 #[derive(Clone)]
 pub(crate) struct ConfigApi {
@@ -76,8 +70,9 @@ impl ConfigApi {
         let effective = layers.effective_config();
         validate_config(&effective).map_err(|err| internal_error("invalid configuration", err))?;
 
-        let config: Config = serde_json::from_value(to_json_value(&effective))
-            .map_err(|err| internal_error("failed to deserialize configuration", err))?;
+        let config: Config =
+            serde_json::from_value(serde_json::to_value(&effective).unwrap_or(JsonValue::Null))
+                .map_err(|err| internal_error("failed to deserialize configuration", err))?;
         let response = ConfigReadResponse {
             config,
             origins: layers.origins(),
@@ -116,7 +111,7 @@ impl ConfigApi {
         expected_version: Option<String>,
         edits: Vec<(String, JsonValue, MergeStrategy)>,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
-        let allowed_path = self.codex_home.join(CONFIG_FILE_NAME);
+        let allowed_path = self.codex_home.join(CONFIG_TOML_FILE);
         let provided_path = file_path
             .as_ref()
             .map(PathBuf::from)
@@ -230,49 +225,13 @@ impl ConfigApi {
         })
     }
 
-    async fn load_layers_state(&self) -> std::io::Result<LayersState> {
-        let LoadedConfigLayers {
-            base,
-            managed_config,
-            managed_preferences,
-        } = load_config_layers_with_overrides(&self.codex_home, self.loader_overrides.clone())
-            .await?;
-
-        let user = LayerState::new(
-            ConfigLayerName::User,
-            self.codex_home.join(CONFIG_FILE_NAME),
-            base,
-        );
-
-        let session_flags = LayerState::new(
-            ConfigLayerName::SessionFlags,
-            PathBuf::from(SESSION_FLAGS_SOURCE),
-            {
-                let mut root = TomlValue::Table(toml::map::Map::new());
-                for (path, value) in self.cli_overrides.iter() {
-                    apply_override(&mut root, path, value.clone());
-                }
-                root
-            },
-        );
-
-        let system = managed_config.map(|cfg| {
-            LayerState::new(
-                ConfigLayerName::System,
-                system_config_path(&self.codex_home),
-                cfg,
-            )
-        });
-
-        let mdm = managed_preferences
-            .map(|cfg| LayerState::new(ConfigLayerName::Mdm, PathBuf::from(MDM_SOURCE), cfg));
-
-        Ok(LayersState {
-            user,
-            session_flags,
-            system,
-            mdm,
-        })
+    async fn load_layers_state(&self) -> std::io::Result<ConfigLayerStack> {
+        load_config_layers_state(
+            &self.codex_home,
+            &self.cli_overrides,
+            self.loader_overrides.clone(),
+        )
+        .await
     }
 }
 
@@ -294,47 +253,6 @@ fn parse_key_path(path: &str) -> Result<Vec<String>, String> {
         .split('.')
         .map(std::string::ToString::to_string)
         .collect())
-}
-
-fn apply_override(target: &mut TomlValue, path: &str, value: TomlValue) {
-    use toml::value::Table;
-
-    let segments: Vec<&str> = path.split('.').collect();
-    let mut current = target;
-
-    for (idx, segment) in segments.iter().enumerate() {
-        let is_last = idx == segments.len() - 1;
-
-        if is_last {
-            match current {
-                TomlValue::Table(table) => {
-                    table.insert(segment.to_string(), value);
-                }
-                _ => {
-                    let mut table = Table::new();
-                    table.insert(segment.to_string(), value);
-                    *current = TomlValue::Table(table);
-                }
-            }
-            return;
-        }
-
-        match current {
-            TomlValue::Table(table) => {
-                current = table
-                    .entry((*segment).to_string())
-                    .or_insert_with(|| TomlValue::Table(Table::new()));
-            }
-            _ => {
-                *current = TomlValue::Table(Table::new());
-                if let TomlValue::Table(tbl) = current {
-                    current = tbl
-                        .entry((*segment).to_string())
-                        .or_insert_with(|| TomlValue::Table(Table::new()));
-                }
-            }
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -462,181 +380,9 @@ fn toml_value_to_value(value: &TomlValue) -> anyhow::Result<toml_edit::Value> {
     }
 }
 
-#[derive(Clone)]
-struct LayerState {
-    name: ConfigLayerName,
-    source: PathBuf,
-    config: TomlValue,
-    version: String,
-}
-
-impl LayerState {
-    fn new(name: ConfigLayerName, source: PathBuf, config: TomlValue) -> Self {
-        let version = version_for_toml(&config);
-        Self {
-            name,
-            source,
-            config,
-            version,
-        }
-    }
-
-    fn metadata(&self) -> ConfigLayerMetadata {
-        ConfigLayerMetadata {
-            name: self.name.clone(),
-            source: self.source.display().to_string(),
-            version: self.version.clone(),
-        }
-    }
-
-    fn as_layer(&self) -> ConfigLayer {
-        ConfigLayer {
-            name: self.name.clone(),
-            source: self.source.display().to_string(),
-            version: self.version.clone(),
-            config: to_json_value(&self.config),
-        }
-    }
-}
-
-#[derive(Clone)]
-struct LayersState {
-    user: LayerState,
-    session_flags: LayerState,
-    system: Option<LayerState>,
-    mdm: Option<LayerState>,
-}
-
-impl LayersState {
-    fn with_user_config(self, user_config: TomlValue) -> Self {
-        Self {
-            user: LayerState::new(self.user.name, self.user.source, user_config),
-            session_flags: self.session_flags,
-            system: self.system,
-            mdm: self.mdm,
-        }
-    }
-
-    fn effective_config(&self) -> TomlValue {
-        let mut merged = self.user.config.clone();
-        merge_toml_values(&mut merged, &self.session_flags.config);
-        if let Some(system) = &self.system {
-            merge_toml_values(&mut merged, &system.config);
-        }
-        if let Some(mdm) = &self.mdm {
-            merge_toml_values(&mut merged, &mdm.config);
-        }
-        merged
-    }
-
-    fn origins(&self) -> HashMap<String, ConfigLayerMetadata> {
-        let mut origins = HashMap::new();
-        let mut path = Vec::new();
-
-        record_origins(
-            &self.user.config,
-            &self.user.metadata(),
-            &mut path,
-            &mut origins,
-        );
-        record_origins(
-            &self.session_flags.config,
-            &self.session_flags.metadata(),
-            &mut path,
-            &mut origins,
-        );
-        if let Some(system) = &self.system {
-            record_origins(&system.config, &system.metadata(), &mut path, &mut origins);
-        }
-        if let Some(mdm) = &self.mdm {
-            record_origins(&mdm.config, &mdm.metadata(), &mut path, &mut origins);
-        }
-
-        origins
-    }
-
-    fn layers_high_to_low(&self) -> Vec<ConfigLayer> {
-        let mut layers = Vec::new();
-        if let Some(mdm) = &self.mdm {
-            layers.push(mdm.as_layer());
-        }
-        if let Some(system) = &self.system {
-            layers.push(system.as_layer());
-        }
-        layers.push(self.session_flags.as_layer());
-        layers.push(self.user.as_layer());
-        layers
-    }
-}
-
-fn record_origins(
-    value: &TomlValue,
-    meta: &ConfigLayerMetadata,
-    path: &mut Vec<String>,
-    origins: &mut HashMap<String, ConfigLayerMetadata>,
-) {
-    match value {
-        TomlValue::Table(table) => {
-            for (key, val) in table {
-                path.push(key.clone());
-                record_origins(val, meta, path, origins);
-                path.pop();
-            }
-        }
-        TomlValue::Array(items) => {
-            for (idx, item) in items.iter().enumerate() {
-                path.push(idx.to_string());
-                record_origins(item, meta, path, origins);
-                path.pop();
-            }
-        }
-        _ => {
-            if !path.is_empty() {
-                origins.insert(path.join("."), meta.clone());
-            }
-        }
-    }
-}
-
-fn to_json_value(value: &TomlValue) -> JsonValue {
-    serde_json::to_value(value).unwrap_or(JsonValue::Null)
-}
-
 fn validate_config(value: &TomlValue) -> Result<(), toml::de::Error> {
     let _: ConfigToml = value.clone().try_into()?;
     Ok(())
-}
-
-fn version_for_toml(value: &TomlValue) -> String {
-    let json = to_json_value(value);
-    let canonical = canonical_json(&json);
-    let serialized = serde_json::to_vec(&canonical).unwrap_or_default();
-    let mut hasher = Sha256::new();
-    hasher.update(serialized);
-    let hash = hasher.finalize();
-    let hex = hash
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    format!("sha256:{hex}")
-}
-
-fn canonical_json(value: &JsonValue) -> JsonValue {
-    match value {
-        JsonValue::Object(map) => {
-            let mut sorted = serde_json::Map::new();
-            let mut keys = map.keys().cloned().collect::<Vec<_>>();
-            keys.sort();
-            for key in keys {
-                if let Some(val) = map.get(&key) {
-                    sorted.insert(key, canonical_json(val));
-                }
-            }
-            JsonValue::Object(sorted)
-        }
-        JsonValue::Array(items) => JsonValue::Array(items.iter().map(canonical_json).collect()),
-        other => other.clone(),
-    }
 }
 
 fn paths_match(expected: &Path, provided: &Path) -> bool {
@@ -676,7 +422,7 @@ fn override_message(layer: &ConfigLayerName) -> String {
 }
 
 fn compute_override_metadata(
-    layers: &LayersState,
+    layers: &ConfigLayerStack,
     effective: &TomlValue,
     segments: &[String],
 ) -> Option<OverriddenMetadata> {
@@ -699,13 +445,13 @@ fn compute_override_metadata(
         message,
         overriding_layer,
         effective_value: effective_value
-            .map(to_json_value)
+            .map(|value| serde_json::to_value(value).unwrap_or(JsonValue::Null))
             .unwrap_or(JsonValue::Null),
     })
 }
 
 fn first_overridden_edit(
-    layers: &LayersState,
+    layers: &ConfigLayerStack,
     effective: &TomlValue,
     edits: &[Vec<String>],
 ) -> Option<OverriddenMetadata> {
@@ -717,9 +463,12 @@ fn first_overridden_edit(
     None
 }
 
-fn find_effective_layer(layers: &LayersState, segments: &[String]) -> Option<ConfigLayerMetadata> {
+fn find_effective_layer(
+    layers: &ConfigLayerStack,
+    segments: &[String],
+) -> Option<ConfigLayerMetadata> {
     let check =
-        |state: &LayerState| value_at_path(&state.config, segments).map(|_| state.metadata());
+        |state: &ConfigLayerEntry| value_at_path(&state.config, segments).map(|_| state.metadata());
 
     if let Some(mdm) = &layers.mdm
         && let Some(meta) = check(mdm)
@@ -735,23 +484,6 @@ fn find_effective_layer(layers: &LayersState, segments: &[String]) -> Option<Con
         return Some(meta);
     }
     check(&layers.user)
-}
-
-fn system_config_path(codex_home: &Path) -> PathBuf {
-    if let Ok(path) = std::env::var("CODEX_MANAGED_CONFIG_PATH") {
-        return PathBuf::from(path);
-    }
-
-    #[cfg(unix)]
-    {
-        let _ = codex_home;
-        PathBuf::from("/etc/codex/managed_config.toml")
-    }
-
-    #[cfg(not(unix))]
-    {
-        codex_home.join("managed_config.toml")
-    }
 }
 
 fn internal_error<E: std::fmt::Display>(context: &str, err: E) -> JSONRPCErrorError {
@@ -843,11 +575,11 @@ hide_full_access_warning = true
 [features]
 unified_exec = true
 "#;
-        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), original)?;
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), original)?;
 
         let api = ConfigApi::new(tmp.path().to_path_buf(), vec![]);
         api.write_value(ConfigValueWriteParams {
-            file_path: Some(tmp.path().join(CONFIG_FILE_NAME).display().to_string()),
+            file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "features.remote_compaction".to_string(),
             value: json!(true),
             merge_strategy: MergeStrategy::Replace,
@@ -857,7 +589,7 @@ unified_exec = true
         .expect("write succeeds");
 
         let updated =
-            std::fs::read_to_string(tmp.path().join(CONFIG_FILE_NAME)).expect("read config");
+            std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"# Codex user configuration
 model = "gpt-5"
 approval_policy = "on-request"
@@ -877,7 +609,7 @@ remote_compaction = true
     #[tokio::test]
     async fn read_includes_origins_and_layers() {
         let tmp = tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), "model = \"user\"").unwrap();
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"").unwrap();
 
         let managed_path = tmp.path().join("managed_config.toml");
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
@@ -919,7 +651,7 @@ remote_compaction = true
     async fn write_value_reports_override() {
         let tmp = tempdir().expect("tempdir");
         std::fs::write(
-            tmp.path().join(CONFIG_FILE_NAME),
+            tmp.path().join(CONFIG_TOML_FILE),
             "approval_policy = \"on-request\"",
         )
         .unwrap();
@@ -939,7 +671,7 @@ remote_compaction = true
 
         let result = api
             .write_value(ConfigValueWriteParams {
-                file_path: Some(tmp.path().join(CONFIG_FILE_NAME).display().to_string()),
+                file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
                 key_path: "approval_policy".to_string(),
                 value: json!("never"),
                 merge_strategy: MergeStrategy::Replace,
@@ -973,12 +705,12 @@ remote_compaction = true
     #[tokio::test]
     async fn version_conflict_rejected() {
         let tmp = tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), "model = \"user\"").unwrap();
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"").unwrap();
 
         let api = ConfigApi::new(tmp.path().to_path_buf(), vec![]);
         let error = api
             .write_value(ConfigValueWriteParams {
-                file_path: Some(tmp.path().join(CONFIG_FILE_NAME).display().to_string()),
+                file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
                 key_path: "model".to_string(),
                 value: json!("gpt-5"),
                 merge_strategy: MergeStrategy::Replace,
@@ -1001,7 +733,7 @@ remote_compaction = true
     #[tokio::test]
     async fn write_value_defaults_to_user_config_path() {
         let tmp = tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), "").unwrap();
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
 
         let api = ConfigApi::new(tmp.path().to_path_buf(), vec![]);
         api.write_value(ConfigValueWriteParams {
@@ -1015,7 +747,7 @@ remote_compaction = true
         .expect("write succeeds");
 
         let contents =
-            std::fs::read_to_string(tmp.path().join(CONFIG_FILE_NAME)).expect("read config");
+            std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
         assert!(
             contents.contains("model = \"gpt-new\""),
             "config.toml should be updated even when file_path is omitted"
@@ -1025,7 +757,7 @@ remote_compaction = true
     #[tokio::test]
     async fn invalid_user_value_rejected_even_if_overridden_by_managed() {
         let tmp = tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), "model = \"user\"").unwrap();
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"").unwrap();
 
         let managed_path = tmp.path().join("managed_config.toml");
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
@@ -1042,7 +774,7 @@ remote_compaction = true
 
         let error = api
             .write_value(ConfigValueWriteParams {
-                file_path: Some(tmp.path().join(CONFIG_FILE_NAME).display().to_string()),
+                file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
                 key_path: "approval_policy".to_string(),
                 value: json!("bogus"),
                 merge_strategy: MergeStrategy::Replace,
@@ -1062,14 +794,14 @@ remote_compaction = true
         );
 
         let contents =
-            std::fs::read_to_string(tmp.path().join(CONFIG_FILE_NAME)).expect("read config");
+            std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
         assert_eq!(contents.trim(), "model = \"user\"");
     }
 
     #[tokio::test]
     async fn read_reports_managed_overrides_user_and_session_flags() {
         let tmp = tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), "model = \"user\"").unwrap();
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"").unwrap();
 
         let managed_path = tmp.path().join("managed_config.toml");
         std::fs::write(&managed_path, "model = \"system\"").unwrap();
@@ -1110,7 +842,7 @@ remote_compaction = true
     #[tokio::test]
     async fn write_value_reports_managed_override() {
         let tmp = tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), "").unwrap();
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
 
         let managed_path = tmp.path().join("managed_config.toml");
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
@@ -1127,7 +859,7 @@ remote_compaction = true
 
         let result = api
             .write_value(ConfigValueWriteParams {
-                file_path: Some(tmp.path().join(CONFIG_FILE_NAME).display().to_string()),
+                file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
                 key_path: "approval_policy".to_string(),
                 value: json!("on-request"),
                 merge_strategy: MergeStrategy::Replace,

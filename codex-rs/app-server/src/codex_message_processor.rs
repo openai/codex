@@ -120,7 +120,8 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::config_loader::load_config_as_toml;
+use codex_core::config_loader::LoaderOverrides;
+use codex_core::config_loader::load_config_layers_state;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
@@ -1108,7 +1109,13 @@ impl CodexMessageProcessor {
     }
 
     async fn get_user_saved_config(&self, request_id: RequestId) {
-        let toml_value = match load_config_as_toml(&self.config.codex_home).await {
+        let layers = match load_config_layers_state(
+            &self.config.codex_home,
+            &[] as &[(String, TomlValue)],
+            LoaderOverrides::default(),
+        )
+        .await
+        {
             Ok(val) => val,
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -1120,6 +1127,8 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+
+        let toml_value = layers.effective_config();
 
         let cfg: ConfigToml = match toml_value.try_into() {
             Ok(cfg) => cfg,

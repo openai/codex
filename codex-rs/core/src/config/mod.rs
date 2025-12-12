@@ -12,10 +12,7 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
-use crate::config_loader::LoadedConfigLayers;
-use crate::config_loader::load_config_as_toml;
-use crate::config_loader::load_config_layers_with_overrides;
-use crate::config_loader::merge_toml_values;
+use crate::config_loader::load_config_layers_state;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
@@ -342,29 +339,8 @@ async fn load_resolved_config(
     cli_overrides: Vec<(String, TomlValue)>,
     overrides: crate::config_loader::LoaderOverrides,
 ) -> std::io::Result<TomlValue> {
-    let layers = load_config_layers_with_overrides(codex_home, overrides).await?;
-    Ok(apply_overlays(layers, cli_overrides))
-}
-
-fn apply_overlays(
-    layers: LoadedConfigLayers,
-    cli_overrides: Vec<(String, TomlValue)>,
-) -> TomlValue {
-    let LoadedConfigLayers {
-        mut base,
-        managed_config,
-        managed_preferences,
-    } = layers;
-
-    for (path, value) in cli_overrides.into_iter() {
-        apply_toml_override(&mut base, &path, value);
-    }
-
-    for overlay in [managed_config, managed_preferences].into_iter().flatten() {
-        merge_toml_values(&mut base, &overlay);
-    }
-
-    base
+    let layers = load_config_layers_state(codex_home, &cli_overrides, overrides).await?;
+    Ok(layers.effective_config())
 }
 
 fn deserialize_config_toml_with_base(
@@ -382,7 +358,12 @@ fn deserialize_config_toml_with_base(
 pub async fn load_global_mcp_servers(
     codex_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
-    let root_value = load_config_as_toml(codex_home).await?;
+    let root_value = load_resolved_config(
+        codex_home,
+        Vec::new(),
+        crate::config_loader::LoaderOverrides::default(),
+    )
+    .await?;
     let Some(servers_value) = root_value.get("mcp_servers") else {
         return Ok(BTreeMap::new());
     };
@@ -539,49 +520,6 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
     // Write the modified document back
     std::fs::write(&config_path, doc.to_string())?;
     Ok(())
-}
-
-/// Apply a single dotted-path override onto a TOML value.
-fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
-    use toml::value::Table;
-
-    let segments: Vec<&str> = path.split('.').collect();
-    let mut current = root;
-
-    for (idx, segment) in segments.iter().enumerate() {
-        let is_last = idx == segments.len() - 1;
-
-        if is_last {
-            match current {
-                TomlValue::Table(table) => {
-                    table.insert(segment.to_string(), value);
-                }
-                _ => {
-                    let mut table = Table::new();
-                    table.insert(segment.to_string(), value);
-                    *current = TomlValue::Table(table);
-                }
-            }
-            return;
-        }
-
-        // Traverse or create intermediate object.
-        match current {
-            TomlValue::Table(table) => {
-                current = table
-                    .entry(segment.to_string())
-                    .or_insert_with(|| TomlValue::Table(Table::new()));
-            }
-            _ => {
-                *current = TomlValue::Table(Table::new());
-                if let TomlValue::Table(tbl) = current {
-                    current = tbl
-                        .entry(segment.to_string())
-                        .or_insert_with(|| TomlValue::Table(Table::new()));
-                }
-            }
-        }
-    }
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
