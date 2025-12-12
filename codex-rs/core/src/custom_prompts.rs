@@ -4,12 +4,53 @@ use std::path::Path;
 use std::path::PathBuf;
 use tokio::fs;
 
+use crate::git_info::resolve_root_git_project_for_trust;
+
+const CONFIG_DIR: &str = ".codex";
+const PROMPTS_DIR: &str = "prompts";
+
 /// Return the default prompts directory: `$CODEX_HOME/prompts`.
 /// If `CODEX_HOME` cannot be resolved, returns `None`.
 pub fn default_prompts_dir() -> Option<PathBuf> {
     crate::config::find_codex_home()
         .ok()
-        .map(|home| home.join("prompts"))
+        .map(|home| home.join(PROMPTS_DIR))
+}
+
+/// Return potential prompt roots in priority order.
+///
+/// The repository-local `.codex/prompts` is returned first when available,
+/// followed by the `$CODEX_HOME/prompts` directory.
+pub fn prompt_search_roots(cwd: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    if let Some(repo_root) = resolve_root_git_project_for_trust(cwd) {
+        roots.push(repo_root.join(CONFIG_DIR).join(PROMPTS_DIR));
+    }
+
+    if let Some(home_prompts) = default_prompts_dir() {
+        roots.push(home_prompts);
+    }
+
+    roots
+}
+
+/// Discover prompts across all search roots, deduplicating by name.
+/// Repository prompts take priority over home prompts when names conflict.
+pub async fn discover_prompts(cwd: &Path) -> Vec<CustomPrompt> {
+    let mut prompts: Vec<CustomPrompt> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for root in prompt_search_roots(cwd) {
+        for prompt in discover_prompts_in(&root).await {
+            if seen.insert(prompt.name.clone()) {
+                prompts.push(prompt);
+            }
+        }
+    }
+
+    prompts.sort_by(|a, b| a.name.cmp(&b.name));
+    prompts
 }
 
 /// Discover prompt files in the given directory, returning entries sorted by name.
@@ -147,7 +188,11 @@ fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>, String) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+    use serial_test::serial;
     use std::fs;
+    use std::path::Path;
+    use std::process::Command;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -240,5 +285,78 @@ mod tests {
         assert_eq!(desc.as_deref(), Some("Line endings"));
         assert_eq!(hint.as_deref(), Some("[arg]"));
         assert_eq!(body, "First line\r\nSecond line\r\n");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn discover_prompts_uses_home_and_repo_roots_with_priority() {
+        let tmp = tempdir().expect("create TempDir");
+        let codex_home = tmp.path().join("home");
+        fs::create_dir_all(codex_home.join(PROMPTS_DIR)).unwrap();
+        let _guard = EnvVarGuard::set("CODEX_HOME", &codex_home);
+
+        let repo_root = tmp.path().join("repo");
+        let repo_prompts = repo_root.join(CONFIG_DIR).join(PROMPTS_DIR);
+        fs::create_dir_all(&repo_prompts).unwrap();
+
+        let status = Command::new("git")
+            .args(["init"])
+            .current_dir(&repo_root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .status()
+            .expect("initialize git repo");
+        assert!(status.success());
+
+        let nested_cwd = repo_root.join("nested");
+        fs::create_dir_all(&nested_cwd).unwrap();
+
+        let home_prompts = codex_home.join(PROMPTS_DIR);
+        fs::write(home_prompts.join("home_only.md"), b"home").unwrap();
+        fs::write(home_prompts.join("shared.md"), b"home shared").unwrap();
+
+        fs::write(repo_prompts.join("repo_only.md"), b"repo").unwrap();
+        fs::write(repo_prompts.join("shared.md"), b"repo shared").unwrap();
+
+        let prompts = discover_prompts(&nested_cwd).await;
+        let names: Vec<String> = prompts.iter().map(|p| p.name.clone()).collect();
+        assert_eq!(names, vec!["home_only", "repo_only", "shared"]);
+
+        let shared = prompts
+            .into_iter()
+            .find(|p| p.name == "shared")
+            .expect("shared prompt present");
+        assert_eq!(shared.content, "repo shared");
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &Path) -> Self {
+            let original = std::env::var(key).ok();
+            // SAFETY: tests adjust process-scoped environment variables in isolation.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.original.take() {
+                // SAFETY: tests adjust process-scoped environment variables in isolation.
+                unsafe {
+                    std::env::set_var(self.key, value);
+                }
+            } else {
+                unsafe {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
     }
 }
