@@ -2079,12 +2079,19 @@ impl CodexMessageProcessor {
     }
 
     async fn list_mcp_servers(&self, request_id: RequestId, params: ListMcpServersParams) {
-        let snapshot = collect_mcp_snapshot(self.config.as_ref()).await;
+        let config = match self.load_latest_config().await {
+            Ok(config) => config,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let snapshot = collect_mcp_snapshot(&config).await;
 
         let tools_by_server = group_tools_by_server(&snapshot.tools);
 
-        let mut server_names: Vec<String> = self
-            .config
+        let mut server_names: Vec<String> = config
             .mcp_servers
             .keys()
             .cloned()

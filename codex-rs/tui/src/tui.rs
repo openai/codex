@@ -277,33 +277,42 @@ impl Tui {
         let event_stream = async_stream::stream! {
             loop {
                 select! {
-                    Some(Ok(event)) = crossterm_events.next() => {
-                        match event {
-                            Event::Key(key_event) => {
-                                #[cfg(unix)]
-                                if SUSPEND_KEY.is_press(key_event) {
-                                    let _ = suspend_context.suspend(&alt_screen_active);
-                                    // We continue here after resume.
-                                    yield TuiEvent::Draw;
-                                    continue;
+                    event_result = crossterm_events.next() => {
+                        match event_result {
+                            Some(Ok(event)) => {
+                                match event {
+                                    Event::Key(key_event) => {
+                                        #[cfg(unix)]
+                                        if SUSPEND_KEY.is_press(key_event) {
+                                            let _ = suspend_context.suspend(&alt_screen_active);
+                                            // We continue here after resume.
+                                            yield TuiEvent::Draw;
+                                            continue;
+                                        }
+                                        yield TuiEvent::Key(key_event);
+                                    }
+                                    Event::Resize(_, _) => {
+                                        yield TuiEvent::Draw;
+                                    }
+                                    Event::Paste(pasted) => {
+                                        yield TuiEvent::Paste(pasted);
+                                    }
+                                    Event::FocusGained => {
+                                        terminal_focused.store(true, Ordering::Relaxed);
+                                        crate::terminal_palette::requery_default_colors();
+                                        yield TuiEvent::Draw;
+                                    }
+                                    Event::FocusLost => {
+                                        terminal_focused.store(false, Ordering::Relaxed);
+                                    }
+                                    _ => {}
                                 }
-                                yield TuiEvent::Key(key_event);
                             }
-                            Event::Resize(_, _) => {
-                                yield TuiEvent::Draw;
+                            Some(Err(_)) | None => {
+                                // Exit the loop in case of broken pipe as we will never
+                                // recover from it
+                                break;
                             }
-                            Event::Paste(pasted) => {
-                                yield TuiEvent::Paste(pasted);
-                            }
-                            Event::FocusGained => {
-                                terminal_focused.store(true, Ordering::Relaxed);
-                                crate::terminal_palette::requery_default_colors();
-                                yield TuiEvent::Draw;
-                            }
-                            Event::FocusLost => {
-                                terminal_focused.store(false, Ordering::Relaxed);
-                            }
-                            _ => {}
                         }
                     }
                     result = draw_rx.recv() => {
@@ -316,7 +325,9 @@ impl Tui {
                                 yield TuiEvent::Draw;
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                // Sender dropped; stop emitting draws from this source.
+                                // Sender dropped. This stream likely outlived its owning `Tui`;
+                                // exit to avoid spinning on a permanently-closed receiver.
+                                break;
                             }
                         }
                     }
