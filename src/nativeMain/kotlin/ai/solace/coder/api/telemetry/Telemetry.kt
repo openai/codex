@@ -8,9 +8,10 @@ import kotlin.time.Duration
 interface SseTelemetry {
     /**
      * Called on each SSE poll with the result and duration.
-     * TODO: Define proper event/error types once eventsource streaming is implemented.
+     * @param hasData Whether data was received (false if timeout or no data)
+     * @param duration Time taken for the poll
      */
-    fun onSsePoll(result: Result<Any?>, duration: Duration)
+    fun onSsePoll(hasData: Boolean, duration: Duration)
 }
 
 /** Telemetry for individual HTTP requests. */

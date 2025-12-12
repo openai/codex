@@ -7,6 +7,7 @@ import ai.solace.coder.protocol.RateLimitSnapshot
 import ai.solace.coder.protocol.ReasoningEffortConfig
 import ai.solace.coder.protocol.ReasoningSummaryConfig
 import ai.solace.coder.protocol.Verbosity
+import ai.solace.coder.protocol.ResponseEvent
 import kotlinx.serialization.json.JsonElement
 
 // Type alias matching Rust usage pattern
@@ -30,18 +31,8 @@ data class CompactionInput(
     val instructions: String,
 )
 
-/** Events emitted by streaming responses. */
-sealed class ResponseEvent {
-    data object Created : ResponseEvent()
-    data class OutputItemDone(val item: ResponseItem) : ResponseEvent()
-    data class OutputItemAdded(val item: ResponseItem) : ResponseEvent()
-    data class Completed(val responseId: String, val tokenUsage: TokenUsage?) : ResponseEvent()
-    data class OutputTextDelta(val delta: String) : ResponseEvent()
-    data class ReasoningSummaryDelta(val delta: String, val summaryIndex: Long) : ResponseEvent()
-    data class ReasoningContentDelta(val delta: String, val contentIndex: Long) : ResponseEvent()
-    data class ReasoningSummaryPartAdded(val summaryIndex: Long) : ResponseEvent()
-    data class RateLimits(val snapshot: RateLimitSnapshot) : ResponseEvent()
-}
+// ResponseEvent is imported from ai.solace.coder.protocol.ResponseEvent
+// See protocol/Models.kt for the full definition
 
 /** Reasoning config payload. */
 data class Reasoning(
@@ -111,12 +102,15 @@ fun createTextParamForRequest(
     )
 }
 
-/** Stream of response events. */
+/**
+ * Stream of response events.
+ * Uses ai.solace.coder.protocol.ResponseEvent.
+ */
 interface ResponseStream {
     /**
      * Receive the next event, or null if stream ended.
-     * TODO: Replace with channel/Flow once concurrency primitives are selected.
+     * Uses the ResponseEvent from protocol package.
      */
-    suspend fun next(): Result<ResponseEvent?>
+    suspend fun next(): Result<ResponseEvent>?
 }
 

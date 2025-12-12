@@ -70,22 +70,6 @@ private fun parseHeaderBool(headers: Headers, name: String): Boolean? {
     }
 }
 
-// TODO: Port from codex-protocol
-data class RateLimitSnapshot(
-    val primary: RateLimitWindow?,
-    val secondary: RateLimitWindow?,
-    val credits: CreditsSnapshot?,
-)
-
-data class RateLimitWindow(
-    val usedPercent: Double,
-    val windowMinutes: Long?,
-    val resetsAt: Long?,
-)
-
-data class CreditsSnapshot(
-    val hasCredits: Boolean,
-    val unlimited: Boolean,
-    val balance: String?,
-)
+// RateLimitSnapshot, RateLimitWindow, and CreditsSnapshot are imported from
+// ai.solace.coder.protocol - see Protocol.kt for definitions
 
