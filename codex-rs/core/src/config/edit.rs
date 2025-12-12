@@ -1168,7 +1168,7 @@ foo = { command = "cmd" } # keep me
         let contents =
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"[mcp_servers]
-foo = { command = "cmd", enabled = false } # keep me
+foo = { command = "cmd" , enabled = false } # keep me
 "#;
         assert_eq!(contents, expected);
     }
@@ -1210,7 +1210,7 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
         let contents =
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"[mcp_servers]
-foo = { command = "cmd" } # keep me
+foo = { command = "cmd"} # keep me
 "#;
         assert_eq!(contents, expected);
     }
@@ -1254,7 +1254,7 @@ foo = { command = "cmd" }
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         let expected = r#"[mcp_servers]
 # keep me
-foo = { command = "cmd", enabled = false }
+foo = { command = "cmd" , enabled = false }
 "#;
         assert_eq!(contents, expected);
     }
