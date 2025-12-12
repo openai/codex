@@ -22,8 +22,8 @@ struct SkillFrontmatter {
 const SKILLS_FILENAME: &str = "SKILL.md";
 const SKILLS_DIR_NAME: &str = "skills";
 const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
-const MAX_NAME_LEN: usize = 100;
-const MAX_DESCRIPTION_LEN: usize = 500;
+const MAX_NAME_LEN: usize = 64;
+const MAX_DESCRIPTION_LEN: usize = 1024;
 
 #[derive(Debug)]
 enum SkillParseError {
@@ -171,7 +171,7 @@ fn validate_field(
     if value.is_empty() {
         return Err(SkillParseError::MissingField(field_name));
     }
-    if value.len() > max_len {
+    if value.chars().count() > max_len {
         return Err(SkillParseError::InvalidField {
             field: field_name,
             reason: format!("exceeds maximum length of {max_len} characters"),
@@ -295,12 +295,22 @@ mod tests {
     #[test]
     fn enforces_length_limits() {
         let codex_home = tempfile::tempdir().expect("tempdir");
-        let long_desc = "a".repeat(MAX_DESCRIPTION_LEN + 1);
-        write_skill(&codex_home, "too-long", "toolong", &long_desc);
+        let max_desc = "\u{1F4A1}".repeat(MAX_DESCRIPTION_LEN);
+        write_skill(&codex_home, "max-len", "max-len", &max_desc);
         let cfg = make_config(&codex_home);
 
         let outcome = load_skills(&cfg);
-        assert_eq!(outcome.skills.len(), 0);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+
+        let too_long_desc = "\u{1F4A1}".repeat(MAX_DESCRIPTION_LEN + 1);
+        write_skill(&codex_home, "too-long", "too-long", &too_long_desc);
+        let outcome = load_skills(&cfg);
+        assert_eq!(outcome.skills.len(), 1);
         assert_eq!(outcome.errors.len(), 1);
         assert!(
             outcome.errors[0].message.contains("invalid description"),

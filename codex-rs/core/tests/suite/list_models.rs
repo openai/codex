@@ -46,7 +46,7 @@ fn expected_models_for_api_key() -> Vec<ModelPreset> {
         gpt_5_1_codex_max(),
         gpt_5_1_codex(),
         gpt_5_1_codex_mini(),
-        robin(),
+        gpt_5_2(),
         gpt_5_1(),
     ]
 }
@@ -56,7 +56,7 @@ fn expected_models_for_chatgpt() -> Vec<ModelPreset> {
         gpt_5_1_codex_max(),
         gpt_5_1_codex(),
         gpt_5_1_codex_mini(),
-        robin(),
+        gpt_5_2(),
         gpt_5_1(),
     ]
 }
@@ -79,7 +79,7 @@ fn gpt_5_1_codex_max() -> ModelPreset {
             ),
             effort(
                 ReasoningEffort::High,
-                "Maximizes reasoning depth for complex problems",
+                "Greater reasoning depth for complex problems",
             ),
             effort(
                 ReasoningEffort::XHigh,
@@ -142,12 +142,14 @@ fn gpt_5_1_codex_mini() -> ModelPreset {
     }
 }
 
-fn robin() -> ModelPreset {
+fn gpt_5_2() -> ModelPreset {
     ModelPreset {
-        id: "robin".to_string(),
-        model: "robin".to_string(),
-        display_name: "robin".to_string(),
-        description: "Robin".to_string(),
+        id: "gpt-5.2".to_string(),
+        model: "gpt-5.2".to_string(),
+        display_name: "gpt-5.2".to_string(),
+        description:
+            "Latest frontier model with improvements across knowledge, reasoning and coding"
+                .to_string(),
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: vec![
             effort(
@@ -160,7 +162,7 @@ fn robin() -> ModelPreset {
             ),
             effort(
                 ReasoningEffort::High,
-                "Maximizes reasoning depth for complex or ambiguous problems",
+                "Greater reasoning depth for complex or ambiguous problems",
             ),
             effort(
                 ReasoningEffort::XHigh,

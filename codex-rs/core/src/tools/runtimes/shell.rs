@@ -8,6 +8,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::tools::runtimes::build_command_spec;
+use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -140,8 +141,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx<'_>,
     ) -> Result<ExecToolCallOutput, ToolError> {
+        let base_command = &req.command;
+        let session_shell = ctx.session.user_shell();
+        let command = maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref());
+
         let spec = build_command_spec(
-            &req.command,
+            &command,
             &req.cwd,
             &req.env,
             req.timeout_ms.into(),

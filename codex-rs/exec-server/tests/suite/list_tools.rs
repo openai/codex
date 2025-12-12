@@ -16,10 +16,10 @@ use tempfile::TempDir;
 #[tokio::test(flavor = "current_thread")]
 async fn list_tools() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let policy_dir = codex_home.path().join("policy");
+    let policy_dir = codex_home.path().join("rules");
     fs::create_dir_all(&policy_dir)?;
     fs::write(
-        policy_dir.join("default.codexpolicy"),
+        policy_dir.join("default.rules"),
         r#"prefix_rule(pattern=["ls"], decision="prompt")"#,
     )?;
     let dotslash_cache_temp_dir = TempDir::new()?;

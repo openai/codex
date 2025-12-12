@@ -252,12 +252,14 @@ impl Stream for ResponseStream {
 
 #[cfg(test)]
 mod tests {
-    use crate::openai_models::model_family::find_family_for_model;
     use codex_api::ResponsesApiRequest;
     use codex_api::common::OpenAiVerbosity;
     use codex_api::common::TextControls;
     use codex_api::create_text_param_for_request;
     use pretty_assertions::assert_eq;
+
+    use crate::config::test_config;
+    use crate::openai_models::models_manager::ModelsManager;
 
     use super::*;
 
@@ -309,7 +311,9 @@ mod tests {
             },
         ];
         for test_case in test_cases {
-            let model_family = find_family_for_model(test_case.slug);
+            let config = test_config();
+            let model_family =
+                ModelsManager::construct_model_family_offline(test_case.slug, &config);
             let expected = if test_case.expects_apply_patch_instructions {
                 format!(
                     "{}\n{}",
