@@ -103,3 +103,7 @@ If you don’t have the tool:
   let request = mock.single_request();
   // assert using request.function_call_output(call_id) or request.json_body() or other helpers.
   ```
+
+# Headings
+
+- `codex-mine` の説明、および `codex-mine` 向けの機能・運用ルールは `README_mine.md` に追記していくこと（一般向けドキュメントや共通仕様に混ぜない）。
