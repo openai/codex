@@ -28,7 +28,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::High,
-                    description: "Maximizes reasoning depth for complex problems".to_string(),
+                    description: "Greater reasoning depth for complex problems".to_string(),
                 },
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::XHigh,
@@ -91,6 +91,34 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 reasoning_effort_mapping: None,
                 migration_config_key: HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG.to_string(),
             }),
+            show_in_picker: true,
+        },
+        ModelPreset {
+            id: "gpt-5.2".to_string(),
+            model: "gpt-5.2".to_string(),
+            display_name: "gpt-5.2".to_string(),
+            description: "Latest frontier model with improvements across knowledge, reasoning and coding".to_string(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "Balances speed with some reasoning; useful for straightforward queries and short explanations".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Medium,
+                    description: "Provides a solid balance of reasoning depth and latency for general-purpose tasks".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "Greater reasoning depth for complex or ambiguous problems".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::XHigh,
+                    description: "Extra high reasoning for complex problems".to_string(),
+                },
+            ],
+            is_default: false,
+            upgrade: None,
             show_in_picker: true,
         },
         ModelPreset {

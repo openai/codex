@@ -8,6 +8,8 @@ use strum_macros::Display;
 use strum_macros::EnumIter;
 use ts_rs::TS;
 
+use crate::config_types::Verbosity;
+
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
 #[derive(
     Debug,
@@ -112,6 +114,51 @@ pub enum ConfigShellToolType {
     ShellCommand,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplyPatchToolType {
+    Freeform,
+    Function,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq, Default, Hash, TS, JsonSchema, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningSummaryFormat {
+    #[default]
+    None,
+    Experimental,
+}
+
+/// Server-provided truncation policy metadata for a model.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TruncationMode {
+    Bytes,
+    Tokens,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
+pub struct TruncationPolicyConfig {
+    pub mode: TruncationMode,
+    pub limit: i64,
+}
+
+impl TruncationPolicyConfig {
+    pub const fn bytes(limit: i64) -> Self {
+        Self {
+            mode: TruncationMode::Bytes,
+            limit,
+        }
+    }
+
+    pub const fn tokens(limit: i64) -> Self {
+        Self {
+            mode: TruncationMode::Tokens,
+            limit,
+        }
+    }
+}
+
 /// Semantic version triple encoded as an array in JSON (e.g. [0, 62, 0]).
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 pub struct ClientVersion(pub i32, pub i32, pub i32);
@@ -121,22 +168,25 @@ pub struct ClientVersion(pub i32, pub i32, pub i32);
 pub struct ModelInfo {
     pub slug: String,
     pub display_name: String,
-    #[serde(default)]
     pub description: Option<String>,
     pub default_reasoning_level: ReasoningEffort,
     pub supported_reasoning_levels: Vec<ReasoningEffortPreset>,
     pub shell_type: ConfigShellToolType,
-    #[serde(default = "default_visibility")]
     pub visibility: ModelVisibility,
     pub minimal_client_version: ClientVersion,
-    #[serde(default)]
     pub supported_in_api: bool,
-    #[serde(default)]
     pub priority: i32,
-    #[serde(default)]
     pub upgrade: Option<String>,
-    #[serde(default)]
     pub base_instructions: Option<String>,
+    pub supports_reasoning_summaries: bool,
+    pub support_verbosity: bool,
+    pub default_verbosity: Option<Verbosity>,
+    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
+    pub truncation_policy: TruncationPolicyConfig,
+    pub supports_parallel_tool_calls: bool,
+    pub context_window: Option<i64>,
+    pub reasoning_summary_format: ReasoningSummaryFormat,
+    pub experimental_supported_tools: Vec<String>,
 }
 
 /// Response wrapper for `/models`.
@@ -145,10 +195,6 @@ pub struct ModelsResponse {
     pub models: Vec<ModelInfo>,
     #[serde(default)]
     pub etag: String,
-}
-
-fn default_visibility() -> ModelVisibility {
-    ModelVisibility::None
 }
 
 // convert ModelInfo to ModelPreset

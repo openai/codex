@@ -53,11 +53,11 @@ pub enum McpSubcommand {
     Remove(RemoveArgs),
 
     /// [experimental] Authenticate with a configured MCP server via OAuth.
-    /// Requires experimental_use_rmcp_client = true in config.toml.
+    /// Requires features.rmcp_client = true in config.toml.
     Login(LoginArgs),
 
     /// [experimental] Remove stored OAuth credentials for a server.
-    /// Requires experimental_use_rmcp_client = true in config.toml.
+    /// Requires features.rmcp_client = true in config.toml.
     Logout(LogoutArgs),
 }
 
@@ -285,7 +285,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
             Ok(true) => {
                 if !config.features.enabled(Feature::RmcpClient) {
                     println!(
-                        "MCP server supports login. Add `experimental_use_rmcp_client = true` \
+                        "MCP server supports login. Add `features.rmcp_client = true` \
                          to your config.toml and run `codex mcp login {name}` to login."
                     );
                 } else {

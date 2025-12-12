@@ -745,6 +745,8 @@ notify = ["python3", "/Users/mbolin/.codex/notify.py"]
 > [!NOTE]
 > Use `notify` for automation and integrations: Codex invokes your external program with a single JSON argument for each event, independent of the TUI. If you only want lightweight desktop notifications while using the TUI, prefer `tui.notifications`, which uses terminal escape codes and requires no external program. You can enable both; `tui.notifications` covers in‑TUI alerts (e.g., approval prompts), while `notify` is best for system‑level hooks or custom notifiers. Currently, `notify` emits only `agent-turn-complete`, whereas `tui.notifications` supports `agent-turn-complete` and `approval-requested` with optional filtering.
 
+When Codex detects WSL 2 inside Windows Terminal (the session exports `WT_SESSION`), `tui.notifications` automatically switches to a Windows toast backend by spawning `powershell.exe`. This ensures both approval prompts and completed turns trigger native toasts even though Windows Terminal ignores OSC 9 escape sequences. Terminals that advertise OSC 9 support (iTerm2, WezTerm, kitty, etc.) continue to use the existing escape-sequence backend, and the `notify` hook remains unchanged.
+
 ### hide_agent_reasoning
 
 Codex intermittently emits "reasoning" events that show the model's internal "thinking" before it produces a final answer. Some users may find these events distracting, especially in CI logs or minimal terminal output.

@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell.rs
+assertion_line: 1817
+expression: rendered
+---
+• Called search.find_docs({"query":"ratatui styling","limit":3})
+  └ Error: network timeout

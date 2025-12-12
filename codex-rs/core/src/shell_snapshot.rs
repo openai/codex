@@ -257,7 +257,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     #[cfg(target_os = "linux")]
     use std::process::Command as StdCommand;
-    use std::sync::Arc;
+
     use tempfile::tempdir;
 
     #[cfg(not(target_os = "windows"))]
@@ -291,53 +291,6 @@ mod tests {
     fn strip_snapshot_preamble_requires_marker() {
         let result = strip_snapshot_preamble("missing header");
         assert!(result.is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn wrap_command_with_snapshot_wraps_bash_shell() {
-        let snapshot_path = PathBuf::from("/tmp/snapshot.sh");
-        let shell = Shell {
-            shell_type: ShellType::Bash,
-            shell_path: PathBuf::from("/bin/bash"),
-            shell_snapshot: Some(Arc::new(ShellSnapshot {
-                path: snapshot_path.clone(),
-            })),
-        };
-        let original_command = vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            "echo hello".to_string(),
-        ];
-
-        let wrapped = shell.wrap_command_with_snapshot(&original_command);
-
-        let mut expected = shell.derive_exec_args(". \"$0\" && exec \"$@\"", false);
-        expected.push(snapshot_path.to_string_lossy().to_string());
-        expected.extend_from_slice(&original_command);
-
-        assert_eq!(wrapped, expected);
-    }
-
-    #[test]
-    fn wrap_command_with_snapshot_preserves_cmd_shell() {
-        let snapshot_path = PathBuf::from("C:\\snapshot.cmd");
-        let shell = Shell {
-            shell_type: ShellType::Cmd,
-            shell_path: PathBuf::from("cmd"),
-            shell_snapshot: Some(Arc::new(ShellSnapshot {
-                path: snapshot_path,
-            })),
-        };
-        let original_command = vec![
-            "cmd".to_string(),
-            "/c".to_string(),
-            "echo hello".to_string(),
-        ];
-
-        let wrapped = shell.wrap_command_with_snapshot(&original_command);
-
-        assert_eq!(wrapped, original_command);
     }
 
     #[cfg(unix)]

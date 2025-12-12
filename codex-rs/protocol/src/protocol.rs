@@ -1625,6 +1625,25 @@ pub struct ListCustomPromptsResponseEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SkillInfo {
+    pub name: String,
+    pub description: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SkillErrorInfo {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, Default)]
+pub struct SkillLoadOutcomeInfo {
+    pub skills: Vec<SkillInfo>,
+    pub errors: Vec<SkillErrorInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
     /// Name left as session_id instead of conversation_id for backwards compatibility.
     pub session_id: ConversationId,
@@ -1658,6 +1677,9 @@ pub struct SessionConfiguredEvent {
     /// When present, UIs can use these to seed the history.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_messages: Option<Vec<EventMsg>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_load_outcome: Option<SkillLoadOutcomeInfo>,
 
     pub rollout_path: PathBuf,
 }
@@ -1786,6 +1808,7 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                skill_load_outcome: None,
                 rollout_path: rollout_file.path().to_path_buf(),
             }),
         };

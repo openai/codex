@@ -4,14 +4,66 @@ macro_rules! windows_modules {
     };
 }
 
-windows_modules!(acl, allow, audit, cap, env, logging, policy, token, winutil);
+windows_modules!(
+    acl, allow, audit, cap, dpapi, env, identity, logging, policy, process, token, winutil
+);
 
 #[cfg(target_os = "windows")]
+#[path = "setup_orchestrator.rs"]
+mod setup;
+
+#[cfg(target_os = "windows")]
+pub use acl::allow_null_device;
+#[cfg(target_os = "windows")]
+pub use acl::ensure_allow_write_aces;
+#[cfg(target_os = "windows")]
+pub use acl::fetch_dacl_handle;
+#[cfg(target_os = "windows")]
+pub use acl::path_mask_allows;
+#[cfg(target_os = "windows")]
 pub use audit::apply_world_writable_scan_and_denies;
+#[cfg(target_os = "windows")]
+pub use cap::load_or_create_cap_sids;
+#[cfg(target_os = "windows")]
+pub use dpapi::protect as dpapi_protect;
+#[cfg(target_os = "windows")]
+pub use dpapi::unprotect as dpapi_unprotect;
+#[cfg(target_os = "windows")]
+pub use identity::require_logon_sandbox_creds;
+#[cfg(target_os = "windows")]
+pub use logging::log_note;
+#[cfg(target_os = "windows")]
+pub use logging::LOG_FILE_NAME;
+#[cfg(target_os = "windows")]
+pub use policy::parse_policy;
+#[cfg(target_os = "windows")]
+pub use policy::SandboxPolicy;
+#[cfg(target_os = "windows")]
+pub use process::create_process_as_user;
+#[cfg(target_os = "windows")]
+pub use setup::run_elevated_setup;
+#[cfg(target_os = "windows")]
+pub use setup::run_setup_refresh;
+#[cfg(target_os = "windows")]
+pub use setup::sandbox_dir;
+#[cfg(target_os = "windows")]
+pub use setup::SETUP_VERSION;
+#[cfg(target_os = "windows")]
+pub use token::convert_string_sid_to_sid;
+#[cfg(target_os = "windows")]
+pub use token::create_readonly_token_with_cap_from;
+#[cfg(target_os = "windows")]
+pub use token::create_workspace_write_token_with_cap_from;
+#[cfg(target_os = "windows")]
+pub use token::get_current_token_for_restriction;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_capture;
 #[cfg(target_os = "windows")]
 pub use windows_impl::CaptureResult;
+#[cfg(target_os = "windows")]
+pub use winutil::string_from_sid_bytes;
+#[cfg(target_os = "windows")]
+pub use winutil::to_wide;
 
 #[cfg(not(target_os = "windows"))]
 pub use stub::apply_world_writable_scan_and_denies;

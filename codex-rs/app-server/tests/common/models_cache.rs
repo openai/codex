@@ -6,6 +6,8 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ReasoningSummaryFormat;
+use codex_protocol::openai_models::TruncationPolicyConfig;
 use serde_json::json;
 use std::path::Path;
 
@@ -28,6 +30,15 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         priority,
         upgrade: preset.upgrade.as_ref().map(|u| u.id.clone()),
         base_instructions: None,
+        supports_reasoning_summaries: false,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        context_window: None,
+        reasoning_summary_format: ReasoningSummaryFormat::None,
+        experimental_supported_tools: Vec::new(),
     }
 }
 

@@ -1,0 +1,9 @@
+---
+source: tui2/src/bottom_pane/feedback_view.rs
+expression: rendered
+---
+▌ Tell us more (bug)
+▌
+▌ (optional) Write a short description to help us further
+
+Press enter to confirm or esc to go back

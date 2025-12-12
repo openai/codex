@@ -300,36 +300,37 @@ impl From<Vec<UserInput>> for ResponseInputItem {
             role: "user".to_string(),
             content: items
                 .into_iter()
-                .map(|c| match c {
-                    UserInput::Text { text } => ContentItem::InputText { text },
-                    UserInput::Image { image_url } => ContentItem::InputImage { image_url },
+                .filter_map(|c| match c {
+                    UserInput::Text { text } => Some(ContentItem::InputText { text }),
+                    UserInput::Image { image_url } => Some(ContentItem::InputImage { image_url }),
                     UserInput::LocalImage { path } => match load_and_resize_to_fit(&path) {
-                        Ok(image) => ContentItem::InputImage {
+                        Ok(image) => Some(ContentItem::InputImage {
                             image_url: image.into_data_url(),
-                        },
+                        }),
                         Err(err) => {
                             if matches!(&err, ImageProcessingError::Read { .. }) {
-                                local_image_error_placeholder(&path, &err)
+                                Some(local_image_error_placeholder(&path, &err))
                             } else if err.is_invalid_image() {
-                                invalid_image_error_placeholder(&path, &err)
+                                Some(invalid_image_error_placeholder(&path, &err))
                             } else {
                                 let Some(mime_guess) = mime_guess::from_path(&path).first() else {
-                                    return local_image_error_placeholder(
+                                    return Some(local_image_error_placeholder(
                                         &path,
                                         "unsupported MIME type (unknown)",
-                                    );
+                                    ));
                                 };
                                 let mime = mime_guess.essence_str().to_owned();
                                 if !mime.starts_with("image/") {
-                                    return local_image_error_placeholder(
+                                    return Some(local_image_error_placeholder(
                                         &path,
                                         format!("unsupported MIME type `{mime}`"),
-                                    );
+                                    ));
                                 }
-                                unsupported_image_error_placeholder(&path, &mime)
+                                Some(unsupported_image_error_placeholder(&path, &mime))
                             }
                         }
                     },
+                    UserInput::Skill { .. } => None, // Skill bodies are injected later in core
                 })
                 .collect::<Vec<ContentItem>>(),
         }
