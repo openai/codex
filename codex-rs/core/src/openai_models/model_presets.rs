@@ -237,9 +237,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     ]
 });
 
-pub(in crate::openai_models) fn builtin_model_presets(
-    _auth_mode: Option<AuthMode>,
-) -> Vec<ModelPreset> {
+pub(super) fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
     PRESETS
         .iter()
         .filter(|preset| preset.show_in_picker)
