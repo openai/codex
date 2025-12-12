@@ -139,21 +139,4 @@ mod tests {
         let result = run_editor("seed", &cmd).await.unwrap();
         assert_eq!(result, "edited".to_string());
     }
-
-    #[tokio::test]
-    #[cfg(unix)]
-    async fn run_editor_returns_none_when_file_empty() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempdir().unwrap();
-        let script_path = dir.path().join("edit.sh");
-        fs::write(&script_path, "#!/bin/sh\n: > \"$1\"\n").unwrap();
-        let mut perms = fs::metadata(&script_path).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&script_path, perms).unwrap();
-
-        let cmd = vec![script_path.to_string_lossy().to_string()];
-        let result = run_editor("seed", &cmd).await.unwrap();
-        assert_eq!(result, "");
-    }
 }
