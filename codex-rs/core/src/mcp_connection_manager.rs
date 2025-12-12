@@ -183,20 +183,17 @@ struct ManagedClient {
 }
 
 impl ManagedClient {
-    async fn notify_sandbox_state(&self, sandbox_state: &SandboxState) -> Result<()> {
+    async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
         if !self.server_supports_sandbox_state_capability {
             return Ok(());
         }
+
         self.client
             .send_custom_notification(
                 MCP_SANDBOX_STATE_NOTIFICATION,
                 Some(serde_json::to_value(sandbox_state)?),
             )
             .await
-    }
-
-    async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
-        self.notify_sandbox_state(sandbox_state).await
     }
 }
 
