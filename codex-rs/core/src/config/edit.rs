@@ -90,7 +90,7 @@ mod document_helpers {
         }
     }
 
-    pub(super) fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
+    fn serialize_mcp_server_table(config: &McpServerConfig) -> TomlTable {
         let mut entry = TomlTable::new();
         entry.set_implicit(false);
 
@@ -161,27 +161,19 @@ mod document_helpers {
             entry["disabled_tools"] = array_from_iter(disabled_tools.iter().cloned());
         }
 
-        TomlItem::Table(entry)
+        entry
+    }
+
+    pub(super) fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
+        TomlItem::Table(serialize_mcp_server_table(config))
     }
 
     pub(super) fn serialize_mcp_server_inline(config: &McpServerConfig) -> InlineTable {
-        let TomlItem::Table(entry) = serialize_mcp_server(config) else {
-            return InlineTable::new();
-        };
-
-        entry.into_inline_table()
+        serialize_mcp_server_table(config).into_inline_table()
     }
 
     pub(super) fn merge_inline_table(existing: &mut InlineTable, replacement: InlineTable) {
-        let keys_to_remove: Vec<String> = existing
-            .iter()
-            .map(|(key, _)| key.to_string())
-            .filter(|key| replacement.get(key.as_str()).is_none())
-            .collect();
-
-        for key in keys_to_remove {
-            existing.remove(&key);
-        }
+        existing.retain(|key, _| replacement.get(key).is_some());
 
         for (key, value) in replacement.iter() {
             if let Some(existing_value) = existing.get_mut(key) {
@@ -359,7 +351,11 @@ impl ConfigDocument {
             return false;
         };
 
-        let Some(table) = document_helpers::ensure_table_for_write(item) else {
+        if document_helpers::ensure_table_for_write(item).is_none() {
+            *item = TomlItem::Table(document_helpers::new_implicit_table());
+        }
+
+        let Some(table) = item.as_table_mut() else {
             return false;
         };
 
