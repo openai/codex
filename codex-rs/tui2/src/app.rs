@@ -21,6 +21,7 @@ use crate::skill_error_prompt::SkillErrorPromptOutcome;
 use crate::skill_error_prompt::run_skill_error_prompt;
 use crate::tui;
 use crate::tui::TuiEvent;
+use crate::tui::scrolling::TranscriptScroll;
 use crate::update_action::UpdateAction;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
@@ -339,21 +340,6 @@ pub(crate) struct App {
     skip_world_writable_scan_once: bool,
 }
 
-/// Scroll state for the inline transcript viewport.
-///
-/// This tracks whether the transcript is pinned to the latest line or anchored
-/// at a specific cell/line pair so later viewport changes can implement
-/// scrollback without losing the notion of "bottom".
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, Default)]
-enum TranscriptScroll {
-    #[default]
-    ToBottom,
-    Scrolled {
-        cell_index: usize,
-        line_in_cell: usize,
-    },
-}
 /// Content-relative selection within the inline transcript viewport.
 ///
 /// Selection endpoints are expressed in terms of flattened, wrapped transcript
@@ -494,7 +480,7 @@ impl App {
             file_search,
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
-            transcript_scroll: TranscriptScroll::ToBottom,
+            transcript_scroll: TranscriptScroll::default(),
             transcript_selection: TranscriptSelection::default(),
             transcript_view_top: 0,
             transcript_total_lines: 0,
@@ -676,7 +662,7 @@ impl App {
     ) -> u16 {
         let area = frame.area();
         if area.width == 0 || area.height == 0 {
-            self.transcript_scroll = TranscriptScroll::ToBottom;
+            self.transcript_scroll = TranscriptScroll::default();
             self.transcript_view_top = 0;
             self.transcript_total_lines = 0;
             return area.bottom().saturating_sub(chat_height);
@@ -685,7 +671,7 @@ impl App {
         let chat_height = chat_height.min(area.height);
         let max_transcript_height = area.height.saturating_sub(chat_height);
         if max_transcript_height == 0 {
-            self.transcript_scroll = TranscriptScroll::ToBottom;
+            self.transcript_scroll = TranscriptScroll::default();
             self.transcript_view_top = 0;
             self.transcript_total_lines = 0;
             return area.y;
@@ -701,7 +687,7 @@ impl App {
         let (lines, meta) = Self::build_transcript_lines(cells, transcript_area.width);
         if lines.is_empty() {
             Clear.render_ref(transcript_area, frame.buffer);
-            self.transcript_scroll = TranscriptScroll::ToBottom;
+            self.transcript_scroll = TranscriptScroll::default();
             self.transcript_view_top = 0;
             self.transcript_total_lines = 0;
             return area.y;
@@ -709,7 +695,7 @@ impl App {
 
         let wrapped = word_wrap_lines_borrowed(&lines, transcript_area.width.max(1) as usize);
         if wrapped.is_empty() {
-            self.transcript_scroll = TranscriptScroll::ToBottom;
+            self.transcript_scroll = TranscriptScroll::default();
             self.transcript_view_top = 0;
             self.transcript_total_lines = 0;
             return area.y;
@@ -745,30 +731,8 @@ impl App {
         let max_visible = std::cmp::min(max_transcript_height as usize, total_lines);
         let max_start = total_lines.saturating_sub(max_visible);
 
-        let top_offset = match self.transcript_scroll {
-            TranscriptScroll::ToBottom => max_start,
-            TranscriptScroll::Scrolled {
-                cell_index,
-                line_in_cell,
-            } => {
-                let mut anchor = None;
-                for (idx, entry) in meta.iter().enumerate() {
-                    if let Some((ci, li)) = entry
-                        && *ci == cell_index
-                        && *li == line_in_cell
-                    {
-                        anchor = Some(idx);
-                        break;
-                    }
-                }
-                if let Some(idx) = anchor {
-                    idx.min(max_start)
-                } else {
-                    self.transcript_scroll = TranscriptScroll::ToBottom;
-                    max_start
-                }
-            }
-        };
+        let (scroll_state, top_offset) = self.transcript_scroll.resolve_top(&meta, max_start);
+        self.transcript_scroll = scroll_state;
         self.transcript_view_top = top_offset;
 
         let transcript_visible_height = max_visible as u16;
@@ -974,69 +938,10 @@ impl App {
             return;
         }
 
-        let (lines, meta) = Self::build_transcript_lines(&self.transcript_cells, width);
-        let total_lines = lines.len();
-        if total_lines <= visible_lines {
-            self.transcript_scroll = TranscriptScroll::ToBottom;
-            return;
-        }
-
-        let max_start = total_lines.saturating_sub(visible_lines);
-
-        let current_top = match self.transcript_scroll {
-            TranscriptScroll::ToBottom => max_start,
-            TranscriptScroll::Scrolled {
-                cell_index,
-                line_in_cell,
-            } => {
-                let mut anchor = None;
-                for (idx, entry) in meta.iter().enumerate() {
-                    if let Some((ci, li)) = entry
-                        && *ci == cell_index
-                        && *li == line_in_cell
-                    {
-                        anchor = Some(idx);
-                        break;
-                    }
-                }
-                anchor.unwrap_or(max_start).min(max_start)
-            }
-        };
-
-        if delta_lines == 0 {
-            return;
-        }
-
-        let new_top = if delta_lines < 0 {
-            current_top.saturating_sub(delta_lines.unsigned_abs() as usize)
-        } else {
-            current_top
-                .saturating_add(delta_lines as usize)
-                .min(max_start)
-        };
-
-        if new_top == max_start {
-            self.transcript_scroll = TranscriptScroll::ToBottom;
-        } else {
-            let anchor = meta.iter().skip(new_top).find_map(|entry| *entry);
-            if let Some((cell_index, line_in_cell)) = anchor {
-                self.transcript_scroll = TranscriptScroll::Scrolled {
-                    cell_index,
-                    line_in_cell,
-                };
-            } else if let Some(prev_idx) = (0..=new_top).rfind(|&idx| meta[idx].is_some()) {
-                if let Some((cell_index, line_in_cell)) = meta[prev_idx] {
-                    self.transcript_scroll = TranscriptScroll::Scrolled {
-                        cell_index,
-                        line_in_cell,
-                    };
-                } else {
-                    self.transcript_scroll = TranscriptScroll::ToBottom;
-                }
-            } else {
-                self.transcript_scroll = TranscriptScroll::ToBottom;
-            }
-        }
+        let (_, meta) = Self::build_transcript_lines(&self.transcript_cells, width);
+        self.transcript_scroll =
+            self.transcript_scroll
+                .scrolled_by(delta_lines, &meta, visible_lines);
 
         tui.frame_requester().schedule_frame();
     }
@@ -1073,22 +978,8 @@ impl App {
             }
         };
 
-        let mut anchor = None;
-        if let Some((cell_index, line_in_cell)) = meta.iter().skip(top_offset).flatten().next() {
-            anchor = Some((*cell_index, *line_in_cell));
-        }
-        if anchor.is_none()
-            && let Some((cell_index, line_in_cell)) =
-                meta[..top_offset].iter().rev().flatten().next()
-        {
-            anchor = Some((*cell_index, *line_in_cell));
-        }
-
-        if let Some((cell_index, line_in_cell)) = anchor {
-            self.transcript_scroll = TranscriptScroll::Scrolled {
-                cell_index,
-                line_in_cell,
-            };
+        if let Some(scroll_state) = TranscriptScroll::anchor_for(&meta, top_offset) {
+            self.transcript_scroll = scroll_state;
         }
     }
 
@@ -2262,7 +2153,7 @@ mod tests {
             active_profile: None,
             file_search,
             transcript_cells: Vec::new(),
-            transcript_scroll: TranscriptScroll::ToBottom,
+            transcript_scroll: TranscriptScroll::default(),
             transcript_selection: TranscriptSelection::default(),
             transcript_view_top: 0,
             transcript_total_lines: 0,
@@ -2306,7 +2197,7 @@ mod tests {
                 active_profile: None,
                 file_search,
                 transcript_cells: Vec::new(),
-                transcript_scroll: TranscriptScroll::ToBottom,
+                transcript_scroll: TranscriptScroll::default(),
                 transcript_selection: TranscriptSelection::default(),
                 transcript_view_top: 0,
                 transcript_total_lines: 0,

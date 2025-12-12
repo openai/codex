@@ -49,6 +49,7 @@ use crate::tui::job_control::SuspendContext;
 mod frame_requester;
 #[cfg(unix)]
 mod job_control;
+pub(crate) mod scrolling;
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
