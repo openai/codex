@@ -771,15 +771,13 @@ impl Session {
             state.session_configuration = session_configuration.clone();
             (session_configuration, sandbox_policy_changed)
         };
+        let per_turn_config = Self::build_per_turn_config(&session_configuration);
 
         if sandbox_policy_changed {
             let sandbox_state = SandboxState {
-                sandbox_policy: session_configuration.sandbox_policy.clone(),
-                codex_linux_sandbox_exe: session_configuration
-                    .original_config_do_not_use
-                    .codex_linux_sandbox_exe
-                    .clone(),
-                sandbox_cwd: session_configuration.cwd.clone(),
+                sandbox_policy: per_turn_config.sandbox_policy.clone(),
+                codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
+                sandbox_cwd: per_turn_config.cwd.clone(),
             };
             if let Err(e) = self
                 .services
@@ -793,7 +791,6 @@ impl Session {
             }
         }
 
-        let per_turn_config = Self::build_per_turn_config(&session_configuration);
         let model_family = self
             .services
             .models_manager
