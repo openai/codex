@@ -3,6 +3,7 @@ use crate::git_info::resolve_root_git_project_for_trust;
 use crate::skills::model::SkillError;
 use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
+use codex_protocol::protocol::SkillScope;
 use dunce::canonicalize as normalize_path;
 use serde::Deserialize;
 use std::collections::VecDeque;
@@ -53,10 +54,21 @@ impl fmt::Display for SkillParseError {
 impl Error for SkillParseError {}
 
 pub fn load_skills(config: &Config) -> SkillLoadOutcome {
+    load_skills_from_roots(skill_roots(config))
+}
+
+pub(crate) struct SkillRoot {
+    pub(crate) path: PathBuf,
+    pub(crate) scope: SkillScope,
+}
+
+pub(crate) fn load_skills_from_roots<I>(roots: I) -> SkillLoadOutcome
+where
+    I: IntoIterator<Item = SkillRoot>,
+{
     let mut outcome = SkillLoadOutcome::default();
-    let roots = skill_roots(config);
     for root in roots {
-        discover_skills_under_root(&root, &mut outcome);
+        discover_skills_under_root(&root.path, root.scope, &mut outcome);
     }
 
     outcome
@@ -66,21 +78,33 @@ pub fn load_skills(config: &Config) -> SkillLoadOutcome {
     outcome
 }
 
-fn skill_roots(config: &Config) -> Vec<PathBuf> {
-    let mut roots = vec![config.codex_home.join(SKILLS_DIR_NAME)];
+pub(crate) fn user_skills_root(codex_home: &Path) -> SkillRoot {
+    SkillRoot {
+        path: codex_home.join(SKILLS_DIR_NAME),
+        scope: SkillScope::User,
+    }
+}
 
-    if let Some(repo_root) = resolve_root_git_project_for_trust(&config.cwd) {
-        roots.push(
-            repo_root
-                .join(REPO_ROOT_CONFIG_DIR_NAME)
-                .join(SKILLS_DIR_NAME),
-        );
+pub(crate) fn repo_skills_root(cwd: &Path) -> Option<SkillRoot> {
+    resolve_root_git_project_for_trust(cwd).map(|repo_root| SkillRoot {
+        path: repo_root
+            .join(REPO_ROOT_CONFIG_DIR_NAME)
+            .join(SKILLS_DIR_NAME),
+        scope: SkillScope::Repo,
+    })
+}
+
+fn skill_roots(config: &Config) -> Vec<SkillRoot> {
+    let mut roots = vec![user_skills_root(&config.codex_home)];
+
+    if let Some(repo_root) = repo_skills_root(&config.cwd) {
+        roots.push(repo_root);
     }
 
     roots
 }
 
-fn discover_skills_under_root(root: &Path, outcome: &mut SkillLoadOutcome) {
+fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut SkillLoadOutcome) {
     let Ok(root) = normalize_path(root) else {
         return;
     };
@@ -124,7 +148,7 @@ fn discover_skills_under_root(root: &Path, outcome: &mut SkillLoadOutcome) {
             }
 
             if file_type.is_file() && file_name == SKILLS_FILENAME {
-                match parse_skill_file(&path) {
+                match parse_skill_file(&path, scope) {
                     Ok(skill) => outcome.skills.push(skill),
                     Err(err) => outcome.errors.push(SkillError {
                         path,
@@ -136,7 +160,7 @@ fn discover_skills_under_root(root: &Path, outcome: &mut SkillLoadOutcome) {
     }
 }
 
-fn parse_skill_file(path: &Path) -> Result<SkillMetadata, SkillParseError> {
+fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, SkillParseError> {
     let contents = fs::read_to_string(path).map_err(SkillParseError::Read)?;
 
     let frontmatter = extract_frontmatter(&contents).ok_or(SkillParseError::MissingFrontmatter)?;
@@ -156,6 +180,7 @@ fn parse_skill_file(path: &Path) -> Result<SkillMetadata, SkillParseError> {
         name,
         description,
         path: resolved_path,
+        scope,
     })
 }
 
