@@ -264,7 +264,7 @@ pub(in crate::openai_models) fn find_family_for_model(slug: &str) -> ModelFamily
         )
 
     // Experimental models.
-    } else if slug.starts_with("exp-codex") {
+    } else if slug.starts_with("exp-codex") || slug.starts_with("codex-1p") {
         // Same as gpt-5.1-codex-max.
         model_family!(
             slug, slug,
@@ -318,7 +318,7 @@ pub(in crate::openai_models) fn find_family_for_model(slug: &str) -> ModelFamily
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
-            supports_parallel_tool_calls: false,
+            supports_parallel_tool_calls: true,
             support_verbosity: false,
             truncation_policy: TruncationPolicy::Tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
