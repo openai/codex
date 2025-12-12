@@ -78,10 +78,8 @@ async fn returns_empty_when_all_layers_missing() {
 
     #[cfg(not(target_os = "macos"))]
     {
-        let table = layers
-            .effective_config()
-            .as_table()
-            .expect("top-level table expected");
+        let effective = layers.effective_config();
+        let table = effective.as_table().expect("top-level table expected");
         assert!(
             table.is_empty(),
             "expected empty table when configs missing"
