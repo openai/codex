@@ -2379,7 +2379,8 @@ impl ChatWidget {
             format!("⚠ {effort_label} reasoning effort can quickly consume Plus plan rate limits.")
         });
         let warn_for_model = preset.model.starts_with("gpt-5.1-codex")
-            || preset.model.starts_with("gpt-5.1-codex-max");
+            || preset.model.starts_with("gpt-5.1-codex-max")
+            || preset.model.starts_with("gpt-5.2");
 
         struct EffortChoice {
             stored: Option<ReasoningEffortConfig>,
