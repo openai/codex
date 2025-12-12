@@ -1197,7 +1197,7 @@ impl App {
             let _ = tui.leave_alt_screen();
         }
 
-        let restore_modes = tui::restore();
+        let restore_modes = tui::restore_keep_raw();
         if let Err(err) = restore_modes {
             tracing::warn!("failed to restore terminal modes before editor: {err}");
         }

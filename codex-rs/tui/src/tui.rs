@@ -118,16 +118,29 @@ impl Command for DisableAlternateScroll {
     }
 }
 
-/// Restore the terminal to its original state.
-/// Inverse of `set_modes`.
-pub fn restore() -> Result<()> {
+fn restore_common(should_disable_raw_mode: bool) -> Result<()> {
     // Pop may fail on platforms that didn't support the push; ignore errors.
     let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
     execute!(stdout(), DisableBracketedPaste)?;
     let _ = execute!(stdout(), DisableFocusChange);
-    disable_raw_mode()?;
+    if should_disable_raw_mode {
+        disable_raw_mode()?;
+    }
     let _ = execute!(stdout(), crossterm::cursor::Show);
     Ok(())
+}
+
+/// Restore the terminal to its original state.
+/// Inverse of `set_modes`.
+pub fn restore() -> Result<()> {
+    let should_disable_raw_mode = true;
+    restore_common(should_disable_raw_mode)
+}
+
+/// Restore the terminal to its original state, but keep raw mode enabled.
+pub fn restore_keep_raw() -> Result<()> {
+    let should_disable_raw_mode = false;
+    restore_common(should_disable_raw_mode)
 }
 
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
