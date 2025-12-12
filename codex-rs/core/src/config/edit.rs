@@ -1132,6 +1132,134 @@ foo = { command = "cmd" }
     }
 
     #[test]
+    fn blocking_replace_mcp_servers_preserves_inline_comment_suffix() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        std::fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            r#"[mcp_servers]
+foo = { command = "cmd" } # keep me
+"#,
+        )
+        .expect("seed");
+
+        let mut servers = BTreeMap::new();
+        servers.insert(
+            "foo".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "cmd".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: false,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+        );
+
+        apply_blocking(codex_home, None, &[ConfigEdit::ReplaceMcpServers(servers)])
+            .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[mcp_servers]
+foo = { command = "cmd", enabled = false } # keep me
+"#;
+        assert_eq!(contents, expected);
+    }
+
+    #[test]
+    fn blocking_replace_mcp_servers_preserves_inline_comment_after_removing_keys() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        std::fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            r#"[mcp_servers]
+foo = { command = "cmd", args = ["--flag"] } # keep me
+"#,
+        )
+        .expect("seed");
+
+        let mut servers = BTreeMap::new();
+        servers.insert(
+            "foo".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "cmd".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+        );
+
+        apply_blocking(codex_home, None, &[ConfigEdit::ReplaceMcpServers(servers)])
+            .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[mcp_servers]
+foo = { command = "cmd" } # keep me
+"#;
+        assert_eq!(contents, expected);
+    }
+
+    #[test]
+    fn blocking_replace_mcp_servers_preserves_inline_comment_prefix_on_update() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        std::fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            r#"[mcp_servers]
+# keep me
+foo = { command = "cmd" }
+"#,
+        )
+        .expect("seed");
+
+        let mut servers = BTreeMap::new();
+        servers.insert(
+            "foo".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "cmd".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: false,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+        );
+
+        apply_blocking(codex_home, None, &[ConfigEdit::ReplaceMcpServers(servers)])
+            .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[mcp_servers]
+# keep me
+foo = { command = "cmd", enabled = false }
+"#;
+        assert_eq!(contents, expected);
+    }
+
+    #[test]
     fn blocking_clear_path_noop_when_missing() {
         let tmp = tempdir().expect("tmpdir");
         let codex_home = tmp.path();
