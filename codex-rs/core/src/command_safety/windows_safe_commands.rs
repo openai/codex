@@ -5,6 +5,9 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::LazyLock;
 
+use crate::command_safety::shared_rules::is_safe_git_command;
+use crate::command_safety::shared_rules::is_safe_ripgrep_command;
+
 const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
 
 /// On Windows, we conservatively allow only clearly read-only PowerShell invocations
@@ -270,7 +273,7 @@ fn is_safe_powershell_command(words: &[String]) -> bool {
 
         "git" => is_safe_git_command(words),
 
-        "rg" => is_safe_ripgrep(words),
+        "rg" => is_safe_ripgrep_command(words),
 
         // Extra safety: explicitly prohibit common side-effecting cmdlets regardless of args.
         "set-content" | "add-content" | "out-file" | "new-item" | "remove-item" | "move-item"
@@ -284,64 +287,6 @@ fn is_safe_powershell_command(words: &[String]) -> bool {
             false
         }
     }
-}
-
-/// Checks that an `rg` invocation avoids options that can spawn arbitrary executables.
-fn is_safe_ripgrep(words: &[String]) -> bool {
-    const UNSAFE_RIPGREP_OPTIONS_WITH_ARGS: &[&str] = &["--pre", "--hostname-bin"];
-    const UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS: &[&str] = &["--search-zip", "-z"];
-
-    !words.iter().skip(1).any(|arg| {
-        let arg_lc = arg.to_ascii_lowercase();
-        // Examples rejected here: "pwsh -Command 'rg --pre cat pattern'" and "pwsh -Command 'rg --search-zip pattern'".
-        UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS.contains(&arg_lc.as_str())
-            || UNSAFE_RIPGREP_OPTIONS_WITH_ARGS
-                .iter()
-                .any(|opt| arg_lc == *opt || arg_lc.starts_with(&format!("{opt}=")))
-    })
-}
-
-/// Ensures a Git command sticks to whitelisted read-only subcommands and flags.
-fn is_safe_git_command(words: &[String]) -> bool {
-    const SAFE_SUBCOMMANDS: &[&str] = &["status", "log", "show", "diff", "cat-file"];
-
-    let mut iter = words.iter().skip(1);
-    while let Some(arg) = iter.next() {
-        let arg_lc = arg.to_ascii_lowercase();
-
-        if arg.starts_with('-') {
-            if arg.eq_ignore_ascii_case("-c") || arg.eq_ignore_ascii_case("--config") {
-                if iter.next().is_none() {
-                    // Examples rejected here: "pwsh -Command 'git -c'" and "pwsh -Command 'git --config'".
-                    return false;
-                }
-                continue;
-            }
-
-            if arg_lc.starts_with("-c=")
-                || arg_lc.starts_with("--config=")
-                || arg_lc.starts_with("--git-dir=")
-                || arg_lc.starts_with("--work-tree=")
-            {
-                continue;
-            }
-
-            if arg.eq_ignore_ascii_case("--git-dir") || arg.eq_ignore_ascii_case("--work-tree") {
-                if iter.next().is_none() {
-                    // Examples rejected here: "pwsh -Command 'git --git-dir'" and "pwsh -Command 'git --work-tree'".
-                    return false;
-                }
-                continue;
-            }
-
-            continue;
-        }
-
-        return SAFE_SUBCOMMANDS.contains(&arg_lc.as_str());
-    }
-
-    // Examples rejected here: "pwsh -Command 'git'" and "pwsh -Command 'git status --short | Remove-Item foo'".
-    false
 }
 
 #[cfg(all(test, windows))]
