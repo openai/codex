@@ -219,7 +219,7 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
         .replace('\r', "\n")
         .trim_end_matches('\n')
         .to_string();
-    let expected_pattern = r"(?s)^Exit code: 124\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:(?:\ncommand timed out after [0-9]+ milliseconds)?\n?$";
+    let expected_pattern = r"(?s)^Exit code: 124\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\ncommand timed out after [0-9]+ milliseconds\n?$";
     assert_regex_match(expected_pattern, &normalized_output);
 
     Ok(())
