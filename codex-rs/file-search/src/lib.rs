@@ -162,14 +162,15 @@ pub fn run(
         // Follow symlinks to search their contents.
         .follow_links(true)
         // Don't require git to be present to apply to apply git-related ignore rules.
-        .require_git(false);
+        .require_git(false)
+        // Don't let ignore rules "leak" from parent directories above the search root.
+        .parents(false);
     if !respect_gitignore {
         walk_builder
             .git_ignore(false)
             .git_global(false)
             .git_exclude(false)
-            .ignore(false)
-            .parents(false);
+            .ignore(false);
     }
 
     if !exclude.is_empty() {
