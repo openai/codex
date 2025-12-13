@@ -410,7 +410,7 @@ impl ChatWidget {
         }
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
-        self.submit_op(Op::ListSkills { cwds: None });
+        self.submit_op(Op::ListSkills { cwds: Vec::new() });
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
