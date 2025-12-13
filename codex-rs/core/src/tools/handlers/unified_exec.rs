@@ -296,6 +296,8 @@ fn format_response(response: &UnifiedExecResponse) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::powershell::prefix_utf8_output;
+    use crate::shell::ShellType;
     use crate::shell::default_user_shell;
     use std::sync::Arc;
 
@@ -308,10 +310,17 @@ mod tests {
 
         assert!(args.shell.is_none());
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let session_shell = Arc::new(default_user_shell());
+        let expected_script = if session_shell.shell_type == ShellType::PowerShell {
+            prefix_utf8_output("echo hello")
+        } else {
+            "echo hello".to_string()
+        };
+
+        let command = get_command(&args, session_shell);
 
         assert_eq!(command.len(), 3);
-        assert_eq!(command[2], "echo hello");
+        assert_eq!(command.last(), Some(&expected_script));
     }
 
     #[test]
@@ -345,7 +354,7 @@ mod tests {
 
         let command = get_command(&args, Arc::new(default_user_shell()));
 
-        assert_eq!(command[2], "echo hello");
+        assert_eq!(command[2], prefix_utf8_output("echo hello"));
     }
 
     #[test]

@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::powershell::prefix_utf8_output;
 use crate::shell_snapshot::ShellSnapshot;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -52,7 +53,7 @@ impl Shell {
                 }
 
                 args.push("-Command".to_string());
-                args.push(command.to_string());
+                args.push(prefix_utf8_output(command));
                 args
             }
             ShellType::Cmd => {
@@ -340,6 +341,7 @@ mod detect_shell_type_tests {
 #[cfg(unix)]
 mod tests {
     use super::*;
+    use crate::powershell::UTF8_OUTPUT_PREFIX;
     use std::path::PathBuf;
     use std::process::Command;
 
@@ -457,11 +459,20 @@ mod tests {
         };
         assert_eq!(
             test_powershell_shell.derive_exec_args("echo hello", false),
-            vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"]
+            vec![
+                "pwsh.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                format!("{UTF8_OUTPUT_PREFIX}echo hello"),
+            ]
         );
         assert_eq!(
             test_powershell_shell.derive_exec_args("echo hello", true),
-            vec!["pwsh.exe", "-Command", "echo hello"]
+            vec![
+                "pwsh.exe".to_string(),
+                "-Command".to_string(),
+                format!("{UTF8_OUTPUT_PREFIX}echo hello"),
+            ]
         );
     }
 

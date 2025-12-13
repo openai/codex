@@ -94,6 +94,10 @@ pub enum MaybeApplyPatch {
     NotApplyPatch,
 }
 
+/// Prelude injected into PowerShell scripts in codex-core to force UTF-8 stdout encoding.
+/// Keep this in sync with core/src/powershell.rs.
+const POWERSHELL_UTF8_OUTPUT_PREFIX: &str = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;";
+
 /// Both the raw PATCH argument to `apply_patch` as well as the PATCH argument
 /// parsed into hunks.
 #[derive(Debug, PartialEq)]
@@ -127,6 +131,15 @@ fn can_skip_flag(shell: &str, flag: &str) -> bool {
     })
 }
 
+fn strip_powershell_utf8_output_prefix(script: &str) -> &str {
+    let trimmed = script.trim_start();
+    if let Some(rest) = trimmed.strip_prefix(POWERSHELL_UTF8_OUTPUT_PREFIX) {
+        rest.trim_start_matches(|c: char| c.is_whitespace() || c == ';')
+    } else {
+        script
+    }
+}
+
 fn parse_shell_script(argv: &[String]) -> Option<(ApplyPatchShell, &str)> {
     match argv {
         [shell, flag, script] => classify_shell(shell, flag).map(|shell_type| {
@@ -148,7 +161,9 @@ fn extract_apply_patch_from_shell(
     script: &str,
 ) -> std::result::Result<(String, Option<String>), ExtractHeredocError> {
     match shell {
-        ApplyPatchShell::Unix | ApplyPatchShell::PowerShell | ApplyPatchShell::Cmd => {
+        ApplyPatchShell::Unix | ApplyPatchShell::Cmd => extract_apply_patch_from_bash(script),
+        ApplyPatchShell::PowerShell => {
+            let script = strip_powershell_utf8_output_prefix(script);
             extract_apply_patch_from_bash(script)
         }
     }
@@ -1093,6 +1108,11 @@ PATCH"#,
     fn test_powershell_heredoc_no_profile() {
         let script = heredoc_script("");
         assert_match_args(args_powershell_no_profile(&script), None);
+    }
+    #[test]
+    fn test_powershell_heredoc_with_utf8_prefix() {
+        let script = format!("{POWERSHELL_UTF8_OUTPUT_PREFIX}{}", heredoc_script(""));
+        assert_match_args(args_powershell(&script), None);
     }
     #[test]
     fn test_pwsh_heredoc() {

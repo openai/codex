@@ -155,7 +155,10 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     })
     .await;
     assert_eq!(begin_event.source, ExecCommandSource::UserShell);
-    let matches_last_arg = begin_event.command.last() == Some(&command);
+    let matches_last_arg = begin_event
+        .command
+        .last()
+        .is_some_and(|last_arg| last_arg == &command || last_arg.ends_with(&command));
     let matches_split = shlex::split(&command).is_some_and(|split| split == begin_event.command);
     assert!(
         matches_last_arg || matches_split,
