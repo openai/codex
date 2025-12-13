@@ -40,7 +40,7 @@ struct ExecCommandArgs {
     yield_time_ms: u64,
     #[serde(default)]
     max_output_tokens: Option<usize>,
-    #[serde(default)]
+    #[serde(default, alias = "with_escalated_permissions")]
     sandbox_permissions: SandboxPermissions,
     #[serde(default)]
     justification: Option<String>,
