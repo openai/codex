@@ -643,6 +643,25 @@ impl UnifiedExecSessionManager {
             entry.session.terminate();
         }
     }
+
+    pub(crate) async fn terminate_sessions_for_turn(&self, sub_id: &str) {
+        let entries: Vec<SessionEntry> = {
+            let mut sessions = self.session_store.lock().await;
+            let ids: Vec<String> = sessions
+                .sessions
+                .iter()
+                .filter(|(_, entry)| entry.turn_ref.sub_id == sub_id)
+                .map(|(id, _)| id.clone())
+                .collect();
+            ids.into_iter()
+                .filter_map(|id| sessions.remove(&id))
+                .collect()
+        };
+
+        for entry in entries {
+            entry.session.terminate();
+        }
+    }
 }
 
 enum SessionStatus {
