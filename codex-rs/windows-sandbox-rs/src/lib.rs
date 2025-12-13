@@ -101,6 +101,7 @@ mod windows_impl {
     use super::winutil::format_last_error;
     use super::winutil::quote_windows_arg;
     use super::winutil::to_wide;
+    use anyhow::Context;
     use anyhow::Result;
     use std::collections::HashMap;
     use std::ffi::c_void;
@@ -242,22 +243,43 @@ mod windows_impl {
         let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
         unsafe {
             for p in &allow {
-                if let Ok(added) = add_allow_ace(p, psid_to_use) {
-                    if added {
-                        if persist_aces {
-                            if p.is_dir() {
-                                // best-effort seeding omitted intentionally
+                match add_allow_ace(p, psid_to_use) {
+                    Ok(added) => {
+                        if added {
+                            if persist_aces {
+                                if p.is_dir() {
+                                    // best-effort seeding omitted intentionally
+                                }
+                            } else {
+                                guards.push((p.clone(), psid_to_use));
                             }
-                        } else {
-                            guards.push((p.clone(), psid_to_use));
                         }
+                    }
+                    Err(e) => {
+                        log_failure(
+                            &command,
+                            &format!("failed to grant allow ACE on {}: {}", p.display(), e),
+                            logs_base_dir,
+                        );
+                        return Err(e.context(format!("failed to grant allow ACE on {}", p.display())));
                     }
                 }
             }
             for p in &deny {
-                if let Ok(added) = add_deny_write_ace(p, psid_to_use) {
-                    if added && !persist_aces {
-                        guards.push((p.clone(), psid_to_use));
+                match add_deny_write_ace(p, psid_to_use) {
+                    Ok(added) => {
+                        if added && !persist_aces {
+                            guards.push((p.clone(), psid_to_use));
+                        }
+                    }
+                    Err(e) => {
+                        log_failure(
+                            &command,
+                            &format!("failed to add deny ACE on {}: {}", p.display(), e),
+                            logs_base_dir,
+                        );
+                        // Deny ACE failure is critical if we need to block access (e.g. .git)
+                        return Err(e.context(format!("failed to add deny ACE on {}", p.display())));
                     }
                 }
             }
