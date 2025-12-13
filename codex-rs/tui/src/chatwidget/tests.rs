@@ -368,6 +368,7 @@ async fn helpers_are_available_and_do_not_panic() {
         auth_manager,
         models_manager: conversation_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
+        skills: None,
         is_first_run: true,
         model_family,
     };

@@ -264,6 +264,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
+    pub(crate) skills: Option<Vec<SkillMetadata>>,
     pub(crate) is_first_run: bool,
     pub(crate) model_family: ModelFamily,
 }
@@ -1268,6 +1269,7 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             feedback,
+            skills,
             is_first_run,
             model_family,
         } = common;
@@ -1290,7 +1292,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
-                skills: None,
+                skills,
             }),
             active_cell: None,
             config,
@@ -1354,6 +1356,7 @@ impl ChatWidget {
             models_manager,
             feedback,
             model_family,
+            skills,
             ..
         } = common;
         let model_slug = model_family.get_model_slug().to_string();
@@ -1375,7 +1378,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
-                skills: None,
+                skills,
             }),
             active_cell: None,
             config,

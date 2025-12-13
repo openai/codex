@@ -66,6 +66,12 @@ impl ConversationManager {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    /// Construct with an AuthManager for tests without re-wrapping CodexAuth.
+    pub fn with_auth_for_testing(auth_manager: Arc<AuthManager>) -> Self {
+        Self::new(auth_manager, SessionSource::Exec)
+    }
+
     pub fn session_source(&self) -> SessionSource {
         self.session_source.clone()
     }

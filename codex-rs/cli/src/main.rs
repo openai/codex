@@ -312,6 +312,9 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     let update_action = exit_info.update_action;
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
+    for line in exit_info.session_lines.iter() {
+        println!("{line}");
+    }
     for line in format_exit_messages(exit_info, color_enabled) {
         println!("{line}");
     }
@@ -657,14 +660,15 @@ fn prepend_config_flags(
 }
 
 /// Run the interactive Codex TUI, dispatching to either the legacy implementation or the
-/// experimental TUI v2 shim based on feature flags resolved from config.
+/// experimental TUI v2 implementation based on feature flags resolved from config.
 async fn run_interactive_tui(
     interactive: TuiCli,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> std::io::Result<AppExitInfo> {
     if is_tui2_enabled(&interactive).await? {
-        let result = tui2::run_main(interactive.into(), codex_linux_sandbox_exe).await?;
-        Ok(result.into())
+        let tui2_cli: tui2::Cli = interactive.into();
+        let exit_info = tui2::run_main(tui2_cli, codex_linux_sandbox_exe).await?;
+        Ok(exit_info.into())
     } else {
         codex_tui::run_main(interactive, codex_linux_sandbox_exe).await
     }
@@ -818,6 +822,7 @@ mod tests {
                 .map(ConversationId::from_string)
                 .map(Result::unwrap),
             update_action: None,
+            session_lines: Vec::new(),
         }
     }
 
@@ -827,6 +832,7 @@ mod tests {
             token_usage: TokenUsage::default(),
             conversation_id: None,
             update_action: None,
+            session_lines: Vec::new(),
         };
         let lines = format_exit_messages(exit_info, false);
         assert!(lines.is_empty());

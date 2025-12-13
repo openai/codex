@@ -22,6 +22,9 @@ pub(crate) struct FooterProps {
     pub(crate) is_task_running: bool,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
+    pub(crate) transcript_scrolled: bool,
+    pub(crate) transcript_selection_active: bool,
+    pub(crate) transcript_scroll_position: Option<(usize, usize)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,6 +97,27 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 key_hint::plain(KeyCode::Char('?')).into(),
                 " for shortcuts".dim(),
             ]);
+            if props.transcript_scrolled {
+                line.push_span(" · ".dim());
+                line.push_span(key_hint::plain(KeyCode::PageUp));
+                line.push_span("/");
+                line.push_span(key_hint::plain(KeyCode::PageDown));
+                line.push_span(" scroll".dim());
+                line.push_span(" · ".dim());
+                line.push_span(key_hint::plain(KeyCode::Home));
+                line.push_span("/");
+                line.push_span(key_hint::plain(KeyCode::End));
+                line.push_span(" jump".dim());
+                if let Some((current, total)) = props.transcript_scroll_position {
+                    line.push_span(" · ".dim());
+                    line.push_span(Span::from(format!("{current}/{total}")).dim());
+                }
+            }
+            if props.transcript_selection_active {
+                line.push_span(" · ".dim());
+                line.push_span(key_hint::ctrl(KeyCode::Char('y')));
+                line.push_span(" copy selection".dim());
+            }
             vec![line]
         }
         FooterMode::ShortcutOverlay => {
@@ -440,6 +464,24 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                transcript_scrolled: false,
+                transcript_selection_active: false,
+                transcript_scroll_position: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_shortcuts_transcript_scrolled_and_selection",
+            FooterProps {
+                mode: FooterMode::ShortcutSummary,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                context_window_percent: None,
+                context_window_used_tokens: None,
+                transcript_scrolled: true,
+                transcript_selection_active: true,
+                transcript_scroll_position: Some((3, 42)),
             },
         );
 
@@ -452,6 +494,9 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                transcript_scrolled: false,
+                transcript_selection_active: false,
+                transcript_scroll_position: None,
             },
         );
 
@@ -464,6 +509,9 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                transcript_scrolled: false,
+                transcript_selection_active: false,
+                transcript_scroll_position: None,
             },
         );
 
@@ -476,6 +524,9 @@ mod tests {
                 is_task_running: true,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                transcript_scrolled: false,
+                transcript_selection_active: false,
+                transcript_scroll_position: None,
             },
         );
 
@@ -488,6 +539,9 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                transcript_scrolled: false,
+                transcript_selection_active: false,
+                transcript_scroll_position: None,
             },
         );
 
@@ -500,6 +554,9 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                transcript_scrolled: false,
+                transcript_selection_active: false,
+                transcript_scroll_position: None,
             },
         );
 
@@ -512,6 +569,9 @@ mod tests {
                 is_task_running: true,
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
+                transcript_scrolled: false,
+                transcript_selection_active: false,
+                transcript_scroll_position: None,
             },
         );
 
@@ -524,6 +584,9 @@ mod tests {
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
+                transcript_scrolled: false,
+                transcript_selection_active: false,
+                transcript_scroll_position: None,
             },
         );
     }

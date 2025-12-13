@@ -105,8 +105,8 @@ arboard = { workspace = true }
 
 
 [dev-dependencies]
-codex-core = { workspace = true, features = ["test-support"] }
 assert_matches = { workspace = true }
+codex-core = { workspace = true, features = ["test-support"] }
 chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }
 pretty_assertions = { workspace = true }
@@ -114,3 +114,6 @@ rand = { workspace = true }
 serial_test = { workspace = true }
 vt100 = { workspace = true }
 uuid = { workspace = true }
+
+[package.metadata.cargo-shear]
+ignored = ["pretty_assertions", "assert_matches"]
