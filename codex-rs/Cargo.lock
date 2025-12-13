@@ -1530,7 +1530,6 @@ dependencies = [
  "anyhow",
  "arboard",
  "assert_matches",
- "async-stream",
  "base64",
  "chrono",
  "clap",

@@ -228,6 +228,8 @@ mod tests {
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
     use pretty_assertions::assert_eq;
+    use std::task::Context;
+    use std::task::Poll;
     use tokio::sync::broadcast;
     use tokio::sync::mpsc;
     use tokio_stream::StreamExt;
@@ -347,6 +349,36 @@ mod tests {
             }
             other => panic!("expected key event, got {other:?}"),
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn draw_and_key_events_yield_both() {
+        let (broker, handle, draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+
+        let expected_key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        let _ = draw_tx.send(());
+        handle.send(Ok(Event::Key(expected_key)));
+
+        let first = stream.next().await.unwrap();
+        let second = stream.next().await.unwrap();
+
+        let mut saw_draw = false;
+        let mut saw_key = false;
+        for event in [first, second] {
+            match event {
+                TuiEvent::Draw => {
+                    saw_draw = true;
+                }
+                TuiEvent::Key(key) => {
+                    assert_eq!(key, expected_key);
+                    saw_key = true;
+                }
+                other => panic!("expected draw or key event, got {other:?}"),
+            }
+        }
+
+        assert!(saw_draw && saw_key, "expected both draw and key events");
     }
 
     #[tokio::test(flavor = "current_thread")]
