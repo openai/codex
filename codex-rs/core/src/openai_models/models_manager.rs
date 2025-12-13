@@ -6,6 +6,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -107,13 +108,23 @@ impl ModelsManager {
         if let Err(err) = self.refresh_available_models(config).await {
             error!("failed to refresh available models: {err}");
         }
-        self.available_models.read().await.clone()
+        let models = self.available_models.read().await.clone();
+        // only send models with show_in_picker set to true
+        models
+            .into_iter()
+            .filter(|model| model.show_in_picker)
+            .collect()
     }
 
     pub fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
-        self.available_models
-            .try_read()
-            .map(|models| models.clone())
+        let models = self.available_models.try_read()?.clone();
+
+        // only send models with show_in_picker set to true
+        let models = models
+            .into_iter()
+            .filter(|model| model.show_in_picker)
+            .collect::<Vec<ModelPreset>>();
+        Ok(models)
     }
 
     fn find_family_for_model(slug: &str) -> ModelFamily {
@@ -123,8 +134,8 @@ impl ModelsManager {
     /// Look up the requested model family while applying remote metadata overrides.
     pub async fn construct_model_family(&self, model: &str, config: &Config) -> ModelFamily {
         Self::find_family_for_model(model)
-            .with_config_overrides(config)
             .with_remote_overrides(self.remote_models.read().await.clone())
+            .with_config_overrides(config)
     }
 
     pub async fn get_model(&self, model: &Option<String>, config: &Config) -> String {
@@ -203,21 +214,49 @@ impl ModelsManager {
         }
     }
 
-    /// Convert remote model metadata into picker-ready presets, marking defaults.
+    /// Merge remote model metadata into picker-ready presets, preserving existing entries.
     async fn build_available_models(&self) {
-        let mut available_models = self.remote_models.read().await.clone();
-        available_models.sort_by(|a, b| a.priority.cmp(&b.priority));
-        let mut model_presets: Vec<ModelPreset> = available_models
-            .into_iter()
-            .map(Into::into)
-            .filter(|preset: &ModelPreset| preset.show_in_picker)
+        // get snapshot of remote models.
+        let mut remote_models = self.remote_models.read().await.clone();
+        remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
+
+        // get snapshot of current presets and build the merge index.
+        let existing_presets = self.available_models.read().await.clone();
+        let mut merged_presets = existing_presets.clone();
+        let index_by_slug: HashMap<String, usize> = existing_presets
+            .iter()
+            .enumerate()
+            .map(|(idx, preset)| (preset.model.clone(), idx))
             .collect();
-        if let Some(default) = model_presets.first_mut() {
+
+        let mut new_models = Vec::new();
+        // apply remote updates and additions without holding locks.
+        for remote_model in remote_models {
+            let remote_preset: ModelPreset = remote_model.into();
+            tracing::error!("remote_preset: {:?}", remote_preset);
+            if let Some(idx) = index_by_slug.get(&remote_preset.model).copied() {
+                tracing::error!("idx: {:?}", idx);
+                merged_presets[idx] = remote_preset;
+                continue;
+            }
+            tracing::error!("inserting remote_preset: {:?}", remote_preset);
+            new_models.push(remote_preset);
+        }
+        merged_presets = new_models
+            .into_iter()
+            .chain(merged_presets.into_iter())
+            .collect();
+        // ensure there is always a default preset.
+        if !merged_presets.iter().any(|preset| preset.is_default)
+            && let Some(default) = merged_presets.first_mut()
+        {
             default.is_default = true;
         }
+
+        // replace the shared presets with the merged snapshot.
         {
             let mut available_models_guard = self.available_models.write().await;
-            *available_models_guard = model_presets;
+            *available_models_guard = merged_presets;
         }
     }
 
