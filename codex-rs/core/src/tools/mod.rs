@@ -70,9 +70,19 @@ pub fn format_exec_output_for_model_freeform(
     // round to 1 decimal place
     let duration_seconds = ((exec_output.duration.as_secs_f32()) * 10.0).round() / 10.0;
 
-    let total_lines = exec_output.aggregated_output.text.lines().count();
+    let content = if exec_output.timed_out {
+        format!(
+            "command timed out after {} milliseconds\n{}",
+            exec_output.duration.as_millis(),
+            exec_output.aggregated_output.text
+        )
+    } else {
+        exec_output.aggregated_output.text.clone()
+    };
 
-    let formatted_output = truncate_text(&exec_output.aggregated_output.text, truncation_policy);
+    let total_lines = content.lines().count();
+
+    let formatted_output = truncate_text(&content, truncation_policy);
 
     let mut sections = Vec::new();
 
