@@ -6,6 +6,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -107,13 +108,13 @@ impl ModelsManager {
         if let Err(err) = self.refresh_available_models(config).await {
             error!("failed to refresh available models: {err}");
         }
-        self.available_models.read().await.clone()
+        let models = self.available_models.read().await.clone();
+        Self::filter_visible_models(models)
     }
 
     pub fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
-        self.available_models
-            .try_read()
-            .map(|models| models.clone())
+        let models = self.available_models.try_read()?.clone();
+        Ok(Self::filter_visible_models(models))
     }
 
     fn find_family_for_model(slug: &str) -> ModelFamily {
@@ -123,8 +124,8 @@ impl ModelsManager {
     /// Look up the requested model family while applying remote metadata overrides.
     pub async fn construct_model_family(&self, model: &str, config: &Config) -> ModelFamily {
         Self::find_family_for_model(model)
-            .with_config_overrides(config)
             .with_remote_overrides(self.remote_models.read().await.clone())
+            .with_config_overrides(config)
     }
 
     pub async fn get_model(&self, model: &Option<String>, config: &Config) -> String {
@@ -203,22 +204,56 @@ impl ModelsManager {
         }
     }
 
-    /// Convert remote model metadata into picker-ready presets, marking defaults.
+    /// Merge remote model metadata into picker-ready presets, preserving existing entries.
     async fn build_available_models(&self) {
-        let mut available_models = self.remote_models.read().await.clone();
-        available_models.sort_by(|a, b| a.priority.cmp(&b.priority));
-        let mut model_presets: Vec<ModelPreset> = available_models
-            .into_iter()
-            .map(Into::into)
-            .filter(|preset: &ModelPreset| preset.show_in_picker)
-            .collect();
-        if let Some(default) = model_presets.first_mut() {
+        let mut remote_models = self.remote_models.read().await.clone();
+        remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
+
+        let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
+        let existing_presets = self.available_models.read().await.clone();
+        let mut merged_presets = Self::merge_presets(remote_presets, existing_presets);
+
+        let has_default = merged_presets.iter().any(|preset| preset.is_default);
+        if let Some(default) = merged_presets.first_mut()
+            && !has_default
+        {
             default.is_default = true;
         }
-        {
-            let mut available_models_guard = self.available_models.write().await;
-            *available_models_guard = model_presets;
+
+        let mut available_models_guard = self.available_models.write().await;
+        *available_models_guard = merged_presets;
+    }
+
+    fn filter_visible_models(models: Vec<ModelPreset>) -> Vec<ModelPreset> {
+        models
+            .into_iter()
+            .filter(|model| model.show_in_picker)
+            .collect()
+    }
+
+    fn merge_presets(
+        remote_presets: Vec<ModelPreset>,
+        existing_presets: Vec<ModelPreset>,
+    ) -> Vec<ModelPreset> {
+        if remote_presets.is_empty() {
+            return existing_presets;
         }
+
+        let remote_slugs: HashSet<&str> = remote_presets
+            .iter()
+            .map(|preset| preset.model.as_str())
+            .collect();
+
+        let mut merged_presets = remote_presets.clone();
+        for mut preset in existing_presets {
+            if remote_slugs.contains(preset.model.as_str()) {
+                continue;
+            }
+            preset.is_default = false;
+            merged_presets.push(preset);
+        }
+
+        merged_presets
     }
 
     fn cache_path(&self) -> PathBuf {
@@ -261,6 +296,7 @@ mod tests {
     use crate::model_provider_info::WireApi;
     use codex_protocol::openai_models::ModelsResponse;
     use core_test_support::responses::mount_models_once;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::tempdir;
     use wiremock::MockServer;
@@ -347,14 +383,23 @@ mod tests {
         assert_eq!(cached_remote, remote_models);
 
         let available = manager.list_models(&config).await;
-        assert_eq!(available.len(), 2);
-        assert_eq!(available[0].model, "priority-high");
+        let high_idx = available
+            .iter()
+            .position(|model| model.model == "priority-high")
+            .expect("priority-high should be listed");
+        let low_idx = available
+            .iter()
+            .position(|model| model.model == "priority-low")
+            .expect("priority-low should be listed");
         assert!(
-            available[0].is_default,
+            high_idx < low_idx,
+            "higher priority should be listed before lower priority"
+        );
+        assert!(
+            available[high_idx].is_default,
             "highest priority should be default"
         );
-        assert_eq!(available[1].model, "priority-low");
-        assert!(!available[1].is_default);
+        assert!(!available[low_idx].is_default);
         assert_eq!(
             models_mock.requests().len(),
             1,
