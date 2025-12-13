@@ -4,17 +4,18 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[lib]
-name = "codex_tui2"
-path = "src/lib.rs"
-
 [[bin]]
 name = "codex-tui2"
 path = "src/main.rs"
 
+[lib]
+name = "codex_tui2"
+path = "src/lib.rs"
+
 [features]
-# Keep feature surface aligned with codex-tui while tui2 evolves separately.
+# Enable vt100-based tests (emulator) when running with `--features vt100-tests`.
 vt100-tests = []
+# Gate verbose debug logging inside the TUI implementation.
 debug-logs = []
 
 [lints]

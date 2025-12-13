@@ -39,6 +39,9 @@ use tokio_stream::Stream;
 pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
+use crate::notifications::DesktopNotificationBackend;
+use crate::notifications::NotificationBackendKind;
+use crate::notifications::detect_backend;
 #[cfg(unix)]
 use crate::tui::job_control::SUSPEND_KEY;
 #[cfg(unix)]
@@ -173,6 +176,7 @@ pub struct Tui {
     // True when terminal/tab is focused; updated internally from crossterm events
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
+    notification_backend: Option<DesktopNotificationBackend>,
 }
 
 impl Tui {
@@ -198,6 +202,7 @@ impl Tui {
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
+            notification_backend: Some(detect_backend()),
         }
     }
 
@@ -212,11 +217,47 @@ impl Tui {
     /// Emit a desktop notification now if the terminal is unfocused.
     /// Returns true if a notification was posted.
     pub fn notify(&mut self, message: impl AsRef<str>) -> bool {
-        if !self.terminal_focused.load(Ordering::Relaxed) {
-            let _ = execute!(stdout(), PostNotification(message.as_ref().to_string()));
-            true
-        } else {
-            false
+        if self.terminal_focused.load(Ordering::Relaxed) {
+            return false;
+        }
+
+        let Some(backend) = self.notification_backend.as_mut() else {
+            return false;
+        };
+
+        let message = message.as_ref().to_string();
+        match backend.notify(&message) {
+            Ok(()) => true,
+            Err(err) => match backend.kind() {
+                NotificationBackendKind::WindowsToast => {
+                    tracing::error!(
+                        error = %err,
+                        "Failed to send Windows toast notification; falling back to OSC 9"
+                    );
+                    self.notification_backend = Some(DesktopNotificationBackend::osc9());
+                    if let Some(backend) = self.notification_backend.as_mut() {
+                        if let Err(osc_err) = backend.notify(&message) {
+                            tracing::warn!(
+                                error = %osc_err,
+                                "Failed to emit OSC 9 notification after toast fallback; \
+                                 disabling future notifications"
+                            );
+                            self.notification_backend = None;
+                            return false;
+                        }
+                        return true;
+                    }
+                    false
+                }
+                NotificationBackendKind::Osc9 => {
+                    tracing::warn!(
+                        error = %err,
+                        "Failed to emit OSC 9 notification; disabling future notifications"
+                    );
+                    self.notification_backend = None;
+                    false
+                }
+            },
         }
     }
 
@@ -236,33 +277,42 @@ impl Tui {
         let event_stream = async_stream::stream! {
             loop {
                 select! {
-                    Some(Ok(event)) = crossterm_events.next() => {
-                        match event {
-                            Event::Key(key_event) => {
-                                #[cfg(unix)]
-                                if SUSPEND_KEY.is_press(key_event) {
-                                    let _ = suspend_context.suspend(&alt_screen_active);
-                                    // We continue here after resume.
-                                    yield TuiEvent::Draw;
-                                    continue;
+                    event_result = crossterm_events.next() => {
+                        match event_result {
+                            Some(Ok(event)) => {
+                                match event {
+                                    Event::Key(key_event) => {
+                                        #[cfg(unix)]
+                                        if SUSPEND_KEY.is_press(key_event) {
+                                            let _ = suspend_context.suspend(&alt_screen_active);
+                                            // We continue here after resume.
+                                            yield TuiEvent::Draw;
+                                            continue;
+                                        }
+                                        yield TuiEvent::Key(key_event);
+                                    }
+                                    Event::Resize(_, _) => {
+                                        yield TuiEvent::Draw;
+                                    }
+                                    Event::Paste(pasted) => {
+                                        yield TuiEvent::Paste(pasted);
+                                    }
+                                    Event::FocusGained => {
+                                        terminal_focused.store(true, Ordering::Relaxed);
+                                        crate::terminal_palette::requery_default_colors();
+                                        yield TuiEvent::Draw;
+                                    }
+                                    Event::FocusLost => {
+                                        terminal_focused.store(false, Ordering::Relaxed);
+                                    }
+                                    _ => {}
                                 }
-                                yield TuiEvent::Key(key_event);
                             }
-                            Event::Resize(_, _) => {
-                                yield TuiEvent::Draw;
+                            Some(Err(_)) | None => {
+                                // Exit the loop in case of broken pipe as we will never
+                                // recover from it
+                                break;
                             }
-                            Event::Paste(pasted) => {
-                                yield TuiEvent::Paste(pasted);
-                            }
-                            Event::FocusGained => {
-                                terminal_focused.store(true, Ordering::Relaxed);
-                                crate::terminal_palette::requery_default_colors();
-                                yield TuiEvent::Draw;
-                            }
-                            Event::FocusLost => {
-                                terminal_focused.store(false, Ordering::Relaxed);
-                            }
-                            _ => {}
                         }
                     }
                     result = draw_rx.recv() => {
@@ -275,7 +325,9 @@ impl Tui {
                                 yield TuiEvent::Draw;
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                // Sender dropped; stop emitting draws from this source.
+                                // Sender dropped. This stream likely outlived its owning `Tui`;
+                                // exit to avoid spinning on a permanently-closed receiver.
+                                break;
                             }
                         }
                     }
@@ -415,27 +467,5 @@ impl Tui {
             }
         }
         Ok(None)
-    }
-}
-
-/// Command that emits an OSC 9 desktop notification with a message.
-#[derive(Debug, Clone)]
-pub struct PostNotification(pub String);
-
-impl Command for PostNotification {
-    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        write!(f, "\x1b]9;{}\x07", self.0)
-    }
-
-    #[cfg(windows)]
-    fn execute_winapi(&self) -> Result<()> {
-        Err(std::io::Error::other(
-            "tried to execute PostNotification using WinAPI; use ANSI instead",
-        ))
-    }
-
-    #[cfg(windows)]
-    fn is_ansi_code_supported(&self) -> bool {
-        true
     }
 }
