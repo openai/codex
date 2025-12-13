@@ -6,7 +6,10 @@ Codex can automatically discover reusable "skills" you keep on disk. A skill is 
 
 ## Where skills live
 
-- Location (v1): `~/.codex/skills/**/SKILL.md` (recursive). Hidden entries and symlinks are skipped. Only files named exactly `SKILL.md` count.
+- Global: `~/.codex/skills/**/SKILL.md` (recursive).
+- Project-local: `./.codex/skills/**/SKILL.md` from your current working directory.
+- Git repo root: `<repo-root>/.codex/skills/**/SKILL.md` (works with worktrees).
+- Hidden entries and symlinks are skipped. Only files named exactly `SKILL.md` count.
 - Sorting: rendered by name, then path for stability.
 
 ## File format
