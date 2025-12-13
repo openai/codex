@@ -1882,13 +1882,12 @@ mod handlers {
         sess.send_event_raw(event).await;
     }
 
-    pub async fn list_skills(sess: &Session, sub_id: String, cwds: Option<Vec<PathBuf>>) {
-        let cwds = match cwds {
-            Some(cwds) if !cwds.is_empty() => cwds,
-            _ => {
-                let state = sess.state.lock().await;
-                vec![state.session_configuration.cwd.clone()]
-            }
+    pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>) {
+        let cwds = if cwds.is_empty() {
+            let state = sess.state.lock().await;
+            vec![state.session_configuration.cwd.clone()]
+        } else {
+            cwds
         };
         let skills = if sess.enabled(Feature::Skills) {
             let skills_manager = &sess.services.skills_manager;

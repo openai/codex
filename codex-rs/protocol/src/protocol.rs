@@ -188,9 +188,11 @@ pub enum Op {
 
     /// Request the list of skills for the provided `cwd` values or the session default.
     ListSkills {
-        /// Optional working directories to scope repo skills discovery.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        cwds: Option<Vec<PathBuf>>,
+        /// Working directories to scope repo skills discovery.
+        ///
+        /// When empty, the session default working directory is used.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        cwds: Vec<PathBuf>,
     },
 
     /// Request the agent to summarize the current conversation context.

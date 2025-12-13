@@ -974,8 +974,9 @@ pub struct ThreadCompactResponse {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SkillsListParams {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cwds: Option<Vec<PathBuf>>,
+    /// When empty, defaults to the current session working directory.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cwds: Vec<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -2622,10 +2622,12 @@ impl CodexMessageProcessor {
 
     async fn skills_list(&self, request_id: RequestId, params: SkillsListParams) {
         let SkillsListParams { cwds } = params;
-        let cwds = match cwds {
-            Some(cwds) if !cwds.is_empty() => cwds,
-            _ => vec![self.config.cwd.clone()],
+        let cwds = if cwds.is_empty() {
+            vec![self.config.cwd.clone()]
+        } else {
+            cwds
         };
+
         let data = if self.config.features.enabled(Feature::Skills) {
             let skills_manager = self.conversation_manager.skills_manager();
             cwds.into_iter()

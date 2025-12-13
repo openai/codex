@@ -114,7 +114,9 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
         });
     let test = builder.build(&server).await?;
 
-    test.codex.submit(Op::ListSkills { cwds: None }).await?;
+    test.codex
+        .submit(Op::ListSkills { cwds: Vec::new() })
+        .await?;
     let response =
         core_test_support::wait_for_event_match(test.codex.as_ref(), |event| match event {
             codex_core::protocol::EventMsg::ListSkillsResponse(response) => Some(response.clone()),
