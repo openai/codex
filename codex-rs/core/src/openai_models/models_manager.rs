@@ -244,7 +244,7 @@ impl ModelsManager {
             .map(|preset| preset.model.as_str())
             .collect();
 
-        let mut merged_presets = remote_presets;
+        let mut merged_presets = remote_presets.clone();
         for mut preset in existing_presets {
             if remote_slugs.contains(preset.model.as_str()) {
                 continue;
