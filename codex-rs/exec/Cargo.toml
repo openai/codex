@@ -59,4 +59,5 @@ pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 uuid = { workspace = true }
 walkdir = { workspace = true }
+which = { workspace = true }
 wiremock = { workspace = true }
