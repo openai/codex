@@ -10,8 +10,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::task::Context;
-use std::task::Poll;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
@@ -19,7 +17,6 @@ use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
-use crossterm::event::Event;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PopKeyboardEnhancementFlags;
@@ -37,8 +34,6 @@ use ratatui::layout::Rect;
 use ratatui::text::Line;
 use tokio::sync::broadcast;
 use tokio_stream::Stream;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
@@ -46,11 +41,12 @@ use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::NotificationBackendKind;
 use crate::notifications::detect_backend;
-#[cfg(unix)]
-use crate::tui::job_control::SUSPEND_KEY;
+use crate::tui::event_stream::EventBroker;
+use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
 
+mod event_stream;
 mod frame_requester;
 #[cfg(unix)]
 mod job_control;
@@ -184,20 +180,6 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
 }
 
-struct EventBroker {
-    paused: bool,
-    crossterm_events: Option<crossterm::event::EventStream>,
-}
-
-impl EventBroker {
-    fn new() -> Self {
-        Self {
-            paused: false,
-            crossterm_events: None,
-        }
-    }
-}
-
 impl Tui {
     pub fn new(terminal: Terminal) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
@@ -235,6 +217,7 @@ impl Tui {
     }
 
     // unused for now
+    #[allow(unused)]
     pub fn pause_events(&mut self) {
         let mut broker = self
             .event_broker
@@ -245,6 +228,7 @@ impl Tui {
     }
 
     // unused for now
+    #[allow(unused)]
     pub fn resume_events(&mut self) {
         let mut broker = self
             .event_broker
@@ -448,146 +432,5 @@ impl Tui {
             }
         }
         Ok(None)
-    }
-}
-
-struct TuiEventStream {
-    broker: Arc<Mutex<EventBroker>>,
-    draw_stream: BroadcastStream<()>,
-    terminal_focused: Arc<AtomicBool>,
-    poll_draw_first: bool,
-    #[cfg(unix)]
-    suspend_context: SuspendContext,
-    #[cfg(unix)]
-    alt_screen_active: Arc<AtomicBool>,
-}
-
-impl TuiEventStream {
-    #[cfg(unix)]
-    fn new(
-        broker: Arc<Mutex<EventBroker>>,
-        draw_rx: broadcast::Receiver<()>,
-        terminal_focused: Arc<AtomicBool>,
-        suspend_context: SuspendContext,
-        alt_screen_active: Arc<AtomicBool>,
-    ) -> Self {
-        Self {
-            broker,
-            draw_stream: BroadcastStream::new(draw_rx),
-            terminal_focused,
-            poll_draw_first: false,
-            suspend_context,
-            alt_screen_active,
-        }
-    }
-
-    #[cfg(not(unix))]
-    fn new(
-        broker: Arc<Mutex<EventBroker>>,
-        draw_rx: broadcast::Receiver<()>,
-        terminal_focused: Arc<AtomicBool>,
-    ) -> Self {
-        Self {
-            broker,
-            draw_stream: BroadcastStream::new(draw_rx),
-            terminal_focused,
-            poll_draw_first: false,
-        }
-    }
-
-    fn poll_crossterm_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<TuiEvent>> {
-        loop {
-            let poll_result = {
-                let mut broker = self
-                    .broker
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if broker.paused {
-                    broker.crossterm_events = None;
-                    return Poll::Pending;
-                }
-                let events = broker
-                    .crossterm_events
-                    .get_or_insert_with(crossterm::event::EventStream::new);
-                match Pin::new(events).poll_next(cx) {
-                    Poll::Ready(Some(Ok(event))) => Some(event),
-                    Poll::Ready(Some(Err(_))) | Poll::Ready(None) => {
-                        broker.crossterm_events = None;
-                        return Poll::Ready(None);
-                    }
-                    Poll::Pending => return Poll::Pending,
-                }
-            };
-
-            if let Some(mapped) = poll_result.and_then(|event| self.map_event(event)) {
-                return Poll::Ready(Some(mapped));
-            }
-        }
-    }
-
-    fn poll_draw_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<TuiEvent>> {
-        match Pin::new(&mut self.draw_stream).poll_next(cx) {
-            Poll::Ready(Some(Ok(()))) => Poll::Ready(Some(TuiEvent::Draw)),
-            Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(_)))) => {
-                Poll::Ready(Some(TuiEvent::Draw))
-            }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-
-    fn map_event(&mut self, event: Event) -> Option<TuiEvent> {
-        match event {
-            Event::Key(key_event) => {
-                #[cfg(unix)]
-                if SUSPEND_KEY.is_press(key_event) {
-                    let _ = self.suspend_context.suspend(&self.alt_screen_active);
-                    return Some(TuiEvent::Draw);
-                }
-                Some(TuiEvent::Key(key_event))
-            }
-            Event::Resize(_, _) => Some(TuiEvent::Draw),
-            Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
-            Event::FocusGained => {
-                self.terminal_focused.store(true, Ordering::Relaxed);
-                crate::terminal_palette::requery_default_colors();
-                Some(TuiEvent::Draw)
-            }
-            Event::FocusLost => {
-                self.terminal_focused.store(false, Ordering::Relaxed);
-                None
-            }
-            _ => None,
-        }
-    }
-}
-
-impl Unpin for TuiEventStream {}
-
-impl Stream for TuiEventStream {
-    type Item = TuiEvent;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // approximate fairness + no starvation via round-robin.
-        let draw_first = self.poll_draw_first;
-        self.poll_draw_first = !self.poll_draw_first;
-
-        if draw_first {
-            if let Poll::Ready(event) = self.poll_draw_event(cx) {
-                return Poll::Ready(event);
-            }
-            if let Poll::Ready(event) = self.poll_crossterm_event(cx) {
-                return Poll::Ready(event);
-            }
-        } else {
-            if let Poll::Ready(event) = self.poll_crossterm_event(cx) {
-                return Poll::Ready(event);
-            }
-            if let Poll::Ready(event) = self.poll_draw_event(cx) {
-                return Poll::Ready(event);
-            }
-        }
-
-        Poll::Pending
     }
 }
