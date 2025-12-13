@@ -1,3 +1,5 @@
+use std::env;
+use std::fs;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
@@ -21,6 +23,9 @@ use codex_core::default_client::originator;
 use codex_core::token_data::TokenData;
 use codex_core::token_data::parse_id_token;
 use rand::RngCore;
+use rustls_pki_types::CertificateDer;
+use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::pem::{self};
 use serde_json::Value as JsonValue;
 use tiny_http::Header;
 use tiny_http::Request;
@@ -30,6 +35,9 @@ use tiny_http::StatusCode;
 
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEFAULT_PORT: u16 = 1455;
+const CODEX_CA_CERT_ENV: &str = "CODEX_CA_CERTIFICATE";
+const SSL_CERT_FILE_ENV: &str = "SSL_CERT_FILE";
+const CA_CERT_HINT: &str = "If you set CODEX_CA_CERTIFICATE or SSL_CERT_FILE, ensure it points to a PEM file containing one or more CERTIFICATE blocks, or unset it to use system roots.";
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -491,6 +499,104 @@ pub(crate) struct ExchangedTokens {
     pub refresh_token: String,
 }
 
+trait EnvSource {
+    fn var(&self, key: &str) -> Option<String>;
+}
+
+struct ProcessEnv;
+
+impl EnvSource for ProcessEnv {
+    fn var(&self, key: &str) -> Option<String> {
+        env::var(key).ok()
+    }
+}
+
+fn login_ca_certificate_path(env_source: &dyn EnvSource) -> Option<PathBuf> {
+    env_source
+        .var(CODEX_CA_CERT_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env_source
+                .var(SSL_CERT_FILE_ENV)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
+}
+
+fn pem_parse_error(path: &Path, error: &pem::Error) -> io::Error {
+    let detail = match error {
+        pem::Error::NoItemsFound => "no certificates found in PEM file".to_string(),
+        _ => format!("failed to parse PEM file: {error}"),
+    };
+
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "Failed to load CA certificates from {path}: {detail}. {hint}",
+            path = path.display(),
+            hint = CA_CERT_HINT
+        ),
+    )
+}
+
+fn read_ca_certificates(path: &Path) -> io::Result<Vec<CertificateDer<'static>>> {
+    let pem_data = fs::read(path).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "Failed to read CA certificate file {path}: {error}. {hint}",
+                path = path.display(),
+                hint = CA_CERT_HINT
+            ),
+        )
+    })?;
+
+    let mut certificates = Vec::new();
+    for cert_result in CertificateDer::pem_slice_iter(&pem_data) {
+        let cert = cert_result.map_err(|error| pem_parse_error(path, &error))?;
+        certificates.push(cert);
+    }
+
+    if certificates.is_empty() {
+        let error = pem::Error::NoItemsFound;
+        return Err(pem_parse_error(path, &error));
+    }
+
+    Ok(certificates)
+}
+
+/// Custom CA handling for login flows.
+///
+/// Enterprise TLS inspection proxies often rely on custom CA roots, which means
+/// system roots alone cannot validate the OAuth exchange. We allow opt-in CA
+/// overrides via `CODEX_CA_CERTIFICATE` (preferred) or `SSL_CERT_FILE`.
+pub fn build_login_http_client() -> io::Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder();
+    let env_source = ProcessEnv;
+
+    if let Some(path) = login_ca_certificate_path(&env_source) {
+        let certificates = read_ca_certificates(&path)?;
+
+        for (idx, cert) in certificates.iter().enumerate() {
+            let certificate = reqwest::Certificate::from_der(cert.as_ref()).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Failed to parse certificate #{index} from {path}: {error}. {hint}",
+                        index = idx + 1,
+                        path = path.display(),
+                        hint = CA_CERT_HINT
+                    ),
+                )
+            })?;
+            builder = builder.add_root_certificate(certificate);
+        }
+    }
+
+    builder.build().map_err(io::Error::other)
+}
+
 pub(crate) async fn exchange_code_for_tokens(
     issuer: &str,
     client_id: &str,
@@ -505,7 +611,7 @@ pub(crate) async fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    let client = reqwest::Client::new();
+    let client = build_login_http_client()?;
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -695,7 +801,7 @@ pub(crate) async fn obtain_api_key(
     struct ExchangeResp {
         access_token: String,
     }
-    let client = reqwest::Client::new();
+    let client = build_login_http_client()?;
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -718,4 +824,66 @@ pub(crate) async fn obtain_api_key(
     }
     let body: ExchangeResp = resp.json().await.map_err(io::Error::other)?;
     Ok(body.access_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+
+    struct MapEnv {
+        values: HashMap<String, String>,
+    }
+
+    impl EnvSource for MapEnv {
+        fn var(&self, key: &str) -> Option<String> {
+            self.values.get(key).cloned()
+        }
+    }
+
+    fn map_env(pairs: &[(&str, &str)]) -> MapEnv {
+        MapEnv {
+            values: pairs
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn ca_path_prefers_codex_env() {
+        let env = map_env(&[
+            (CODEX_CA_CERT_ENV, "/tmp/codex.pem"),
+            (SSL_CERT_FILE_ENV, "/tmp/fallback.pem"),
+        ]);
+
+        assert_eq!(
+            login_ca_certificate_path(&env),
+            Some(PathBuf::from("/tmp/codex.pem"))
+        );
+    }
+
+    #[test]
+    fn ca_path_falls_back_to_ssl_cert_file() {
+        let env = map_env(&[(SSL_CERT_FILE_ENV, "/tmp/fallback.pem")]);
+
+        assert_eq!(
+            login_ca_certificate_path(&env),
+            Some(PathBuf::from("/tmp/fallback.pem"))
+        );
+    }
+
+    #[test]
+    fn ca_path_ignores_empty_values() {
+        let env = map_env(&[
+            (CODEX_CA_CERT_ENV, ""),
+            (SSL_CERT_FILE_ENV, "/tmp/fallback.pem"),
+        ]);
+
+        assert_eq!(
+            login_ca_certificate_path(&env),
+            Some(PathBuf::from("/tmp/fallback.pem"))
+        );
+    }
 }
