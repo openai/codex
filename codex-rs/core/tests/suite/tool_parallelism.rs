@@ -340,7 +340,7 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
     let mut builder = test_codex().with_model("gpt-5.1");
     let base_url = format!("{}/v1", streaming_server.uri());
     builder = builder.with_config(move |config| {
-        config.model_provider.base_url = Some(base_url.clone());
+        config.model_provider.base_url = Some(base_url);
         config.model_provider.request_max_retries = Some(0);
         config.model_provider.stream_max_retries = Some(0);
         config.model_provider.stream_idle_timeout_ms = Some(5_000);
