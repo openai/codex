@@ -58,6 +58,7 @@ use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tracing::instrument;
 use tracing::warn;
 
 use crate::codex::INITIAL_SUBMIT_ID;
@@ -397,6 +398,7 @@ impl McpConnectionManager {
 
     /// Returns a single map that contains all tools. Each key is the
     /// fully-qualified name for the tool.
+    #[instrument(skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
         let mut tools = HashMap::new();
         for managed_client in self.clients.values() {

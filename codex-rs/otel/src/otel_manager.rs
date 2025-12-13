@@ -1,5 +1,7 @@
+use crate::otel_provider::traceparent_context_from_env;
 use chrono::SecondsFormat;
 use chrono::Utc;
+use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningSummary;
@@ -8,6 +10,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use eventsource_stream::Event as StreamEvent;
 use eventsource_stream::EventStreamError as StreamError;
@@ -16,10 +19,14 @@ use reqwest::Response;
 use serde::Serialize;
 use std::borrow::Cow;
 use std::fmt::Display;
+use std::future::Future;
 use std::time::Duration;
 use std::time::Instant;
 use strum_macros::Display;
 use tokio::time::error::Elapsed;
+use tracing::Span;
+use tracing::info_span;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[derive(Debug, Clone, Serialize, Display)]
 #[serde(rename_all = "snake_case")]
@@ -42,11 +49,12 @@ pub struct OtelEventMetadata {
 }
 
 #[derive(Debug, Clone)]
-pub struct OtelEventManager {
+pub struct OtelManager {
     metadata: OtelEventMetadata,
+    session_span: Span,
 }
 
-impl OtelEventManager {
+impl OtelManager {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         conversation_id: ConversationId,
@@ -57,7 +65,14 @@ impl OtelEventManager {
         auth_mode: Option<AuthMode>,
         log_user_prompts: bool,
         terminal_type: String,
-    ) -> OtelEventManager {
+        session_source: SessionSource,
+    ) -> OtelManager {
+        let session_span = info_span!("new_session", conversation_id = %conversation_id, session_source = %session_source);
+
+        if let Some(context) = traceparent_context_from_env() {
+            session_span.set_parent(context);
+        }
+
         Self {
             metadata: OtelEventMetadata {
                 conversation_id,
@@ -70,6 +85,7 @@ impl OtelEventManager {
                 app_version: env!("CARGO_PKG_VERSION"),
                 terminal_type,
             },
+            session_span,
         }
     }
 
@@ -78,6 +94,30 @@ impl OtelEventManager {
         manager.metadata.model = model.to_owned();
         manager.metadata.slug = slug.to_owned();
         manager
+    }
+
+    pub fn current_span(&self) -> &Span {
+        &self.session_span
+    }
+
+    pub fn record_responses(&self, handle_responses_span: &Span, event: &ResponseEvent) {
+        handle_responses_span.record("otel.name", OtelManager::responses_type(event));
+
+        match event {
+            ResponseEvent::OutputItemDone(item) => {
+                handle_responses_span.record("from", "output_item_done");
+                if let ResponseItem::FunctionCall { name, .. } = &item {
+                    handle_responses_span.record("tool_name", name.as_str());
+                }
+            }
+            ResponseEvent::OutputItemAdded(item) => {
+                handle_responses_span.record("from", "output_item_added");
+                if let ResponseItem::FunctionCall { name, .. } = &item {
+                    handle_responses_span.record("tool_name", name.as_str());
+                }
+            }
+            _ => {}
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -394,27 +434,13 @@ impl OtelEventManager {
             Err(error) => (Cow::Owned(error.to_string()), false),
         };
 
-        let success_str = if success { "true" } else { "false" };
-
-        tracing::event!(
-            tracing::Level::INFO,
-            event.name = "codex.tool_result",
-            event.timestamp = %timestamp(),
-            conversation.id = %self.metadata.conversation_id,
-            app.version = %self.metadata.app_version,
-            auth_mode = self.metadata.auth_mode,
-            user.account_id= self.metadata.account_id,
-            user.email = self.metadata.account_email,
-            terminal.type = %self.metadata.terminal_type,
-            model = %self.metadata.model,
-            slug = %self.metadata.slug,
-            tool_name = %tool_name,
-            call_id = %call_id,
-            arguments = %arguments,
-            duration_ms = %duration.as_millis(),
-            success = %success_str,
-            // `output` is truncated by the tool layer before reaching telemetry.
-            output = %output,
+        self.tool_result(
+            tool_name,
+            call_id,
+            arguments,
+            duration,
+            success,
+            output.as_ref(),
         );
 
         result
@@ -470,6 +496,38 @@ impl OtelEventManager {
             success = %success_str,
             output = %output,
         );
+    }
+
+    fn responses_type(event: &ResponseEvent) -> String {
+        match event {
+            ResponseEvent::Created => "created".into(),
+            ResponseEvent::OutputItemDone(item) => OtelManager::responses_item_type(item),
+            ResponseEvent::OutputItemAdded(item) => OtelManager::responses_item_type(item),
+            ResponseEvent::Completed { .. } => "completed".into(),
+            ResponseEvent::OutputTextDelta(_) => "text_delta".into(),
+            ResponseEvent::ReasoningSummaryDelta { .. } => "reasoning_summary_delta".into(),
+            ResponseEvent::ReasoningContentDelta { .. } => "reasoning_content_delta".into(),
+            ResponseEvent::ReasoningSummaryPartAdded { .. } => {
+                "reasoning_summary_part_added".into()
+            }
+            ResponseEvent::RateLimits(_) => "rate_limits".into(),
+        }
+    }
+
+    fn responses_item_type(item: &ResponseItem) -> String {
+        match item {
+            ResponseItem::Message { role, .. } => format!("message_from_{role}"),
+            ResponseItem::Reasoning { .. } => "reasoning".into(),
+            ResponseItem::LocalShellCall { .. } => "local_shell_call".into(),
+            ResponseItem::FunctionCall { .. } => "function_call".into(),
+            ResponseItem::FunctionCallOutput { .. } => "function_call_output".into(),
+            ResponseItem::CustomToolCall { .. } => "custom_tool_call".into(),
+            ResponseItem::CustomToolCallOutput { .. } => "custom_tool_call_output".into(),
+            ResponseItem::WebSearchCall { .. } => "web_search_call".into(),
+            ResponseItem::GhostSnapshot { .. } => "ghost_snapshot".into(),
+            ResponseItem::Compaction { .. } => "compaction".into(),
+            ResponseItem::Other => "other".into(),
+        }
     }
 }
 
