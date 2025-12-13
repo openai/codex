@@ -5,6 +5,7 @@ use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
 use dunce::canonicalize as normalize_path;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
@@ -67,10 +68,31 @@ pub fn load_skills(config: &Config) -> SkillLoadOutcome {
 }
 
 fn skill_roots(config: &Config) -> Vec<PathBuf> {
-    let mut roots = vec![config.codex_home.join(SKILLS_DIR_NAME)];
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
 
+    let mut push_root = |path: PathBuf| {
+        let normalized = normalize_path(&path).unwrap_or(path);
+        if seen.insert(normalized.clone()) {
+            roots.push(normalized);
+        }
+    };
+
+    // Global skills under ~/.codex/skills.
+    push_root(config.codex_home.join(SKILLS_DIR_NAME));
+
+    // Project-local skills under <cwd>/.codex/skills (works even outside git).
+    push_root(
+        config
+            .cwd
+            .join(REPO_ROOT_CONFIG_DIR_NAME)
+            .join(SKILLS_DIR_NAME),
+    );
+
+    // Repository-root skills under <git root>/.codex/skills, deduped if it
+    // matches the cwd variant above.
     if let Some(repo_root) = resolve_root_git_project_for_trust(&config.cwd) {
-        roots.push(
+        push_root(
             repo_root
                 .join(REPO_ROOT_CONFIG_DIR_NAME)
                 .join(SKILLS_DIR_NAME),
@@ -349,5 +371,70 @@ mod tests {
         let skill = &outcome.skills[0];
         assert_eq!(skill.name, "repo-skill");
         assert!(skill.path.starts_with(&repo_root));
+    }
+
+    #[test]
+    fn does_not_duplicate_repo_and_project_roots() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let repo_dir = tempfile::tempdir().expect("tempdir");
+
+        let status = Command::new("git")
+            .arg("init")
+            .current_dir(repo_dir.path())
+            .status()
+            .expect("git init");
+        assert!(status.success(), "git init failed");
+
+        // Place a skill under repo-root .codex/skills. With cwd at repo root,
+        // both the project-local and repo-root paths point to the same directory.
+        let skills_root = repo_dir
+            .path()
+            .join(REPO_ROOT_CONFIG_DIR_NAME)
+            .join(SKILLS_DIR_NAME);
+        write_skill_at(&skills_root, "dedup", "dedup-skill", "from repo");
+
+        let mut cfg = make_config(&codex_home);
+        cfg.cwd = repo_dir.path().to_path_buf();
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills.len(),
+            1,
+            "expected single skill when roots overlap"
+        );
+        assert_eq!(outcome.skills[0].name, "dedup-skill");
+    }
+
+    #[test]
+    fn loads_skills_from_project_local_dir() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let project_dir = tempfile::tempdir().expect("tempdir");
+
+        let skill_root = project_dir.path().join(REPO_ROOT_CONFIG_DIR_NAME);
+        write_skill_at(&skill_root, "proj", "proj-skill", "from project");
+
+        let mut cfg = make_config(&codex_home);
+        cfg.cwd = project_dir.path().to_path_buf();
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        let skill = &outcome.skills[0];
+        assert_eq!(skill.name, "proj-skill");
+        let canonical_root = normalize_path(&skill_root).unwrap_or(skill_root);
+        assert!(
+            skill.path.starts_with(&canonical_root),
+            "expected path under project .codex/skills, got {}",
+            skill.path.display()
+        );
     }
 }
