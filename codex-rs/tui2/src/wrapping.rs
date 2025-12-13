@@ -636,11 +636,11 @@ mod tests {
         let joined: String = wrapped.iter().map(ToString::to_string).join("\n");
         assert_eq!(
             joined,
-            r#"Years passed, and Willowmere thrived
-in peace and friendship. Mira’s herb
-garden flourished with both ordinary and
-enchanted plants, and travelers spoke
-of the kindness of the woman who tended
+            r#"Years passed, and Willowmere thrived in
+peace and friendship. Mira’s herb garden
+flourished with both ordinary and
+enchanted plants, and travelers spoke of
+the kindness of the woman who tended
 them."#
         );
     }
