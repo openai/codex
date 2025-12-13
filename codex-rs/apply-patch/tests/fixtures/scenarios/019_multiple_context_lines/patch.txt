@@ -1,0 +1,7 @@
+*** Begin Patch
+*** Update File: example.py
+@@ class BaseClass:
+@@     def method():
+-        # to_remove
++        # to_add
+*** End Patch
