@@ -59,17 +59,15 @@ pub(crate) async fn handle_output_item_done(
                 .await;
 
             let cancellation_token = ctx.cancellation_token.child_token();
-            let tool_runtime = ctx.tool_runtime.clone();
+            let response_future = ctx
+                .tool_runtime
+                .clone()
+                .handle_tool_call(call, cancellation_token);
 
-            let tool_future: InFlightFuture<'static> = Box::pin(
-                async move {
-                    let response_input = tool_runtime
-                        .handle_tool_call(call, cancellation_token)
-                        .await?;
-                    Ok(response_input)
-                }
-                .in_current_span(),
-            );
+            let tool_future: InFlightFuture<'static> = Box::pin(async move {
+                let response = response_future.await?;
+                Ok(response)
+            });
 
             output.needs_follow_up = true;
             output.tool_future = Some(tool_future);
