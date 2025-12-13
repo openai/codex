@@ -216,7 +216,7 @@ impl Tui {
         self.enhanced_keys_supported
     }
 
-    // unused for now
+    // todo(sayan) unused for now; intend to use to enable opening external editors
     #[allow(unused)]
     pub fn pause_events(&mut self) {
         let mut broker = self
@@ -227,7 +227,7 @@ impl Tui {
         broker.crossterm_events = None;
     }
 
-    // unused for now
+    // todo(sayan) unused for now; intend to use to enable opening external editors
     #[allow(unused)]
     pub fn resume_events(&mut self) {
         let mut broker = self
