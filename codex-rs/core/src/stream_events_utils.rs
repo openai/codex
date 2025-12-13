@@ -16,7 +16,9 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use futures::Future;
+use tracing::Instrument;
 use tracing::debug;
+use tracing::instrument;
 
 /// Handle a completed output item from the model stream, recording it and
 /// queuing any tool execution futures. This records items immediately so
@@ -38,6 +40,7 @@ pub(crate) struct HandleOutputCtx {
     pub cancellation_token: CancellationToken,
 }
 
+#[instrument(skip_all)]
 pub(crate) async fn handle_output_item_done(
     ctx: &mut HandleOutputCtx,
     item: ResponseItem,
@@ -95,7 +98,7 @@ pub(crate) async fn handle_output_item_done(
             let msg = "LocalShellCall without call_id or id";
             ctx.turn_context
                 .client
-                .get_otel_event_manager()
+                .get_otel_manager()
                 .log_tool_failed("local_shell", msg);
             tracing::error!(msg);
 
