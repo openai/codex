@@ -13,7 +13,9 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
+use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
 use super::chat_composer_history::ChatComposerHistory;
@@ -24,7 +26,7 @@ use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
-use super::footer::render_footer;
+use super::footer::prefixed_footer_lines;
 use super::footer::reset_mode_after_activity;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
@@ -282,6 +284,85 @@ impl ChatComposer {
         }
     }
 
+    /// Replace the composer content with text from an external editor.
+    /// Clears pending paste placeholders and keeps only attachments whose
+    /// placeholder labels still appear in the new text. Cursor is placed at
+    /// the end after rebuilding elements.
+    pub(crate) fn apply_external_edit(&mut self, text: String) {
+        self.pending_pastes.clear();
+
+        // Count placeholder occurrences in the new text.
+        let mut placeholder_counts: HashMap<String, usize> = HashMap::new();
+        for placeholder in self.attached_images.iter().map(|img| &img.placeholder) {
+            if placeholder_counts.contains_key(placeholder) {
+                continue;
+            }
+            let count = text.match_indices(placeholder).count();
+            if count > 0 {
+                placeholder_counts.insert(placeholder.clone(), count);
+            }
+        }
+
+        // Keep attachments only while we have matching occurrences left.
+        let mut kept_images = Vec::new();
+        for img in self.attached_images.drain(..) {
+            if let Some(count) = placeholder_counts.get_mut(&img.placeholder)
+                && *count > 0
+            {
+                *count -= 1;
+                kept_images.push(img);
+            }
+        }
+        self.attached_images = kept_images;
+
+        // Rebuild textarea so placeholders become elements again.
+        self.textarea.set_text("");
+        let mut remaining: HashMap<&str, usize> = HashMap::new();
+        for img in &self.attached_images {
+            *remaining.entry(img.placeholder.as_str()).or_insert(0) += 1;
+        }
+
+        let mut occurrences: Vec<(usize, &str)> = Vec::new();
+        for placeholder in remaining.keys() {
+            for (pos, _) in text.match_indices(placeholder) {
+                occurrences.push((pos, *placeholder));
+            }
+        }
+        occurrences.sort_unstable_by_key(|(pos, _)| *pos);
+
+        let mut idx = 0usize;
+        for (pos, ph) in occurrences {
+            let Some(count) = remaining.get_mut(ph) else {
+                continue;
+            };
+            if *count == 0 {
+                continue;
+            }
+            if pos > idx {
+                self.textarea.insert_str(&text[idx..pos]);
+            }
+            self.textarea.insert_element(ph);
+            *count -= 1;
+            idx = pos + ph.len();
+        }
+        if idx < text.len() {
+            self.textarea.insert_str(&text[idx..]);
+        }
+
+        self.textarea.set_cursor(self.textarea.text().len());
+        self.sync_popups();
+    }
+
+    pub(crate) fn current_text_with_pending(&self) -> String {
+        let mut text = self.textarea.text().to_string();
+        for (placeholder, actual) in &self.pending_pastes {
+            if text.contains(placeholder) {
+                text = text.replace(placeholder, actual);
+            }
+        }
+        text
+    }
+
     /// Override the footer hint items displayed beneath the composer. Passing
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
@@ -321,7 +402,8 @@ impl ChatComposer {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "image".to_string());
-        let placeholder = format!("[{file_label} {width}x{height}]");
+        let base_placeholder = format!("{file_label} {width}x{height}");
+        let placeholder = self.next_image_placeholder(&base_placeholder);
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
         self.textarea.insert_element(&placeholder);
@@ -381,6 +463,22 @@ impl ChatComposer {
             base
         } else {
             format!("{base} #{next_suffix}")
+        }
+    }
+
+    fn next_image_placeholder(&mut self, base: &str) -> String {
+        let text = self.textarea.text();
+        let mut suffix = 1;
+        loop {
+            let placeholder = if suffix == 1 {
+                format!("[{base}]")
+            } else {
+                format!("[{base} #{suffix}]")
+            };
+            if !text.contains(&placeholder) {
+                return placeholder;
+            }
+            suffix += 1;
         }
     }
 
@@ -1778,6 +1876,47 @@ impl ChatComposer {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
     }
+
+    fn footer_hint_rect(popup_rect: Rect, footer_hint_height: u16, footer_spacing: u16) -> Rect {
+        if footer_spacing > 0 && footer_hint_height > 0 {
+            let [_, hint_rect] = Layout::vertical([
+                Constraint::Length(footer_spacing),
+                Constraint::Length(footer_hint_height),
+            ])
+            .areas(popup_rect);
+            hint_rect
+        } else {
+            popup_rect
+        }
+    }
+
+    fn footer_render_data(
+        &self,
+        hint_rect: Rect,
+        footer_props: FooterProps,
+    ) -> Option<(Rect, Vec<Line<'static>>)> {
+        if let Some(items) = self.footer_hint_override.as_ref() {
+            if items.is_empty() {
+                return None;
+            }
+            let mut spans = Vec::with_capacity(items.len() * 4);
+            for (idx, (key, label)) in items.iter().enumerate() {
+                spans.push(" ".into());
+                spans.push(Span::styled(key.clone(), Style::default().bold()));
+                spans.push(format!(" {label}").into());
+                if idx + 1 != items.len() {
+                    spans.push("   ".into());
+                }
+            }
+            let mut custom_rect = hint_rect;
+            if custom_rect.width > 2 {
+                custom_rect.x += 2;
+                custom_rect.width = custom_rect.width.saturating_sub(2);
+            }
+            return Some((custom_rect, vec![Line::from(spans)]));
+        }
+        Some((hint_rect, prefixed_footer_lines(footer_props)))
+    }
 }
 
 impl Renderable for ChatComposer {
@@ -1824,36 +1963,10 @@ impl Renderable for ChatComposer {
                 let footer_hint_height =
                     custom_height.unwrap_or_else(|| footer_height(footer_props));
                 let footer_spacing = Self::footer_spacing(footer_hint_height);
-                let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
-                    let [_, hint_rect] = Layout::vertical([
-                        Constraint::Length(footer_spacing),
-                        Constraint::Length(footer_hint_height),
-                    ])
-                    .areas(popup_rect);
-                    hint_rect
-                } else {
-                    popup_rect
-                };
-                if let Some(items) = self.footer_hint_override.as_ref() {
-                    if !items.is_empty() {
-                        let mut spans = Vec::with_capacity(items.len() * 4);
-                        for (idx, (key, label)) in items.iter().enumerate() {
-                            spans.push(" ".into());
-                            spans.push(Span::styled(key.clone(), Style::default().bold()));
-                            spans.push(format!(" {label}").into());
-                            if idx + 1 != items.len() {
-                                spans.push("   ".into());
-                            }
-                        }
-                        let mut custom_rect = hint_rect;
-                        if custom_rect.width > 2 {
-                            custom_rect.x += 2;
-                            custom_rect.width = custom_rect.width.saturating_sub(2);
-                        }
-                        Line::from(spans).render_ref(custom_rect, buf);
-                    }
-                } else {
-                    render_footer(hint_rect, buf, footer_props);
+                let hint_rect =
+                    Self::footer_hint_rect(popup_rect, footer_hint_height, footer_spacing);
+                if let Some((rect, lines)) = self.footer_render_data(hint_rect, footer_props) {
+                    Paragraph::new(lines).render(rect, buf);
                 }
             }
         }
@@ -3151,6 +3264,35 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_image_placeholders_get_suffix() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        let path = PathBuf::from("/tmp/image_dup.png");
+        composer.attach_image(path.clone(), 10, 5, "PNG");
+        composer.handle_paste(" ".into());
+        composer.attach_image(path, 10, 5, "PNG");
+
+        let text = composer.textarea.text().to_string();
+        assert!(text.contains("[image_dup.png 10x5]"));
+        assert!(text.contains("[image_dup.png 10x5 #2]"));
+        assert_eq!(
+            composer.attached_images[0].placeholder,
+            "[image_dup.png 10x5]"
+        );
+        assert_eq!(
+            composer.attached_images[1].placeholder,
+            "[image_dup.png 10x5 #2]"
+        );
+    }
+
+    #[test]
     fn image_placeholder_backspace_behaves_like_text_placeholder() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -3998,5 +4140,117 @@ mod tests {
             matches!(composer.active_popup, ActivePopup::None),
             "'/zzz' should not activate slash popup because it is not a prefix of any built-in command"
         );
+    }
+
+    #[test]
+    fn apply_external_edit_rebuilds_text_and_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let placeholder = "[image 10x10]".to_string();
+        composer.textarea.insert_element(&placeholder);
+        composer.attached_images.push(AttachedImage {
+            placeholder: placeholder.clone(),
+            path: PathBuf::from("img.png"),
+        });
+        composer
+            .pending_pastes
+            .push(("[Pasted]".to_string(), "data".to_string()));
+
+        composer.apply_external_edit(format!("Edited {placeholder} text"));
+
+        assert_eq!(
+            composer.current_text(),
+            format!("Edited {placeholder} text")
+        );
+        assert!(composer.pending_pastes.is_empty());
+        assert_eq!(composer.attached_images.len(), 1);
+        assert_eq!(composer.attached_images[0].placeholder, placeholder);
+        assert_eq!(composer.textarea.cursor(), composer.current_text().len());
+    }
+
+    #[test]
+    fn apply_external_edit_drops_missing_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let placeholder = "[image 10x10]".to_string();
+        composer.textarea.insert_element(&placeholder);
+        composer.attached_images.push(AttachedImage {
+            placeholder: placeholder.clone(),
+            path: PathBuf::from("img.png"),
+        });
+
+        composer.apply_external_edit("No images here".to_string());
+
+        assert_eq!(composer.current_text(), "No images here".to_string());
+        assert!(composer.attached_images.is_empty());
+    }
+
+    #[test]
+    fn current_text_with_pending_expands_placeholders() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let placeholder = "[Pasted Content 5 chars]".to_string();
+        composer.textarea.insert_element(&placeholder);
+        composer
+            .pending_pastes
+            .push((placeholder.clone(), "hello".to_string()));
+
+        assert_eq!(
+            composer.current_text_with_pending(),
+            "hello".to_string(),
+            "placeholder should expand to actual text"
+        );
+    }
+
+    #[test]
+    fn apply_external_edit_limits_duplicates_to_occurrences() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let placeholder = "[image 10x10]".to_string();
+        composer.textarea.insert_element(&placeholder);
+        composer.attached_images.push(AttachedImage {
+            placeholder: placeholder.clone(),
+            path: PathBuf::from("img.png"),
+        });
+
+        composer.apply_external_edit(format!("{placeholder} extra {placeholder}"));
+
+        assert_eq!(
+            composer.current_text(),
+            format!("{placeholder} extra {placeholder}")
+        );
+        assert_eq!(composer.attached_images.len(), 1);
     }
 }

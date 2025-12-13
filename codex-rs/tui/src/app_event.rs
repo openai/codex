@@ -175,6 +175,12 @@ pub(crate) enum AppEvent {
     OpenFeedbackConsent {
         category: FeedbackCategory,
     },
+
+    /// Clear a pending external editor request if no draw occurred in time.
+    ExternalEditorRequestTimeout,
+
+    /// Launch the external editor after a normal draw has completed.
+    LaunchExternalEditorAfterDraw,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

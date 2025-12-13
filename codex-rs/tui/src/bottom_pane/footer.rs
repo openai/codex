@@ -6,13 +6,9 @@ use crate::render::line_utils::prefix_lines;
 use crate::status::format_tokens_compact;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Widget;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FooterProps {
@@ -66,13 +62,12 @@ pub(crate) fn footer_height(props: FooterProps) -> u16 {
     footer_lines(props).len() as u16
 }
 
-pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
-    Paragraph::new(prefix_lines(
+pub(crate) fn prefixed_footer_lines(props: FooterProps) -> Vec<Line<'static>> {
+    prefix_lines(
         footer_lines(props),
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
-    ))
-    .render(area, buf);
+    )
 }
 
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
@@ -162,6 +157,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut newline = Line::from("");
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
+    let mut external_editor = Line::from("");
     let mut edit_previous = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
@@ -173,6 +169,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::InsertNewline => newline = text,
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
+                ShortcutId::ExternalEditor => external_editor = text,
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
@@ -185,6 +182,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         newline,
         file_paths,
         paste_image,
+        external_editor,
         edit_previous,
         quit,
         Line::from(""),
@@ -261,6 +259,7 @@ enum ShortcutId {
     InsertNewline,
     FilePaths,
     PasteImage,
+    ExternalEditor,
     EditPrevious,
     Quit,
     ShowTranscript,
@@ -382,6 +381,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         label: " to paste images",
     },
     ShortcutDescriptor {
+        id: ShortcutId::ExternalEditor,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('g')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " to edit in external editor",
+    },
+    ShortcutDescriptor {
         id: ShortcutId::EditPrevious,
         bindings: &[ShortcutBinding {
             key: key_hint::plain(KeyCode::Esc),
@@ -416,6 +424,9 @@ mod tests {
     use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::Paragraph;
+    use ratatui::widgets::Widget;
 
     fn snapshot_footer(name: &str, props: FooterProps) {
         let height = footer_height(props).max(1);
@@ -423,7 +434,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = Rect::new(0, 0, f.area().width, height);
-                render_footer(area, f.buffer_mut(), props);
+                Paragraph::new(prefixed_footer_lines(props)).render(area, f.buffer_mut());
             })
             .unwrap();
         assert_snapshot!(name, terminal.backend());

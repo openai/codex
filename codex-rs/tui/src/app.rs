@@ -3,9 +3,13 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
+use crate::chatwidget::ExternalEditorState;
 use crate::diff_render::DiffSummary;
+use crate::editor;
+use crate::editor::EditorError;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
+use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
@@ -58,9 +62,12 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
+use tokio::time;
 
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
+
+const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -486,6 +493,10 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
+        // If the external editor is active, don't process any tui events.
+        if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
+            return Ok(true);
+        }
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -518,6 +529,12 @@ impl App {
                             }
                         },
                     )?;
+                    if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
+                        self.chat_widget
+                            .set_external_editor_state(ExternalEditorState::Active);
+                        self.app_event_tx
+                            .send(AppEvent::LaunchExternalEditorAfterDraw);
+                    }
                 }
             }
         }
@@ -779,6 +796,17 @@ impl App {
             }
             AppEvent::OpenFeedbackConsent { category } => {
                 self.chat_widget.open_feedback_consent(category);
+            }
+            AppEvent::ExternalEditorRequestTimeout => {
+                // Reset the external editor state if it was requested and no draw occurred in time.
+                if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
+                    self.reset_external_editor_state(tui);
+                }
+            }
+            AppEvent::LaunchExternalEditorAfterDraw => {
+                if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
+                    self.launch_external_editor(tui).await;
+                }
             }
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
@@ -1086,6 +1114,130 @@ impl App {
         self.config.model_reasoning_effort = effort;
     }
 
+    async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
+        let editor_cmd = match editor::resolve_editor_command() {
+            Ok(cmd) => cmd,
+            Err(EditorError::MissingEditor) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(
+                        "Cannot open external editor: set $VISUAL or $EDITOR".to_string(),
+                    ));
+                self.reset_external_editor_state(tui);
+                return;
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to open editor: {err}",
+                    )));
+                self.reset_external_editor_state(tui);
+                return;
+            }
+        };
+
+        // Leave alt screen if active to avoid conflicts with editor.
+        // This is defensive as we gate the external editor launch on there being no overlay.
+        let was_alt_screen = tui.is_alt_screen_active();
+        if was_alt_screen {
+            let _ = tui.leave_alt_screen();
+        }
+
+        let restore_modes = tui::restore_keep_raw();
+        if let Err(err) = restore_modes {
+            tracing::warn!("failed to restore terminal modes before editor: {err}");
+        }
+
+        let seed = self.chat_widget.composer_text_with_pending();
+        let editor_result = editor::run_editor(&seed, &editor_cmd).await;
+
+        if let Err(err) = tui::set_modes() {
+            tracing::warn!("failed to re-enable terminal modes after editor: {err}");
+        }
+        // After the editor exits, reset terminal state and flush any buffered keypresses.
+        Self::flush_terminal_input_buffer();
+        self.reset_external_editor_state(tui);
+
+        if was_alt_screen {
+            let _ = tui.enter_alt_screen();
+        }
+
+        match editor_result {
+            Ok(new_text) => {
+                // Trim trailing whitespace
+                let cleaned = new_text.trim_end().to_string();
+                self.chat_widget.apply_external_edit(cleaned);
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to open editor: {err}",
+                    )));
+            }
+        }
+        tui.frame_requester().schedule_frame();
+    }
+
+    #[cfg(unix)]
+    fn flush_terminal_input_buffer() {
+        // Safety: flushing the stdin queue is safe and does not move ownership.
+        let result = unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) };
+        if result != 0 {
+            let err = std::io::Error::last_os_error();
+            tracing::warn!("failed to tcflush stdin: {err}");
+        }
+    }
+
+    #[cfg(windows)]
+    fn flush_terminal_input_buffer() {
+        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::System::Console::FlushConsoleInputBuffer;
+        use windows_sys::Win32::System::Console::GetStdHandle;
+        use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
+
+        let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+        if handle == INVALID_HANDLE_VALUE || handle == 0 {
+            let err = unsafe { GetLastError() };
+            tracing::warn!("failed to get stdin handle for flush: error {err}");
+            return;
+        }
+
+        let result = unsafe { FlushConsoleInputBuffer(handle) };
+        if result == 0 {
+            let err = unsafe { GetLastError() };
+            tracing::warn!("failed to flush stdin buffer: error {err}");
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn flush_terminal_input_buffer() {}
+
+    fn request_external_editor_launch(&mut self, tui: &mut tui::Tui) {
+        self.chat_widget
+            .set_external_editor_state(ExternalEditorState::Requested);
+        tui.pause_events();
+        self.chat_widget.set_footer_hint_override(Some(vec![(
+            EXTERNAL_EDITOR_HINT.to_string(),
+            String::new(),
+        )]));
+        tui.frame_requester().schedule_frame();
+
+        // Right now this sends the timeout event regardless of whether the frame was drawn.
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            time::sleep(Duration::from_millis(500)).await;
+            tx.send(AppEvent::ExternalEditorRequestTimeout);
+        });
+    }
+
+    fn reset_external_editor_state(&mut self, tui: &mut tui::Tui) {
+        self.chat_widget
+            .set_external_editor_state(ExternalEditorState::Closed);
+        self.chat_widget.set_footer_hint_override(None);
+        tui.resume_events();
+        tui.frame_requester().schedule_frame();
+    }
+
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
@@ -1098,6 +1250,21 @@ impl App {
                 let _ = tui.enter_alt_screen();
                 self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
                 tui.frame_requester().schedule_frame();
+            }
+            KeyEvent {
+                code: KeyCode::Char('g'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                // Only launch the external editor if there is no overlay and the bottom pane is not in use.
+                // Note that it can be launched while a task is running to enable editing while the previous turn is ongoing.
+                if self.overlay.is_none()
+                    && self.chat_widget.can_launch_external_editor()
+                    && self.chat_widget.external_editor_state() == ExternalEditorState::Closed
+                {
+                    self.request_external_editor_launch(tui);
+                }
             }
             // Esc primes/advances backtracking only in normal (not working) mode
             // with the composer focused and empty. In any other state, forward
