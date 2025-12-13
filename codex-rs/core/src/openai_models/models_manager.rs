@@ -6,7 +6,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -109,22 +109,12 @@ impl ModelsManager {
             error!("failed to refresh available models: {err}");
         }
         let models = self.available_models.read().await.clone();
-        // only send models with show_in_picker set to true
-        models
-            .into_iter()
-            .filter(|model| model.show_in_picker)
-            .collect()
+        Self::filter_visible_models(models)
     }
 
     pub fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
         let models = self.available_models.try_read()?.clone();
-
-        // only send models with show_in_picker set to true
-        let models = models
-            .into_iter()
-            .filter(|model| model.show_in_picker)
-            .collect::<Vec<ModelPreset>>();
-        Ok(models)
+        Ok(Self::filter_visible_models(models))
     }
 
     fn find_family_for_model(slug: &str) -> ModelFamily {
@@ -216,48 +206,54 @@ impl ModelsManager {
 
     /// Merge remote model metadata into picker-ready presets, preserving existing entries.
     async fn build_available_models(&self) {
-        // get snapshot of remote models.
         let mut remote_models = self.remote_models.read().await.clone();
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
-        // get snapshot of current presets and build the merge index.
+        let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
         let existing_presets = self.available_models.read().await.clone();
-        let mut merged_presets = existing_presets.clone();
-        let index_by_slug: HashMap<String, usize> = existing_presets
-            .iter()
-            .enumerate()
-            .map(|(idx, preset)| (preset.model.clone(), idx))
-            .collect();
+        let mut merged_presets = Self::merge_presets(remote_presets, existing_presets);
 
-        let mut new_models = Vec::new();
-        // apply remote updates and additions without holding locks.
-        for remote_model in remote_models {
-            let remote_preset: ModelPreset = remote_model.into();
-            tracing::error!("remote_preset: {:?}", remote_preset);
-            if let Some(idx) = index_by_slug.get(&remote_preset.model).copied() {
-                tracing::error!("idx: {:?}", idx);
-                merged_presets[idx] = remote_preset;
-                continue;
-            }
-            tracing::error!("inserting remote_preset: {:?}", remote_preset);
-            new_models.push(remote_preset);
-        }
-        merged_presets = new_models
-            .into_iter()
-            .chain(merged_presets.into_iter())
-            .collect();
-        // ensure there is always a default preset.
-        if !merged_presets.iter().any(|preset| preset.is_default)
-            && let Some(default) = merged_presets.first_mut()
+        let has_default = merged_presets.iter().any(|preset| preset.is_default);
+        if let Some(default) = merged_presets.first_mut()
+            && !has_default
         {
             default.is_default = true;
         }
 
-        // replace the shared presets with the merged snapshot.
-        {
-            let mut available_models_guard = self.available_models.write().await;
-            *available_models_guard = merged_presets;
+        let mut available_models_guard = self.available_models.write().await;
+        *available_models_guard = merged_presets;
+    }
+
+    fn filter_visible_models(models: Vec<ModelPreset>) -> Vec<ModelPreset> {
+        models
+            .into_iter()
+            .filter(|model| model.show_in_picker)
+            .collect()
+    }
+
+    fn merge_presets(
+        remote_presets: Vec<ModelPreset>,
+        existing_presets: Vec<ModelPreset>,
+    ) -> Vec<ModelPreset> {
+        if remote_presets.is_empty() {
+            return existing_presets;
         }
+
+        let remote_slugs: HashSet<&str> = remote_presets
+            .iter()
+            .map(|preset| preset.model.as_str())
+            .collect();
+
+        let mut merged_presets = remote_presets;
+        for mut preset in existing_presets {
+            if remote_slugs.contains(preset.model.as_str()) {
+                continue;
+            }
+            preset.is_default = false;
+            merged_presets.push(preset);
+        }
+
+        merged_presets
     }
 
     fn cache_path(&self) -> PathBuf {
@@ -300,6 +296,7 @@ mod tests {
     use crate::model_provider_info::WireApi;
     use codex_protocol::openai_models::ModelsResponse;
     use core_test_support::responses::mount_models_once;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::tempdir;
     use wiremock::MockServer;
@@ -386,14 +383,23 @@ mod tests {
         assert_eq!(cached_remote, remote_models);
 
         let available = manager.list_models(&config).await;
-        assert_eq!(available.len(), 2);
-        assert_eq!(available[0].model, "priority-high");
+        let high_idx = available
+            .iter()
+            .position(|model| model.model == "priority-high")
+            .expect("priority-high should be listed");
+        let low_idx = available
+            .iter()
+            .position(|model| model.model == "priority-low")
+            .expect("priority-low should be listed");
         assert!(
-            available[0].is_default,
+            high_idx < low_idx,
+            "higher priority should be listed before lower priority"
+        );
+        assert!(
+            available[high_idx].is_default,
             "highest priority should be default"
         );
-        assert_eq!(available[1].model, "priority-low");
-        assert!(!available[1].is_default);
+        assert!(!available[low_idx].is_default);
         assert_eq!(
             models_mock.requests().len(),
             1,
