@@ -304,7 +304,8 @@ pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
         (Some(cwd_repo), Some(path_repo)) => cwd_repo == path_repo,
         _ => false,
     };
-    let chosen = if path_in_same_repo {
+    let is_descendant = path.starts_with(cwd);
+    let chosen = if path_in_same_repo || is_descendant {
         pathdiff::diff_paths(path, cwd).unwrap_or_else(|| path.to_path_buf())
     } else {
         relativize_to_home(path)
