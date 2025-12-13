@@ -31,9 +31,10 @@ use codex_core::openai_models::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFI
 use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
+use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
-use codex_core::protocol::SkillLoadOutcomeInfo;
+use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
 use codex_core::skills::SkillError;
 use codex_protocol::ConversationId;
@@ -50,6 +51,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -86,15 +88,23 @@ fn session_summary(
     })
 }
 
-fn skill_errors_from_outcome(outcome: &SkillLoadOutcomeInfo) -> Vec<SkillError> {
-    outcome
-        .errors
+fn skill_errors_from_info(errors: &[SkillErrorInfo]) -> Vec<SkillError> {
+    errors
         .iter()
         .map(|err| SkillError {
             path: err.path.clone(),
             message: err.message.clone(),
         })
         .collect()
+}
+
+fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
+    response
+        .skills
+        .iter()
+        .find(|entry| entry.cwd.as_path() == cwd)
+        .map(|entry| entry.errors.clone())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -688,11 +698,14 @@ impl App {
                     self.suppress_shutdown_complete = false;
                     return Ok(true);
                 }
-                if let EventMsg::SessionConfigured(cfg) = &event.msg
-                    && let Some(outcome) = cfg.skill_load_outcome.as_ref()
-                    && !outcome.errors.is_empty()
-                {
-                    let errors = skill_errors_from_outcome(outcome);
+                if let EventMsg::ListSkillsResponse(response) = &event.msg {
+                    let cwd = self.chat_widget.config_ref().cwd.clone();
+                    let errors = errors_for_cwd(&cwd, response);
+                    if errors.is_empty() {
+                        self.chat_widget.handle_codex_event(event);
+                        return Ok(true);
+                    }
+                    let errors = skill_errors_from_info(&errors);
                     match run_skill_error_prompt(tui, &errors).await {
                         SkillErrorPromptOutcome::Exit => {
                             self.chat_widget.submit_op(Op::Shutdown);
@@ -1382,7 +1395,6 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
-                skill_load_outcome: None,
                 rollout_path: PathBuf::new(),
             };
             Arc::new(new_session_info(
@@ -1438,7 +1450,6 @@ mod tests {
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
-            skill_load_outcome: None,
             rollout_path: PathBuf::new(),
         };
 
