@@ -221,6 +221,56 @@ fn parse_task_id(raw: &str) -> anyhow::Result<codex_cloud_tasks_client::TaskId> 
     Ok(codex_cloud_tasks_client::TaskId(id.to_string()))
 }
 
+/// Execute a tool command safely without shell injection vulnerabilities.
+/// 
+/// This function prevents command injection by executing the program directly
+/// without invoking a shell interpreter. User input is passed as individual
+/// arguments, not through shell interpretation.
+/// 
+/// # Security
+/// 
+/// This avoids the vulnerability of passing user input directly to `sh -c`,
+/// which would allow arbitrary shell commands to be injected. Instead, we
+/// parse the command string and execute the program with separated arguments.
+async fn execute_tool(command_string: String) -> anyhow::Result<()> {
+    if command_string.is_empty() {
+        return Err(anyhow!("command_string cannot be empty"));
+    }
+    
+    // Split command into program and arguments without shell interpretation
+    // We use a simple whitespace-based split which is safer than sh -c
+    let parts: Vec<&str> = command_string.split_whitespace().collect();
+    
+    if parts.is_empty() {
+        return Err(anyhow!("no command specified"));
+    }
+    
+    let program = parts[0];
+    let args = &parts[1..];
+    
+    // Execute the command directly without shell interpretation
+    // This ensures that special characters, pipes, redirects, etc. are
+    // treated as literal arguments, not as shell commands
+    let mut cmd = std::process::Command::new(program);
+    for arg in args {
+        cmd.arg(arg);
+    }
+    
+    let output = cmd.output()?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let error_msg = if stderr.is_empty() {
+            format!("command failed with status: {}", output.status)
+        } else {
+            format!("command failed: {}", stderr.trim())
+        };
+        return Err(anyhow!(error_msg));
+    }
+    
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 struct AttemptDiffData {
     placement: Option<i64>,
