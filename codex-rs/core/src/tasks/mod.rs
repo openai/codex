@@ -199,11 +199,19 @@ impl Session {
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
+            self.services
+                .unified_exec_manager
+                .terminate_sessions_for_turn(&sub_id)
+                .await;
             return;
         }
 
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
         task.cancellation_token.cancel();
+        self.services
+            .unified_exec_manager
+            .terminate_sessions_for_turn(&sub_id)
+            .await;
         let session_task = task.task;
 
         select! {
