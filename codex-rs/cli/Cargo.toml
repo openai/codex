@@ -37,11 +37,13 @@ codex-rmcp-client = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
 codex-tui = { workspace = true }
 codex-tui2 = { workspace = true }
+chrono = { workspace = true }
 ctor = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true}
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 supports-color = { workspace = true }
 toml = { workspace = true }
 tokio = { workspace = true, features = [

@@ -1,3 +1,4 @@
+use chrono::Utc;
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
@@ -27,6 +28,8 @@ use codex_tui::Cli as TuiCli;
 use codex_tui::update_action::UpdateAction;
 use codex_tui2 as tui2;
 use owo_colors::OwoColorize;
+use sha2::Digest;
+use sha2::Sha256;
 use std::path::PathBuf;
 use supports_color::Stream;
 
@@ -40,10 +43,16 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::config::types::GraphitiGroupIdStrategy;
 use codex_core::features::Feature;
 use codex_core::features::FeatureOverrides;
 use codex_core::features::Features;
 use codex_core::features::is_known_feature_key;
+use codex_core::git_info::get_git_repo_root;
+use codex_core::graphiti::client::AddMessagesRequest;
+use codex_core::graphiti::client::GraphitiClient;
+use codex_core::graphiti::client::GraphitiMessage;
+use codex_core::graphiti::client::GraphitiRoleType;
 
 /// Codex CLI
 ///
@@ -130,6 +139,9 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+
+    /// Graphiti memory integration tooling.
+    Graphiti(GraphitiCli),
 }
 
 #[derive(Debug, Parser)]
@@ -406,6 +418,111 @@ enum FeaturesSubcommand {
     List,
 }
 
+#[derive(Debug, Parser)]
+struct GraphitiCli {
+    #[clap(flatten)]
+    config_overrides: CliConfigOverrides,
+
+    #[command(subcommand)]
+    sub: GraphitiSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum GraphitiSubcommand {
+    /// Test connectivity to the configured Graphiti endpoint.
+    #[clap(name = "test-connection")]
+    TestConnection(GraphitiTestConnectionArgs),
+
+    /// Print Graphiti config and derived group ids for the current cwd.
+    Status(GraphitiStatusArgs),
+
+    /// Create a durable memory episode (promotion).
+    Promote(GraphitiPromoteArgs),
+
+    /// Delete a Graphiti group by id.
+    Purge(GraphitiPurgeArgs),
+}
+
+#[derive(Debug, Args)]
+struct GraphitiTestConnectionArgs {
+    /// Override Graphiti endpoint (otherwise uses config `[graphiti].endpoint`).
+    #[arg(long = "endpoint")]
+    endpoint: Option<String>,
+
+    /// Request timeout (ms).
+    #[arg(long = "timeout-ms", default_value_t = 1500)]
+    timeout_ms: u64,
+
+    /// Allow network calls in untrusted projects (use with care).
+    #[arg(long = "allow-untrusted", default_value_t = false)]
+    allow_untrusted: bool,
+
+    /// Run a smoke test (writes a temporary group, polls episodes, then deletes it).
+    #[arg(long = "smoke", default_value_t = false)]
+    smoke: bool,
+}
+
+#[derive(Debug, Args)]
+struct GraphitiStatusArgs {
+    /// Also perform a `GET /healthcheck` request.
+    #[arg(long = "healthcheck", default_value_t = false)]
+    healthcheck: bool,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+enum GraphitiPromotionScope {
+    Workspace,
+    Global,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+enum GraphitiEpisodeKind {
+    Decision,
+    LessonLearned,
+    Preference,
+    Procedure,
+    TaskUpdate,
+}
+
+#[derive(Debug, Args)]
+struct GraphitiPromoteArgs {
+    /// Override Graphiti endpoint (otherwise uses config `[graphiti].endpoint`).
+    #[arg(long = "endpoint")]
+    endpoint: Option<String>,
+
+    #[arg(long = "scope", value_enum, default_value_t = GraphitiPromotionScope::Workspace)]
+    scope: GraphitiPromotionScope,
+
+    #[arg(long = "kind", value_enum)]
+    kind: GraphitiEpisodeKind,
+
+    #[arg(long = "title")]
+    title: Option<String>,
+
+    /// Episode content. If omitted, use `--stdin`.
+    #[arg(long = "text")]
+    text: Option<String>,
+
+    /// Read episode content from stdin.
+    #[arg(long = "stdin", default_value_t = false)]
+    stdin: bool,
+}
+
+#[derive(Debug, Args)]
+struct GraphitiPurgeArgs {
+    /// Override Graphiti endpoint (otherwise uses config `[graphiti].endpoint`).
+    #[arg(long = "endpoint")]
+    endpoint: Option<String>,
+
+    /// Allow network calls in untrusted projects (use with care).
+    #[arg(long = "allow-untrusted", default_value_t = false)]
+    allow_untrusted: bool,
+
+    group_id: String,
+}
+
 fn stage_str(stage: codex_core::features::Stage) -> &'static str {
     use codex_core::features::Stage;
     match stage {
@@ -415,6 +532,361 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
         Stage::Deprecated => "deprecated",
         Stage::Removed => "removed",
     }
+}
+
+async fn run_graphiti_cli(cli: GraphitiCli, config_profile: Option<String>) -> anyhow::Result<()> {
+    let cli_kv_overrides = cli
+        .config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let overrides = ConfigOverrides {
+        config_profile,
+        ..Default::default()
+    };
+    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
+
+    match cli.sub {
+        GraphitiSubcommand::Status(args) => {
+            print_graphiti_status(&config, args.healthcheck).await?;
+        }
+        GraphitiSubcommand::TestConnection(args) => {
+            ensure_graphiti_cli_allowed(&config, args.allow_untrusted)?;
+            let endpoint = resolve_graphiti_endpoint(&config, args.endpoint.as_deref())?;
+            let client = build_graphiti_client(&config, &endpoint)?;
+            let timeout = std::time::Duration::from_millis(args.timeout_ms);
+
+            let health = client.healthcheck(timeout).await?;
+            println!("Graphiti healthcheck: {}", health.status);
+
+            if args.smoke {
+                run_graphiti_smoke_test(&config, &client, timeout).await?;
+            }
+        }
+        GraphitiSubcommand::Promote(args) => {
+            ensure_graphiti_cli_allowed(&config, false)?;
+            ensure_graphiti_enabled_and_consented(&config)?;
+
+            let endpoint = resolve_graphiti_endpoint(&config, args.endpoint.as_deref())?;
+            let client = build_graphiti_client(&config, &endpoint)?;
+
+            let text = match (args.text, args.stdin) {
+                (Some(text), _) => text,
+                (None, true) => read_stdin_to_string()?,
+                (None, false) => anyhow::bail!("Missing --text (or pass --stdin)"),
+            };
+
+            let (group_id, scope_label) = match args.scope {
+                GraphitiPromotionScope::Workspace => {
+                    (derive_workspace_group_id(&config), "workspace".to_string())
+                }
+                GraphitiPromotionScope::Global => {
+                    if !config.graphiti.global.enabled {
+                        anyhow::bail!(
+                            "Global scope is disabled (set [graphiti.global].enabled = true)"
+                        );
+                    }
+                    (
+                        config.graphiti.global.group_id.clone(),
+                        "global".to_string(),
+                    )
+                }
+            };
+
+            let template = build_promotion_template(args.kind, args.title.as_deref(), &text);
+            let request = AddMessagesRequest {
+                group_id: group_id.clone(),
+                messages: vec![GraphitiMessage {
+                    content: template,
+                    uuid: None,
+                    name: String::new(),
+                    role_type: GraphitiRoleType::System,
+                    role: None,
+                    timestamp: Utc::now(),
+                    source_description: format!("codex promotion scope={scope_label}"),
+                }],
+            };
+
+            client
+                .add_messages(
+                    request,
+                    std::time::Duration::from_millis(config.graphiti.ingest.timeout_ms),
+                    config.graphiti.ingest.max_batch_size,
+                )
+                .await?;
+
+            println!("Promoted episode to group_id={group_id}");
+        }
+        GraphitiSubcommand::Purge(args) => {
+            ensure_graphiti_cli_allowed(&config, args.allow_untrusted)?;
+            let endpoint = resolve_graphiti_endpoint(&config, args.endpoint.as_deref())?;
+            let client = build_graphiti_client(&config, &endpoint)?;
+            let timeout = std::time::Duration::from_millis(config.graphiti.ingest.timeout_ms);
+            client.delete_group(&args.group_id, timeout).await?;
+            println!("Deleted group_id={}", args.group_id);
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_graphiti_cli_allowed(config: &Config, allow_untrusted: bool) -> anyhow::Result<()> {
+    if config.active_project.is_trusted() || allow_untrusted {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "Project is not trusted; set `[projects.\"{}\"].trust_level = \"trusted\"` in config.toml or pass --allow-untrusted",
+        config.cwd.display()
+    )
+}
+
+fn ensure_graphiti_enabled_and_consented(config: &Config) -> anyhow::Result<()> {
+    if !config.graphiti.enabled {
+        anyhow::bail!("Graphiti is disabled (set [graphiti].enabled = true)");
+    }
+    if !config.graphiti.consent {
+        anyhow::bail!("Graphiti consent not granted (set [graphiti].consent = true)");
+    }
+    Ok(())
+}
+
+fn resolve_graphiti_endpoint<'a>(
+    config: &'a Config,
+    override_endpoint: Option<&'a str>,
+) -> anyhow::Result<String> {
+    if let Some(endpoint) = override_endpoint {
+        return Ok(endpoint.to_string());
+    }
+    config
+        .graphiti
+        .endpoint
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("Missing [graphiti].endpoint (or pass --endpoint)"))
+}
+
+fn build_graphiti_client(config: &Config, endpoint: &str) -> anyhow::Result<GraphitiClient> {
+    let bearer_token = config
+        .graphiti
+        .bearer_token_env_var
+        .as_deref()
+        .and_then(|key| std::env::var(key).ok());
+    Ok(GraphitiClient::from_base_url_str(endpoint, bearer_token)?)
+}
+
+async fn run_graphiti_smoke_test(
+    config: &Config,
+    client: &GraphitiClient,
+    timeout: std::time::Duration,
+) -> anyhow::Result<()> {
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
+
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let group_id = format!("codex-smoke-{now_ms}");
+    let marker = format!("codex-graphiti-smoke-{now_ms}");
+
+    client
+        .add_messages(
+            AddMessagesRequest {
+                group_id: group_id.clone(),
+                messages: vec![GraphitiMessage {
+                    content: marker.clone(),
+                    uuid: None,
+                    name: String::new(),
+                    role_type: GraphitiRoleType::User,
+                    role: None,
+                    timestamp: Utc::now(),
+                    source_description: "codex graphiti smoke".to_string(),
+                }],
+            },
+            timeout,
+            config.graphiti.ingest.max_batch_size,
+        )
+        .await?;
+
+    let mut saw_episode = false;
+    for _ in 0..20 {
+        let episodes = client.get_episodes(&group_id, 5, timeout).await?;
+        if episodes.as_array().is_some_and(|arr| !arr.is_empty()) {
+            saw_episode = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+
+    if saw_episode {
+        println!("Smoke test: episodes observed for group_id={group_id}");
+    } else {
+        println!(
+            "Smoke test: no episodes observed yet for group_id={group_id} (Graphiti may be slow to process)"
+        );
+    }
+
+    let _ = client.delete_group(&group_id, timeout).await;
+    Ok(())
+}
+
+async fn print_graphiti_status(config: &Config, healthcheck: bool) -> anyhow::Result<()> {
+    println!("cwd: {}", config.cwd.display());
+    println!("trusted: {}", config.active_project.is_trusted());
+
+    println!("graphiti.enabled: {}", config.graphiti.enabled);
+    println!("graphiti.consent: {}", config.graphiti.consent);
+    println!(
+        "graphiti.endpoint: {}",
+        config.graphiti.endpoint.as_deref().unwrap_or("<unset>")
+    );
+    println!(
+        "graphiti.group_id_strategy: {}",
+        match config.graphiti.group_id_strategy {
+            GraphitiGroupIdStrategy::Raw => "raw",
+            GraphitiGroupIdStrategy::Hashed => "hashed",
+        }
+    );
+    println!(
+        "graphiti.ingest_scopes: {}",
+        config
+            .graphiti
+            .ingest_scopes
+            .iter()
+            .map(|scope| format!("{scope:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
+        "graphiti.recall.enabled: {}",
+        config.graphiti.recall.enabled
+    );
+    println!(
+        "graphiti.recall.scopes: {}",
+        config
+            .graphiti
+            .recall
+            .scopes
+            .iter()
+            .map(|scope| format!("{scope:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
+        "graphiti.global.enabled: {}",
+        config.graphiti.global.enabled
+    );
+    if config.graphiti.global.enabled {
+        println!(
+            "graphiti.global.group_id: {}",
+            config.graphiti.global.group_id
+        );
+    }
+
+    println!(
+        "derived.workspace_group_id: {}",
+        derive_workspace_group_id(config)
+    );
+
+    if healthcheck {
+        ensure_graphiti_cli_allowed(config, false)?;
+        let endpoint = resolve_graphiti_endpoint(config, None)?;
+        let client = build_graphiti_client(config, &endpoint)?;
+        let health = client
+            .healthcheck(std::time::Duration::from_millis(1500))
+            .await?;
+        println!("graphiti.healthcheck: {}", health.status);
+    }
+
+    Ok(())
+}
+
+fn derive_workspace_group_id(config: &Config) -> String {
+    let workspace_key = get_git_repo_root(&config.cwd)
+        .unwrap_or_else(|| config.cwd.clone())
+        .to_string_lossy()
+        .to_string();
+    graphiti_make_group_id(
+        "codex-workspace",
+        &workspace_key,
+        &config.graphiti.group_id_strategy,
+    )
+}
+
+fn graphiti_make_group_id(
+    prefix: &str,
+    raw_key: &str,
+    strategy: &GraphitiGroupIdStrategy,
+) -> String {
+    match strategy {
+        GraphitiGroupIdStrategy::Hashed => {
+            let mut hasher = Sha256::new();
+            hasher.update(raw_key.as_bytes());
+            let digest = hasher.finalize();
+            let hex = graphiti_hex_encode(digest.as_slice());
+            format!("{prefix}-{}", &hex[..16])
+        }
+        GraphitiGroupIdStrategy::Raw => {
+            let safe = raw_key
+                .chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                        ch
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>();
+            let mut candidate = format!("{prefix}-{safe}");
+            if candidate.len() <= 120 {
+                return candidate;
+            }
+
+            let mut hasher = Sha256::new();
+            hasher.update(raw_key.as_bytes());
+            let digest = hasher.finalize();
+            let hex = graphiti_hex_encode(digest.as_slice());
+            let suffix = format!("-{}", &hex[..16]);
+            let max_prefix = 120usize.saturating_sub(suffix.len());
+            candidate.truncate(max_prefix);
+            candidate.push_str(&suffix);
+            candidate
+        }
+    }
+}
+
+fn graphiti_hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
+fn build_promotion_template(kind: GraphitiEpisodeKind, title: Option<&str>, text: &str) -> String {
+    let kind_str = match kind {
+        GraphitiEpisodeKind::Decision => "decision",
+        GraphitiEpisodeKind::LessonLearned => "lesson_learned",
+        GraphitiEpisodeKind::Preference => "preference",
+        GraphitiEpisodeKind::Procedure => "procedure",
+        GraphitiEpisodeKind::TaskUpdate => "task_update",
+    };
+    let mut out = format!("<graphiti_episode kind=\"{kind_str}\">\n");
+    if let Some(title) = title {
+        out.push_str(&format!("title: {title}\n"));
+    }
+    out.push_str("content:\n");
+    out.push_str(text.trim());
+    out.push_str("\n</graphiti_episode>");
+    out
+}
+
+fn read_stdin_to_string() -> anyhow::Result<String> {
+    use std::io::Read;
+
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf)?;
+    Ok(buf)
 }
 
 /// As early as possible in the process lifecycle, apply hardening measures. We
@@ -640,6 +1112,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 }
             }
         },
+        Some(Subcommand::Graphiti(mut graphiti_cli)) => {
+            prepend_config_flags(
+                &mut graphiti_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            run_graphiti_cli(graphiti_cli, interactive.config_profile.clone()).await?;
+        }
     }
 
     Ok(())
