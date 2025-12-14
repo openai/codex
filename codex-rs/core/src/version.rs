@@ -39,7 +39,7 @@ impl Version {
         if let Some(stripped) = input.strip_prefix('v') {
             input = stripped;
         }
-        let input = input.splitn(2, '+').next().unwrap_or(input);
+        let input = input.split('+').next().unwrap_or(input);
         let mut parts = input.splitn(2, '-');
         let core = parts.next()?;
         let pre = parts.next();
@@ -52,7 +52,7 @@ impl Version {
         }
         let pre = match pre {
             None => None,
-            Some(value) if value.is_empty() => None,
+            Some("") => None,
             Some(value) => {
                 let mut idents = Vec::new();
                 for ident in value.split('.') {
