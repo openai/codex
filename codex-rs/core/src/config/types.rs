@@ -531,6 +531,238 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
     }
 }
 
+// ===== Graphiti configuration =====
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum GraphitiGroupIdStrategy {
+    Raw,
+    Hashed,
+}
+
+impl Default for GraphitiGroupIdStrategy {
+    fn default() -> Self {
+        Self::Hashed
+    }
+}
+
+#[derive(Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[serde(rename_all = "kebab-case")]
+pub enum GraphitiScope {
+    Session,
+    Workspace,
+    Global,
+}
+
+fn default_graphiti_scopes_session_workspace() -> Vec<GraphitiScope> {
+    vec![GraphitiScope::Session, GraphitiScope::Workspace]
+}
+
+fn default_graphiti_ingest_timeout_ms() -> u64 {
+    5_000
+}
+
+fn default_graphiti_ingest_max_queue_size() -> usize {
+    256
+}
+
+fn default_graphiti_ingest_max_batch_size() -> usize {
+    32
+}
+
+fn default_graphiti_ingest_max_content_chars() -> usize {
+    8_000
+}
+
+fn default_graphiti_retry_max_attempts() -> u32 {
+    6
+}
+
+fn default_graphiti_retry_initial_backoff_ms() -> u64 {
+    250
+}
+
+fn default_graphiti_retry_max_backoff_ms() -> u64 {
+    5_000
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct GraphitiIngest {
+    /// Request timeout for `POST /messages`.
+    #[serde(default = "default_graphiti_ingest_timeout_ms")]
+    pub timeout_ms: u64,
+
+    /// Maximum number of queued ingestion jobs (ready + delayed).
+    #[serde(default = "default_graphiti_ingest_max_queue_size")]
+    pub max_queue_size: usize,
+
+    /// Maximum number of messages to send per `POST /messages`.
+    #[serde(default = "default_graphiti_ingest_max_batch_size")]
+    pub max_batch_size: usize,
+
+    /// Maximum characters to include per message content (truncate beyond this).
+    #[serde(default = "default_graphiti_ingest_max_content_chars")]
+    pub max_content_chars: usize,
+
+    #[serde(default = "default_graphiti_retry_max_attempts")]
+    pub retry_max_attempts: u32,
+
+    #[serde(default = "default_graphiti_retry_initial_backoff_ms")]
+    pub retry_initial_backoff_ms: u64,
+
+    #[serde(default = "default_graphiti_retry_max_backoff_ms")]
+    pub retry_max_backoff_ms: u64,
+}
+
+impl Default for GraphitiIngest {
+    fn default() -> Self {
+        Self {
+            timeout_ms: default_graphiti_ingest_timeout_ms(),
+            max_queue_size: default_graphiti_ingest_max_queue_size(),
+            max_batch_size: default_graphiti_ingest_max_batch_size(),
+            max_content_chars: default_graphiti_ingest_max_content_chars(),
+            retry_max_attempts: default_graphiti_retry_max_attempts(),
+            retry_initial_backoff_ms: default_graphiti_retry_initial_backoff_ms(),
+            retry_max_backoff_ms: default_graphiti_retry_max_backoff_ms(),
+        }
+    }
+}
+
+fn default_graphiti_recall_timeout_ms() -> u64 {
+    750
+}
+
+fn default_graphiti_recall_max_facts() -> usize {
+    10
+}
+
+fn default_graphiti_recall_max_fact_chars() -> usize {
+    280
+}
+
+fn default_graphiti_recall_max_total_chars() -> usize {
+    2_000
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct GraphitiRecall {
+    /// If true, recall will run before each model turn.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Request timeout for `POST /search`.
+    #[serde(default = "default_graphiti_recall_timeout_ms")]
+    pub timeout_ms: u64,
+
+    /// Maximum number of facts to request from Graphiti per query.
+    #[serde(default = "default_graphiti_recall_max_facts")]
+    pub max_facts: usize,
+
+    /// Maximum characters to include per fact when injecting into the prompt.
+    #[serde(default = "default_graphiti_recall_max_fact_chars")]
+    pub max_fact_chars: usize,
+
+    /// Maximum total characters to inject for the entire memory section.
+    #[serde(default = "default_graphiti_recall_max_total_chars")]
+    pub max_total_chars: usize,
+
+    /// Scopes to query for recall (default: session + workspace).
+    #[serde(default = "default_graphiti_scopes_session_workspace")]
+    pub scopes: Vec<GraphitiScope>,
+}
+
+impl Default for GraphitiRecall {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            timeout_ms: default_graphiti_recall_timeout_ms(),
+            max_facts: default_graphiti_recall_max_facts(),
+            max_fact_chars: default_graphiti_recall_max_fact_chars(),
+            max_total_chars: default_graphiti_recall_max_total_chars(),
+            scopes: default_graphiti_scopes_session_workspace(),
+        }
+    }
+}
+
+fn default_graphiti_global_group_id() -> String {
+    "codex-global".to_string()
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct GraphitiGlobal {
+    /// If true, enables Global scope (promotion and optional recall).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Graphiti group_id used for Global scope.
+    #[serde(default = "default_graphiti_global_group_id")]
+    pub group_id: String,
+}
+
+impl Default for GraphitiGlobal {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            group_id: default_graphiti_global_group_id(),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct Graphiti {
+    /// Master enable switch (default: false).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Explicit consent gate (default: false).
+    #[serde(default)]
+    pub consent: bool,
+
+    /// Base URL of the Graphiti REST service (e.g., "http://localhost:8000").
+    pub endpoint: Option<String>,
+
+    /// Name of an environment variable containing a bearer token.
+    pub bearer_token_env_var: Option<String>,
+
+    /// Group id strategy (default: hashed).
+    #[serde(default)]
+    pub group_id_strategy: GraphitiGroupIdStrategy,
+
+    /// If true, include git branch/commit/dirty in message metadata (default: false).
+    #[serde(default)]
+    pub include_git_metadata: bool,
+
+    /// Scopes to ingest automatically (default: session + workspace).
+    #[serde(default = "default_graphiti_scopes_session_workspace")]
+    pub ingest_scopes: Vec<GraphitiScope>,
+
+    #[serde(default)]
+    pub ingest: GraphitiIngest,
+
+    #[serde(default)]
+    pub recall: GraphitiRecall,
+
+    #[serde(default)]
+    pub global: GraphitiGlobal,
+}
+
+impl Default for Graphiti {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            consent: false,
+            endpoint: None,
+            bearer_token_env_var: None,
+            group_id_strategy: GraphitiGroupIdStrategy::default(),
+            include_git_metadata: false,
+            ingest_scopes: default_graphiti_scopes_session_workspace(),
+            ingest: GraphitiIngest::default(),
+            recall: GraphitiRecall::default(),
+            global: GraphitiGlobal::default(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
