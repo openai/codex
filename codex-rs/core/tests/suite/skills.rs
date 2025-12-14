@@ -6,7 +6,6 @@ use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::SkillLoadOutcomeInfo;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -115,11 +114,23 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
         });
     let test = builder.build(&server).await?;
 
-    let SkillLoadOutcomeInfo { skills, errors } = test
-        .session_configured
-        .skill_load_outcome
-        .as_ref()
-        .expect("skill outcome present");
+    test.codex
+        .submit(Op::ListSkills { cwds: Vec::new() })
+        .await?;
+    let response =
+        core_test_support::wait_for_event_match(test.codex.as_ref(), |event| match event {
+            codex_core::protocol::EventMsg::ListSkillsResponse(response) => Some(response.clone()),
+            _ => None,
+        })
+        .await;
+
+    let cwd = test.cwd_path();
+    let (skills, errors) = response
+        .skills
+        .iter()
+        .find(|entry| entry.cwd.as_path() == cwd)
+        .map(|entry| (entry.skills.clone(), entry.errors.clone()))
+        .unwrap_or_default();
 
     assert!(
         skills.is_empty(),

@@ -186,6 +186,15 @@ pub enum Op {
     /// Request the list of available custom prompts.
     ListCustomPrompts,
 
+    /// Request the list of skills for the provided `cwd` values or the session default.
+    ListSkills {
+        /// Working directories to scope repo skills discovery.
+        ///
+        /// When empty, the session default working directory is used.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        cwds: Vec<PathBuf>,
+    },
+
     /// Request the agent to summarize the current conversation context.
     /// The agent will use its existing context (either conversation history or previous response id)
     /// to generate a summary which will be returned as an AgentMessage event.
@@ -587,6 +596,9 @@ pub enum EventMsg {
 
     /// List of custom prompts available to the agent.
     ListCustomPromptsResponse(ListCustomPromptsResponseEvent),
+
+    /// List of skills available to the agent.
+    ListSkillsResponse(ListSkillsResponseEvent),
 
     PlanUpdate(UpdatePlanArgs),
 
@@ -1650,11 +1662,26 @@ pub struct ListCustomPromptsResponseEvent {
     pub custom_prompts: Vec<CustomPrompt>,
 }
 
+/// Response payload for `Op::ListSkills`.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct SkillInfo {
+pub struct ListSkillsResponseEvent {
+    pub skills: Vec<SkillsListEntry>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SkillScope {
+    User,
+    Repo,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SkillMetadata {
     pub name: String,
     pub description: String,
     pub path: PathBuf,
+    pub scope: SkillScope,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1663,9 +1690,10 @@ pub struct SkillErrorInfo {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, Default)]
-pub struct SkillLoadOutcomeInfo {
-    pub skills: Vec<SkillInfo>,
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SkillsListEntry {
+    pub cwd: PathBuf,
+    pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillErrorInfo>,
 }
 
@@ -1703,9 +1731,6 @@ pub struct SessionConfiguredEvent {
     /// When present, UIs can use these to seed the history.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_messages: Option<Vec<EventMsg>>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub skill_load_outcome: Option<SkillLoadOutcomeInfo>,
 
     pub rollout_path: PathBuf,
 }
@@ -1834,7 +1859,6 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
-                skill_load_outcome: None,
                 rollout_path: rollout_file.path().to_path_buf(),
             }),
         };

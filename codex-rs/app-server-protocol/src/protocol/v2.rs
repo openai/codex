@@ -21,6 +21,9 @@ use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
+use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
+use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
+use codex_protocol::protocol::SkillScope as CoreSkillScope;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -966,6 +969,87 @@ pub struct ThreadCompactParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadCompactResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsListParams {
+    /// When empty, defaults to the current session working directory.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cwds: Vec<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsListResponse {
+    pub data: Vec<SkillsListEntry>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum SkillScope {
+    User,
+    Repo,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillMetadata {
+    pub name: String,
+    pub description: String,
+    pub path: PathBuf,
+    pub scope: SkillScope,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillErrorInfo {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsListEntry {
+    pub cwd: PathBuf,
+    pub skills: Vec<SkillMetadata>,
+    pub errors: Vec<SkillErrorInfo>,
+}
+
+impl From<CoreSkillMetadata> for SkillMetadata {
+    fn from(value: CoreSkillMetadata) -> Self {
+        Self {
+            name: value.name,
+            description: value.description,
+            path: value.path,
+            scope: value.scope.into(),
+        }
+    }
+}
+
+impl From<CoreSkillScope> for SkillScope {
+    fn from(value: CoreSkillScope) -> Self {
+        match value {
+            CoreSkillScope::User => Self::User,
+            CoreSkillScope::Repo => Self::Repo,
+        }
+    }
+}
+
+impl From<CoreSkillErrorInfo> for SkillErrorInfo {
+    fn from(value: CoreSkillErrorInfo) -> Self {
+        Self {
+            path: value.path,
+            message: value.message,
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
