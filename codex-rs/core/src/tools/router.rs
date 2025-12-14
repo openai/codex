@@ -137,6 +137,7 @@ impl ToolRouter {
         session: Arc<Session>,
         turn: Arc<TurnContext>,
         tracker: SharedTurnDiffTracker,
+        cancellation_token: tokio_util::sync::CancellationToken,
         call: ToolCall,
     ) -> Result<ResponseInputItem, FunctionCallError> {
         let ToolCall {
@@ -151,6 +152,7 @@ impl ToolRouter {
             session,
             turn,
             tracker,
+            cancellation_token,
             call_id,
             tool_name,
             payload,

@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::time::Instant;
-use tokio_util::sync::CancellationToken;
 
 use crate::function_tool::FunctionCallError;
 use crate::protocol::EventMsg;
@@ -46,6 +45,7 @@ impl ToolHandler for RunSubagentHandler {
             turn,
             session,
             payload,
+            cancellation_token,
             ..
         } = invocation;
 
@@ -110,13 +110,14 @@ impl ToolHandler for RunSubagentHandler {
             )
             .await;
 
+        let subagent_cancellation_token = cancellation_token.child_token();
         let result = run_subagent_one_shot_with_definition(
             &session,
             &turn,
             definition.prompt.clone(),
             definition.source.clone(),
             prompt,
-            &CancellationToken::new(),
+            &subagent_cancellation_token,
         )
         .await;
 
