@@ -98,6 +98,12 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     fn is_stream_continuation(&self) -> bool {
         false
     }
+
+    /// If set, the transcript output is time-dependent and should be re-rendered when the tick
+    /// changes (e.g. for animated spinners/shimmers).
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        None
+    }
 }
 
 impl Renderable for Box<dyn HistoryCell> {
@@ -1010,6 +1016,13 @@ impl HistoryCell for McpToolCallCell {
         }
 
         lines
+    }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled || self.result.is_some() {
+            return None;
+        }
+        Some((self.start_time.elapsed().as_millis() / 50) as u64)
     }
 }
 
