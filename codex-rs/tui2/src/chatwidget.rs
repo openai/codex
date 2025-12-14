@@ -286,6 +286,7 @@ pub(crate) struct ChatWidget {
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
+    active_cell_revision: u64,
     config: Config,
     model: String,
     auth_manager: Arc<AuthManager>,
@@ -338,6 +339,23 @@ pub(crate) struct ChatWidget {
     feedback: codex_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
+}
+
+/// Snapshot of active-cell state that affects transcript overlay rendering.
+///
+/// The overlay keeps a cached "live tail" for the in-flight cell; this key lets
+/// it cheaply decide when to recompute that tail as the active cell evolves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ActiveCellTranscriptKey {
+    /// Bumped whenever the active cell's transcript lines change in place.
+    /// Used to invalidate the overlay cache even if the active cell pointer
+    /// itself is unchanged.
+    pub(crate) revision: u64,
+    /// Whether the active cell continues the prior stream, which affects
+    /// spacing between transcript blocks.
+    pub(crate) is_stream_continuation: bool,
+    /// Optional animation tick for spinners or in-progress indicators.
+    pub(crate) animation_tick: Option<u64>,
 }
 
 struct UserMessage {
@@ -1091,6 +1109,9 @@ impl ChatWidget {
             cell.complete_call(&ev.call_id, output, ev.duration);
             if cell.should_flush() {
                 self.flush_active_cell();
+            } else {
+                self.bump_active_cell_revision();
+                self.request_redraw();
             }
         }
     }
@@ -1207,6 +1228,7 @@ impl ChatWidget {
             )
         {
             *cell = new_exec;
+            self.bump_active_cell_revision();
         } else {
             self.flush_active_cell();
 
@@ -1218,6 +1240,7 @@ impl ChatWidget {
                 interaction_input,
                 self.config.animations,
             )));
+            self.bump_active_cell_revision();
         }
 
         self.request_redraw();
@@ -1231,6 +1254,7 @@ impl ChatWidget {
             ev.invocation,
             self.config.animations,
         )));
+        self.bump_active_cell_revision();
         self.request_redraw();
     }
     pub(crate) fn handle_mcp_end_now(&mut self, ev: McpToolCallEndEvent) {
@@ -1303,6 +1327,7 @@ impl ChatWidget {
                 skills: None,
             }),
             active_cell: None,
+            active_cell_revision: 0,
             config,
             model: model.clone(),
             auth_manager,
@@ -1387,6 +1412,7 @@ impl ChatWidget {
                 skills: None,
             }),
             active_cell: None,
+            active_cell_revision: 0,
             config,
             model: model.clone(),
             auth_manager,
@@ -2062,6 +2088,12 @@ impl ChatWidget {
 
     fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
+    }
+
+    fn bump_active_cell_revision(&mut self) {
+        // Wrapping avoids overflow; wraparound would require 2^64 bumps and at
+        // worst causes a one-time cache-key collision.
+        self.active_cell_revision = self.active_cell_revision.wrapping_add(1);
     }
 
     fn notify(&mut self, notification: Notification) {
@@ -3635,6 +3667,21 @@ impl ChatWidget {
 
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {
         self.current_rollout_path.clone()
+    }
+
+    pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
+        let cell = self.active_cell.as_ref()?;
+        Some(ActiveCellTranscriptKey {
+            revision: self.active_cell_revision,
+            is_stream_continuation: cell.is_stream_continuation(),
+            animation_tick: cell.transcript_animation_tick(),
+        })
+    }
+
+    pub(crate) fn active_cell_transcript_lines(&self, width: u16) -> Option<Vec<Line<'static>>> {
+        let cell = self.active_cell.as_ref()?;
+        let lines = cell.transcript_lines(width);
+        (!lines.is_empty()).then_some(lines)
     }
 
     /// Return a reference to the widget's current config (includes any

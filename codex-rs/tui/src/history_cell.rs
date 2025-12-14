@@ -100,6 +100,12 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     fn is_stream_continuation(&self) -> bool {
         false
     }
+
+    /// If set, the transcript output is time-dependent and should be re-rendered when the tick
+    /// changes (e.g. for animated spinners/shimmers).
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        None
+    }
 }
 
 impl Renderable for Box<dyn HistoryCell> {
@@ -448,6 +454,7 @@ pub(crate) fn new_unified_exec_interaction(
 pub(crate) struct UnifiedExecWaitCell {
     command_display: Option<String>,
     animations_enabled: bool,
+    start_time: Instant,
 }
 
 impl UnifiedExecWaitCell {
@@ -455,6 +462,7 @@ impl UnifiedExecWaitCell {
         Self {
             command_display: command_display.filter(|display| !display.is_empty()),
             animations_enabled,
+            start_time: Instant::now(),
         }
     }
 
@@ -466,10 +474,15 @@ impl UnifiedExecWaitCell {
         }
     }
 
-    pub(crate) fn update_command_display(&mut self, command_display: Option<String>) {
-        if self.command_display.is_none() {
-            self.command_display = command_display.filter(|display| !display.is_empty());
+    /// Update the command display once; returns true when it changes so callers
+    /// can invalidate cached transcript rendering.
+    pub(crate) fn update_command_display(&mut self, command_display: Option<String>) -> bool {
+        let command_display = command_display.filter(|display| !display.is_empty());
+        if self.command_display.is_some() || command_display.is_none() {
+            return false;
         }
+        self.command_display = command_display;
+        true
     }
 
     pub(crate) fn command_display(&self) -> Option<String> {
@@ -506,6 +519,13 @@ impl HistoryCell for UnifiedExecWaitCell {
 
     fn desired_height(&self, width: u16) -> u16 {
         self.display_lines(width).len() as u16
+    }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled {
+            return None;
+        }
+        Some((self.start_time.elapsed().as_millis() / 50) as u64)
     }
 }
 
@@ -1251,6 +1271,13 @@ impl HistoryCell for McpToolCallCell {
         }
 
         lines
+    }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled || self.result.is_some() {
+            return None;
+        }
+        Some((self.start_time.elapsed().as_millis() / 50) as u64)
     }
 }
 
