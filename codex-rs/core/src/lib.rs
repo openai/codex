@@ -80,6 +80,7 @@ pub mod spawn;
 pub mod terminal;
 mod tools;
 pub mod turn_diff_tracker;
+pub mod version;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;

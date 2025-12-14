@@ -2,13 +2,17 @@
 
 use crate::update_action;
 use crate::update_action::UpdateAction;
-use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
 use codex_core::config::Config;
 use codex_core::default_client::create_client;
+use codex_core::version::VERSION_FILENAME;
+use codex_core::version::VersionInfo;
+use codex_core::version::extract_version_from_cask;
+use codex_core::version::extract_version_from_latest_tag;
+use codex_core::version::is_newer;
+use codex_core::version::read_version_info;
 use serde::Deserialize;
-use serde::Serialize;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -45,16 +49,6 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
     })
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct VersionInfo {
-    latest_version: String,
-    // ISO-8601 timestamp (RFC3339)
-    last_checked_at: DateTime<Utc>,
-    #[serde(default)]
-    dismissed_version: Option<String>,
-}
-
-const VERSION_FILENAME: &str = "version.json";
 // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
 const HOMEBREW_CASK_URL: &str =
     "https://raw.githubusercontent.com/Homebrew/homebrew-cask/HEAD/Casks/c/codex.rb";
@@ -67,11 +61,6 @@ struct ReleaseInfo {
 
 fn version_filepath(config: &Config) -> PathBuf {
     config.codex_home.join(VERSION_FILENAME)
-}
-
-fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
-    let contents = std::fs::read_to_string(version_file)?;
-    Ok(serde_json::from_str(&contents)?)
 }
 
 async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
@@ -116,32 +105,6 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn is_newer(latest: &str, current: &str) -> Option<bool> {
-    match (parse_version(latest), parse_version(current)) {
-        (Some(l), Some(c)) => Some(l > c),
-        _ => None,
-    }
-}
-
-fn extract_version_from_cask(cask_contents: &str) -> anyhow::Result<String> {
-    cask_contents
-        .lines()
-        .find_map(|line| {
-            let line = line.trim();
-            line.strip_prefix("version \"")
-                .and_then(|rest| rest.strip_suffix('"'))
-                .map(ToString::to_string)
-        })
-        .ok_or_else(|| anyhow::anyhow!("Failed to find version in Homebrew cask file"))
-}
-
-fn extract_version_from_latest_tag(latest_tag_name: &str) -> anyhow::Result<String> {
-    latest_tag_name
-        .strip_prefix("rust-v")
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))
-}
-
 /// Returns the latest version to show in a popup, if it should be shown.
 /// This respects the user's dismissal choice for the current latest version.
 pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
@@ -177,48 +140,14 @@ pub async fn dismiss_version(config: &Config, version: &str) -> anyhow::Result<(
     Ok(())
 }
 
-fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
-    let mut iter = v.trim().split('.');
-    let maj = iter.next()?.parse::<u64>().ok()?;
-    let min = iter.next()?.parse::<u64>().ok()?;
-    let pat = iter.next()?.parse::<u64>().ok()?;
-    Some((maj, min, pat))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn parses_version_from_cask_contents() {
-        let cask = r#"
-            cask "codex" do
-              version "0.55.0"
-            end
-        "#;
-        assert_eq!(
-            extract_version_from_cask(cask).expect("failed to parse version"),
-            "0.55.0"
-        );
-    }
-
-    #[test]
-    fn extracts_version_from_latest_tag() {
-        assert_eq!(
-            extract_version_from_latest_tag("rust-v1.5.0").expect("failed to parse version"),
-            "1.5.0"
-        );
-    }
-
-    #[test]
-    fn latest_tag_without_prefix_is_invalid() {
-        assert!(extract_version_from_latest_tag("v1.5.0").is_err());
-    }
-
-    #[test]
     fn prerelease_version_is_not_considered_newer() {
-        assert_eq!(is_newer("0.11.0-beta.1", "0.11.0"), None);
-        assert_eq!(is_newer("1.0.0-rc.1", "1.0.0"), None);
+        assert_eq!(is_newer("0.11.0-beta.1", "0.11.0"), Some(false));
+        assert_eq!(is_newer("1.0.0-rc.1", "1.0.0"), Some(false));
     }
 
     #[test]
@@ -231,7 +160,6 @@ mod tests {
 
     #[test]
     fn whitespace_is_ignored() {
-        assert_eq!(parse_version(" 1.2.3 \n"), Some((1, 2, 3)));
         assert_eq!(is_newer(" 1.2.3 ", "1.2.2"), Some(true));
     }
 }

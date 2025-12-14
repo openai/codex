@@ -82,6 +82,8 @@ use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::error::error_event_with_update_nudge;
+use crate::error::stream_error_event_with_update_nudge;
 #[cfg(test)]
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
@@ -108,7 +110,6 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::SkillErrorInfo;
 use crate::protocol::SkillInfo;
 use crate::protocol::SkillLoadOutcomeInfo;
-use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
@@ -201,6 +202,13 @@ fn maybe_push_chat_wire_api_deprecation(
     });
 }
 
+fn compute_is_up_to_date(codex_home: &std::path::Path) -> bool {
+    let version_file = codex_home.join(crate::version::VERSION_FILENAME);
+    crate::version::read_latest_version(&version_file)
+        .and_then(|latest| crate::version::is_up_to_date(&latest, env!("CARGO_PKG_VERSION")))
+        .unwrap_or(true)
+}
+
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub async fn spawn(
@@ -251,6 +259,7 @@ impl Codex {
             error!("failed to refresh available models: {err:?}");
         }
         let model = models_manager.get_model(&config.model, &config).await;
+        let is_up_to_date = compute_is_up_to_date(&config.codex_home);
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             model: model.clone(),
@@ -266,6 +275,7 @@ impl Codex {
             original_config_do_not_use: Arc::clone(&config),
             exec_policy,
             session_source,
+            is_up_to_date,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -430,6 +440,9 @@ pub(crate) struct SessionConfiguration {
     original_config_do_not_use: Arc<Config>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
+    /// Whether the CLI is up to date with the latest known version at session start.
+    #[allow(dead_code)]
+    is_up_to_date: bool,
 }
 
 impl SessionConfiguration {
@@ -762,6 +775,11 @@ impl Session {
         state.get_total_token_usage()
     }
 
+    pub(crate) async fn is_up_to_date(&self) -> bool {
+        let state = self.state.lock().await;
+        state.session_configuration.is_up_to_date
+    }
+
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
         let turn_context = self.new_turn(SessionSettingsUpdate::default()).await;
         match conversation_history {
@@ -791,15 +809,11 @@ impl Session {
                         warn!(
                             "resuming session with different model: previous={prev}, current={curr}"
                         );
-                        self.send_event(
-                            &turn_context,
-                            EventMsg::Warning(WarningEvent {
-                                message: format!(
-                                    "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
+                        let message = format!(
+                            "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
                          Consider switching back to `{prev}` as it may affect Codex performance."
-                                ),
-                            }),
-                        )
+                        );
+                        self.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
                             .await;
                     }
                 }
@@ -1380,10 +1394,11 @@ impl Session {
         let codex_error_info = CodexErrorInfo::ResponseStreamDisconnected {
             http_status_code: codex_error.http_status_code_value(),
         };
-        let event = EventMsg::StreamError(StreamErrorEvent {
-            message: message.into(),
-            codex_error_info: Some(codex_error_info),
-        });
+        let event = EventMsg::StreamError(stream_error_event_with_update_nudge(
+            message.into(),
+            Some(codex_error_info),
+            self.is_up_to_date().await,
+        ));
         self.send_event(turn_context, event).await;
     }
 
@@ -1629,6 +1644,7 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
+    use crate::error::error_event_with_update_nudge;
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::review_prompts::resolve_review_request;
@@ -1638,7 +1654,6 @@ mod handlers {
     use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
-    use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
@@ -1920,12 +1935,14 @@ mod handlers {
             && let Err(e) = rec.shutdown().await
         {
             warn!("failed to shutdown rollout recorder: {e}");
+            let is_up_to_date = sess.is_up_to_date().await;
             let event = Event {
                 id: sub_id.clone(),
-                msg: EventMsg::Error(ErrorEvent {
-                    message: "Failed to shutdown rollout recorder".to_string(),
-                    codex_error_info: Some(CodexErrorInfo::Other),
-                }),
+                msg: EventMsg::Error(error_event_with_update_nudge(
+                    "Failed to shutdown rollout recorder".to_string(),
+                    Some(CodexErrorInfo::Other),
+                    is_up_to_date,
+                )),
             };
             sess.send_event_raw(event).await;
         }
@@ -1959,12 +1976,14 @@ mod handlers {
                 .await;
             }
             Err(err) => {
+                let is_up_to_date = sess.is_up_to_date().await;
                 let event = Event {
                     id: sub_id,
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: err.to_string(),
-                        codex_error_info: Some(CodexErrorInfo::Other),
-                    }),
+                    msg: EventMsg::Error(error_event_with_update_nudge(
+                        err.to_string(),
+                        Some(CodexErrorInfo::Other),
+                        is_up_to_date,
+                    )),
                 };
                 sess.send_event(&turn_context, event.msg).await;
             }
@@ -2229,7 +2248,13 @@ pub(crate) async fn run_task(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
-                let event = EventMsg::Error(e.to_error_event(None));
+                let is_up_to_date = sess.is_up_to_date().await;
+                let error_event = e.to_error_event(None);
+                let event = EventMsg::Error(error_event_with_update_nudge(
+                    error_event.message,
+                    error_event.codex_error_info,
+                    is_up_to_date,
+                ));
                 sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
                 break;
@@ -2723,6 +2748,7 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
+            is_up_to_date: true,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -2795,6 +2821,7 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
+            is_up_to_date: true,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -2999,6 +3026,7 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
+            is_up_to_date: true,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_family = ModelsManager::construct_model_family_offline(
@@ -3089,6 +3117,7 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
+            is_up_to_date: true,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_family = ModelsManager::construct_model_family_offline(
