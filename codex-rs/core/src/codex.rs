@@ -202,13 +202,6 @@ fn maybe_push_chat_wire_api_deprecation(
     });
 }
 
-fn compute_is_up_to_date(codex_home: &std::path::Path) -> bool {
-    let version_file = codex_home.join(crate::version::VERSION_FILENAME);
-    crate::version::read_latest_version(&version_file)
-        .and_then(|latest| crate::version::is_up_to_date(&latest, env!("CARGO_PKG_VERSION")))
-        .unwrap_or(true)
-}
-
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub async fn spawn(
@@ -2645,6 +2638,13 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
             None
         }
     })
+}
+
+fn compute_is_up_to_date(codex_home: &std::path::Path) -> bool {
+    let version_file = codex_home.join(crate::version::VERSION_FILENAME);
+    crate::version::read_latest_version(&version_file)
+        .and_then(|latest| crate::version::is_up_to_date(&latest, env!("CARGO_PKG_VERSION")))
+        .unwrap_or(true)
 }
 
 #[cfg(test)]
