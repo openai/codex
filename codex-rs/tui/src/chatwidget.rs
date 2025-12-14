@@ -3266,6 +3266,15 @@ impl ChatWidget {
         self.current_rollout_path.clone()
     }
 
+    pub(crate) fn active_cell_transcript_lines(
+        &self,
+        width: u16,
+    ) -> Option<(Vec<Line<'static>>, bool)> {
+        let cell = self.active_cell.as_ref()?;
+        let lines = cell.transcript_lines(width);
+        (!lines.is_empty()).then(|| (lines, cell.is_stream_continuation()))
+    }
+
     /// Return a reference to the widget's current config (includes any
     /// runtime overrides applied via TUI, e.g., model or approval policy).
     pub(crate) fn config_ref(&self) -> &Config {

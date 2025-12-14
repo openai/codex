@@ -466,12 +466,53 @@ impl TranscriptOverlay {
         }
     }
 
+    pub(crate) fn set_live_tail(
+        &mut self,
+        lines: Vec<Line<'static>>,
+        is_stream_continuation: bool,
+    ) {
+        if lines.is_empty() {
+            self.clear_live_tail();
+            return;
+        }
+
+        let follow_bottom = self.view.is_scrolled_to_bottom();
+        self.clear_live_tail();
+        self.view.renderables.push(Self::live_tail_renderable(
+            lines,
+            !self.cells.is_empty(),
+            is_stream_continuation,
+        ));
+        if follow_bottom {
+            self.view.scroll_offset = usize::MAX;
+        }
+    }
+
+    pub(crate) fn clear_live_tail(&mut self) {
+        if self.view.renderables.len() > self.cells.len() {
+            self.view.renderables.pop();
+        }
+    }
+
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
         self.highlight_cell = cell;
         self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
         if let Some(idx) = self.highlight_cell {
             self.view.scroll_chunk_into_view(idx);
         }
+    }
+
+    fn live_tail_renderable(
+        lines: Vec<Line<'static>>,
+        has_prior_cells: bool,
+        is_stream_continuation: bool,
+    ) -> Box<dyn Renderable> {
+        let paragraph = Paragraph::new(Text::from(lines));
+        let mut renderable: Box<dyn Renderable> = Box::new(CachedRenderable::new(paragraph));
+        if has_prior_cells && !is_stream_continuation {
+            renderable = Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));
+        }
+        renderable
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
@@ -690,6 +731,19 @@ mod tests {
                 lines: vec![Line::from("gamma")],
             }),
         ]);
+        let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
+        term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert_snapshot!(term.backend());
+    }
+
+    #[test]
+    fn transcript_overlay_renders_live_tail() {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: vec![Line::from("alpha")],
+        })]);
+        overlay.set_live_tail(vec![Line::from("tail")], false);
+
         let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");

@@ -218,6 +218,19 @@ impl App {
 
     /// Forward any event to the overlay and close it if done.
     fn overlay_forward_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
+        if matches!(&event, TuiEvent::Draw)
+            && let Some(Overlay::Transcript(t)) = &mut self.overlay
+        {
+            let width = tui.terminal.viewport_area.width.max(1);
+            if let Some((lines, is_stream_continuation)) =
+                self.chat_widget.active_cell_transcript_lines(width)
+            {
+                t.set_live_tail(lines, is_stream_continuation);
+            } else {
+                t.clear_live_tail();
+            }
+        }
+
         if let Some(overlay) = &mut self.overlay {
             overlay.handle_event(tui, event)?;
             if overlay.is_done() {
