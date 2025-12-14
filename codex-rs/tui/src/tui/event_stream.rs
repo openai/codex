@@ -37,25 +37,66 @@ use super::TuiEvent;
 pub type EventResult = Result<Event, ()>;
 
 /// Abstraction over a source of terminal events. Allows swapping in a fake for tests.
+/// Value in production is [`CrosstermEventSource`].
 pub trait EventSource: Send + 'static {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<EventResult>>;
 }
 
-/// Shared crossterm input state for all `event_stream()` handles. A single EventStream
+/// Shared crossterm input state for all [`TuiEventStream`] instances. A single crossterm EventStream
 /// is reused so all streams still see the same input source.
 ///
 /// This intermediate layer enables dropping/recreating the underlying EventStream (pause/resume) without rebuilding consumers.
 pub struct EventBroker<S: EventSource = CrosstermEventSource> {
-    pub paused: bool,
-    pub crossterm_events: Option<S>,
+    state: Mutex<EventBrokerState<S>>,
+}
+
+/// Tracks state of underlying [`EventSource`].
+enum EventBrokerState<S: EventSource> {
+    Paused,     // Underlying event source (i.e., crossterm EventStream) dropped
+    Start,      // A new event source will be created on next poll
+    Running(S), // Event source is currently running
+}
+
+impl<S: EventSource + Default> EventBrokerState<S> {
+    /// Return the running event source, starting it if needed; None when paused.
+    fn active_event_source_mut(&mut self) -> Option<&mut S> {
+        match self {
+            EventBrokerState::Paused => None,
+            EventBrokerState::Start => {
+                *self = EventBrokerState::Running(S::default());
+                match self {
+                    EventBrokerState::Running(events) => Some(events),
+                    EventBrokerState::Paused | EventBrokerState::Start => None,
+                }
+            }
+            EventBrokerState::Running(events) => Some(events),
+        }
+    }
 }
 
 impl<S: EventSource + Default> EventBroker<S> {
     pub fn new() -> Self {
         Self {
-            paused: false,
-            crossterm_events: None,
+            state: Mutex::new(EventBrokerState::Start),
         }
+    }
+
+    /// Drop the underlying event source
+    pub fn pause_events(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *state = EventBrokerState::Paused;
+    }
+
+    /// Create a new instance of the underlying event source
+    pub fn resume_events(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *state = EventBrokerState::Start;
     }
 }
 
@@ -83,13 +124,12 @@ impl EventSource for CrosstermEventSource {
 /// TuiEventStream is a struct for reading TUI events (draws and user input).
 /// Each instance has its own draw subscription (the draw channel is broadcast, so
 /// multiple receivers are fine), while crossterm input is funneled through a
-/// single shared `EventStream` because crossterm uses a global stdin reader and
-/// does not support fan-out. Multiple instances can exist during the app lifetime
-/// (for nested or sequential screens), but only one should be polled at a time;
-/// otherwise one instance can consume ("steal") input events and the other will
-/// miss them.
+/// single shared [`EventBroker`] because crossterm uses a global stdin reader and
+/// does not support fan-out. Multiple TuiEventStream instances can exist during the app lifetime
+/// (for nested or sequential screens), but only one should be polled at a time,
+/// otherwise one instance can consume ("steal") input events and the other will miss them.
 pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSource> {
-    broker: Arc<Mutex<EventBroker<S>>>,
+    broker: Arc<EventBroker<S>>,
     draw_stream: BroadcastStream<()>,
     terminal_focused: Arc<AtomicBool>,
     poll_draw_first: bool,
@@ -101,7 +141,7 @@ pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSourc
 
 impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
     pub fn new(
-        broker: Arc<Mutex<EventBroker<S>>>,
+        broker: Arc<EventBroker<S>>,
         draw_rx: broadcast::Receiver<()>,
         terminal_focused: Arc<AtomicBool>,
         #[cfg(unix)] suspend_context: crate::tui::job_control::SuspendContext,
@@ -129,19 +169,19 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         // until we return a mapped event, hit Pending, or see EOF/error.
         loop {
             let poll_result = {
-                let mut broker = self
+                let mut state = self
                     .broker
+                    .state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if broker.paused {
-                    broker.crossterm_events = None;
-                    return Poll::Pending;
-                }
-                let events = broker.crossterm_events.get_or_insert_with(S::default);
+                let events = match state.active_event_source_mut() {
+                    Some(events) => events,
+                    None => return Poll::Pending,
+                };
                 match Pin::new(events).poll_next(cx) {
                     Poll::Ready(Some(Ok(event))) => Some(event),
                     Poll::Ready(Some(Err(_))) | Poll::Ready(None) => {
-                        broker.crossterm_events = None;
+                        *state = EventBrokerState::Start;
                         return Poll::Ready(None);
                     }
                     Poll::Pending => return Poll::Pending,
@@ -244,7 +284,7 @@ mod tests {
     }
 
     struct FakeEventSourceHandle {
-        broker: Arc<Mutex<EventBroker<FakeEventSource>>>,
+        broker: Arc<EventBroker<FakeEventSource>>,
     }
 
     impl FakeEventSource {
@@ -261,21 +301,19 @@ mod tests {
     }
 
     impl FakeEventSourceHandle {
-        fn new(broker: Arc<Mutex<EventBroker<FakeEventSource>>>) -> Self {
+        fn new(broker: Arc<EventBroker<FakeEventSource>>) -> Self {
             Self { broker }
         }
 
         fn send(&self, event: EventResult) {
-            let mut broker = self
+            let mut state = self
                 .broker
+                .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if broker.paused {
+            let Some(source) = state.active_event_source_mut() else {
                 return;
-            }
-            let source = broker
-                .crossterm_events
-                .get_or_insert_with(FakeEventSource::default);
+            };
             let _ = source.tx.send(event);
         }
     }
@@ -292,7 +330,7 @@ mod tests {
     }
 
     fn make_stream(
-        broker: Arc<Mutex<EventBroker<FakeEventSource>>>,
+        broker: Arc<EventBroker<FakeEventSource>>,
         draw_rx: broadcast::Receiver<()>,
         terminal_focused: Arc<AtomicBool>,
     ) -> TuiEventStream<FakeEventSource> {
@@ -308,7 +346,7 @@ mod tests {
     }
 
     type SetupState = (
-        Arc<Mutex<EventBroker<FakeEventSource>>>,
+        Arc<EventBroker<FakeEventSource>>,
         FakeEventSourceHandle,
         broadcast::Sender<()>,
         broadcast::Receiver<()>,
@@ -317,8 +355,8 @@ mod tests {
 
     fn setup() -> SetupState {
         let source = FakeEventSource::new();
-        let broker = Arc::new(Mutex::new(EventBroker::new()));
-        broker.lock().unwrap().crossterm_events = Some(source);
+        let broker = Arc::new(EventBroker::new());
+        *broker.state.lock().unwrap() = EventBrokerState::Running(source);
         let handle = FakeEventSourceHandle::new(broker.clone());
 
         let (draw_tx, draw_rx) = broadcast::channel(1);

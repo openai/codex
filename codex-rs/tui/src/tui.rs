@@ -7,7 +7,6 @@ use std::io::stdout;
 use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -166,7 +165,7 @@ pub enum TuiEvent {
 pub struct Tui {
     frame_requester: FrameRequester,
     draw_tx: broadcast::Sender<()>,
-    event_broker: Arc<Mutex<EventBroker>>,
+    event_broker: Arc<EventBroker>,
     pub(crate) terminal: Terminal,
     pending_history_lines: Vec<Line<'static>>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
@@ -195,7 +194,7 @@ impl Tui {
         Self {
             frame_requester,
             draw_tx,
-            event_broker: Arc::new(Mutex::new(EventBroker::new())),
+            event_broker: Arc::new(EventBroker::new()),
             terminal,
             pending_history_lines: vec![],
             alt_saved_viewport: None,
@@ -219,22 +218,13 @@ impl Tui {
     // todo(sayan) unused for now; intend to use to enable opening external editors
     #[allow(unused)]
     pub fn pause_events(&mut self) {
-        let mut broker = self
-            .event_broker
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        broker.paused = true;
-        broker.crossterm_events = None;
+        self.event_broker.pause_events();
     }
 
     // todo(sayan) unused for now; intend to use to enable opening external editors
     #[allow(unused)]
     pub fn resume_events(&mut self) {
-        let mut broker = self
-            .event_broker
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        broker.paused = false;
+        self.event_broker.resume_events();
     }
 
     /// Emit a desktop notification now if the terminal is unfocused.
