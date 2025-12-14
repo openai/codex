@@ -426,6 +426,60 @@ fn pre_main_hardening() {
 }
 
 fn main() -> anyhow::Result<()> {
+    use codex_common::trace_jsonl::RunFinished;
+    use codex_common::trace_jsonl::RunStarted;
+    use codex_common::trace_jsonl::TraceConfig;
+    use codex_common::trace_jsonl::TraceEvent;
+    use codex_common::trace_jsonl::TraceWriter;
+    use codex_common::trace_jsonl::now_ms;
+    use codex_common::trace_jsonl::redact_string;
+
+    let cfg = TraceConfig::from_env();
+    if !cfg.is_enabled() {
+        return main_inner();
+    }
+
+    let run_id = format!("run_{}_{}", now_ms(), std::process::id());
+
+    // Best-effort tracing: never fail the CLI if trace IO fails
+    let mut trace = cfg
+        .path
+        .as_ref()
+        .and_then(|p| TraceWriter::open(p, run_id.clone(), cfg.redact).ok());
+
+    if let Some(t) = trace.as_mut() {
+        let cwd = std::env::current_dir()
+            .ok()
+            .map(|p| p.display().to_string());
+        let _ = t.write_event(TraceEvent::RunStarted(RunStarted {
+            ts_ms: now_ms(),
+            run_id: run_id.clone(),
+            mode: "cli".to_string(),
+            cwd,
+        }));
+
+        let result = main_inner();
+
+        let (ok, error) = match &result {
+            Ok(_) => (true, None),
+            Err(e) => (false, Some(redact_string(&e.to_string(), t.redact()))),
+        };
+
+        let _ = t.write_event(TraceEvent::RunFinished(RunFinished {
+            ts_ms: now_ms(),
+            run_id: run_id.clone(),
+            ok: ok,
+            exit_code: None,
+            error,
+        }));
+
+        return result;
+    }
+
+    main_inner()
+}
+
+fn main_inner() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         cli_main(codex_linux_sandbox_exe).await?;
         Ok(())

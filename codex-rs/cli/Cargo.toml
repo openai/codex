@@ -24,7 +24,7 @@ codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
-codex-common = { workspace = true, features = ["cli"] }
+codex-common = { workspace = true, features = ["cli", "trace"] }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
 codex-execpolicy = { workspace = true }
