@@ -3,6 +3,9 @@ use std::collections::HashSet;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 
+
+use tracing::error;
+
 use crate::util::error_or_panic;
 
 pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
@@ -22,9 +25,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                 });
 
                 if !has_output {
-                    error_or_panic(format!(
-                        "Function call output is missing for call id: {call_id}"
-                    ));
+                    error!("Function call output is missing for call id: {call_id}");
                     missing_outputs_to_insert.push((
                         idx,
                         ResponseItem::FunctionCallOutput {
@@ -46,9 +47,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                 });
 
                 if !has_output {
-                    error_or_panic(format!(
-                        "Custom tool call output is missing for call id: {call_id}"
-                    ));
+                    error!("Custom tool call output is missing for call id: {call_id}");
                     missing_outputs_to_insert.push((
                         idx,
                         ResponseItem::CustomToolCallOutput {
@@ -69,9 +68,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                     });
 
                     if !has_output {
-                        error_or_panic(format!(
-                            "Local shell call output is missing for call id: {call_id}"
-                        ));
+                        error!("Local shell call output is missing for call id: {call_id}");
                         missing_outputs_to_insert.push((
                             idx,
                             ResponseItem::FunctionCallOutput {
