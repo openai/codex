@@ -451,7 +451,6 @@ pub(crate) struct SessionConfiguration {
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
     /// Whether the CLI is up to date with the latest known version at session start.
-    #[allow(dead_code)]
     is_up_to_date: bool,
 }
 
