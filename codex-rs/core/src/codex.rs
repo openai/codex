@@ -20,6 +20,7 @@ use crate::openai_models::model_family::ModelFamily;
 use crate::openai_models::models_manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
+use crate::reflection::{ReflectionContext, evaluate_reflection};
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -114,6 +115,7 @@ use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
+use crate::protocol::ReflectionVerdictEvent;
 use crate::protocol::WarningEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
@@ -371,6 +373,7 @@ pub(crate) struct TurnContext {
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) exec_policy: Arc<RwLock<ExecPolicy>>,
     pub(crate) truncation_policy: TruncationPolicy,
+    pub(crate) reflection: crate::config::types::ReflectionConfig,
 }
 
 impl TurnContext {
@@ -536,6 +539,7 @@ impl Session {
                 per_turn_config.as_ref(),
                 model_family.truncation_policy,
             ),
+            reflection: per_turn_config.reflection.clone(),
         }
     }
 
@@ -2087,6 +2091,7 @@ async fn spawn_review_thread(
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         exec_policy: parent_turn_context.exec_policy.clone(),
         truncation_policy: TruncationPolicy::new(&per_turn_config, model_family.truncation_policy),
+        reflection: per_turn_config.reflection.clone(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2175,6 +2180,9 @@ pub(crate) async fn run_task(
             .await;
     }
 
+    // Extract initial task for reflection BEFORE input is consumed
+    let initial_task = extract_initial_task_from_input(&input);
+
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_response_item_and_emit_turn_item(turn_context.as_ref(), response_item)
@@ -2191,6 +2199,11 @@ pub(crate) async fn run_task(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+
+    // Track reflection attempts
+    let mut reflection_attempt: u32 = 0;
+    let reflection_config = &turn_context.reflection;
+    let reflection_enabled = reflection_config.enabled || sess.enabled(Feature::Reflection);
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -2255,7 +2268,95 @@ pub(crate) async fn run_task(
                 }
 
                 if !needs_follow_up {
-                    last_agent_message = turn_last_agent_message;
+                    last_agent_message = turn_last_agent_message.clone();
+
+                    // Run reflection if enabled and we haven't exceeded max attempts
+                    let max_attempts = reflection_config.max_attempts;
+                    if reflection_enabled && reflection_attempt < max_attempts {
+                        reflection_attempt += 1;
+                        info!(
+                            "Running reflection evaluation (attempt {}/{})",
+                            reflection_attempt, max_attempts
+                        );
+
+                        // Collect conversation items for reflection
+                        let history_items = sess.clone_history().await.get_history_for_prompt();
+                        let context = ReflectionContext::from_conversation(
+                            initial_task.clone(),
+                            &history_items,
+                            reflection_attempt,
+                            max_attempts,
+                        );
+
+                        // Evaluate with the judge, optionally using a different model
+                        match evaluate_reflection(
+                            &turn_context.client,
+                            context,
+                            reflection_config.model.as_deref(),
+                        )
+                        .await
+                        {
+                            Ok(verdict) => {
+                                info!(
+                                    "Reflection verdict: completed={}, confidence={:.2}",
+                                    verdict.completed, verdict.confidence
+                                );
+
+                                // Emit reflection verdict event for visibility
+                                sess.send_event(
+                                    &turn_context,
+                                    EventMsg::ReflectionVerdict(ReflectionVerdictEvent {
+                                        completed: verdict.completed,
+                                        confidence: verdict.confidence,
+                                        reasoning: verdict.reasoning.clone(),
+                                        feedback: verdict.feedback.clone(),
+                                        attempt: reflection_attempt,
+                                        max_attempts,
+                                    }),
+                                )
+                                .await;
+
+                                if !verdict.completed {
+                                    if let Some(feedback) = verdict.feedback {
+                                        info!("Task incomplete, injecting feedback: {}", feedback);
+
+                                        // Inject feedback as a new user message
+                                        let feedback_msg = format!(
+                                            "[Reflection Judge - Attempt {}/{}] Task verification failed.\n\nReasoning: {}\n\nFeedback: {}\n\nPlease address the above feedback and complete the task.",
+                                            reflection_attempt,
+                                            max_attempts,
+                                            verdict.reasoning,
+                                            feedback
+                                        );
+
+                                        let feedback_item = ResponseItem::Message {
+                                            id: None,
+                                            role: "user".to_string(),
+                                            content: vec![ContentItem::InputText {
+                                                text: feedback_msg,
+                                            }],
+                                        };
+
+                                        sess.record_conversation_items(
+                                            &turn_context,
+                                            &[feedback_item],
+                                        )
+                                        .await;
+
+                                        // Continue the loop to process the feedback
+                                        continue;
+                                    }
+                                } else {
+                                    info!("Reflection: Task completed successfully");
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Reflection evaluation failed: {}", e);
+                                // Continue without blocking on reflection errors
+                            }
+                        }
+                    }
+
                     sess.notifier()
                         .notify(&UserNotification::AgentTurnComplete {
                             thread_id: sess.conversation_id.to_string(),
@@ -2290,6 +2391,27 @@ pub(crate) async fn run_task(
     }
 
     last_agent_message
+}
+
+/// Extract the initial task/prompt from user input.
+fn extract_initial_task_from_input(input: &[UserInput]) -> String {
+    for item in input {
+        match item {
+            UserInput::Text { text } => {
+                return text.clone();
+            }
+            UserInput::Image { .. } | UserInput::LocalImage { .. } => {
+                // Skip images, look for text
+            }
+            UserInput::Skill { name, .. } => {
+                // Return skill name as task description
+                return format!("Run skill: {}", name);
+            }
+            // Handle future variants of the non-exhaustive enum
+            _ => {}
+        }
+    }
+    "(No initial task found)".to_string()
 }
 
 #[instrument(

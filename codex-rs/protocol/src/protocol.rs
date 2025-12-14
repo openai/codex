@@ -630,6 +630,9 @@ pub enum EventMsg {
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
+
+    /// Reflection layer verdict after evaluating task completion.
+    ReflectionVerdict(ReflectionVerdictEvent),
 }
 
 /// Codex errors that we expose to clients.
@@ -792,6 +795,24 @@ pub struct ErrorEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct WarningEvent {
     pub message: String,
+}
+
+/// Event emitted when the reflection layer evaluates task completion.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ReflectionVerdictEvent {
+    /// Whether the task was completed successfully.
+    pub completed: bool,
+    /// Confidence score from 0.0 to 1.0.
+    pub confidence: f32,
+    /// The judge's reasoning for the verdict.
+    pub reasoning: String,
+    /// Feedback for incomplete tasks (None if completed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<String>,
+    /// Current reflection attempt number.
+    pub attempt: u32,
+    /// Maximum allowed attempts.
+    pub max_attempts: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

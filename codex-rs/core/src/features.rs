@@ -64,6 +64,8 @@ pub enum Feature {
     ShellSnapshot,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
+    /// Reflection layer that verifies task completion via a judge model.
+    Reflection,
 }
 
 impl Feature {
@@ -362,6 +364,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Tui2,
         key: "tui2",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Reflection,
+        key: "reflection",
         stage: Stage::Experimental,
         default_enabled: false,
     },

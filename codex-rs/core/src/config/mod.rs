@@ -7,6 +7,8 @@ use crate::config::types::Notifications;
 use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
+use crate::config::types::ReflectionConfig;
+use crate::config::types::ReflectionConfigToml;
 use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
@@ -273,6 +275,9 @@ pub struct Config {
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
+
+    /// Configuration for the reflection/judge feature.
+    pub reflection: ReflectionConfig,
 
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
@@ -666,6 +671,9 @@ pub struct ConfigToml {
     /// Settings for ghost snapshots (used for undo).
     #[serde(default)]
     pub ghost_snapshot: Option<GhostSnapshotToml>,
+    /// Configuration for the reflection/judge feature.
+    #[serde(default)]
+    pub reflection: Option<ReflectionConfigToml>,
 
     /// When `true`, checks for Codex updates on startup and surfaces update prompts.
     /// Set to `false` only if your Codex updates are centrally managed.
@@ -1221,6 +1229,7 @@ impl Config {
             use_experimental_use_rmcp_client,
             ghost_snapshot,
             features,
+            reflection: cfg.reflection.map(Into::into).unwrap_or_default(),
             active_profile: active_profile_name,
             active_project,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
@@ -2983,6 +2992,7 @@ model_verbosity = "high"
                 use_experimental_use_rmcp_client: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
+                reflection: ReflectionConfig::default(),
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
                 windows_wsl_setup_acknowledged: false,
@@ -3058,6 +3068,7 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
+            reflection: ReflectionConfig::default(),
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
@@ -3148,6 +3159,7 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
+            reflection: ReflectionConfig::default(),
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
@@ -3224,6 +3236,7 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
+            reflection: ReflectionConfig::default(),
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,

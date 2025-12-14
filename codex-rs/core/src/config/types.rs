@@ -531,6 +531,57 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
     }
 }
 
+/// Configuration for the reflection/judge feature.
+/// This controls how task completion is verified by a separate "judge" model.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct ReflectionConfigToml {
+    /// Enable or disable reflection. When enabled, a judge model evaluates
+    /// task completion after each turn. Defaults to false.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+
+    /// Model to use for reflection/judging. If not set, uses the same model
+    /// as the main agent. Can be set to a cheaper/faster model like "gpt-4o-mini".
+    pub model: Option<String>,
+
+    /// Maximum number of reflection attempts before giving up.
+    /// Defaults to 3.
+    pub max_attempts: Option<u32>,
+}
+
+/// Runtime reflection configuration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReflectionConfig {
+    /// Whether reflection is enabled.
+    pub enabled: bool,
+
+    /// Model to use for reflection/judging.
+    pub model: Option<String>,
+
+    /// Maximum number of reflection attempts.
+    pub max_attempts: u32,
+}
+
+impl Default for ReflectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: None,
+            max_attempts: 3,
+        }
+    }
+}
+
+impl From<ReflectionConfigToml> for ReflectionConfig {
+    fn from(toml: ReflectionConfigToml) -> Self {
+        Self {
+            enabled: toml.enabled.unwrap_or(false),
+            model: toml.model,
+            max_attempts: toml.max_attempts.unwrap_or(3),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -802,5 +853,93 @@ mod tests {
             err.to_string().contains("bearer_token is not supported"),
             "unexpected error: {err}"
         );
+    }
+
+    // ==================== ReflectionConfig Tests ====================
+
+    #[test]
+    fn test_reflection_config_defaults() {
+        let config = ReflectionConfig::default();
+        assert!(!config.enabled);
+        assert!(config.model.is_none());
+        assert_eq!(config.max_attempts, 3);
+    }
+
+    #[test]
+    fn test_reflection_config_toml_defaults() {
+        let toml_config = ReflectionConfigToml::default();
+        assert!(toml_config.enabled.is_none());
+        assert!(toml_config.model.is_none());
+        assert!(toml_config.max_attempts.is_none());
+    }
+
+    #[test]
+    fn test_reflection_config_from_toml_defaults() {
+        let toml_config = ReflectionConfigToml::default();
+        let config: ReflectionConfig = toml_config.into();
+
+        assert!(!config.enabled);
+        assert!(config.model.is_none());
+        assert_eq!(config.max_attempts, 3);
+    }
+
+    #[test]
+    fn test_reflection_config_from_toml_full() {
+        let toml_config = ReflectionConfigToml {
+            enabled: Some(true),
+            model: Some("gpt-4o-mini".to_string()),
+            max_attempts: Some(5),
+        };
+        let config: ReflectionConfig = toml_config.into();
+
+        assert!(config.enabled);
+        assert_eq!(config.model, Some("gpt-4o-mini".to_string()));
+        assert_eq!(config.max_attempts, 5);
+    }
+
+    #[test]
+    fn test_reflection_config_deserialize_toml() {
+        let cfg: ReflectionConfigToml = toml::from_str(
+            r#"
+            enabled = true
+            model = "gpt-4o-mini"
+            max_attempts = 10
+        "#,
+        )
+        .expect("should deserialize reflection config");
+
+        assert_eq!(cfg.enabled, Some(true));
+        assert_eq!(cfg.model, Some("gpt-4o-mini".to_string()));
+        assert_eq!(cfg.max_attempts, Some(10));
+    }
+
+    #[test]
+    fn test_reflection_config_deserialize_toml_partial() {
+        let cfg: ReflectionConfigToml = toml::from_str(
+            r#"
+            enabled = true
+        "#,
+        )
+        .expect("should deserialize partial reflection config");
+
+        assert_eq!(cfg.enabled, Some(true));
+        assert!(cfg.model.is_none());
+        assert!(cfg.max_attempts.is_none());
+
+        // Convert to runtime config
+        let config: ReflectionConfig = cfg.into();
+        assert!(config.enabled);
+        assert!(config.model.is_none());
+        assert_eq!(config.max_attempts, 3); // default
+    }
+
+    #[test]
+    fn test_reflection_config_deserialize_toml_empty() {
+        let cfg: ReflectionConfigToml =
+            toml::from_str("").expect("should deserialize empty config");
+
+        assert!(cfg.enabled.is_none());
+        assert!(cfg.model.is_none());
+        assert!(cfg.max_attempts.is_none());
     }
 }

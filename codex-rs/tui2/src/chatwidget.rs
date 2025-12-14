@@ -58,6 +58,7 @@ use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
+use codex_core::protocol::ReflectionVerdictEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_core::skills::model::SkillMetadata;
@@ -687,6 +688,18 @@ impl ChatWidget {
 
     fn on_warning(&mut self, message: impl Into<String>) {
         self.add_to_history(history_cell::new_warning_event(message.into()));
+        self.request_redraw();
+    }
+
+    fn on_reflection_verdict(&mut self, ev: ReflectionVerdictEvent) {
+        self.add_to_history(history_cell::new_reflection_verdict(
+            ev.completed,
+            ev.confidence,
+            ev.reasoning,
+            ev.feedback,
+            ev.attempt,
+            ev.max_attempts,
+        ));
         self.request_redraw();
     }
 
@@ -1906,6 +1919,7 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
+            EventMsg::ReflectionVerdict(ev) => self.on_reflection_verdict(ev),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)

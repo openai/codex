@@ -1071,6 +1071,42 @@ pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
     PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
 }
 
+/// Creates a history cell for reflection verdict display.
+#[allow(clippy::disallowed_methods)]
+pub(crate) fn new_reflection_verdict(
+    completed: bool,
+    confidence: f32,
+    reasoning: String,
+    feedback: Option<String>,
+    attempt: u32,
+    max_attempts: u32,
+) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    if completed {
+        // Success case - green checkmark
+        let header = format!(
+            "✓ Reflection: Task completed (confidence: {:.0}%)",
+            confidence * 100.0
+        );
+        lines.push(vec![header.green()].into());
+        lines.push(vec![format!("  {}", reasoning).dim()].into());
+    } else {
+        // Incomplete case - yellow warning
+        let header = format!(
+            "⟳ Reflection: Task incomplete - attempt {}/{} (confidence: {:.0}%)",
+            attempt, max_attempts, confidence * 100.0
+        );
+        lines.push(vec![header.yellow()].into());
+        lines.push(vec![format!("  Reasoning: {}", reasoning).dim()].into());
+        if let Some(fb) = feedback {
+            lines.push(vec![format!("  Feedback: {}", fb).yellow()].into());
+        }
+    }
+
+    PlainHistoryCell { lines }
+}
+
 #[derive(Debug)]
 pub(crate) struct DeprecationNoticeCell {
     summary: String,

@@ -63,6 +63,8 @@ pub struct ModelClient {
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
     session_source: SessionSource,
+    /// Optional model override for specialized use cases (e.g., reflection judge).
+    model_override: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -88,7 +90,17 @@ impl ModelClient {
             effort,
             summary,
             session_source,
+            model_override: None,
         }
+    }
+
+    /// Returns a clone of this client with a different model for the API request.
+    /// This is useful for specialized tasks like reflection judging that may use
+    /// a different (often cheaper/faster) model than the main agent.
+    pub fn with_model_override(&self, model: &str) -> Self {
+        let mut client = self.clone();
+        client.model_override = Some(model.to_string());
+        client
     }
 
     pub fn get_model_context_window(&self) -> Option<i64> {
@@ -294,9 +306,13 @@ impl ModelClient {
         self.session_source.clone()
     }
 
-    /// Returns the currently configured model slug.
+    /// Returns the currently configured model slug, or the override if set.
     pub fn get_model(&self) -> String {
-        self.get_model_family().get_model_slug().to_string()
+        if let Some(ref override_model) = self.model_override {
+            override_model.clone()
+        } else {
+            self.get_model_family().get_model_slug().to_string()
+        }
     }
 
     /// Returns the currently configured model family.
