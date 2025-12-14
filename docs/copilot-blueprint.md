@@ -8,6 +8,14 @@ This document outlines how to assemble a tailored, local-first copilot using the
 - Codex CLI itself installs from npm/Homebrew/Linux binaries (see [Install & build](./install.md)). There is no separate Primator binary yet; Primator is a configuration, naming, and profile layer on top of Codex CLI.
 - Start a session with `codex --profile primator` once you add the profile below to your `~/.codex/config.toml`. Primator runs in **command-only** mode by design.
 
+### Quick next steps (TL;DR)
+
+1. Install Codex CLI (`brew install codex` or `npm i -g @openai/codex`).
+2. Paste the minimal Primator profile into `~/.codex/config.toml` (see "Quickstart" below).
+3. Run `codex --profile primator` and approve each command prompt (`approval_policy = "untrusted"`).
+4. Swap `model_provider` to `ollama` for offline use or keep `openai`/cloud providers for online.
+5. (Optional) Pipe microphone transcripts into the running CLI and send replies through TTS for voice-only sessions.
+
 ## Architecture overview
 
 - **Codex CLI orchestration**: Use the existing CLI loop to chat, plan, and execute actions. Model routing and session state stay within the standard Codex runtime.
