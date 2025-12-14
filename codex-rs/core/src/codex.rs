@@ -253,10 +253,16 @@ impl Codex {
         let exec_policy = Arc::new(RwLock::new(exec_policy));
 
         let config = Arc::new(config);
+        let mut remote_models_error: Option<EventMsg> = None;
         if config.features.enabled(Feature::RemoteModels)
             && let Err(err) = models_manager.refresh_available_models(&config).await
         {
             error!("failed to refresh available models: {err:?}");
+            remote_models_error = Some(EventMsg::Error(error_event_with_update_nudge(
+                format!("failed to refresh available models: {err:?}"),
+                None,
+                compute_is_up_to_date(&config.codex_home),
+            )));
         }
         let model = models_manager.get_model(&config.model, &config).await;
         let is_up_to_date = compute_is_up_to_date(&config.codex_home);
@@ -299,12 +305,23 @@ impl Codex {
         let conversation_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(session, config, rx_sub));
+        tokio::spawn(submission_loop(session.clone(), config, rx_sub));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event,
         };
+
+        if let Some(remote_models_error) = remote_models_error {
+            let event = Event {
+                id: session
+                    .next_internal_sub_id
+                    .fetch_add(1, Ordering::SeqCst)
+                    .to_string(),
+                msg: remote_models_error,
+            };
+            session.send_event_raw(event).await;
+        }
 
         Ok(CodexSpawnOk {
             codex,

@@ -47,7 +47,11 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
 use wiremock::BodyPrintLimit;
+use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 const REMOTE_MODEL_SLUG: &str = "codex-test";
 
@@ -294,6 +298,52 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     let body = response_mock.single_request().body_json();
     let instructions = body["instructions"].as_str().unwrap();
     assert_eq!(instructions, remote_base);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_invalid_payload_emits_error() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
+        .start()
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path_regex(".*/models$"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(json!({
+                    "models": "invalid",
+                    "etag": "etag",
+                })),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    let RemoteModelsHarness { codex, .. } = build_remote_models_harness(&server, |config| {
+        config.features.enable(Feature::RemoteModels);
+        config.model = Some("gpt-5.1".to_string());
+    })
+    .await?;
+
+    let error_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::Error(_))).await;
+    let EventMsg::Error(error_event) = error_event else {
+        unreachable!();
+    };
+
+    assert!(
+        error_event
+            .message
+            .contains("failed to refresh available models"),
+        "unexpected error message: {}",
+        error_event.message
+    );
 
     Ok(())
 }
