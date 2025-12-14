@@ -50,6 +50,8 @@ pub enum Feature {
     ExecPolicy,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
+    /// Use the elevated Windows sandbox pipeline (setup + runner).
+    WindowsSandboxElevated,
     /// Remote compaction enabled (only for ChatGPT auth)
     RemoteCompaction,
     /// Refresh remote models and emit AppReady once the list is available.
@@ -324,6 +326,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WindowsSandbox,
         key: "enable_experimental_windows_sandbox",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WindowsSandboxElevated,
+        key: "enable_elevated_windows_sandbox",
         stage: Stage::Experimental,
         default_enabled: false,
     },

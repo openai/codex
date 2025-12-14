@@ -101,7 +101,13 @@ jobs:
           sudo apt-get install -y musl-tools pkg-config
 
       - name: Cargo build
-        run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
+        shell: bash
+        run: |
+          if [[ "${{ contains(matrix.target, 'windows') }}" == 'true' ]]; then
+            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup --bin codex-command-runner
+          else
+            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
+          fi
 
       - if: ${{ contains(matrix.target, 'linux') }}
         name: Cosign Linux artifacts

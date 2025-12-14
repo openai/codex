@@ -18,6 +18,8 @@ use std::sync::atomic::Ordering;
 
 #[cfg(target_os = "windows")]
 static WINDOWS_SANDBOX_ENABLED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static WINDOWS_ELEVATED_SANDBOX_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "windows")]
 pub fn set_windows_sandbox_enabled(enabled: bool) {
@@ -27,6 +29,26 @@ pub fn set_windows_sandbox_enabled(enabled: bool) {
 #[cfg(not(target_os = "windows"))]
 #[allow(dead_code)]
 pub fn set_windows_sandbox_enabled(_enabled: bool) {}
+
+#[cfg(target_os = "windows")]
+pub fn set_windows_elevated_sandbox_enabled(enabled: bool) {
+    WINDOWS_ELEVATED_SANDBOX_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+pub fn set_windows_elevated_sandbox_enabled(_enabled: bool) {}
+
+#[cfg(target_os = "windows")]
+pub fn is_windows_elevated_sandbox_enabled() -> bool {
+    WINDOWS_ELEVATED_SANDBOX_ENABLED.load(Ordering::Relaxed)
+}
+
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+pub fn is_windows_elevated_sandbox_enabled() -> bool {
+    false
+}
 
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
@@ -188,6 +210,7 @@ fn is_write_patch_constrained_to_writable_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use tempfile::TempDir;
 
     #[test]
@@ -228,7 +251,7 @@ mod tests {
         // With the parent dir explicitly added as a writable root, the
         // outside write should be permitted.
         let policy_with_parent = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![parent],
+            writable_roots: vec![AbsolutePathBuf::try_from(parent).unwrap()],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,

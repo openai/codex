@@ -83,7 +83,7 @@ pub struct ModelFamily {
 }
 
 impl ModelFamily {
-    pub fn with_config_overrides(mut self, config: &Config) -> Self {
+    pub(super) fn with_config_overrides(mut self, config: &Config) -> Self {
         if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries {
             self.supports_reasoning_summaries = supports_reasoning_summaries;
         }
@@ -98,7 +98,7 @@ impl ModelFamily {
         }
         self
     }
-    pub fn with_remote_overrides(mut self, remote_models: Vec<ModelInfo>) -> Self {
+    pub(super) fn with_remote_overrides(mut self, remote_models: Vec<ModelInfo>) -> Self {
         for model in remote_models {
             if model.slug == self.slug {
                 self.apply_remote_overrides(model);
@@ -198,7 +198,7 @@ macro_rules! model_family {
 
 /// Internal offline helper for `ModelsManager` that returns a `ModelFamily` for the given
 /// model slug.
-pub(in crate::openai_models) fn find_family_for_model(slug: &str) -> ModelFamily {
+pub(super) fn find_family_for_model(slug: &str) -> ModelFamily {
     if slug.starts_with("o3") {
         model_family!(
             slug, "o3",
@@ -264,7 +264,7 @@ pub(in crate::openai_models) fn find_family_for_model(slug: &str) -> ModelFamily
         )
 
     // Experimental models.
-    } else if slug.starts_with("exp-codex") {
+    } else if slug.starts_with("exp-codex") || slug.starts_with("codex-1p") {
         // Same as gpt-5.1-codex-max.
         model_family!(
             slug, slug,

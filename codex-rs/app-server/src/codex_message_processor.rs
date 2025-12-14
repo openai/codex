@@ -117,10 +117,9 @@ use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
+use codex_core::config::ConfigService;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::config_loader::load_config_as_toml;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
@@ -1108,33 +1107,19 @@ impl CodexMessageProcessor {
     }
 
     async fn get_user_saved_config(&self, request_id: RequestId) {
-        let toml_value = match load_config_as_toml(&self.config.codex_home).await {
-            Ok(val) => val,
+        let service = ConfigService::new(self.config.codex_home.clone(), Vec::new());
+        let user_saved_config: UserSavedConfig = match service.load_user_saved_config().await {
+            Ok(config) => config,
             Err(err) => {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to load config.toml: {err}"),
+                    message: err.to_string(),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
-
-        let cfg: ConfigToml = match toml_value.try_into() {
-            Ok(cfg) => cfg,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to parse config.toml: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        let user_saved_config: UserSavedConfig = cfg.into();
 
         let response = GetUserSavedConfigResponse {
             config: user_saved_config,

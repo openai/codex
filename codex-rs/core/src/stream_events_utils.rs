@@ -16,7 +16,9 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use futures::Future;
+use tracing::Instrument;
 use tracing::debug;
+use tracing::instrument;
 
 /// Handle a completed output item from the model stream, recording it and
 /// queuing any tool execution futures. This records items immediately so
@@ -38,6 +40,7 @@ pub(crate) struct HandleOutputCtx {
     pub cancellation_token: CancellationToken,
 }
 
+#[instrument(skip_all)]
 pub(crate) async fn handle_output_item_done(
     ctx: &mut HandleOutputCtx,
     item: ResponseItem,
@@ -58,12 +61,15 @@ pub(crate) async fn handle_output_item_done(
             let cancellation_token = ctx.cancellation_token.child_token();
             let tool_runtime = ctx.tool_runtime.clone();
 
-            let tool_future: InFlightFuture<'static> = Box::pin(async move {
-                let response_input = tool_runtime
-                    .handle_tool_call(call, cancellation_token)
-                    .await?;
-                Ok(response_input)
-            });
+            let tool_future: InFlightFuture<'static> = Box::pin(
+                async move {
+                    let response_input = tool_runtime
+                        .handle_tool_call(call, cancellation_token)
+                        .await?;
+                    Ok(response_input)
+                }
+                .in_current_span(),
+            );
 
             output.needs_follow_up = true;
             output.tool_future = Some(tool_future);
@@ -94,7 +100,7 @@ pub(crate) async fn handle_output_item_done(
             let msg = "LocalShellCall without call_id or id";
             ctx.turn_context
                 .client
-                .get_otel_event_manager()
+                .get_otel_manager()
                 .log_tool_failed("local_shell", msg);
             tracing::error!(msg);
 

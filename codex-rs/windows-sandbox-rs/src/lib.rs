@@ -13,6 +13,9 @@ windows_modules!(
 mod setup;
 
 #[cfg(target_os = "windows")]
+mod elevated_impl;
+
+#[cfg(target_os = "windows")]
 pub use acl::allow_null_device;
 #[cfg(target_os = "windows")]
 pub use acl::ensure_allow_write_aces;
@@ -28,6 +31,8 @@ pub use cap::load_or_create_cap_sids;
 pub use dpapi::protect as dpapi_protect;
 #[cfg(target_os = "windows")]
 pub use dpapi::unprotect as dpapi_unprotect;
+#[cfg(target_os = "windows")]
+pub use elevated_impl::run_windows_sandbox_capture as run_windows_sandbox_capture_elevated;
 #[cfg(target_os = "windows")]
 pub use identity::require_logon_sandbox_creds;
 #[cfg(target_os = "windows")]
@@ -91,8 +96,10 @@ mod windows_impl {
     use super::logging::log_success;
     use super::policy::parse_policy;
     use super::policy::SandboxPolicy;
+    use super::process::make_env_block;
     use super::token::convert_string_sid_to_sid;
     use super::winutil::format_last_error;
+    use super::winutil::quote_windows_arg;
     use super::winutil::to_wide;
     use anyhow::Result;
     use std::collections::HashMap;
@@ -133,66 +140,6 @@ mod windows_impl {
     fn ensure_codex_home_exists(p: &Path) -> Result<()> {
         std::fs::create_dir_all(p)?;
         Ok(())
-    }
-
-    fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
-        let mut items: Vec<(String, String)> =
-            env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        items.sort_by(|a, b| {
-            a.0.to_uppercase()
-                .cmp(&b.0.to_uppercase())
-                .then(a.0.cmp(&b.0))
-        });
-        let mut w: Vec<u16> = Vec::new();
-        for (k, v) in items {
-            let mut s = to_wide(format!("{}={}", k, v));
-            s.pop();
-            w.extend_from_slice(&s);
-            w.push(0);
-        }
-        w.push(0);
-        w
-    }
-
-    // Quote a single Windows command-line argument following the rules used by
-    // CommandLineToArgvW/CRT so that spaces, quotes, and backslashes are preserved.
-    // Reference behavior matches Rust std::process::Command on Windows.
-    fn quote_windows_arg(arg: &str) -> String {
-        let needs_quotes = arg.is_empty()
-            || arg
-                .chars()
-                .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'));
-        if !needs_quotes {
-            return arg.to_string();
-        }
-
-        let mut quoted = String::with_capacity(arg.len() + 2);
-        quoted.push('"');
-        let mut backslashes = 0;
-        for ch in arg.chars() {
-            match ch {
-                '\\' => {
-                    backslashes += 1;
-                }
-                '"' => {
-                    quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
-                    quoted.push('"');
-                    backslashes = 0;
-                }
-                _ => {
-                    if backslashes > 0 {
-                        quoted.push_str(&"\\".repeat(backslashes));
-                        backslashes = 0;
-                    }
-                    quoted.push(ch);
-                }
-            }
-        }
-        if backslashes > 0 {
-            quoted.push_str(&"\\".repeat(backslashes * 2));
-        }
-        quoted.push('"');
-        quoted
     }
 
     unsafe fn setup_stdio_pipes() -> io::Result<PipeHandles> {

@@ -44,6 +44,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
+use codex_core::protocol::SkillLoadOutcomeInfo;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TerminalInteractionEvent;
@@ -263,7 +264,6 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
-    pub(crate) skills: Option<Vec<SkillMetadata>>,
     pub(crate) is_first_run: bool,
     pub(crate) model_family: ModelFamily,
 }
@@ -392,6 +392,7 @@ impl ChatWidget {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
+        self.set_skills_from_outcome(event.skill_load_outcome.as_ref());
         self.conversation_id = Some(event.session_id);
         self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
@@ -414,6 +415,11 @@ impl ChatWidget {
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
+    }
+
+    fn set_skills_from_outcome(&mut self, outcome: Option<&SkillLoadOutcomeInfo>) {
+        let skills = outcome.map(skills_from_outcome);
+        self.bottom_pane.set_skills(skills);
     }
 
     pub(crate) fn open_feedback_note(
@@ -1262,7 +1268,6 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             feedback,
-            skills,
             is_first_run,
             model_family,
         } = common;
@@ -1285,7 +1290,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
-                skills,
+                skills: None,
             }),
             active_cell: None,
             config,
@@ -1348,7 +1353,6 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             feedback,
-            skills,
             model_family,
             ..
         } = common;
@@ -1371,7 +1375,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
-                skills,
+                skills: None,
             }),
             active_cell: None,
             config,
@@ -1736,6 +1740,16 @@ impl ChatWidget {
 
         for path in image_paths {
             items.push(UserInput::LocalImage { path });
+        }
+
+        if let Some(skills) = self.bottom_pane.skills() {
+            let skill_mentions = find_skill_mentions(&text, skills);
+            for skill in skill_mentions {
+                items.push(UserInput::Skill {
+                    name: skill.name.clone(),
+                    path: skill.path.clone(),
+                });
+            }
         }
 
         self.codex_op_tx
@@ -2226,9 +2240,10 @@ impl ChatWidget {
                     Some(preset.default_reasoning_effort),
                 );
                 SelectionItem {
-                    name: preset.display_name,
+                    name: preset.display_name.clone(),
                     description,
                     is_current: model == current_model,
+                    is_default: preset.is_default,
                     actions,
                     dismiss_on_select: true,
                     ..Default::default()
@@ -2305,9 +2320,10 @@ impl ChatWidget {
                 });
             })];
             items.push(SelectionItem {
-                name: preset.display_name.to_string(),
+                name: preset.display_name.clone(),
                 description,
                 is_current,
+                is_default: preset.is_default,
                 actions,
                 dismiss_on_select: single_supported_effort,
                 ..Default::default()
@@ -3458,6 +3474,34 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Type to search commits".to_string()),
         ..Default::default()
     });
+}
+
+fn skills_from_outcome(outcome: &SkillLoadOutcomeInfo) -> Vec<SkillMetadata> {
+    outcome
+        .skills
+        .iter()
+        .map(|skill| SkillMetadata {
+            name: skill.name.clone(),
+            description: skill.description.clone(),
+            path: skill.path.clone(),
+        })
+        .collect()
+}
+
+fn find_skill_mentions(text: &str, skills: &[SkillMetadata]) -> Vec<SkillMetadata> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut matches: Vec<SkillMetadata> = Vec::new();
+    for skill in skills {
+        if seen.contains(&skill.name) {
+            continue;
+        }
+        let needle = format!("${}", skill.name);
+        if text.contains(&needle) {
+            seen.insert(skill.name.clone());
+            matches.push(skill.clone());
+        }
+    }
+    matches
 }
 
 #[cfg(test)]

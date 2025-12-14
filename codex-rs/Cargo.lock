@@ -840,18 +840,15 @@ dependencies = [
  "codex-utils-json-to-toml",
  "core_test_support",
  "mcp-types",
- "opentelemetry-appender-tracing",
  "os_info",
  "pretty_assertions",
  "serde",
  "serde_json",
  "serial_test",
- "sha2",
  "shlex",
  "tempfile",
  "tokio",
  "toml 0.9.5",
- "toml_edit",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -865,6 +862,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "mcp-types",
  "pretty_assertions",
  "schemars 0.8.22",
@@ -1016,6 +1014,8 @@ dependencies = [
  "eventsource-stream",
  "futures",
  "http",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "rand 0.9.2",
  "reqwest",
  "serde",
@@ -1023,6 +1023,8 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1161,6 +1163,7 @@ dependencies = [
  "toml 0.9.5",
  "toml_edit",
  "tracing",
+ "tracing-subscriber",
  "tracing-test",
  "tree-sitter",
  "tree-sitter-bash",
@@ -1183,10 +1186,10 @@ dependencies = [
  "codex-common",
  "codex-core",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "core_test_support",
  "libc",
  "mcp-types",
- "opentelemetry-appender-tracing",
  "owo-colors",
  "predicates",
  "pretty_assertions",
@@ -1255,7 +1258,7 @@ dependencies = [
  "allocative",
  "anyhow",
  "clap",
- "derive_more 2.1.0",
+ "derive_more 2.0.1",
  "env_logger",
  "log",
  "multimap",
@@ -1322,6 +1325,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "codex-core",
+ "codex-utils-absolute-path",
  "landlock",
  "libc",
  "seccompiler",
@@ -1414,12 +1418,14 @@ name = "codex-otel"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "codex-api",
  "codex-app-server-protocol",
  "codex-protocol",
  "codex-utils-absolute-path",
  "eventsource-stream",
  "http",
  "opentelemetry",
+ "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
@@ -1430,6 +1436,8 @@ dependencies = [
  "tokio",
  "tonic",
  "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1446,6 +1454,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-git",
+ "codex-utils-absolute-path",
  "codex-utils-image",
  "icu_decimal",
  "icu_locale_core",
@@ -1544,10 +1553,11 @@ dependencies = [
  "codex-file-search",
  "codex-login",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "codex-windows-sandbox",
  "color-eyre",
  "crossterm",
- "derive_more 2.1.0",
+ "derive_more 2.0.1",
  "diffy",
  "dirs",
  "dunce",
@@ -1557,7 +1567,6 @@ dependencies = [
  "lazy_static",
  "libc",
  "mcp-types",
- "opentelemetry-appender-tracing",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
@@ -1613,10 +1622,11 @@ dependencies = [
  "codex-login",
  "codex-protocol",
  "codex-tui",
+ "codex-utils-absolute-path",
  "codex-windows-sandbox",
  "color-eyre",
  "crossterm",
- "derive_more 2.1.0",
+ "derive_more 2.0.1",
  "diffy",
  "dirs",
  "dunce",
@@ -1626,7 +1636,6 @@ dependencies = [
  "lazy_static",
  "libc",
  "mcp-types",
- "opentelemetry-appender-tracing",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
@@ -1665,9 +1674,11 @@ name = "codex-utils-absolute-path"
 version = "0.0.0"
 dependencies = [
  "path-absolutize",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "tempfile",
+ "ts-rs",
 ]
 
 [[package]]
@@ -1737,6 +1748,7 @@ dependencies = [
  "base64",
  "chrono",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "dirs-next",
  "dunce",
  "rand 0.8.5",
@@ -1837,9 +1849,9 @@ dependencies = [
 
 [[package]]
 name = "convert_case"
-version = "0.10.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+checksum = "bb402b8d4c85569410425650ce3eddc7d698ed96d39a73f941b08fb63082f1e7"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -1879,6 +1891,7 @@ dependencies = [
  "base64",
  "codex-core",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "notify",
  "regex-lite",
  "serde_json",
@@ -2178,11 +2191,11 @@ dependencies = [
 
 [[package]]
 name = "derive_more"
-version = "2.1.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10b768e943bed7bf2cab53df09f4bc34bfd217cdb57d971e769874c9a6710618"
+checksum = "093242cf7570c207c83073cf82f79706fe7b8317e98620a47d5be7c3d8497678"
 dependencies = [
- "derive_more-impl 2.1.0",
+ "derive_more-impl 2.0.1",
 ]
 
 [[package]]
@@ -2200,14 +2213,13 @@ dependencies = [
 
 [[package]]
 name = "derive_more-impl"
-version = "2.1.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d286bfdaf75e988b4a78e013ecd79c581e06399ab53fbacd2d916c2f904f30b"
+checksum = "bda628edc44c4bb645fbe0f758797143e4e07926f7ebf4e9bdfbd3d2ce621df3"
 dependencies = [
- "convert_case 0.10.0",
+ "convert_case 0.7.1",
  "proc-macro2",
  "quote",
- "rustc_version",
  "syn 2.0.104",
  "unicode-xid",
 ]
@@ -6891,6 +6903,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-opentelemetry"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddcf5959f39507d0d04d6413119c04f33b623f4f951ebcbdddddfad2d0623a9c"
+dependencies = [
+ "js-sys",
+ "once_cell",
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "smallvec",
+ "tracing",
+ "tracing-core",
+ "tracing-log",
+ "tracing-subscriber",
+ "web-time",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6991,9 +7021,9 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "ts-rs"
-version = "11.1.0"
+version = "11.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4994acea2522cd2b3b85c1d9529a55991e3ad5e25cdcd3de9d505972c4379424"
+checksum = "6ef1b7a6d914a34127ed8e1fa927eb7088903787bcded4fa3eef8f85ee1568be"
 dependencies = [
  "serde_json",
  "thiserror 2.0.17",
@@ -7003,9 +7033,9 @@ dependencies = [
 
 [[package]]
 name = "ts-rs-macros"
-version = "11.1.0"
+version = "11.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee6ff59666c9cbaec3533964505d39154dc4e0a56151fdea30a09ed0301f62e2"
+checksum = "e9d4ed7b4c18cc150a6a0a1e9ea1ecfa688791220781af6e119f9599a8502a0a"
 dependencies = [
  "proc-macro2",
  "quote",
