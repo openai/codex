@@ -2,16 +2,20 @@
 //!
 //! - [`EventBroker`] holds the shared crossterm stream so multiple callers reuse the same
 //!   input source and can drop/recreate it on pause/resume without rebuilding consumers.
-//! - [`TuiEventStream`] wraps a per-call draw subscription plus the shared broker and maps crossterm
+//! - [`TuiEventStream`] wraps a draw event subscription plus the shared [`EventBroker`] and maps crossterm
 //!   events into [`TuiEvent`].
 //! - [`EventSource`] abstracts the underlying event producer; the real implementation is
 //!   [`CrosstermEventSource`] and tests can swap in [`FakeEventSource`].
 //!
-//! The motivation for dropping/recreating the crossterm event stream is to enable fully relinquishing stdin.
-//! If the stream is not dropped, it will continue to read from stdin even if it is not actively being polled,
-//! potentially stealing input from other processes.
+//! The motivation for dropping/recreating the crossterm event stream is to enable the TUI to fully relinquish stdin.
+//! If the stream is not dropped, it will continue to read from stdin even if it is not actively being polled
+//! (due to how crossterm's EventStream is implemented), potentially stealing input from other processes reading stdin,
+//! like terminal text editors. This race can cause missed input or capturing terminal query responses (for example, OSC palette/size queries)
+//! that the other process expects to read. Stopping polling, instead of dropping the stream, is only sufficient when the
+//! pause happens before the stream enters a pending state; otherwise the crossterm reader thread may keep reading
+//! from stdin, so the safer approach is to drop and recreate the event stream when we need to hand off the terminal.
 //!
-//! See https://ratatui.rs/recipes/apps/spawn-vim/ and https://openai.slack.com/archives/C095U48JNL9/p1765401070172969?thread_ts=1765398553.890439&cid=C095U48JNL9
+//! See https://ratatui.rs/recipes/apps/spawn-vim/ and https://www.reddit.com/r/rust/comments/1f3o33u/myterious_crossterm_input_after_running_vim for more details.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -76,9 +80,14 @@ impl EventSource for CrosstermEventSource {
     }
 }
 
-/// Per-call event stream wrapper. Each handle has its own draw subscription but
-/// pulls crossterm events from the shared broker so nested/sequential streams
-/// can coexist (only one should be polled at a time to avoid stealing).
+/// TuiEventStream is a struct for reading TUI events (draws and user input).
+/// Each instance has its own draw subscription (the draw channel is broadcast, so
+/// multiple receivers are fine), while crossterm input is funneled through a
+/// single shared `EventStream` because crossterm uses a global stdin reader and
+/// does not support fan-out. Multiple instances can exist during the app lifetime
+/// (for nested or sequential screens), but only one should be polled at a time;
+/// otherwise one instance can consume ("steal") input events and the other will
+/// miss them.
 pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSource> {
     broker: Arc<Mutex<EventBroker<S>>>,
     draw_stream: BroadcastStream<()>,
@@ -91,38 +100,30 @@ pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSourc
 }
 
 impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
-    #[cfg(unix)]
     pub fn new(
         broker: Arc<Mutex<EventBroker<S>>>,
         draw_rx: broadcast::Receiver<()>,
         terminal_focused: Arc<AtomicBool>,
-        suspend_context: crate::tui::job_control::SuspendContext,
-        alt_screen_active: Arc<AtomicBool>,
+        #[cfg(unix)] suspend_context: crate::tui::job_control::SuspendContext,
+        #[cfg(unix)] alt_screen_active: Arc<AtomicBool>,
     ) -> Self {
         Self {
             broker,
             draw_stream: BroadcastStream::new(draw_rx),
             terminal_focused,
             poll_draw_first: false,
+            #[cfg(unix)]
             suspend_context,
+            #[cfg(unix)]
             alt_screen_active,
         }
     }
 
-    #[cfg(not(unix))]
-    pub fn new(
-        broker: Arc<Mutex<EventBroker<S>>>,
-        draw_rx: broadcast::Receiver<()>,
-        terminal_focused: Arc<AtomicBool>,
-    ) -> Self {
-        Self {
-            broker,
-            draw_stream: BroadcastStream::new(draw_rx),
-            terminal_focused,
-            poll_draw_first: false,
-        }
-    }
-
+    /// Poll the shared crossterm stream for the next mapped `TuiEvent`.
+    ///
+    /// This skips events we don't use (mouse events, etc.) and keeps polling until it yields
+    /// a mapped event, hits `Pending`, or sees EOF/error. When the broker is paused, it drops
+    /// the underlying stream and returns `Pending` to fully release stdin.
     pub fn poll_crossterm_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<TuiEvent>> {
         // Some crossterm events map to None (e.g. FocusLost, mouse); loop so we keep polling
         // until we return a mapped event, hit Pending, or see EOF/error.
@@ -147,12 +148,13 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 }
             };
 
-            if let Some(mapped) = poll_result.and_then(|event| self.map_event(event)) {
+            if let Some(mapped) = poll_result.and_then(|event| self.map_crossterm_event(event)) {
                 return Poll::Ready(Some(mapped));
             }
         }
     }
 
+    /// Poll the draw broadcast stream for the next draw event. Draw events are used to trigger a redraw of the TUI.
     pub fn poll_draw_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<TuiEvent>> {
         match Pin::new(&mut self.draw_stream).poll_next(cx) {
             Poll::Ready(Some(Ok(()))) => Poll::Ready(Some(TuiEvent::Draw)),
@@ -164,7 +166,8 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         }
     }
 
-    fn map_event(&mut self, event: Event) -> Option<TuiEvent> {
+    /// Map a crossterm event to a [`TuiEvent`], skipping events we don't use (mouse events, etc.).
+    fn map_crossterm_event(&mut self, event: Event) -> Option<TuiEvent> {
         match event {
             Event::Key(key_event) => {
                 #[cfg(unix)]
@@ -288,7 +291,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     fn make_stream(
         broker: Arc<Mutex<EventBroker<FakeEventSource>>>,
         draw_rx: broadcast::Receiver<()>,
@@ -298,18 +300,11 @@ mod tests {
             broker,
             draw_rx,
             terminal_focused,
+            #[cfg(unix)]
             crate::tui::job_control::SuspendContext::new(),
+            #[cfg(unix)]
             Arc::new(AtomicBool::new(false)),
         )
-    }
-
-    #[cfg(not(unix))]
-    fn make_stream(
-        broker: Arc<Mutex<EventBroker<FakeEventSource>>>,
-        draw_rx: broadcast::Receiver<()>,
-        terminal_focused: Arc<AtomicBool>,
-    ) -> TuiEventStream<FakeEventSource> {
-        TuiEventStream::new(broker, draw_rx, terminal_focused)
     }
 
     type SetupState = (
