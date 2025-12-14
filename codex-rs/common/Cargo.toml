@@ -8,15 +8,17 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+serde_json = { workspace = true, optional = true }
 clap = { workspace = true, features = ["derive", "wrap_help"], optional = true }
 codex-core = { workspace = true }
 codex-lmstudio = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
-serde = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
 toml = { workspace = true, optional = true }
 
 [features]
+trace = ["serde", "serde_json"]
 # Separate feature so that `clap` is not a mandatory dependency.
 cli = ["clap", "serde", "toml"]
 elapsed = []
