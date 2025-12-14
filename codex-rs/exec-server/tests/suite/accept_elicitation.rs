@@ -24,6 +24,7 @@ use serde_json::json;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::fs::symlink;
 use tempfile::TempDir;
+use tokio::process::Command;
 
 /// Verify that when using a read-only sandbox and an execpolicy that prompts,
 /// the proper elicitation is sent. Upon auto-approving the elicitation, the
@@ -53,11 +54,21 @@ prefix_rule(
 
     // Create an MCP client that approves expected elicitation messages.
     let project_root = TempDir::new()?;
-    let git = which::which("git")?;
     let project_root_path = project_root.path().canonicalize().unwrap();
+    let git = Command::new("bash")
+        .arg("-lc")
+        .arg("command -v git")
+        .output()
+        .await
+        .context("failed to resolve git via login shell")?;
+    let git_path = String::from_utf8(git.stdout)
+        .context("git path was not valid utf8")?
+        .trim()
+        .to_string();
+    ensure!(!git_path.is_empty(), "git path should not be empty");
     let expected_elicitation_message = format!(
         "Allow agent to run `{} init .` in `{}`?",
-        git.display(),
+        git_path,
         project_root_path.display()
     );
     let elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParam>>> = Default::default();
