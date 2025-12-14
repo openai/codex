@@ -54,12 +54,11 @@ impl SessionTask for GhostSnapshotTask {
             tokio::task::spawn(async move {
                 tokio::select! {
                     _ = tokio::time::sleep(SNAPSHOT_WARNING_THRESHOLD) => {
-                        session_for_warning
-                            .session
+                        session_for_warning.session
                             .send_event(
                                 &ctx_for_warning,
                                 EventMsg::Warning(WarningEvent {
-                                    message: "Repository snapshot is taking longer than expected. Large untracked or ignored files can slow snapshots; consider adding large files or directories to .gitignore or disabling `undo` in your config.".to_string(),
+                                    message: "Repository snapshot is taking longer than expected. Large untracked or ignored files can slow snapshots; consider adding large files or directories to .gitignore or disabling `undo` in your config.".to_string()
                                 }),
                             )
                             .await;
