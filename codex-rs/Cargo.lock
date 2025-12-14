@@ -1081,6 +1081,7 @@ dependencies = [
  "codex-ollama",
  "codex-protocol",
  "serde",
+ "serde_json",
  "toml 0.9.5",
 ]
 
