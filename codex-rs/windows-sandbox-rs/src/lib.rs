@@ -262,7 +262,10 @@ mod windows_impl {
                             &format!("failed to grant allow ACE on {}: {}", p.display(), e),
                             logs_base_dir,
                         );
-                        ace_setup_error = Some(e.context(format!("failed to grant allow ACE on {}", p.display())));
+                        ace_setup_error = Some(e.context(format!(
+                            "failed to grant allow ACE on {}",
+                            p.display()
+                        )));
                         break;
                     }
                 }
@@ -282,7 +285,10 @@ mod windows_impl {
                                 &format!("failed to add deny ACE on {}: {}", p.display(), e),
                                 logs_base_dir,
                             );
-                            ace_setup_error = Some(e.context(format!("failed to add deny ACE on {}", p.display())));
+                            ace_setup_error = Some(e.context(format!(
+                                "failed to add deny ACE on {}",
+                                p.display()
+                            )));
                             break;
                         }
                     }
