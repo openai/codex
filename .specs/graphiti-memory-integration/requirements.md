@@ -69,6 +69,7 @@ This feature integrates the Graphiti service with Codex CLI so that Codex can st
 4.2 THE Codex system SHALL support a `global` scope that is disabled for automatic ingestion by default.
 4.3 THE Codex system SHALL provide a CLI mechanism to write a curated memory into `workspace` or `global` scope.
 4.4 THE Codex system SHALL allow configuration to include/exclude each scope for recall.
+4.5 WHEN promoting a memory, THE Codex CLI SHALL wrap the promoted content in a structured `<graphiti_episode kind="…">…</graphiti_episode>` template.
 
 ### Requirement 5 — Observability and operability
 
@@ -79,6 +80,7 @@ This feature integrates the Graphiti service with Codex CLI so that Codex can st
 5.1 THE Codex CLI SHALL provide a command to test Graphiti connectivity (healthcheck and a small smoke test).
 5.2 THE Codex CLI SHALL provide a command to report Graphiti configuration status.
 5.3 WHEN explicitly requested, THE Codex CLI SHALL be able to purge a scope group.
+5.4 WHEN the active project is untrusted, THE Codex CLI SHALL require an explicit override (e.g. `--allow-untrusted`) for commands that contact Graphiti.
 
 ### Requirement 6 — Metadata and privacy
 
@@ -89,4 +91,3 @@ This feature integrates the Graphiti service with Codex CLI so that Codex can st
 6.1 THE Codex system SHALL avoid storing absolute filesystem paths in group ids or metadata by default.
 6.2 THE Codex system SHALL support a hashed group id strategy by default.
 6.3 WHEN enabled, THE Codex system SHALL include basic git metadata (branch, commit, dirty) in episode metadata without including file paths.
-

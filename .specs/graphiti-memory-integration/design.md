@@ -4,7 +4,7 @@
 
 Codex CLI currently treats each turn as ephemeral: context only persists within the active conversation buffer. This feature integrates the external **Graphiti** knowledge-graph service to:
 
-- **Ingest** Codex conversation turns as “episodes” for long-term storage.
+- **Ingest** Codex conversation turns as messages for long-term storage.
 - **Recall** relevant memories at the start of each turn to improve continuity and reduce repeated explanations.
 
 ### Goals
@@ -62,7 +62,7 @@ Recall  ────┘                      └──── Ingest ────
     - Scope → group id mapping (session/workspace/global).
     - Recall formatting and token/length caps.
     - Background ingestion queue + retry policy.
-    - Optional git metadata formatting for `source_description` (branch/commit/dirty), computed at session init with bounded timeouts.
+    - Optional git metadata formatting for `source_description` (repo/branch/commit/dirty), computed once at session init with bounded timeouts (no per-turn git calls).
 
 - Turn integration (`codex-rs/core/src/codex.rs`)
   - Inserts recall system message before the last user message (so it conditions the reply without overriding user intent).
@@ -80,19 +80,27 @@ Recall  ────┘                      └──── Ingest ────
 
 ### Episode representation (turn ingestion)
 
-Each Codex turn is encoded into Graphiti as one or more “messages” with metadata:
+Each Codex turn is encoded into Graphiti as one or more `/messages` calls, grouped by `group_id`:
 
 - `group_id`: derived from scope (session/workspace/global) and a stable identifier (hashed by default).
 - `role_type`: `user` / `assistant` / `system` (Graphiti’s supported role set).
 - `content`: the raw text for that message (with small normalization).
 - `source_description`: identifies Codex and carries safe metadata (e.g., repository name; optionally git branch/commit/dirty).
-- `idempotency_key`: `${group_id}:${turn_id}` to reduce duplicates on retry.
+
+Codex does not rely on a Graphiti-side idempotency key; it de-dupes within the current session before enqueueing ingestion jobs.
 
 ### Recall query
 
 - Query string is derived from the user inputs for the current turn.
 - Search runs with a strict timeout and maximum result count.
 - Returned facts are formatted into a single system message with a hard character cap.
+
+### Concrete integration entry points
+
+- Session init + gating: `GraphitiMemoryService::new_if_enabled` in `codex-rs/core/src/graphiti/service.rs#L52`
+- Session wiring: `codex-rs/core/src/codex.rs#L666`
+- Recall injection: `codex-rs/core/src/codex.rs#L2179`
+- Turn ingestion enqueue: `codex-rs/core/src/codex.rs#L2224`
 
 ## Integration Points
 
@@ -115,6 +123,38 @@ All automatic recall/ingest is disabled unless:
 - the active project is trusted.
 
 CLI operations that can bypass trust checks (e.g., connectivity tests) require an explicit `--allow-untrusted` flag.
+
+## Schema & Relations (recommended direction)
+
+The current integration sends raw conversation messages to Graphiti and relies on Graphiti’s default extraction to create facts. For higher-quality long-term memory (especially for coding + project management), the next layer should add **structured episodes** and **domain entities/relations**.
+
+### Suggested “episode kinds”
+
+- `decision` (architecture choice + rationale)
+- `lesson_learned` (what went wrong/right; guardrails)
+- `procedure` (repeatable steps/runbooks)
+- `preference` (style/standards, repo conventions)
+- `task_update` (status + blockers + next steps)
+
+Codex already supports explicit curated episodes via `codex graphiti promote`, which wraps content in a `<graphiti_episode kind="…">` template.
+
+### Suggested entities and relations
+
+These are intentionally “generic coding agent” primitives; they can be added later either by:
+1) emitting structured episode content, or
+2) extending Graphiti’s extraction/ontology configuration.
+
+Entities (examples): `Repository`, `Branch`, `Commit`, `PullRequest`, `File`, `Symbol`, `Task`, `Decision`, `Incident`, `Tool`, `Service`.
+
+Relations (examples):
+- `APPLIES_TO` (Preference/Lesson → Repository/Workspace)
+- `HAPPENED_ON` (Incident → Branch/Commit)
+- `MODIFIES` (Commit/PR → File/Symbol)
+- `IMPLEMENTS` (Commit/PR → Task/Requirement)
+- `BLOCKS` / `DEPENDS_ON` (Task → Task)
+- `USES_TOOL` (Procedure/Turn → Tool)
+
+Privacy note: prefer repo-relative identifiers and hashed ids over absolute paths.
 
 ## Migration / Rollout Strategy
 
@@ -146,4 +186,3 @@ CLI operations that can bypass trust checks (e.g., connectivity tests) require a
 - Add a “promotion” workflow: promote frequently-reused workspace memories to global.
 - Add de-duplication across sessions and/or a local cache.
 - Add a TUI inspector for recalled memories and stored episodes.
-

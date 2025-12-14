@@ -33,4 +33,5 @@
 
 - Phase: implementation.
 - Completed: core + CLI implementation, docs, demo, and tests.
+- PR: https://github.com/openai/codex/pull/8026
 - Next tasks: address review feedback and merge.
