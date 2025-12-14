@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 
 use codex_core::error::CodexErr;
 use codex_core::error::Result;
@@ -62,6 +64,7 @@ fn install_filesystem_landlock_rules_on_current_thread(
     let abi = ABI::V5;
     let access_rw = AccessFs::from_all(abi);
     let access_ro = AccessFs::from_read(abi);
+    let gpu_device_paths = gpu_device_paths();
 
     let mut ruleset = Ruleset::default()
         .set_compatibility(CompatLevel::BestEffort)
@@ -70,6 +73,10 @@ fn install_filesystem_landlock_rules_on_current_thread(
         .add_rules(landlock::path_beneath_rules(&["/"], access_ro))?
         .add_rules(landlock::path_beneath_rules(&["/dev/null"], access_rw))?
         .set_no_new_privs(true);
+
+    if !gpu_device_paths.is_empty() {
+        ruleset = ruleset.add_rules(landlock::path_beneath_rules(&gpu_device_paths, access_rw))?;
+    }
 
     if !writable_roots.is_empty() {
         ruleset = ruleset.add_rules(landlock::path_beneath_rules(&writable_roots, access_rw))?;
@@ -82,6 +89,34 @@ fn install_filesystem_landlock_rules_on_current_thread(
     }
 
     Ok(())
+}
+
+fn gpu_device_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    let drm_path = Path::new("/dev/dri");
+    if drm_path.exists() {
+        paths.push(drm_path.to_path_buf());
+    }
+
+    let amd_kfd_path = Path::new("/dev/kfd");
+    if amd_kfd_path.exists() {
+        paths.push(amd_kfd_path.to_path_buf());
+    }
+
+    if let Ok(entries) = fs::read_dir("/dev") {
+        paths.extend(entries.flatten().filter_map(|entry| {
+            let file_name = entry.file_name();
+            let name = file_name.to_str()?;
+            if name.starts_with("nvidia") {
+                Some(entry.path())
+            } else {
+                None
+            }
+        }));
+    }
+
+    paths
 }
 
 /// Installs a seccomp filter that blocks outbound network access except for
