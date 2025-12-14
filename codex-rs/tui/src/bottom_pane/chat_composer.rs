@@ -587,6 +587,7 @@ impl ChatComposer {
             if self.paste_burst.try_append_char_if_active(ch, now) {
                 return (InputResult::None, true);
             }
+            self.paste_burst.extend_window(now);
         }
         if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
             self.handle_paste(pasted);
@@ -2372,6 +2373,46 @@ mod tests {
             InputResult::Submitted(text) => assert_eq!(text, "1あ"),
             _ => panic!("expected Submitted"),
         }
+    }
+
+    #[test]
+    fn non_ascii_start_extends_burst_window_for_enter() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Simulate pasting "你好\nhi" - non-ASCII chars first, then Enter, then ASCII
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('你'), KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('好'), KeyModifiers::NONE));
+
+        // The Enter should be treated as a newline, not a submit
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            matches!(result, InputResult::None),
+            "Enter after non-ASCII should insert newline, not submit"
+        );
+
+        // Continue with more chars
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+
+        // The text should now contain newline
+        let text = composer.textarea.text();
+        assert!(
+            text.contains('\n'),
+            "Text should contain newline: got '{text}'"
+        );
     }
 
     #[test]
