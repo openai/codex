@@ -242,6 +242,7 @@ mod windows_impl {
             compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
         let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
         unsafe {
+            let mut ace_setup_error = None;
             for p in &allow {
                 match add_allow_ace(p, psid_to_use) {
                     Ok(added) => {
@@ -261,28 +262,43 @@ mod windows_impl {
                             &format!("failed to grant allow ACE on {}: {}", p.display(), e),
                             logs_base_dir,
                         );
-                        return Err(e.context(format!("failed to grant allow ACE on {}", p.display())));
+                        ace_setup_error = Some(e.context(format!("failed to grant allow ACE on {}", p.display())));
+                        break;
                     }
                 }
             }
-            for p in &deny {
-                match add_deny_write_ace(p, psid_to_use) {
-                    Ok(added) => {
-                        if added && !persist_aces {
-                            guards.push((p.clone(), psid_to_use));
+
+            if ace_setup_error.is_none() {
+                for p in &deny {
+                    match add_deny_write_ace(p, psid_to_use) {
+                        Ok(added) => {
+                            if added && !persist_aces {
+                                guards.push((p.clone(), psid_to_use));
+                            }
+                        }
+                        Err(e) => {
+                            log_failure(
+                                &command,
+                                &format!("failed to add deny ACE on {}: {}", p.display(), e),
+                                logs_base_dir,
+                            );
+                            ace_setup_error = Some(e.context(format!("failed to add deny ACE on {}", p.display())));
+                            break;
                         }
                     }
-                    Err(e) => {
-                        log_failure(
-                            &command,
-                            &format!("failed to add deny ACE on {}: {}", p.display(), e),
-                            logs_base_dir,
-                        );
-                        // Deny ACE failure is critical if we need to block access (e.g. .git)
-                        return Err(e.context(format!("failed to add deny ACE on {}", p.display())));
-                    }
                 }
             }
+
+            if let Some(err) = ace_setup_error {
+                if !persist_aces {
+                    for (p, sid) in guards {
+                        revoke_ace(&p, sid);
+                    }
+                }
+                CloseHandle(h_token);
+                return Err(err);
+            }
+
             allow_null_device(psid_to_use);
         }
 
