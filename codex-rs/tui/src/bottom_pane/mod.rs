@@ -381,6 +381,17 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update the model and reasoning effort displayed in the footer.
+    pub(crate) fn set_footer_model_reasoning(
+        &mut self,
+        model: Option<String>,
+        reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    ) {
+        self.composer
+            .set_footer_model_reasoning(model, reasoning_effort);
+        self.request_redraw();
+    }
+
     /// Show a generic list selection view with the provided items.
     pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());

@@ -1,0 +1,5 @@
+---
+source: tui/src/bottom_pane/footer.rs
+expression: terminal.backend()
+---
+"  gpt-5.1-codex-max · medium reasoning · 72% context left · ? for shortcuts     "

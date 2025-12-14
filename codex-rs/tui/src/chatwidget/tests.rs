@@ -444,6 +444,8 @@ fn make_chatwidget_manual(
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
+        footer_model: None,
+        footer_reasoning_effort: None,
     };
     (widget, rx, op_rx)
 }

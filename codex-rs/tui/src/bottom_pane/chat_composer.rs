@@ -120,6 +120,10 @@ pub(crate) struct ChatComposer {
     context_window_used_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
+    /// Current model name for footer display.
+    footer_model: Option<String>,
+    /// Current reasoning effort for footer display.
+    footer_reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -168,6 +172,8 @@ impl ChatComposer {
             context_window_used_tokens: None,
             skills: None,
             dismissed_skill_popup_token: None,
+            footer_model: None,
+            footer_reasoning_effort: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -182,7 +188,7 @@ impl ChatComposer {
         let footer_props = self.footer_props();
         let footer_hint_height = self
             .custom_footer_height()
-            .unwrap_or_else(|| footer_height(footer_props));
+            .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         let popup_constraint = match &self.active_popup {
@@ -1531,6 +1537,8 @@ impl ChatComposer {
             is_task_running: self.is_task_running,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
+            model: self.footer_model.clone(),
+            reasoning_effort: self.footer_reasoning_effort,
         }
     }
 
@@ -1770,6 +1778,16 @@ impl ChatComposer {
         self.context_window_used_tokens = used_tokens;
     }
 
+    /// Update the model and reasoning effort displayed in the footer.
+    pub(crate) fn set_footer_model_reasoning(
+        &mut self,
+        model: Option<String>,
+        reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    ) {
+        self.footer_model = model;
+        self.footer_reasoning_effort = reasoning_effort;
+    }
+
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
         if show {
@@ -1791,7 +1809,7 @@ impl Renderable for ChatComposer {
         let footer_props = self.footer_props();
         let footer_hint_height = self
             .custom_footer_height()
-            .unwrap_or_else(|| footer_height(footer_props));
+            .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
@@ -1822,7 +1840,7 @@ impl Renderable for ChatComposer {
                 let footer_props = self.footer_props();
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
-                    custom_height.unwrap_or_else(|| footer_height(footer_props));
+                    custom_height.unwrap_or_else(|| footer_height(&footer_props));
                 let footer_spacing = Self::footer_spacing(footer_hint_height);
                 let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
                     let [_, hint_rect] = Layout::vertical([
@@ -1853,7 +1871,7 @@ impl Renderable for ChatComposer {
                         Line::from(spans).render_ref(custom_rect, buf);
                     }
                 } else {
-                    render_footer(hint_rect, buf, footer_props);
+                    render_footer(hint_rect, buf, &footer_props);
                 }
             }
         }
@@ -2017,7 +2035,7 @@ mod tests {
         );
         setup(&mut composer);
         let footer_props = composer.footer_props();
-        let footer_lines = footer_height(footer_props);
+        let footer_lines = footer_height(&footer_props);
         let footer_spacing = ChatComposer::footer_spacing(footer_lines);
         let height = footer_lines + footer_spacing + 8;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();

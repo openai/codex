@@ -334,6 +334,10 @@ pub(crate) struct ChatWidget {
     feedback: codex_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
+    // Current model name for footer display.
+    footer_model: Option<String>,
+    // Current reasoning effort for footer display.
+    footer_reasoning_effort: Option<ReasoningEffortConfig>,
 }
 
 struct UserMessage {
@@ -399,6 +403,10 @@ impl ChatWidget {
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
+        // Update footer model/reasoning from the session event.
+        self.footer_model = Some(model_for_header.clone());
+        self.footer_reasoning_effort = event.reasoning_effort;
+        self.update_footer_model_reasoning();
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -1336,6 +1344,8 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
+            footer_model: None,
+            footer_reasoning_effort: None,
         };
 
         widget.prefetch_rate_limits();
@@ -1421,6 +1431,8 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
+            footer_model: None,
+            footer_reasoning_effort: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2995,12 +3007,27 @@ impl ChatWidget {
     /// Set the reasoning effort in the widget's config copy.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.config.model_reasoning_effort = effort;
+        self.footer_reasoning_effort = effort;
+        self.update_footer_model_reasoning();
     }
 
     /// Set the model in the widget's config copy.
     pub(crate) fn set_model(&mut self, model: &str, model_family: ModelFamily) {
         self.session_header.set_model(model);
         self.model_family = model_family;
+        self.footer_model = Some(model.to_string());
+        self.update_footer_model_reasoning();
+    }
+
+    /// Update the footer with the current model and reasoning effort.
+    /// Uses the explicit reasoning effort if set, otherwise falls back to
+    /// the model family's default reasoning effort.
+    fn update_footer_model_reasoning(&mut self) {
+        let effective_effort = self
+            .footer_reasoning_effort
+            .or(self.model_family.default_reasoning_effort);
+        self.bottom_pane
+            .set_footer_model_reasoning(self.footer_model.clone(), effective_effort);
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {

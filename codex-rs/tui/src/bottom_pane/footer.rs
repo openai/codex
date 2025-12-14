@@ -14,7 +14,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct FooterProps {
     pub(crate) mode: FooterMode,
     pub(crate) esc_backtrack_hint: bool,
@@ -22,6 +22,10 @@ pub(crate) struct FooterProps {
     pub(crate) is_task_running: bool,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
+    /// Current model name to display in the footer.
+    pub(crate) model: Option<String>,
+    /// Current reasoning effort to display in the footer.
+    pub(crate) reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,11 +66,11 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     }
 }
 
-pub(crate) fn footer_height(props: FooterProps) -> u16 {
+pub(crate) fn footer_height(props: &FooterProps) -> u16 {
     footer_lines(props).len() as u16
 }
 
-pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
+pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: &FooterProps) {
     Paragraph::new(prefix_lines(
         footer_lines(props),
         " ".repeat(FOOTER_INDENT_COLS).into(),
@@ -75,7 +79,7 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
     .render(area, buf);
 }
 
-fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
+fn footer_lines(props: &FooterProps) -> Vec<Line<'static>> {
     // Show the context indicator on the left, appended after the primary hint
     // (e.g., "? for shortcuts"). Keep it visible even when typing (i.e., when
     // the shortcut hint is hidden). Hide it only for the multi-line
@@ -85,10 +89,12 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             is_task_running: props.is_task_running,
         })],
         FooterMode::ShortcutSummary => {
-            let mut line = context_window_line(
+            let mut line = model_reasoning_line(props.model.as_deref(), props.reasoning_effort);
+            let context = context_window_line(
                 props.context_window_percent,
                 props.context_window_used_tokens,
             );
+            line.extend(context.spans);
             line.push_span(" · ".dim());
             line.extend(vec![
                 key_hint::plain(KeyCode::Char('?')).into(),
@@ -110,11 +116,47 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             shortcut_overlay_lines(state)
         }
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
-        FooterMode::ContextOnly => vec![context_window_line(
-            props.context_window_percent,
-            props.context_window_used_tokens,
-        )],
+        FooterMode::ContextOnly => {
+            let mut line = model_reasoning_line(props.model.as_deref(), props.reasoning_effort);
+            let context = context_window_line(
+                props.context_window_percent,
+                props.context_window_used_tokens,
+            );
+            line.extend(context.spans);
+            vec![line]
+        }
     }
+}
+
+/// Build a line with the model name and reasoning effort prefix.
+/// Format: "<model> · <effort> reasoning · " or "<model> · " if no effort.
+fn model_reasoning_line(
+    model: Option<&str>,
+    effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+) -> Line<'static> {
+    use codex_protocol::openai_models::ReasoningEffort;
+
+    let Some(model) = model else {
+        return Line::from("");
+    };
+
+    // Convert effort to lowercase string, never showing "default" or "none" alone
+    let effort_label = match effort {
+        Some(ReasoningEffort::Minimal) => Some("minimal"),
+        Some(ReasoningEffort::Low) => Some("low"),
+        Some(ReasoningEffort::Medium) => Some("medium"),
+        Some(ReasoningEffort::High) => Some("high"),
+        Some(ReasoningEffort::XHigh) => Some("extra high"),
+        Some(ReasoningEffort::None) | None => None,
+    };
+
+    let text = if let Some(effort) = effort_label {
+        format!("{model} · {effort} reasoning · ")
+    } else {
+        format!("{model} · ")
+    };
+
+    Line::from(vec![Span::from(text).dim()])
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -413,11 +455,12 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::openai_models::ReasoningEffort;
     use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    fn snapshot_footer(name: &str, props: FooterProps) {
+    fn snapshot_footer(name: &str, props: &FooterProps) {
         let height = footer_height(props).max(1);
         let mut terminal = Terminal::new(TestBackend::new(80, height)).unwrap();
         terminal
@@ -433,97 +476,156 @@ mod tests {
     fn footer_snapshots() {
         snapshot_footer(
             "footer_shortcuts_default",
-            FooterProps {
+            &FooterProps {
                 mode: FooterMode::ShortcutSummary,
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                model: None,
+                reasoning_effort: None,
             },
         );
 
         snapshot_footer(
             "footer_shortcuts_shift_and_esc",
-            FooterProps {
+            &FooterProps {
                 mode: FooterMode::ShortcutOverlay,
                 esc_backtrack_hint: true,
                 use_shift_enter_hint: true,
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                model: None,
+                reasoning_effort: None,
             },
         );
 
         snapshot_footer(
             "footer_ctrl_c_quit_idle",
-            FooterProps {
+            &FooterProps {
                 mode: FooterMode::CtrlCReminder,
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                model: None,
+                reasoning_effort: None,
             },
         );
 
         snapshot_footer(
             "footer_ctrl_c_quit_running",
-            FooterProps {
+            &FooterProps {
                 mode: FooterMode::CtrlCReminder,
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                model: None,
+                reasoning_effort: None,
             },
         );
 
         snapshot_footer(
             "footer_esc_hint_idle",
-            FooterProps {
+            &FooterProps {
                 mode: FooterMode::EscHint,
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                model: None,
+                reasoning_effort: None,
             },
         );
 
         snapshot_footer(
             "footer_esc_hint_primed",
-            FooterProps {
+            &FooterProps {
                 mode: FooterMode::EscHint,
                 esc_backtrack_hint: true,
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                model: None,
+                reasoning_effort: None,
             },
         );
 
         snapshot_footer(
             "footer_shortcuts_context_running",
-            FooterProps {
+            &FooterProps {
                 mode: FooterMode::ShortcutSummary,
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
+                model: None,
+                reasoning_effort: None,
             },
         );
 
         snapshot_footer(
             "footer_context_tokens_used",
-            FooterProps {
+            &FooterProps {
                 mode: FooterMode::ShortcutSummary,
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
+                model: None,
+                reasoning_effort: None,
+            },
+        );
+
+        // New tests for model/reasoning display
+        snapshot_footer(
+            "footer_model_with_reasoning",
+            &FooterProps {
+                mode: FooterMode::ShortcutSummary,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                context_window_percent: Some(72),
+                context_window_used_tokens: None,
+                model: Some("gpt-5.1-codex-max".to_string()),
+                reasoning_effort: Some(ReasoningEffort::Medium),
+            },
+        );
+
+        snapshot_footer(
+            "footer_model_no_reasoning",
+            &FooterProps {
+                mode: FooterMode::ShortcutSummary,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                context_window_percent: Some(50),
+                context_window_used_tokens: None,
+                model: Some("o3-mini".to_string()),
+                reasoning_effort: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_context_only_with_model",
+            &FooterProps {
+                mode: FooterMode::ContextOnly,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                context_window_percent: Some(80),
+                context_window_used_tokens: None,
+                model: Some("claude-opus-4".to_string()),
+                reasoning_effort: Some(ReasoningEffort::High),
             },
         );
     }
