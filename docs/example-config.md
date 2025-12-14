@@ -131,6 +131,54 @@ persistence = "save-all"
 file_opener = "vscode"
 
 ################################################################################
+# Graphiti Memory Integration (optional)
+################################################################################
+
+[graphiti]
+# Master enable switch (default: false). Requires a trusted project entry under [projects."<path>"].
+enabled = false
+# Explicit consent gate (default: false). Set true only if you understand and accept data egress.
+consent = false
+
+# Graphiti REST base URL (example: local docker compose)
+# endpoint = "http://localhost:8000"
+
+# Optional bearer token sourced from an env var (recommended over hardcoding secrets).
+# bearer_token_env_var = "GRAPHITI_BEARER_TOKEN"
+
+# raw | hashed (default: hashed)
+group_id_strategy = "hashed"
+
+# Include git metadata (branch/commit/dirty) in message source_description (default: false)
+include_git_metadata = false
+
+# Scopes to ingest automatically (default: ["session","workspace"])
+ingest_scopes = ["session", "workspace"]
+
+[graphiti.ingest]
+timeout_ms = 5000
+max_queue_size = 256
+max_batch_size = 32
+max_content_chars = 8000
+retry_max_attempts = 6
+retry_initial_backoff_ms = 250
+retry_max_backoff_ms = 5000
+
+[graphiti.recall]
+# Enable recall + prompt injection (default: false)
+enabled = false
+timeout_ms = 750
+max_facts = 10
+max_fact_chars = 280
+max_total_chars = 2000
+scopes = ["session", "workspace"]
+
+[graphiti.global]
+# Global scope is promotion-only by default.
+enabled = false
+group_id = "codex-global"
+
+################################################################################
 # UI, Notifications, and Misc
 ################################################################################
 
