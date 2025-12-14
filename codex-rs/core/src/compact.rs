@@ -8,7 +8,6 @@ use crate::codex::TurnContext;
 use crate::codex::get_last_assistant_message_from_turn;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::error::error_event_with_update_nudge;
 use crate::features::Feature;
 use crate::protocol::CompactedItem;
 use crate::protocol::ContextCompactedEvent;
@@ -68,7 +67,6 @@ async fn run_compact_task_inner(
     input: Vec<UserInput>,
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    let is_up_to_date = sess.is_up_to_date().await;
 
     let mut history = sess.clone_history().await;
     history.record_items(
@@ -128,11 +126,7 @@ async fn run_compact_task_inner(
                 }
                 sess.set_total_tokens_full(turn_context.as_ref()).await;
                 let error_event = e.to_error_event(None);
-                let event = EventMsg::Error(error_event_with_update_nudge(
-                    error_event.message,
-                    error_event.codex_error_info,
-                    is_up_to_date,
-                ));
+                let event = EventMsg::Error(error_event);
                 sess.send_event(&turn_context, event).await;
                 return;
             }
@@ -150,11 +144,7 @@ async fn run_compact_task_inner(
                     continue;
                 } else {
                     let error_event = e.to_error_event(None);
-                    let event = EventMsg::Error(error_event_with_update_nudge(
-                        error_event.message,
-                        error_event.codex_error_info,
-                        is_up_to_date,
-                    ));
+                    let event = EventMsg::Error(error_event);
                     sess.send_event(&turn_context, event).await;
                     return;
                 }

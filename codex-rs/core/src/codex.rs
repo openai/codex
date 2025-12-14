@@ -97,6 +97,7 @@ use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::DeprecationNoticeEvent;
+use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
@@ -110,6 +111,7 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::SkillErrorInfo;
 use crate::protocol::SkillInfo;
 use crate::protocol::SkillLoadOutcomeInfo;
+use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
@@ -251,11 +253,10 @@ impl Codex {
             && let Err(err) = models_manager.refresh_available_models(&config).await
         {
             error!("failed to refresh available models: {err:?}");
-            remote_models_error = Some(EventMsg::Error(error_event_with_update_nudge(
-                format!("failed to refresh available models: {err:?}"),
-                None,
-                compute_is_up_to_date(&config.codex_home),
-            )));
+            remote_models_error = Some(EventMsg::Error(ErrorEvent {
+                message: format!("failed to refresh available models."),
+                codex_error_info: None,
+            }));
         }
         let model = models_manager.get_model(&config.model, &config).await;
         let is_up_to_date = compute_is_up_to_date(&config.codex_home);
@@ -953,7 +954,25 @@ impl Session {
         }
     }
 
-    pub(crate) async fn send_event_raw(&self, event: Event) {
+    pub(crate) async fn send_event_raw(&self, mut event: Event) {
+        if matches!(&event.msg, EventMsg::Error(_) | EventMsg::StreamError(_)) {
+            let is_up_to_date = self.is_up_to_date().await;
+            event.msg = match event.msg {
+                EventMsg::Error(error_event) => EventMsg::Error(error_event_with_update_nudge(
+                    error_event.message,
+                    error_event.codex_error_info,
+                    is_up_to_date,
+                )),
+                EventMsg::StreamError(error_event) => {
+                    EventMsg::StreamError(stream_error_event_with_update_nudge(
+                        error_event.message,
+                        error_event.codex_error_info,
+                        is_up_to_date,
+                    ))
+                }
+                other => other,
+            };
+        }
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
@@ -1407,11 +1426,10 @@ impl Session {
         let codex_error_info = CodexErrorInfo::ResponseStreamDisconnected {
             http_status_code: codex_error.http_status_code_value(),
         };
-        let event = EventMsg::StreamError(stream_error_event_with_update_nudge(
-            message.into(),
-            Some(codex_error_info),
-            self.is_up_to_date().await,
-        ));
+        let event = EventMsg::StreamError(StreamErrorEvent {
+            message: message.into(),
+            codex_error_info: Some(codex_error_info),
+        });
         self.send_event(turn_context, event).await;
     }
 
@@ -1657,7 +1675,6 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
-    use crate::error::error_event_with_update_nudge;
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::review_prompts::resolve_review_request;
@@ -1948,14 +1965,12 @@ mod handlers {
             && let Err(e) = rec.shutdown().await
         {
             warn!("failed to shutdown rollout recorder: {e}");
-            let is_up_to_date = sess.is_up_to_date().await;
             let event = Event {
                 id: sub_id.clone(),
-                msg: EventMsg::Error(error_event_with_update_nudge(
-                    "Failed to shutdown rollout recorder".to_string(),
-                    Some(CodexErrorInfo::Other),
-                    is_up_to_date,
-                )),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Failed to shutdown rollout recorder".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
             };
             sess.send_event_raw(event).await;
         }
@@ -1989,14 +2004,12 @@ mod handlers {
                 .await;
             }
             Err(err) => {
-                let is_up_to_date = sess.is_up_to_date().await;
                 let event = Event {
                     id: sub_id,
-                    msg: EventMsg::Error(error_event_with_update_nudge(
-                        err.to_string(),
-                        Some(CodexErrorInfo::Other),
-                        is_up_to_date,
-                    )),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: err.to_string(),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
                 };
                 sess.send_event(&turn_context, event.msg).await;
             }
@@ -2261,13 +2274,8 @@ pub(crate) async fn run_task(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
-                let is_up_to_date = sess.is_up_to_date().await;
                 let error_event = e.to_error_event(None);
-                let event = EventMsg::Error(error_event_with_update_nudge(
-                    error_event.message,
-                    error_event.codex_error_info,
-                    is_up_to_date,
-                ));
+                let event = EventMsg::Error(error_event);
                 sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
                 break;
