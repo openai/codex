@@ -9,7 +9,7 @@
 - [x] 7. Add docs + demo guide _Requirements: 5.1_
 - [x] 8. Add tests (mock Graphiti, assert recall+ingest) _Requirements: 2.1, 3.2, 3.4_
 - [x] 9. Add git metadata support + tests _Requirements: 6.3_
-- [ ] 10. Run fmt/clippy/tests and ship PR _Requirements: all_
+- [x] 10. Run fmt/clippy/tests and ship PR _Requirements: all_
 
 ## Implementation Notes
 
@@ -33,5 +33,4 @@
 
 - Phase: implementation.
 - Completed: core + CLI implementation, docs, demo, and tests.
-- Next tasks: create a clean feature branch, split logical commits, push to origin, and open a PR.
-
+- Next tasks: address review feedback and merge.
