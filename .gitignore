@@ -85,3 +85,6 @@ CHANGELOG.ignore.md
 # nix related
 .direnv
 .envrc
+
+# local memos
+.memo/
