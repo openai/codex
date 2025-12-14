@@ -818,11 +818,15 @@ impl Session {
                         warn!(
                             "resuming session with different model: previous={prev}, current={curr}"
                         );
-                        let message = format!(
-                            "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
+                        self.send_event(
+                            &turn_context,
+                            EventMsg::Warning(WarningEvent {
+                                message: format!(
+                                    "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
                          Consider switching back to `{prev}` as it may affect Codex performance."
-                        );
-                        self.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
+                        ),
+                    }),
+                )
                             .await;
                     }
                 }
