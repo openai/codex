@@ -30,6 +30,7 @@ use std::time::Duration;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::subagent_search::search_subagents;
 
 const MAX_FILE_SEARCH_RESULTS: NonZeroUsize = NonZeroUsize::new(20).unwrap();
 const NUM_FILE_SEARCH_THREADS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
@@ -46,6 +47,7 @@ pub(crate) struct FileSearchManager {
     state: Arc<Mutex<SearchState>>,
 
     search_dir: PathBuf,
+    codex_home: PathBuf,
     app_tx: AppEventSender,
 }
 
@@ -66,7 +68,7 @@ struct ActiveSearch {
 }
 
 impl FileSearchManager {
-    pub fn new(search_dir: PathBuf, tx: AppEventSender) -> Self {
+    pub fn new(search_dir: PathBuf, codex_home: PathBuf, tx: AppEventSender) -> Self {
         Self {
             state: Arc::new(Mutex::new(SearchState {
                 latest_query: String::new(),
@@ -74,6 +76,7 @@ impl FileSearchManager {
                 active_search: None,
             })),
             search_dir,
+            codex_home,
             app_tx: tx,
         }
     }
@@ -116,6 +119,7 @@ impl FileSearchManager {
         // debounce timer.
         let state = self.state.clone();
         let search_dir = self.search_dir.clone();
+        let codex_home = self.codex_home.clone();
         let tx_clone = self.app_tx.clone();
         thread::spawn(move || {
             // Always do a minimum debounce, but then poll until the
@@ -148,6 +152,7 @@ impl FileSearchManager {
             FileSearchManager::spawn_file_search(
                 query,
                 search_dir,
+                codex_home,
                 tx_clone,
                 cancellation_token,
                 state,
@@ -158,13 +163,14 @@ impl FileSearchManager {
     fn spawn_file_search(
         query: String,
         search_dir: PathBuf,
+        codex_home: PathBuf,
         tx: AppEventSender,
         cancellation_token: Arc<AtomicBool>,
         search_state: Arc<Mutex<SearchState>>,
     ) {
         let compute_indices = true;
         std::thread::spawn(move || {
-            let matches = file_search::run(
+            let matches = match file_search::run(
                 &query,
                 MAX_FILE_SEARCH_RESULTS,
                 &search_dir,
@@ -173,13 +179,22 @@ impl FileSearchManager {
                 cancellation_token.clone(),
                 compute_indices,
                 true,
-            )
-            .map(|res| res.matches)
-            .unwrap_or_default();
+            ) {
+                Ok(res) => res.matches,
+                Err(err) => {
+                    tracing::warn!("file search failed: {err}");
+                    Vec::new()
+                }
+            };
 
             let is_cancelled = cancellation_token.load(Ordering::Relaxed);
             if !is_cancelled {
-                tx.send(AppEvent::FileSearchResult { query, matches });
+                let subagents = search_subagents(&search_dir, &codex_home, &query);
+                tx.send(AppEvent::AtSearchResult {
+                    query,
+                    subagents,
+                    matches,
+                });
             }
 
             // Reset the active search state. Do a pointer comparison to verify

@@ -10,7 +10,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::user_input::UserInput;
 use std::time::Duration;
@@ -33,6 +32,7 @@ use codex_protocol::protocol::InitialHistory;
 /// The returned `events_rx` yields non-approval events emitted by the sub-agent.
 /// Approval requests are handled via `parent_session` and are not surfaced.
 /// The returned `ops_tx` allows the caller to submit additional `Op`s to the sub-agent.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_codex_conversation_interactive(
     config: Config,
     auth_manager: Arc<AuthManager>,
@@ -40,6 +40,7 @@ pub(crate) async fn run_codex_conversation_interactive(
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
+    session_source: SessionSource,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -50,7 +51,7 @@ pub(crate) async fn run_codex_conversation_interactive(
         auth_manager,
         models_manager,
         initial_history.unwrap_or(InitialHistory::New),
-        SessionSource::SubAgent(SubAgentSource::Review),
+        session_source,
     )
     .await?;
     let codex = Arc::new(codex);
@@ -100,6 +101,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
+    session_source: SessionSource,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
     // Use a child token so we can stop the delegate after completion without
@@ -112,6 +114,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
         parent_session,
         parent_ctx,
         child_cancel.clone(),
+        session_source,
         initial_history,
     )
     .await?;

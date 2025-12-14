@@ -7,11 +7,9 @@ use crossterm::Command;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Color as CColor;
-use crossterm::style::Colors;
 use crossterm::style::Print;
 use crossterm::style::SetAttribute;
 use crossterm::style::SetBackgroundColor;
-use crossterm::style::SetColors;
 use crossterm::style::SetForegroundColor;
 use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
@@ -96,16 +94,10 @@ where
         queue!(writer, Print("\r\n"))?;
         queue!(
             writer,
-            SetColors(Colors::new(
-                line.style
-                    .fg
-                    .map(std::convert::Into::into)
-                    .unwrap_or(CColor::Reset),
-                line.style
-                    .bg
-                    .map(std::convert::Into::into)
-                    .unwrap_or(CColor::Reset)
-            ))
+            SetSgrColors {
+                fg: line.style.fg.unwrap_or(Color::Reset),
+                bg: line.style.bg.unwrap_or(Color::Reset),
+            }
         )?;
         queue!(writer, Clear(ClearType::UntilNewLine))?;
         // Merge line-level style into each span so that ANSI colors reflect
@@ -171,6 +163,70 @@ impl Command for ResetScrollRegion {
     fn is_ansi_code_supported(&self) -> bool {
         // TODO(nornagon): is this supported on Windows?
         true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SetSgrColors {
+    fg: Color,
+    bg: Color,
+}
+
+impl Command for SetSgrColors {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        f.write_str("\x1b[")?;
+        let mut first = true;
+        write_sgr_color(f, self.fg, true, &mut first)?;
+        write_sgr_color(f, self.bg, false, &mut first)?;
+        f.write_str("m")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "SetSgrColors not supported by winapi.",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        true
+    }
+}
+
+fn write_sgr_color(
+    f: &mut impl fmt::Write,
+    color: Color,
+    is_foreground: bool,
+    first: &mut bool,
+) -> fmt::Result {
+    if !*first {
+        f.write_str(";")?;
+    }
+    *first = false;
+
+    let base = if is_foreground { 38 } else { 48 };
+    match color {
+        Color::Reset => write!(f, "{}", if is_foreground { 39 } else { 49 }),
+        Color::Black => write!(f, "{}", if is_foreground { 30 } else { 40 }),
+        Color::Red => write!(f, "{}", if is_foreground { 31 } else { 41 }),
+        Color::Green => write!(f, "{}", if is_foreground { 32 } else { 42 }),
+        Color::Yellow => write!(f, "{}", if is_foreground { 33 } else { 43 }),
+        Color::Blue => write!(f, "{}", if is_foreground { 34 } else { 44 }),
+        Color::Magenta => write!(f, "{}", if is_foreground { 35 } else { 45 }),
+        Color::Cyan => write!(f, "{}", if is_foreground { 36 } else { 46 }),
+        Color::Gray => write!(f, "{}", if is_foreground { 37 } else { 47 }),
+        Color::DarkGray => write!(f, "{}", if is_foreground { 90 } else { 100 }),
+        Color::LightRed => write!(f, "{}", if is_foreground { 91 } else { 101 }),
+        Color::LightGreen => write!(f, "{}", if is_foreground { 92 } else { 102 }),
+        Color::LightYellow => write!(f, "{}", if is_foreground { 93 } else { 103 }),
+        Color::LightBlue => write!(f, "{}", if is_foreground { 94 } else { 104 }),
+        Color::LightMagenta => write!(f, "{}", if is_foreground { 95 } else { 105 }),
+        Color::LightCyan => write!(f, "{}", if is_foreground { 96 } else { 106 }),
+        Color::White => write!(f, "{}", if is_foreground { 97 } else { 107 }),
+        Color::Rgb(r, g, b) => write!(f, "{base};2;{r};{g};{b}"),
+        Color::Indexed(i) => write!(f, "{base};5;{i}"),
     }
 }
 
@@ -265,7 +321,10 @@ where
         if next_fg != fg || next_bg != bg {
             queue!(
                 writer,
-                SetColors(Colors::new(next_fg.into(), next_bg.into()))
+                SetSgrColors {
+                    fg: next_fg,
+                    bg: next_bg
+                }
             )?;
             fg = next_fg;
             bg = next_bg;

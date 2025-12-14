@@ -1,15 +1,23 @@
 use codex_file_search::FileMatch;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::widgets::WidgetRef;
 
 use crate::render::Insets;
 use crate::render::RectExt;
+use crate::subagent_search::SubAgentMatch;
 
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows;
+
+#[derive(Debug, Clone)]
+pub(crate) enum AtCompletionItem {
+    SubAgent(SubAgentMatch),
+    File(FileMatch),
+}
 
 /// Visual state for the file-search popup.
 pub(crate) struct FileSearchPopup {
@@ -21,7 +29,7 @@ pub(crate) struct FileSearchPopup {
     /// When `true` we are still waiting for results for `pending_query`.
     waiting: bool,
     /// Cached matches; paths relative to the search dir.
-    matches: Vec<FileMatch>,
+    matches: Vec<AtCompletionItem>,
     /// Shared selection/scroll state.
     state: ScrollState,
 }
@@ -76,7 +84,29 @@ impl FileSearchPopup {
         }
 
         self.display_query = query.to_string();
-        self.matches = matches;
+        self.matches = matches.into_iter().map(AtCompletionItem::File).collect();
+        self.waiting = false;
+        let len = self.matches.len();
+        self.state.clamp_selection(len);
+        self.state.ensure_visible(len, len.min(MAX_POPUP_ROWS));
+    }
+
+    pub(crate) fn set_at_matches(
+        &mut self,
+        query: &str,
+        subagents: Vec<SubAgentMatch>,
+        matches: Vec<FileMatch>,
+    ) {
+        if query != self.pending_query {
+            return; // stale
+        }
+
+        self.display_query = query.to_string();
+        self.matches = subagents
+            .into_iter()
+            .map(AtCompletionItem::SubAgent)
+            .chain(matches.into_iter().map(AtCompletionItem::File))
+            .collect();
         self.waiting = false;
         let len = self.matches.len();
         self.state.clamp_selection(len);
@@ -101,7 +131,16 @@ impl FileSearchPopup {
         self.state
             .selected_idx
             .and_then(|idx| self.matches.get(idx))
-            .map(|file_match| file_match.path.as_str())
+            .and_then(|item| match item {
+                AtCompletionItem::File(file_match) => Some(file_match.path.as_str()),
+                AtCompletionItem::SubAgent(_) => None,
+            })
+    }
+
+    pub(crate) fn selected_item(&self) -> Option<&AtCompletionItem> {
+        self.state
+            .selected_idx
+            .and_then(|idx| self.matches.get(idx))
     }
 
     pub(crate) fn calculate_required_height(&self) -> u16 {
@@ -123,15 +162,26 @@ impl WidgetRef for &FileSearchPopup {
         } else {
             self.matches
                 .iter()
-                .map(|m| GenericDisplayRow {
-                    name: m.path.clone(),
-                    match_indices: m
-                        .indices
-                        .as_ref()
-                        .map(|v| v.iter().map(|&i| i as usize).collect()),
-                    display_shortcut: None,
-                    description: None,
-                    wrap_indent: None,
+                .map(|m| match m {
+                    AtCompletionItem::File(file_match) => GenericDisplayRow {
+                        name: file_match.path.clone(),
+                        match_indices: file_match
+                            .indices
+                            .as_ref()
+                            .map(|v| v.iter().map(|&i| i as usize).collect()),
+                        display_shortcut: None,
+                        description: None,
+                        wrap_indent: None,
+                        name_style: None,
+                    },
+                    AtCompletionItem::SubAgent(sub) => GenericDisplayRow {
+                        name: format!("agents:{}", sub.name),
+                        match_indices: None,
+                        display_shortcut: None,
+                        description: Some(sub.description.clone()),
+                        wrap_indent: None,
+                        name_style: sub.color.map(|c| Style::default().fg(c)),
+                    },
                 })
                 .collect()
         };

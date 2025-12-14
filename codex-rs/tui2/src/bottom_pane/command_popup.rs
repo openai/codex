@@ -185,6 +185,7 @@ impl CommandPopup {
                     display_shortcut: None,
                     description: Some(description),
                     wrap_indent: None,
+                    name_style: None,
                 }
             })
             .collect()

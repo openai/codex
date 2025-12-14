@@ -10,7 +10,9 @@ use serde::Serialize;
 use std::cell::UnsafeCell;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::ffi::OsStr;
 use std::num::NonZero;
+use std::path::Component;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -159,6 +161,20 @@ pub fn run(
         .threads(num_walk_builder_threads)
         // Allow hidden entries.
         .hidden(false)
+        // Never traverse the repo's internal git metadata directory.
+        .filter_entry(|entry| {
+            let Some(name) = entry.file_name().to_str() else {
+                return true;
+            };
+            if name == ".git" {
+                return false;
+            }
+            // Also skip paths that contain a `.git` component (defensive for non-standard roots).
+            !entry
+                .path()
+                .components()
+                .any(|c| matches!(c, Component::Normal(seg) if seg == OsStr::new(".git")))
+        })
         // Follow symlinks to search their contents.
         .follow_links(true)
         // Don't require git to be present to apply to apply git-related ignore rules.

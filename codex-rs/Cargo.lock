@@ -1646,6 +1646,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "serde_yaml",
  "serial_test",
  "shlex",
  "strum 0.27.2",

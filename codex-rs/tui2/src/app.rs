@@ -408,7 +408,11 @@ impl App {
 
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(
+            config.cwd.clone(),
+            config.codex_home.clone(),
+            app_event_tx.clone(),
+        );
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -741,8 +745,13 @@ impl App {
                     self.file_search.on_user_query(query);
                 }
             }
-            AppEvent::FileSearchResult { query, matches } => {
-                self.chat_widget.apply_file_search_result(query, matches);
+            AppEvent::AtSearchResult {
+                query,
+                subagents,
+                matches,
+            } => {
+                self.chat_widget
+                    .apply_at_search_result(query, subagents, matches);
             }
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
@@ -1220,7 +1229,11 @@ mod tests {
         ));
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(
+            config.cwd.clone(),
+            config.codex_home.clone(),
+            app_event_tx.clone(),
+        );
 
         App {
             server,
@@ -1259,7 +1272,11 @@ mod tests {
         ));
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(
+            config.cwd.clone(),
+            config.codex_home.clone(),
+            app_event_tx.clone(),
+        );
 
         (
             App {

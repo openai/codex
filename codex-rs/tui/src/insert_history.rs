@@ -22,6 +22,51 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
+fn color_to_crossterm(color: Color) -> CColor {
+    match color {
+        Color::Reset => CColor::Reset,
+        Color::Black => CColor::Black,
+        Color::Red => CColor::DarkRed,
+        Color::Green => CColor::DarkGreen,
+        Color::Yellow => CColor::DarkYellow,
+        Color::Blue => CColor::DarkBlue,
+        Color::Magenta => CColor::DarkMagenta,
+        Color::Cyan => CColor::DarkCyan,
+        Color::Gray => CColor::Grey,
+        Color::DarkGray => CColor::DarkGrey,
+        Color::LightRed => CColor::Red,
+        Color::LightGreen => CColor::Green,
+        Color::LightYellow => CColor::Yellow,
+        Color::LightBlue => CColor::Blue,
+        Color::LightMagenta => CColor::Magenta,
+        Color::LightCyan => CColor::Cyan,
+        Color::White => CColor::White,
+        Color::Rgb(r, g, b) => CColor::AnsiValue(rgb_to_ansi256(r, g, b)),
+        Color::Indexed(i) => CColor::AnsiValue(i),
+    }
+}
+
+fn rgb_to_ansi256(r: u8, g: u8, b: u8) -> u8 {
+    // Xterm 256-color palette mapping.
+    // - Grayscale ramp: 232..255
+    // - Color cube: 16..231 (6x6x6)
+    if r == g && g == b {
+        // Special cases for pure black/white and the grayscale ramp.
+        if r < 8 {
+            return 16;
+        }
+        if r > 248 {
+            return 231;
+        }
+        return 232 + ((u16::from(r) - 8) / 10) as u8;
+    }
+
+    let r_idx = (u16::from(r) * 5 + 127) / 255;
+    let g_idx = (u16::from(g) * 5 + 127) / 255;
+    let b_idx = (u16::from(b) * 5 + 127) / 255;
+    16 + (36 * r_idx + 6 * g_idx + b_idx) as u8
+}
+
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
 pub fn insert_history_lines<B>(
@@ -99,11 +144,11 @@ where
             SetColors(Colors::new(
                 line.style
                     .fg
-                    .map(std::convert::Into::into)
+                    .map(color_to_crossterm)
                     .unwrap_or(CColor::Reset),
                 line.style
                     .bg
-                    .map(std::convert::Into::into)
+                    .map(color_to_crossterm)
                     .unwrap_or(CColor::Reset)
             ))
         )?;
@@ -265,7 +310,10 @@ where
         if next_fg != fg || next_bg != bg {
             queue!(
                 writer,
-                SetColors(Colors::new(next_fg.into(), next_bg.into()))
+                SetColors(Colors::new(
+                    color_to_crossterm(next_fg),
+                    color_to_crossterm(next_bg),
+                ))
             )?;
             fg = next_fg;
             bg = next_bg;
@@ -289,6 +337,7 @@ mod tests {
     use crate::test_backend::VT100Backend;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
+    use serial_test::serial;
 
     #[test]
     fn writes_bold_then_regular_spans() {
@@ -319,7 +368,44 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn vt100_parser_parses_basic_sgr_colors() {
+        crossterm::style::Colored::set_ansi_color_disabled(false);
+        let mut parser = vt100::Parser::new(2, 10, 0);
+        parser.process(b"\x1b[32mX\x1b[m");
+        assert_ne!(
+            parser.screen().cell(0, 0).unwrap().fgcolor(),
+            vt100::Color::Default
+        );
+        crossterm::style::Colored::set_ansi_color_disabled(true);
+    }
+
+    #[test]
+    #[serial]
+    fn vt100_parser_parses_crossterm_setcolors_output() {
+        crossterm::style::Colored::set_ansi_color_disabled(false);
+        let mut buf: Vec<u8> = Vec::new();
+        queue!(
+            buf,
+            SetColors(Colors::new(CColor::DarkGreen, CColor::Reset)),
+            Print("X"),
+            SetAttribute(crossterm::style::Attribute::Reset),
+        )
+        .unwrap();
+
+        let mut parser = vt100::Parser::new(2, 10, 0);
+        parser.process(&buf);
+        assert_ne!(
+            parser.screen().cell(0, 0).unwrap().fgcolor(),
+            vt100::Color::Default
+        );
+        crossterm::style::Colored::set_ansi_color_disabled(true);
+    }
+
+    #[test]
+    #[serial]
     fn vt100_blockquote_line_emits_green_fg() {
+        crossterm::style::Colored::set_ansi_color_disabled(false);
         // Set up a small off-screen terminal
         let width: u16 = 40;
         let height: u16 = 10;
@@ -351,10 +437,13 @@ mod tests {
             saw_colored,
             "expected at least one colored cell in vt100 output"
         );
+        crossterm::style::Colored::set_ansi_color_disabled(true);
     }
 
     #[test]
+    #[serial]
     fn vt100_blockquote_wrap_preserves_color_on_all_wrapped_lines() {
+        crossterm::style::Colored::set_ansi_color_disabled(false);
         // Force wrapping by using a narrow viewport width and a long blockquote line.
         let width: u16 = 20;
         let height: u16 = 8;
@@ -417,10 +506,13 @@ mod tests {
                 }
             }
         }
+        crossterm::style::Colored::set_ansi_color_disabled(true);
     }
 
     #[test]
+    #[serial]
     fn vt100_colored_prefix_then_plain_text_resets_color() {
+        crossterm::style::Colored::set_ansi_color_disabled(false);
         let width: u16 = 40;
         let height: u16 = 6;
         let backend = VT100Backend::new(width, height);
@@ -475,10 +567,13 @@ mod tests {
             }
             break 'rows;
         }
+        crossterm::style::Colored::set_ansi_color_disabled(true);
     }
 
     #[test]
+    #[serial]
     fn vt100_deep_nested_mixed_list_third_level_marker_is_colored() {
+        crossterm::style::Colored::set_ansi_color_disabled(false);
         // Markdown with five levels (ordered → unordered → ordered → unordered → unordered).
         let md = "1. First\n   - Second level\n     1. Third level (ordered)\n        - Fourth level (bullet)\n          - Fifth level to test indent consistency\n";
         let text = render_markdown_text(md);
@@ -526,5 +621,6 @@ mod tests {
                 cell.fgcolor()
             );
         }
+        crossterm::style::Colored::set_ansi_color_disabled(true);
     }
 }

@@ -7,6 +7,8 @@ use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::SubAgentRunBeginEvent;
+use codex_core::protocol::SubAgentRunEndEvent;
 use codex_protocol::approvals::ElicitationRequestEvent;
 
 use super::ChatWidget;
@@ -21,6 +23,8 @@ pub(crate) enum QueuedInterrupt {
     McpBegin(McpToolCallBeginEvent),
     McpEnd(McpToolCallEndEvent),
     PatchEnd(PatchApplyEndEvent),
+    SubAgentBegin(SubAgentRunBeginEvent),
+    SubAgentEnd(SubAgentRunEndEvent),
 }
 
 #[derive(Default)]
@@ -77,6 +81,14 @@ impl InterruptManager {
         self.queue.push_back(QueuedInterrupt::PatchEnd(ev));
     }
 
+    pub(crate) fn push_subagent_begin(&mut self, ev: SubAgentRunBeginEvent) {
+        self.queue.push_back(QueuedInterrupt::SubAgentBegin(ev));
+    }
+
+    pub(crate) fn push_subagent_end(&mut self, ev: SubAgentRunEndEvent) {
+        self.queue.push_back(QueuedInterrupt::SubAgentEnd(ev));
+    }
+
     pub(crate) fn flush_all(&mut self, chat: &mut ChatWidget) {
         while let Some(q) = self.queue.pop_front() {
             match q {
@@ -90,6 +102,8 @@ impl InterruptManager {
                 QueuedInterrupt::McpBegin(ev) => chat.handle_mcp_begin_now(ev),
                 QueuedInterrupt::McpEnd(ev) => chat.handle_mcp_end_now(ev),
                 QueuedInterrupt::PatchEnd(ev) => chat.handle_patch_apply_end_now(ev),
+                QueuedInterrupt::SubAgentBegin(ev) => chat.handle_subagent_run_begin_now(ev),
+                QueuedInterrupt::SubAgentEnd(ev) => chat.handle_subagent_run_end_now(ev),
             }
         }
     }
