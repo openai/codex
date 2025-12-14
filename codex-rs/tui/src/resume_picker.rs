@@ -10,6 +10,7 @@ use codex_core::ConversationsPage;
 use codex_core::Cursor;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
+use codex_core::path_utils;
 use codex_protocol::items::TurnItem;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -670,7 +671,7 @@ fn extract_session_meta_from_head(head: &[serde_json::Value]) -> (Option<PathBuf
 }
 
 fn paths_match(a: &Path, b: &Path) -> bool {
-    if let (Ok(ca), Ok(cb)) = (a.canonicalize(), b.canonicalize()) {
+    if let (Ok(ca), Ok(cb)) = (path_utils::canonicalize(a), path_utils::canonicalize(b)) {
         return ca == cb;
     }
     a == b
