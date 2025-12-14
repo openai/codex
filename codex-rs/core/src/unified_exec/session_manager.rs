@@ -647,11 +647,19 @@ impl UnifiedExecSessionManager {
     pub(crate) async fn terminate_sessions_for_turn(&self, sub_id: &str) {
         let entries: Vec<SessionEntry> = {
             let mut sessions = self.session_store.lock().await;
-            sessions
+            let mut entries = Vec::new();
+            let mut removed_ids = Vec::new();
+            for (process_id, entry) in sessions
                 .sessions
                 .extract_if(|_, entry| entry.turn_ref.sub_id == sub_id)
-                .map(|(_, entry)| entry)
-                .collect()
+            {
+                removed_ids.push(process_id);
+                entries.push(entry);
+            }
+            for process_id in removed_ids {
+                sessions.reserved_sessions_id.remove(&process_id);
+            }
+            entries
         };
 
         for entry in entries {
