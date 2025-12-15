@@ -333,8 +333,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::UnifiedExec,
         key: "unified_exec",
         stage: Stage::Beta {
-            menu_description: "Process management toolset for long running shell interactions.",
-            announcement: "NEW! Check out our new process management mode that works great for long running processes. Enable in /experimental!",
+            menu_description: "Background terminals for long running processes.",
+            announcement: "NEW! Try Background terminals for long running processes. Enable in /experimental!",
         },
         default_enabled: false,
     },

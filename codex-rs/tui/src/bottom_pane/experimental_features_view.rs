@@ -74,23 +74,11 @@ impl ExperimentalFeaturesView {
     }
 
     fn visible_len(&self) -> usize {
-        if self.features.is_empty() {
-            0
-        } else {
-            self.features.len() + 1
-        }
-    }
-
-    fn toggle_all_index(&self) -> Option<usize> {
-        (!self.features.is_empty()).then_some(self.features.len())
-    }
-
-    fn all_enabled(&self) -> bool {
-        self.features.iter().all(|item| item.enabled)
+        self.features.len()
     }
 
     fn build_rows(&self) -> Vec<GenericDisplayRow> {
-        let mut rows = Vec::with_capacity(self.visible_len().max(1));
+        let mut rows = Vec::with_capacity(self.features.len());
         let selected_idx = self.state.selected_idx;
         for (idx, item) in self.features.iter().enumerate() {
             let prefix = if selected_idx == Some(idx) {
@@ -105,33 +93,6 @@ impl ExperimentalFeaturesView {
                 display_shortcut: None,
                 match_indices: None,
                 description: Some(item.description.clone()),
-                wrap_indent: None,
-            });
-        }
-
-        if let Some(idx) = self.toggle_all_index() {
-            let prefix = if selected_idx == Some(idx) {
-                '›'
-            } else {
-                ' '
-            };
-            let all_enabled = self.all_enabled();
-            let marker = if all_enabled { 'x' } else { ' ' };
-            let label = if all_enabled {
-                "Disable all"
-            } else {
-                "Enable all"
-            };
-            let description = if all_enabled {
-                "Disable all beta features"
-            } else {
-                "Enable all beta features"
-            };
-            rows.push(GenericDisplayRow {
-                name: format!("{prefix} [{marker}] {label}"),
-                display_shortcut: None,
-                match_indices: None,
-                description: Some(description.to_string()),
                 wrap_indent: None,
             });
         }
@@ -162,21 +123,6 @@ impl ExperimentalFeaturesView {
             return;
         };
         if self.features.is_empty() {
-            return;
-        }
-
-        if self.toggle_all_index() == Some(selected_idx) {
-            let enable = !self.all_enabled();
-            let updates: Vec<(Feature, bool)> = self
-                .features
-                .iter_mut()
-                .map(|item| {
-                    item.enabled = enable;
-                    (item.feature, enable)
-                })
-                .collect();
-            self.app_event_tx
-                .send(AppEvent::UpdateFeatureFlags { updates });
             return;
         }
 
