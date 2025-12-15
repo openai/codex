@@ -300,6 +300,7 @@ pub(crate) struct ChatWidget {
     suppressed_exec_calls: HashSet<String>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     task_complete_pending: bool,
+    suppress_late_exec_ends: bool,
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -520,6 +521,7 @@ impl ChatWidget {
         self.bottom_pane.clear_ctrl_c_quit_hint();
         self.bottom_pane.set_task_running(true);
         self.retry_status_header = None;
+        self.suppress_late_exec_ends = false;
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
@@ -535,6 +537,7 @@ impl ChatWidget {
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
+        self.suppress_late_exec_ends = true;
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -1038,6 +1041,14 @@ impl ChatWidget {
         if self.suppressed_exec_calls.remove(&ev.call_id) {
             return;
         }
+        if self.suppress_late_exec_ends
+            && matches!(
+                ev.source,
+                ExecCommandSource::UnifiedExecStartup | ExecCommandSource::UnifiedExecInteraction
+            )
+        {
+            return;
+        }
         let (command, parsed, source) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd, rc.source),
             None => (ev.command.clone(), ev.parsed_cmd.clone(), ev.source),
@@ -1319,6 +1330,7 @@ impl ChatWidget {
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             task_complete_pending: false,
+            suppress_late_exec_ends: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -1404,6 +1416,7 @@ impl ChatWidget {
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             task_complete_pending: false,
+            suppress_late_exec_ends: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
