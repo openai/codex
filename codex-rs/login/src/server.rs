@@ -524,6 +524,33 @@ fn login_ca_certificate_path(env_source: &dyn EnvSource) -> Option<PathBuf> {
         })
 }
 
+fn strip_pem_block(input: &str, label: &str) -> String {
+    let begin = format!("-----BEGIN {label}-----");
+    let end = format!("-----END {label}-----");
+
+    let mut output = String::new();
+    let mut rest = input;
+
+    loop {
+        if let Some(begin_idx) = rest.find(&begin) {
+            output.push_str(&rest[..begin_idx]);
+            if let Some(end_idx) = rest[begin_idx..].find(&end) {
+                let after_end = begin_idx + end_idx + end.len();
+                rest = &rest[after_end..];
+                continue;
+            } else {
+                output.push_str(&rest[begin_idx..]);
+                break;
+            }
+        } else {
+            output.push_str(rest);
+            break;
+        }
+    }
+
+    output
+}
+
 fn pem_parse_error(path: &Path, error: &pem::Error) -> io::Error {
     let detail = match error {
         pem::Error::NoItemsFound => "no certificates found in PEM file".to_string(),
@@ -554,12 +581,15 @@ fn read_ca_certificates(path: &Path) -> io::Result<Vec<CertificateDer<'static>>>
 
     // Support both standard CERTIFICATE and TRUSTED CERTIFICATE labels by
     // normalizing the latter to the former before parsing.
-    let normalized_pem = String::from_utf8(pem_data.clone())
+    let mut normalized_pem = String::from_utf8(pem_data.clone())
         .map(|s| {
             s.replace("BEGIN TRUSTED CERTIFICATE", "BEGIN CERTIFICATE")
                 .replace("END TRUSTED CERTIFICATE", "END CERTIFICATE")
         })
         .unwrap_or_else(|_| String::from_utf8_lossy(&pem_data).into_owned());
+
+    // Strip CRL blocks so mixed bundles (certs + CRLs) do not fail parsing.
+    normalized_pem = strip_pem_block(&normalized_pem, "X509 CRL");
 
     let mut certificates = Vec::new();
     for cert_result in
