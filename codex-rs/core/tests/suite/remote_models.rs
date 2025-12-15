@@ -16,6 +16,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::version::VERSION_FILENAME;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ClientVersion;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -327,6 +328,12 @@ async fn remote_models_invalid_payload_emits_error() -> Result<()> {
         .await;
 
     let RemoteModelsHarness { codex, .. } = build_remote_models_harness(&server, |config| {
+        let version_file = config.codex_home.join(VERSION_FILENAME);
+        std::fs::write(
+            &version_file,
+            r#"{"latest_version":"0.0.1","last_checked_at":"2025-01-01T00:00:00Z","dismissed_version":null}"#,
+        )
+        .expect("write version.json");
         config.features.enable(Feature::RemoteModels);
         config.model = Some("gpt-5.1".to_string());
     })
