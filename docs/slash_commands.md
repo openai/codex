@@ -20,6 +20,7 @@ Control Codex’s behavior during an interactive session with slash commands.
 | `/init`      | create an AGENTS.md file with instructions for Codex                       |
 | `/compact`   | summarize conversation to prevent hitting the context limit                |
 | `/undo`      | ask Codex to undo a turn                                                   |
+| `/interrupt` | interrupt the currently running task (alternative to pressing Esc)         |
 | `/diff`      | show git diff (including untracked files)                                  |
 | `/mention`   | mention a file                                                             |
 | `/status`    | show current session configuration and token usage                         |

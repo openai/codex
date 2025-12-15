@@ -1583,6 +1583,16 @@ impl ChatWidget {
             SlashCommand::Undo => {
                 self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
             }
+            SlashCommand::Interrupt => {
+                if self.bottom_pane.is_task_running() {
+                    self.submit_op(Op::Interrupt);
+                } else {
+                    self.add_info_message(
+                        "No task is currently running to interrupt.".to_string(),
+                        None,
+                    );
+                }
+            }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
                 let tx = self.app_event_tx.clone();
