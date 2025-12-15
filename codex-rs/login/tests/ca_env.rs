@@ -156,3 +156,15 @@ fn accepts_trusted_certificate_label() {
 
     assert!(output.status.success());
 }
+
+#[test]
+fn accepts_bundle_with_crl() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let crl = "-----BEGIN X509 CRL-----\nMIIC\n-----END X509 CRL-----";
+    let bundle = format!("{TEST_CERT_1}\n{crl}");
+    let cert_path = write_cert_file(&temp_dir, "bundle_crl.pem", &bundle);
+
+    let output = run_probe(&[(CODEX_CA_CERT_ENV, cert_path.as_path())]);
+
+    assert!(output.status.success());
+}
