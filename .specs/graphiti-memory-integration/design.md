@@ -10,6 +10,7 @@ Codex CLI currently treats each turn as ephemeral: context only persists within 
 ### Goals
 
 - Add **workspace** and **session** scoped memory (default), plus an optional **global** scope (promotion-only by default).
+- Enable **shared memory across agent clients** (Codex CLI + Copilot Chat) by using canonical Graphiti group ids derived from stable `(scope, key)` inputs.
 - Keep the agent loop fast: **non-blocking ingestion**, bounded queues, and **time-bounded recall**.
 - Keep it safe: **opt-in**, **explicit consent**, and **trusted-project gating** by default.
 - Provide a small CLI surface to **test connectivity** and **promote curated memories**.
@@ -94,6 +95,26 @@ Codex does not rely on a Graphiti-side idempotency key; it de-dupes within the c
 - Query string is derived from the user inputs for the current turn.
 - Search runs with a strict timeout and maximum result count.
 - Returned facts are formatted into a single system message with a hard character cap.
+
+### Canonical group ids (shared memory across clients)
+
+To share memory between Codex CLI and other clients (e.g. Copilot Chat), group ids are derived from the same `(scope, key)` mapping:
+
+- `scope`: `session | workspace | user` (Codex config calls this “global”; it maps to `user` for canonical ids)
+- `key`: stable string (see conventions below)
+- `group_id`: canonical id string safe for Graphiti group lookups
+
+Canonical ids use a deterministic, privacy-safe algorithm compatible with server-side resolution (when available):
+
+`group_id = "graphiti_" + scope + "_" + sha256(key).slice(0, 32)`
+
+Key conventions:
+
+- `user`: `github_login:<login>` (auto-detected via `gh auth status` when available) or a configured `graphiti.user_scope_key`.
+- `workspace`: `github_repo:<host>/<org>/<repo>` when the workspace maps to a GitHub remote; fall back to a stable-but-local key when no remote is available.
+- `session`: `codex_session:<conversation_id>` (tool-local; not intended to be shared across clients).
+
+Migration note: recall may query both canonical `graphiti_*` group ids and legacy Codex-specific group ids (e.g. `codex-workspace-*`) to avoid dropping previously ingested memories during the transition.
 
 ### Dynamic recall scope selection (`graphiti.recall.scopes_mode=auto`)
 

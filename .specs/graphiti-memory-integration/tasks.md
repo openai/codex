@@ -21,6 +21,14 @@
 - [x] 16. Add tests for identity + automation _Requirements: 7.1, 7.2, 8.1, 8.2, 8.3, 8.4_
 - [x] 17. Update demo guide with auto-mode + directives _Requirements: 5.1, 8.1, 8.2_
 
+## Extension: Cross-client shared group ids
+
+- [x] 18. Switch to canonical `graphiti_*` group ids _Requirements: 2.4, 3.1, 7.2, 9.1_
+  - [x] 18.1 Derive `workspace` key from repo identity _Requirements: 9.2_
+  - [x] 18.2 Auto-detect `github_login:<login>` user key _Requirements: 7.3, 9.3_
+  - [x] 18.3 Include legacy Codex group ids in recall _Requirements: 9.4_
+- [x] 19. Update docs/demo to explain shared memory _Requirements: 5.1, 9.4_
+
 ## Implementation Notes
 
 - Automatic behavior is always best-effort and fail-open.
@@ -41,8 +49,8 @@
 
 ## Current Status Summary
 
-- Phase: implementation.
+- Phase: implementation (canonical ids complete).
 - Completed: core + CLI implementation, docs, demo, and tests.
-- PR: https://github.com/openai/codex/pull/8026
+- PR (fork): https://github.com/yulongbai-nov/codex/pull/1
 - Completed (extension): identity + ownership context + auto recall + Memory Directives.
-- Next tasks: address review feedback, sign CLA, and merge.
+- Next tasks: address PR feedback and merge.

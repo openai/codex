@@ -101,8 +101,9 @@ This feature integrates the Graphiti service with Codex CLI so that Codex can st
 #### Acceptance Criteria
 
 7.1 WHEN `graphiti.include_system_messages` is enabled, THE Codex system SHALL ingest an ownership context `system` message at most once per Graphiti group describing the Owner and scope identity.
-7.2 WHEN `graphiti.user_scope_key` is configured and Global scope is enabled, THE Codex system SHALL derive the Global scope group id from `graphiti.user_scope_key` using the configured group id strategy (so global memory is isolated per user).
-7.3 THE Codex system SHALL NOT attempt to automatically discover the user’s email address or other identity for Graphiti by default (identity must be explicitly configured).
+7.2 WHEN Global scope is enabled, THE Codex system SHALL derive the Global scope group id from an effective user scope key, preferring `graphiti.user_scope_key` when configured.
+7.3 WHEN `graphiti.user_scope_key` is not configured, THE Codex system SHOULD attempt to derive a `github_login:<login>` user scope key from the local GitHub CLI auth state (`gh auth status`) when available.
+7.4 THE Codex system SHALL NOT attempt to automatically discover the user’s email address for Graphiti identity by default.
 
 ### Requirement 8 — Automatic scope selection and auto-promotion (optional)
 
@@ -114,3 +115,14 @@ This feature integrates the Graphiti service with Codex CLI so that Codex can st
 8.2 WHEN `graphiti.auto_promote.enabled` is enabled, THE Codex system SHALL detect supported Memory Directives in user messages and SHALL enqueue an additional Graphiti message containing a `<graphiti_episode kind="…">…</graphiti_episode>` block without blocking the response path.
 8.3 WHEN auto-promotion is triggered, THE Codex system SHALL support explicit scope overrides in the directive (e.g. `(global)` / `(workspace)`), otherwise inferring a scope with a default that prefers the least persistent scope when ambiguous.
 8.4 THE Codex system SHALL refuse auto-promotion when the directive content appears to contain secrets (e.g. tokens/passwords/private keys) and SHALL log a debug reason.
+
+### Requirement 9 — Canonical group ids for cross-client shared memory
+
+**User Story:** As a user, I want Codex to use canonical Graphiti group ids, so that my memories can be shared across different agent clients without per-client silos.
+
+#### Acceptance Criteria
+
+9.1 THE Codex system SHALL write new Graphiti messages to canonical group ids with a `graphiti_<scope>_...` prefix derived from a stable `(scope, key)` mapping.
+9.2 WHEN deriving a `workspace` key, THE Codex system SHALL prefer a repository identity (e.g. GitHub remote host + org/repo) when available, otherwise falling back to a stable-but-local key.
+9.3 WHEN deriving a `user` key, THE Codex system SHOULD prefer a `github_login:<login>` key when available, otherwise falling back to a configured `graphiti.user_scope_key`.
+9.4 WHEN recalling from `workspace` or Global scope, THE Codex system SHOULD include legacy Codex-specific group ids in the search target set for a transition period to avoid dropping previously ingested memories.
