@@ -9,18 +9,22 @@ import subprocess
 import tarfile
 import tempfile
 import zipfile
+import hashlib
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Iterable, Sequence
 from urllib.parse import urlparse
-from urllib.request import urlopen
+from urllib.request import urlopen, Request
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODEX_CLI_ROOT = SCRIPT_DIR.parent
 DEFAULT_WORKFLOW_URL = "https://github.com/openai/codex/actions/runs/17952349351"  # rust-v0.40.0
 VENDOR_DIR_NAME = "vendor"
 RG_MANIFEST = CODEX_CLI_ROOT / "bin" / "rg"
+
+NETWORK_TIMEOUT = 30
+
 BINARY_TARGETS = (
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
@@ -190,17 +194,18 @@ def fetch_rg(
 
 
 def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
-    cmd = [
-        "gh",
-        "run",
-        "download",
-        "--dir",
-        str(dest_dir),
-        "--repo",
-        "openai/codex",
-        workflow_id,
-    ]
-    subprocess.check_call(cmd)
+    subprocess.check_call(
+        [
+            shutil.which("gh") or "gh",
+            "run",
+            "download",
+            "--dir",
+            str(dest_dir),
+            "--repo",
+            "openai/codex",
+            workflow_id,
+        ]
+    )
 
 
 def install_binary_components(
@@ -310,7 +315,8 @@ def _fetch_single_rg(
 
 def _download_file(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with urlopen(url) as response, open(dest, "wb") as out:
+    req = Request(url, headers={"User-Agent": "codex-installer"})
+    with urlopen(req, timeout=NETWORK_TIMEOUT) as response, open(dest, "wb") as out:
         shutil.copyfileobj(response, out)
 
 
@@ -322,11 +328,15 @@ def extract_archive(
 ) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
 
+    base_dir = archive_path.parent.resolve()
+
     if archive_format == "zst":
         output_path = archive_path.parent / dest.name
         subprocess.check_call(
-            ["zstd", "-f", "-d", str(archive_path), "-o", str(output_path)]
+            [shutil.which("zstd") or "zstd", "-f", "-d", str(archive_path), "-o", str(output_path)]
         )
+        if not output_path.resolve().is_relative_to(base_dir):
+            raise RuntimeError("Path traversal detected during extraction")
         shutil.move(str(output_path), dest)
         return
 
@@ -334,14 +344,11 @@ def extract_archive(
         if not archive_member:
             raise RuntimeError("Missing 'path' for tar.gz archive in DotSlash manifest.")
         with tarfile.open(archive_path, "r:gz") as tar:
-            try:
-                member = tar.getmember(archive_member)
-            except KeyError as exc:
-                raise RuntimeError(
-                    f"Entry '{archive_member}' not found in archive {archive_path}."
-                ) from exc
-            tar.extract(member, path=archive_path.parent, filter="data")
-        extracted = archive_path.parent / archive_member
+            member = tar.getmember(archive_member)
+            extracted = base_dir / member.name
+            if not extracted.resolve().is_relative_to(base_dir):
+                raise RuntimeError("Path traversal detected during extraction")
+            tar.extract(member, path=base_dir, filter="data")
         shutil.move(str(extracted), dest)
         return
 
@@ -349,20 +356,19 @@ def extract_archive(
         if not archive_member:
             raise RuntimeError("Missing 'path' for zip archive in DotSlash manifest.")
         with zipfile.ZipFile(archive_path) as archive:
-            try:
-                with archive.open(archive_member) as src, open(dest, "wb") as out:
-                    shutil.copyfileobj(src, out)
-            except KeyError as exc:
-                raise RuntimeError(
-                    f"Entry '{archive_member}' not found in archive {archive_path}."
-                ) from exc
+            extracted = dest.parent / Path(archive_member).name
+            if not extracted.resolve().is_relative_to(dest.parent.resolve()):
+                raise RuntimeError("Path traversal detected during extraction")
+            with archive.open(archive_member) as src, open(extracted, "wb") as out:
+                shutil.copyfileobj(src, out)
+        shutil.move(str(extracted), dest)
         return
 
     raise RuntimeError(f"Unsupported archive format '{archive_format}'.")
 
 
 def _load_manifest(manifest_path: Path) -> dict:
-    cmd = ["dotslash", "--", "parse", str(manifest_path)]
+    cmd = [shutil.which("dotslash") or "dotslash", "--", "parse", str(manifest_path)]
     stdout = subprocess.check_output(cmd, text=True)
     try:
         manifest = json.loads(stdout)
