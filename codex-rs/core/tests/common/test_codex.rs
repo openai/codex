@@ -136,7 +136,7 @@ impl TestCodexBuilder {
     }
 
     async fn build_from_config(
-        &self,
+        &mut self,
         config: Config,
         cwd: Arc<TempDir>,
         home: Arc<TempDir>,
