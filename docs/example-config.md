@@ -220,6 +220,7 @@ view_image_tool = true
 web_search_request = false
 ghost_commit = false
 enable_experimental_windows_sandbox = false
+skills = false
 
 ################################################################################
 # Experimental toggles (legacy; prefer [features])
