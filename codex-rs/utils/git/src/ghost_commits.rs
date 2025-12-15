@@ -593,7 +593,7 @@ fn capture_status_snapshot(
                 expect_rename_source = true;
             }
             b'u' => {
-                if let Some(path) = extract_status_path_after_fields(entry, 9) {
+                if let Some(path) = extract_status_path_after_fields(entry, 10) {
                     let normalized = normalize_relative_path(Path::new(path))?;
                     snapshot.tracked_paths.push(normalized);
                 }
