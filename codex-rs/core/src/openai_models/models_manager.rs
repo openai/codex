@@ -561,7 +561,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let provider = provider_for(server.uri());
-        let manager = ModelsManager::with_provider(auth_manager, provider);
+        let mut manager = ModelsManager::with_provider(auth_manager, provider);
         manager.cache_ttl = Duration::ZERO;
 
         manager
