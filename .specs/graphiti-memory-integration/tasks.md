@@ -11,6 +11,16 @@
 - [x] 9. Add git metadata support + tests _Requirements: 6.3_
 - [x] 10. Run fmt/clippy/tests and ship PR _Requirements: all_
 
+## Extension: Identity, ownership context, and automation
+
+- [x] 11. Add config for identity + automation + docs _Requirements: 7.1, 7.2, 7.3, 8.1, 8.2_
+- [x] 12. Derive Global group id from `graphiti.user_scope_key` _Requirements: 7.2_
+- [x] 13. Ingest ownership context system message per group _Requirements: 7.1, 7.3_
+- [x] 14. Implement `graphiti.recall.scopes_mode=auto` _Requirements: 8.1_
+- [x] 15. Implement Memory Directives auto-promotion _Requirements: 8.2, 8.3, 8.4_
+- [x] 16. Add tests for identity + automation _Requirements: 7.1, 7.2, 8.1, 8.2, 8.3, 8.4_
+- [x] 17. Update demo guide with auto-mode + directives _Requirements: 5.1, 8.1, 8.2_
+
 ## Implementation Notes
 
 - Automatic behavior is always best-effort and fail-open.
@@ -34,4 +44,5 @@
 - Phase: implementation.
 - Completed: core + CLI implementation, docs, demo, and tests.
 - PR: https://github.com/openai/codex/pull/8026
-- Next tasks: address review feedback and merge.
+- Completed (extension): identity + ownership context + auto recall + Memory Directives.
+- Next tasks: address review feedback, sign CLA, and merge.

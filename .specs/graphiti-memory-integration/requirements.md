@@ -20,7 +20,9 @@ This feature integrates the Graphiti service with Codex CLI so that Codex can st
 - **Graphiti**: External service providing knowledge-graph storage and retrieval.
 - **Episode**: A stored unit of conversation/history (e.g., a Codex turn) ingested into Graphiti.
 - **Memory**: Information retrieved from Graphiti and injected into the model prompt.
+- **Memory Directive**: A user-authored prefix (e.g. `preference: …`) that requests auto-promotion into Graphiti.
 - **Scope**: The grouping boundary for memory (`session`, `workspace`, `global`).
+- **Actor / Owner**: The user identity associated with the current Codex session/workspace (used to express “my” preferences/assets).
 - **Trusted Project**: A Codex project state that permits networked integrations by default.
 - **Consent**: A user-configured flag allowing persistence of conversation data.
 
@@ -91,3 +93,24 @@ This feature integrates the Graphiti service with Codex CLI so that Codex can st
 6.1 THE Codex system SHALL avoid storing absolute filesystem paths in group ids or metadata by default.
 6.2 THE Codex system SHALL support a hashed group id strategy by default.
 6.3 WHEN enabled, THE Codex system SHALL include basic git metadata (branch, commit, dirty) in episode metadata without including file paths.
+
+### Requirement 7 — User identity and ownership context
+
+**User Story:** As a user, I want Graphiti memories to be associated with my identity and ownership relationships, so that asking about “my” preferences/terminology/assets can recall relevant facts across sessions and workspaces.
+
+#### Acceptance Criteria
+
+7.1 WHEN `graphiti.include_system_messages` is enabled, THE Codex system SHALL ingest an ownership context `system` message at most once per Graphiti group describing the Owner and scope identity.
+7.2 WHEN `graphiti.user_scope_key` is configured and Global scope is enabled, THE Codex system SHALL derive the Global scope group id from `graphiti.user_scope_key` using the configured group id strategy (so global memory is isolated per user).
+7.3 THE Codex system SHALL NOT attempt to automatically discover the user’s email address or other identity for Graphiti by default (identity must be explicitly configured).
+
+### Requirement 8 — Automatic scope selection and auto-promotion (optional)
+
+**User Story:** As a user, I want global (“my”) memory to be recalled only when relevant, and I want a lightweight way to auto-promote key facts without slowing down the agent loop.
+
+#### Acceptance Criteria
+
+8.1 WHEN `graphiti.recall.scopes_mode` is configured as `auto`, THE Codex system SHALL dynamically include Global scope in recall only when the user query indicates user-specific memory (e.g. preferences/terminology), and SHALL otherwise recall from the configured base scopes.
+8.2 WHEN `graphiti.auto_promote.enabled` is enabled, THE Codex system SHALL detect supported Memory Directives in user messages and SHALL enqueue an additional Graphiti message containing a `<graphiti_episode kind="…">…</graphiti_episode>` block without blocking the response path.
+8.3 WHEN auto-promotion is triggered, THE Codex system SHALL support explicit scope overrides in the directive (e.g. `(global)` / `(workspace)`), otherwise inferring a scope with a default that prefers the least persistent scope when ambiguous.
+8.4 THE Codex system SHALL refuse auto-promotion when the directive content appears to contain secrets (e.g. tokens/passwords/private keys) and SHALL log a debug reason.

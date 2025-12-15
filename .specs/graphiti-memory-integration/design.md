@@ -95,6 +95,38 @@ Codex does not rely on a Graphiti-side idempotency key; it de-dupes within the c
 - Search runs with a strict timeout and maximum result count.
 - Returned facts are formatted into a single system message with a hard character cap.
 
+### Dynamic recall scope selection (`graphiti.recall.scopes_mode=auto`)
+
+To avoid always querying Global scope (privacy/latency) while still answering “my preferences / my terminology / my owned assets” queries, an optional `auto` mode dynamically decides whether to include Global scope per turn:
+
+- Always include the configured base scopes (default `session` + `workspace`).
+- Include `global` only when the user query indicates user-specific memory (e.g. preferences/terminology).
+
+Selection is heuristic, best-effort, and bounded by the same recall timeout/caps.
+
+### Actor identity + ownership context (optional)
+
+When `graphiti.include_system_messages` is enabled, the ingestion layer prepends a one-time `system` message to each active scope/group containing an `<graphiti_episode kind="ownership_context">…</graphiti_episode>` block describing:
+
+- The Owner identity (from explicit config; no automatic email discovery by default).
+- The scope identity (session/workspace/global) and a short natural-language ownership statement (“Owner owns this … scope”).
+- Optional, safe metadata such as repo basename and git branch/commit/dirty (when enabled).
+
+This context is sent at most once per group to avoid repeated noise and keep ingestion inexpensive.
+
+### Auto-promotion from Memory Directives (optional)
+
+To reduce the friction of manual promotion while keeping safety and performance, an optional auto-promotion mode can detect explicit “Memory Directives” in user messages (e.g. `preference: …`, `terminology (global): …`) and enqueue an additional synthetic message containing a `<graphiti_episode kind="…">…</graphiti_episode>` block.
+
+Key properties:
+
+- **Opt-in** via `graphiti.auto_promote.enabled`.
+- **Non-blocking**: promotion is enqueued on the same bounded ingestion pipeline.
+- **Scope inference**:
+  - Supports explicit scope markers like `preference (global): …` / `decision (workspace): …`.
+  - Defaults to a least-persistent scope when ambiguous (prefer `workspace` over `global`).
+- **Secret guard**: heuristically refuses to auto-promote when the directive content looks like credentials or private keys.
+
 ### Concrete integration entry points
 
 - Session init + gating: `GraphitiMemoryService::new_if_enabled` in `codex-rs/core/src/graphiti/service.rs#L52`
@@ -153,6 +185,9 @@ Relations (examples):
 - `IMPLEMENTS` (Commit/PR → Task/Requirement)
 - `BLOCKS` / `DEPENDS_ON` (Task → Task)
 - `USES_TOOL` (Procedure/Turn → Tool)
+- `PREFERS` (User → Tool/Style/Workflow)
+- `ALIAS_OF` / `TERMINOLOGY_FOR` (Term → Term/Concept)
+- `CREATED` / `AUTHORED` (User → PR/Commit/Decision)
 
 Privacy note: prefer repo-relative identifiers and hashed ids over absolute paths.
 
