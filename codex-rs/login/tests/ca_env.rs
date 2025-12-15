@@ -143,3 +143,16 @@ fn rejects_malformed_pem_with_hint() {
     assert!(stderr.contains("CODEX_CA_CERTIFICATE"));
     assert!(stderr.contains("SSL_CERT_FILE"));
 }
+
+#[test]
+fn accepts_trusted_certificate_label() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let trusted = TEST_CERT_1
+        .replace("BEGIN CERTIFICATE", "BEGIN TRUSTED CERTIFICATE")
+        .replace("END CERTIFICATE", "END TRUSTED CERTIFICATE");
+    let cert_path = write_cert_file(&temp_dir, "trusted.pem", &trusted);
+
+    let output = run_probe(&[(CODEX_CA_CERT_ENV, cert_path.as_path())]);
+
+    assert!(output.status.success());
+}
