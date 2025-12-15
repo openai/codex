@@ -43,6 +43,7 @@ use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
+use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
@@ -1510,7 +1511,8 @@ impl ChatComposer {
 
         let toggles = matches!(key_event.code, KeyCode::Char('?'))
             && !has_ctrl_or_alt(key_event.modifiers)
-            && self.is_empty();
+            && self.is_empty()
+            && !self.is_in_paste_burst();
 
         if !toggles {
             return false;
@@ -1621,7 +1623,7 @@ impl ChatComposer {
 
         let builtin_match = built_in_slash_commands()
             .into_iter()
-            .any(|(cmd_name, _)| cmd_name.starts_with(name));
+            .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
 
         if builtin_match {
             return true;
@@ -1630,7 +1632,7 @@ impl ChatComposer {
         let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
         self.custom_prompts
             .iter()
-            .any(|p| format!("{prompt_prefix}{}", p.name).starts_with(name))
+            .any(|p| fuzzy_match(&format!("{prompt_prefix}{}", p.name), name).is_some())
     }
 
     /// Synchronize `self.command_popup` with the current text in the
@@ -2168,6 +2170,35 @@ mod tests {
         assert_eq!(composer.textarea.text(), "h?");
         assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
         assert_eq!(composer.footer_mode(), FooterMode::ContextOnly);
+    }
+
+    #[test]
+    fn question_mark_does_not_toggle_during_paste_burst() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        for ch in ['h', 'i', '?', 't', 'h', 'e', 'r', 'e'] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        assert!(composer.is_in_paste_burst());
+        assert_eq!(composer.textarea.text(), "");
+
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+        let _ = composer.flush_paste_burst_if_due();
+
+        assert_eq!(composer.textarea.text(), "hi?there");
+        assert_ne!(composer.footer_mode, FooterMode::ShortcutOverlay);
     }
 
     #[test]
@@ -3982,8 +4013,15 @@ mod tests {
             "'/re' should activate slash popup via prefix match"
         );
 
-        // Case 3: invalid prefix "/zzz" – still allowed to open popup if it
-        // matches no built-in command, our current logic will *not* open popup.
+        // Case 3: fuzzy match "/ac" (subsequence of /compact and /feedback)
+        composer.set_text_content("/ac".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "'/ac' should activate slash popup via fuzzy match"
+        );
+
+        // Case 4: invalid prefix "/zzz" – still allowed to open popup if it
+        // matches no built-in command; our current logic will not open popup.
         // Verify that explicitly.
         composer.set_text_content("/zzz".to_string());
         assert!(

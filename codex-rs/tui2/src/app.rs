@@ -8,7 +8,7 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
-use crate::model_migration::migration_copy_for_config;
+use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
@@ -20,22 +20,23 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
-use codex_app_server_protocol::AuthMode;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
+#[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::openai_models::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::openai_models::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
+use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
+use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
-use codex_core::skills::load_skills;
-use codex_core::skills::model::SkillMetadata;
+use codex_core::skills::SkillError;
 use codex_protocol::ConversationId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -49,6 +50,8 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -60,9 +63,6 @@ use tokio::sync::mpsc::unbounded_channel;
 
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
-
-const GPT_5_1_MIGRATION_AUTH_MODES: [AuthMode; 2] = [AuthMode::ChatGPT, AuthMode::ApiKey];
-const GPT_5_1_CODEX_MIGRATION_AUTH_MODES: [AuthMode; 2] = [AuthMode::ChatGPT, AuthMode::ApiKey];
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -98,6 +98,25 @@ fn session_summary(
     })
 }
 
+fn skill_errors_from_info(errors: &[SkillErrorInfo]) -> Vec<SkillError> {
+    errors
+        .iter()
+        .map(|err| SkillError {
+            path: err.path.clone(),
+            message: err.message.clone(),
+        })
+        .collect()
+}
+
+fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
+    response
+        .skills
+        .iter()
+        .find(|entry| entry.cwd.as_path() == cwd)
+        .map(|entry| entry.errors.clone())
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
     usage_line: String,
@@ -107,26 +126,46 @@ struct SessionSummary {
 fn should_show_model_migration_prompt(
     current_model: &str,
     target_model: &str,
-    hide_prompt_flag: Option<bool>,
-    available_models: Vec<ModelPreset>,
+    seen_migrations: &BTreeMap<String, String>,
+    available_models: &[ModelPreset],
 ) -> bool {
-    if target_model == current_model || hide_prompt_flag.unwrap_or(false) {
+    if target_model == current_model {
         return false;
     }
 
-    available_models
+    if let Some(seen_target) = seen_migrations.get(current_model)
+        && seen_target == target_model
+    {
+        return false;
+    }
+
+    if available_models
         .iter()
-        .filter(|preset| preset.upgrade.is_some())
-        .any(|preset| preset.model == current_model)
+        .any(|preset| preset.model == current_model && preset.upgrade.is_some())
+    {
+        return true;
+    }
+
+    if available_models
+        .iter()
+        .any(|preset| preset.upgrade.as_ref().map(|u| u.id.as_str()) == Some(target_model))
+    {
+        return true;
+    }
+
+    false
 }
 
-fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> Option<bool> {
+fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> bool {
     match migration_config_key {
-        HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => {
-            config.notices.hide_gpt_5_1_codex_max_migration_prompt
+        HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => config
+            .notices
+            .hide_gpt_5_1_codex_max_migration_prompt
+            .unwrap_or(false),
+        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => {
+            config.notices.hide_gpt5_1_migration_prompt.unwrap_or(false)
         }
-        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => config.notices.hide_gpt5_1_migration_prompt,
-        _ => None,
+        _ => false,
     }
 }
 
@@ -135,7 +174,6 @@ async fn handle_model_migration_prompt_if_needed(
     config: &mut Config,
     model: &str,
     app_event_tx: &AppEventSender,
-    auth_mode: Option<AuthMode>,
     models_manager: Arc<ModelsManager>,
 ) -> Option<AppExitInfo> {
     let available_models = models_manager.list_models(config).await;
@@ -150,26 +188,52 @@ async fn handle_model_migration_prompt_if_needed(
         migration_config_key,
     }) = upgrade
     {
-        if !migration_prompt_allows_auth_mode(auth_mode, migration_config_key.as_str()) {
+        if migration_prompt_hidden(config, migration_config_key.as_str()) {
             return None;
         }
 
         let target_model = target_model.to_string();
-        let hide_prompt_flag = migration_prompt_hidden(config, migration_config_key.as_str());
         if !should_show_model_migration_prompt(
             model,
             &target_model,
-            hide_prompt_flag,
-            available_models.clone(),
+            &config.notices.model_migrations,
+            &available_models,
         ) {
             return None;
         }
 
-        let prompt_copy = migration_copy_for_config(migration_config_key.as_str());
+        let current_preset = available_models.iter().find(|preset| preset.model == model);
+        let target_preset = available_models
+            .iter()
+            .find(|preset| preset.model == target_model);
+        let target_display_name = target_preset
+            .map(|preset| preset.display_name.clone())
+            .unwrap_or_else(|| target_model.clone());
+        let heading_label = if target_display_name == model {
+            target_model.clone()
+        } else {
+            target_display_name.clone()
+        };
+        let target_description = target_preset.and_then(|preset| {
+            if preset.description.is_empty() {
+                None
+            } else {
+                Some(preset.description.clone())
+            }
+        });
+        let can_opt_out = current_preset.is_some();
+        let prompt_copy = migration_copy_for_models(
+            model,
+            &target_model,
+            heading_label,
+            target_description,
+            can_opt_out,
+        );
         match run_model_migration_prompt(tui, prompt_copy).await {
             ModelMigrationOutcome::Accepted => {
                 app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
-                    migration_config: migration_config_key.to_string(),
+                    from_model: model.to_string(),
+                    to_model: target_model.clone(),
                 });
                 config.model = Some(target_model.clone());
 
@@ -195,7 +259,8 @@ async fn handle_model_migration_prompt_if_needed(
             }
             ModelMigrationOutcome::Rejected => {
                 app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
-                    migration_config: migration_config_key.to_string(),
+                    from_model: model.to_string(),
+                    to_model: target_model.clone(),
                 });
             }
             ModelMigrationOutcome::Exit => {
@@ -247,8 +312,6 @@ pub(crate) struct App {
 
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
-
-    pub(crate) skills: Option<Vec<SkillMetadata>>,
 }
 
 impl App {
@@ -276,7 +339,6 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
-        let auth_mode = auth_manager.auth().map(|auth| auth.mode);
         let conversation_manager = Arc::new(ConversationManager::new(
             auth_manager.clone(),
             SessionSource::Cli,
@@ -290,7 +352,6 @@ impl App {
             &mut config,
             model.as_str(),
             &app_event_tx,
-            auth_mode,
             conversation_manager.get_models_manager(),
         )
         .await;
@@ -300,26 +361,6 @@ impl App {
         if let Some(updated_model) = config.model.clone() {
             model = updated_model;
         }
-
-        let skills_outcome = load_skills(&config);
-        if !skills_outcome.errors.is_empty() {
-            match run_skill_error_prompt(tui, &skills_outcome.errors).await {
-                SkillErrorPromptOutcome::Exit => {
-                    return Ok(AppExitInfo {
-                        token_usage: TokenUsage::default(),
-                        conversation_id: None,
-                        update_action: None,
-                    });
-                }
-                SkillErrorPromptOutcome::Continue => {}
-            }
-        }
-
-        let skills = if config.features.enabled(Feature::Skills) {
-            Some(skills_outcome.skills.clone())
-        } else {
-            None
-        };
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let model_family = conversation_manager
@@ -338,7 +379,6 @@ impl App {
                     auth_manager: auth_manager.clone(),
                     models_manager: conversation_manager.get_models_manager(),
                     feedback: feedback.clone(),
-                    skills: skills.clone(),
                     is_first_run,
                     model_family: model_family.clone(),
                 };
@@ -365,7 +405,6 @@ impl App {
                     auth_manager: auth_manager.clone(),
                     models_manager: conversation_manager.get_models_manager(),
                     feedback: feedback.clone(),
-                    skills: skills.clone(),
                     is_first_run,
                     model_family: model_family.clone(),
                 };
@@ -403,7 +442,6 @@ impl App {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
-            skills,
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -529,7 +567,6 @@ impl App {
                     auth_manager: self.auth_manager.clone(),
                     models_manager: self.server.get_models_manager(),
                     feedback: self.feedback.clone(),
-                    skills: self.skills.clone(),
                     is_first_run: false,
                     model_family: model_family.clone(),
                 };
@@ -580,7 +617,6 @@ impl App {
                                     auth_manager: self.auth_manager.clone(),
                                     models_manager: self.server.get_models_manager(),
                                     feedback: self.feedback.clone(),
-                                    skills: self.skills.clone(),
                                     is_first_run: false,
                                     model_family: model_family.clone(),
                                 };
@@ -671,6 +707,22 @@ impl App {
                 {
                     self.suppress_shutdown_complete = false;
                     return Ok(true);
+                }
+                if let EventMsg::ListSkillsResponse(response) = &event.msg {
+                    let cwd = self.chat_widget.config_ref().cwd.clone();
+                    let errors = errors_for_cwd(&cwd, response);
+                    if errors.is_empty() {
+                        self.chat_widget.handle_codex_event(event);
+                        return Ok(true);
+                    }
+                    let errors = skill_errors_from_info(&errors);
+                    match run_skill_error_prompt(tui, &errors).await {
+                        SkillErrorPromptOutcome::Exit => {
+                            self.chat_widget.submit_op(Op::Shutdown);
+                            return Ok(false);
+                        }
+                        SkillErrorPromptOutcome::Continue => {}
+                    }
                 }
                 self.chat_widget.handle_codex_event(event);
             }
@@ -960,13 +1012,19 @@ impl App {
                     ));
                 }
             }
-            AppEvent::PersistModelMigrationPromptAcknowledged { migration_config } => {
+            AppEvent::PersistModelMigrationPromptAcknowledged {
+                from_model,
+                to_model,
+            } => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .set_hide_model_migration_prompt(&migration_config, true)
+                    .record_model_migration_seen(from_model.as_str(), to_model.as_str())
                     .apply()
                     .await
                 {
-                    tracing::error!(error = %err, "failed to persist model migration prompt acknowledgement");
+                    tracing::error!(
+                        error = %err,
+                        "failed to persist model migration prompt acknowledgement"
+                    );
                     self.chat_widget.add_error_message(format!(
                         "Failed to save model migration prompt preference: {err}"
                     ));
@@ -1140,28 +1198,6 @@ impl App {
     }
 }
 
-fn migration_prompt_allowed_auth_modes(migration_config_key: &str) -> Option<&'static [AuthMode]> {
-    match migration_config_key {
-        HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG => Some(&GPT_5_1_MIGRATION_AUTH_MODES),
-        HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG => Some(&GPT_5_1_CODEX_MIGRATION_AUTH_MODES),
-        _ => None,
-    }
-}
-
-fn migration_prompt_allows_auth_mode(
-    auth_mode: Option<AuthMode>,
-    migration_config_key: &str,
-) -> bool {
-    if let Some(allowed_modes) = migration_prompt_allowed_auth_modes(migration_config_key) {
-        match auth_mode {
-            None => true,
-            Some(mode) => allowed_modes.contains(&mode),
-        }
-    } else {
-        auth_mode != Some(AuthMode::ApiKey)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1219,7 +1255,6 @@ mod tests {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
-            skills: None,
         }
     }
 
@@ -1260,7 +1295,6 @@ mod tests {
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 skip_world_writable_scan_once: false,
-                skills: None,
             },
             rx,
             op_rx,
@@ -1273,51 +1307,54 @@ mod tests {
 
     #[test]
     fn model_migration_prompt_only_shows_for_deprecated_models() {
+        let seen = BTreeMap::new();
         assert!(should_show_model_migration_prompt(
             "gpt-5",
             "gpt-5.1",
-            None,
-            all_model_presets()
+            &seen,
+            &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5-codex",
             "gpt-5.1-codex",
-            None,
-            all_model_presets()
+            &seen,
+            &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5-codex-mini",
             "gpt-5.1-codex-mini",
-            None,
-            all_model_presets()
+            &seen,
+            &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5.1-codex",
             "gpt-5.1-codex-max",
-            None,
-            all_model_presets()
+            &seen,
+            &all_model_presets()
         ));
         assert!(!should_show_model_migration_prompt(
             "gpt-5.1-codex",
             "gpt-5.1-codex",
-            None,
-            all_model_presets()
+            &seen,
+            &all_model_presets()
         ));
     }
 
     #[test]
     fn model_migration_prompt_respects_hide_flag_and_self_target() {
+        let mut seen = BTreeMap::new();
+        seen.insert("gpt-5".to_string(), "gpt-5.1".to_string());
         assert!(!should_show_model_migration_prompt(
             "gpt-5",
             "gpt-5.1",
-            Some(true),
-            all_model_presets()
+            &seen,
+            &all_model_presets()
         ));
         assert!(!should_show_model_migration_prompt(
             "gpt-5.1",
             "gpt-5.1",
-            None,
-            all_model_presets()
+            &seen,
+            &all_model_presets()
         ));
     }
 
@@ -1368,7 +1405,6 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
-                skill_load_outcome: None,
                 rollout_path: PathBuf::new(),
             };
             Arc::new(new_session_info(
@@ -1424,7 +1460,6 @@ mod tests {
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
-            skill_load_outcome: None,
             rollout_path: PathBuf::new(),
         };
 
@@ -1470,41 +1505,5 @@ mod tests {
             summary.resume_command,
             Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
-    }
-
-    #[test]
-    fn gpt5_migration_allows_api_key_and_chatgpt() {
-        assert!(migration_prompt_allows_auth_mode(
-            Some(AuthMode::ApiKey),
-            HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG,
-        ));
-        assert!(migration_prompt_allows_auth_mode(
-            Some(AuthMode::ChatGPT),
-            HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG,
-        ));
-    }
-
-    #[test]
-    fn gpt_5_1_codex_max_migration_limits_to_chatgpt() {
-        assert!(migration_prompt_allows_auth_mode(
-            Some(AuthMode::ChatGPT),
-            HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
-        ));
-        assert!(migration_prompt_allows_auth_mode(
-            Some(AuthMode::ApiKey),
-            HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG,
-        ));
-    }
-
-    #[test]
-    fn other_migrations_block_api_key() {
-        assert!(!migration_prompt_allows_auth_mode(
-            Some(AuthMode::ApiKey),
-            "unknown"
-        ));
-        assert!(migration_prompt_allows_auth_mode(
-            Some(AuthMode::ChatGPT),
-            "unknown"
-        ));
     }
 }

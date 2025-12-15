@@ -58,7 +58,6 @@ pub enum SandboxErr {
 
 #[derive(Error, Debug)]
 pub enum CodexErr {
-    // todo(aibrahim): git rid of this error carrying the dangling artifacts
     #[error("turn aborted. Something went wrong? Hit `/feedback` to report the issue.")]
     TurnAborted,
 

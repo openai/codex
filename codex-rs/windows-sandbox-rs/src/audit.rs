@@ -1,5 +1,5 @@
 use crate::acl::add_deny_write_ace;
-use crate::acl::path_quick_mask_allows;
+use crate::acl::path_mask_allows;
 use crate::cap::cap_sid_file;
 use crate::cap::load_or_create_cap_sids;
 use crate::logging::{debug_log, log_note};
@@ -84,7 +84,7 @@ unsafe fn path_has_world_write_allow(path: &Path) -> Result<bool> {
     let mut world = world_sid()?;
     let psid_world = world.as_mut_ptr() as *mut c_void;
     let write_mask = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES;
-    path_quick_mask_allows(path, &[psid_world], write_mask)
+    path_mask_allows(path, &[psid_world], write_mask, false)
 }
 
 pub fn audit_everyone_writable(
@@ -260,12 +260,8 @@ pub fn apply_capability_denies_for_world_writable(
             let mut roots: Vec<PathBuf> =
                 vec![dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf())];
             for root in writable_roots {
-                let candidate = if root.is_absolute() {
-                    root.clone()
-                } else {
-                    cwd.join(root)
-                };
-                roots.push(dunce::canonicalize(&candidate).unwrap_or(candidate));
+                let candidate = root.as_path();
+                roots.push(dunce::canonicalize(candidate).unwrap_or_else(|_| root.to_path_buf()));
             }
             (sid, roots)
         }

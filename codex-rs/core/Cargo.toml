@@ -28,7 +28,7 @@ codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git = { workspace = true }
 codex-keyring-store = { workspace = true }
-codex-otel = { workspace = true, features = ["otel"] }
+codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -132,6 +132,7 @@ pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
+tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }
 walkdir = { workspace = true }
 wiremock = { workspace = true }

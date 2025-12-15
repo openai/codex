@@ -1,5 +1,6 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::test_tmp_path;
 use app_test_support::to_response;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -23,10 +24,12 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
+    let writable_root = test_tmp_path();
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
-        r#"
+        format!(
+            r#"
 model = "gpt-5.1-codex-max"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
@@ -38,7 +41,7 @@ forced_chatgpt_workspace_id = "12345678-0000-0000-0000-000000000000"
 forced_login_method = "chatgpt"
 
 [sandbox_workspace_write]
-writable_roots = ["/tmp"]
+writable_roots = [{}]
 network_access = true
 exclude_tmpdir_env_var = true
 exclude_slash_tmp = true
@@ -56,6 +59,8 @@ model_verbosity = "medium"
 model_provider = "openai"
 chatgpt_base_url = "https://api.chatgpt.com"
 "#,
+            serde_json::json!(writable_root)
+        ),
     )
 }
 
@@ -75,12 +80,13 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
     .await??;
 
     let config: GetUserSavedConfigResponse = to_response(resp)?;
+    let writable_root = test_tmp_path();
     let expected = GetUserSavedConfigResponse {
         config: UserSavedConfig {
             approval_policy: Some(AskForApproval::OnRequest),
             sandbox_mode: Some(SandboxMode::WorkspaceWrite),
             sandbox_settings: Some(SandboxSettings {
-                writable_roots: vec!["/tmp".into()],
+                writable_roots: vec![writable_root],
                 network_access: Some(true),
                 exclude_tmpdir_env_var: Some(true),
                 exclude_slash_tmp: Some(true),

@@ -58,6 +58,7 @@ use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tracing::instrument;
 use tracing::warn;
 
 use crate::codex::INITIAL_SUBMIT_ID;
@@ -182,6 +183,21 @@ struct ManagedClient {
     server_supports_sandbox_state_capability: bool,
 }
 
+impl ManagedClient {
+    async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
+        if !self.server_supports_sandbox_state_capability {
+            return Ok(());
+        }
+
+        self.client
+            .send_custom_notification(
+                MCP_SANDBOX_STATE_NOTIFICATION,
+                Some(serde_json::to_value(sandbox_state)?),
+            )
+            .await
+    }
+}
+
 #[derive(Clone)]
 struct AsyncManagedClient {
     client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
@@ -231,17 +247,7 @@ impl AsyncManagedClient {
 
     async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
         let managed = self.client().await?;
-        if !managed.server_supports_sandbox_state_capability {
-            return Ok(());
-        }
-
-        managed
-            .client
-            .send_custom_notification(
-                MCP_SANDBOX_STATE_NOTIFICATION,
-                Some(serde_json::to_value(sandbox_state)?),
-            )
-            .await
+        managed.notify_sandbox_state_change(sandbox_state).await
     }
 }
 
@@ -274,6 +280,7 @@ impl McpConnectionManager {
         auth_entries: HashMap<String, McpAuthStatusEntry>,
         tx_event: Sender<Event>,
         cancel_token: CancellationToken,
+        initial_sandbox_state: SandboxState,
     ) {
         if cancel_token.is_cancelled() {
             return;
@@ -302,13 +309,25 @@ impl McpConnectionManager {
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
+            let sandbox_state = initial_sandbox_state.clone();
             join_set.spawn(async move {
                 let outcome = async_managed_client.client().await;
                 if cancel_token.is_cancelled() {
                     return (server_name, Err(StartupOutcomeError::Cancelled));
                 }
                 let status = match &outcome {
-                    Ok(_) => McpStartupStatus::Ready,
+                    Ok(_) => {
+                        // Send sandbox state notification immediately after Ready
+                        if let Err(e) = async_managed_client
+                            .notify_sandbox_state_change(&sandbox_state)
+                            .await
+                        {
+                            warn!(
+                                "Failed to notify sandbox state to MCP server {server_name}: {e:#}",
+                            );
+                        }
+                        McpStartupStatus::Ready
+                    }
                     Err(error) => {
                         let error_str = mcp_init_error_display(
                             server_name.as_str(),
@@ -379,6 +398,7 @@ impl McpConnectionManager {
 
     /// Returns a single map that contains all tools. Each key is the
     /// fully-qualified name for the tool.
+    #[instrument(skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
         let mut tools = HashMap::new();
         for managed_client in self.clients.values() {

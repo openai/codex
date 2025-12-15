@@ -1633,7 +1633,7 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
         .await?;
     wait_for_completion(&test).await;
 
-    let policy_path = test.home.path().join("policy").join("default.codexpolicy");
+    let policy_path = test.home.path().join("rules").join("default.rules");
     let policy_contents = fs::read_to_string(&policy_path)?;
     assert!(
         policy_contents

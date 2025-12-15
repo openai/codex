@@ -25,6 +25,8 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::ReasoningSummaryFormat;
+use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
@@ -75,6 +77,15 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         priority: 1,
         upgrade: None,
         base_instructions: None,
+        supports_reasoning_summaries: false,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        context_window: None,
+        reasoning_summary_format: ReasoningSummaryFormat::None,
+        experimental_supported_tools: Vec::new(),
     };
 
     let models_mock = mount_models_once(
@@ -206,6 +217,15 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         priority: 1,
         upgrade: None,
         base_instructions: Some(remote_base.to_string()),
+        supports_reasoning_summaries: false,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        context_window: None,
+        reasoning_summary_format: ReasoningSummaryFormat::None,
+        experimental_supported_tools: Vec::new(),
     };
     mount_models_once(
         &server,

@@ -33,6 +33,7 @@ use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
+use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
 use codex_core::protocol::McpStartupStatus;
@@ -44,6 +45,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
+use codex_core::protocol::SkillsListEntry;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TerminalInteractionEvent;
@@ -263,7 +265,6 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
-    pub(crate) skills: Option<Vec<SkillMetadata>>,
     pub(crate) is_first_run: bool,
     pub(crate) model_family: ModelFamily,
 }
@@ -392,6 +393,7 @@ impl ChatWidget {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
+        self.set_skills(None);
         self.conversation_id = Some(event.session_id);
         self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
@@ -408,12 +410,22 @@ impl ChatWidget {
         }
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
+        self.submit_op(Op::ListSkills { cwds: Vec::new() });
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
+    }
+
+    fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
+        self.bottom_pane.set_skills(skills);
+    }
+
+    fn set_skills_from_response(&mut self, response: &ListSkillsResponseEvent) {
+        let skills = skills_for_cwd(&self.config.cwd, &response.skills);
+        self.set_skills(Some(skills));
     }
 
     pub(crate) fn open_feedback_note(
@@ -1262,7 +1274,6 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             feedback,
-            skills,
             is_first_run,
             model_family,
         } = common;
@@ -1285,7 +1296,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
-                skills,
+                skills: None,
             }),
             active_cell: None,
             config,
@@ -1348,7 +1359,6 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             feedback,
-            skills,
             model_family,
             ..
         } = common;
@@ -1371,7 +1381,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
-                skills,
+                skills: None,
             }),
             active_cell: None,
             config,
@@ -1738,6 +1748,16 @@ impl ChatWidget {
             items.push(UserInput::LocalImage { path });
         }
 
+        if let Some(skills) = self.bottom_pane.skills() {
+            let skill_mentions = find_skill_mentions(&text, skills);
+            for skill in skill_mentions {
+                items.push(UserInput::Skill {
+                    name: skill.name.clone(),
+                    path: skill.path.clone(),
+                });
+            }
+        }
+
         self.codex_op_tx
             .send(Op::UserInput { items })
             .unwrap_or_else(|e| {
@@ -1865,6 +1885,7 @@ impl ChatWidget {
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
+            EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::DeprecationNotice(ev) => self.on_deprecation_notice(ev),
@@ -2226,9 +2247,10 @@ impl ChatWidget {
                     Some(preset.default_reasoning_effort),
                 );
                 SelectionItem {
-                    name: preset.display_name,
+                    name: preset.display_name.clone(),
                     description,
                     is_current: model == current_model,
+                    is_default: preset.is_default,
                     actions,
                     dismiss_on_select: true,
                     ..Default::default()
@@ -2305,9 +2327,10 @@ impl ChatWidget {
                 });
             })];
             items.push(SelectionItem {
-                name: preset.display_name.to_string(),
+                name: preset.display_name.clone(),
                 description,
                 is_current,
+                is_default: preset.is_default,
                 actions,
                 dismiss_on_select: single_supported_effort,
                 ..Default::default()
@@ -2379,7 +2402,8 @@ impl ChatWidget {
             format!("⚠ {effort_label} reasoning effort can quickly consume Plus plan rate limits.")
         });
         let warn_for_model = preset.model.starts_with("gpt-5.1-codex")
-            || preset.model.starts_with("gpt-5.1-codex-max");
+            || preset.model.starts_with("gpt-5.1-codex-max")
+            || preset.model.starts_with("gpt-5.2");
 
         struct EffortChoice {
             stored: Option<ReasoningEffortConfig>,
@@ -3075,6 +3099,10 @@ impl ChatWidget {
         self.bottom_pane.set_custom_prompts(ev.custom_prompts);
     }
 
+    fn on_list_skills(&mut self, ev: ListSkillsResponseEvent) {
+        self.set_skills_from_response(&ev);
+    }
+
     pub(crate) fn open_review_popup(&mut self) {
         let mut items: Vec<SelectionItem> = Vec::new();
 
@@ -3457,6 +3485,41 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Type to search commits".to_string()),
         ..Default::default()
     });
+}
+
+fn find_skill_mentions(text: &str, skills: &[SkillMetadata]) -> Vec<SkillMetadata> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut matches: Vec<SkillMetadata> = Vec::new();
+    for skill in skills {
+        if seen.contains(&skill.name) {
+            continue;
+        }
+        let needle = format!("${}", skill.name);
+        if text.contains(&needle) {
+            seen.insert(skill.name.clone());
+            matches.push(skill.clone());
+        }
+    }
+    matches
+}
+
+fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMetadata> {
+    skills_entries
+        .iter()
+        .find(|entry| entry.cwd.as_path() == cwd)
+        .map(|entry| {
+            entry
+                .skills
+                .iter()
+                .map(|skill| SkillMetadata {
+                    name: skill.name.clone(),
+                    description: skill.description.clone(),
+                    path: skill.path.clone(),
+                    scope: skill.scope,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -28,7 +28,7 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::GhostSnapshot { .. }
-        | ResponseItem::CompactionSummary { .. } => true,
+        | ResponseItem::Compaction { .. } => true,
         ResponseItem::Other => false,
     }
 }
@@ -79,6 +79,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::McpStartupUpdate(_)
         | EventMsg::McpStartupComplete(_)
         | EventMsg::ListCustomPromptsResponse(_)
+        | EventMsg::ListSkillsResponse(_)
         | EventMsg::PlanUpdate(_)
         | EventMsg::ShutdownComplete
         | EventMsg::ViewImageToolCall(_)

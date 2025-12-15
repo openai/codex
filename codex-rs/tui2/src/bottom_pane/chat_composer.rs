@@ -43,6 +43,7 @@ use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
+use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
@@ -799,6 +800,10 @@ impl ChatComposer {
 
     fn skills_enabled(&self) -> bool {
         self.skills.as_ref().is_some_and(|s| !s.is_empty())
+    }
+
+    pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
+        self.skills.as_ref()
     }
 
     /// Extract a token prefixed with `prefix` under the cursor, if any.
@@ -1617,7 +1622,7 @@ impl ChatComposer {
 
         let builtin_match = built_in_slash_commands()
             .into_iter()
-            .any(|(cmd_name, _)| cmd_name.starts_with(name));
+            .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
 
         if builtin_match {
             return true;
@@ -1626,7 +1631,7 @@ impl ChatComposer {
         let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
         self.custom_prompts
             .iter()
-            .any(|p| format!("{prompt_prefix}{}", p.name).starts_with(name))
+            .any(|p| fuzzy_match(&format!("{prompt_prefix}{}", p.name), name).is_some())
     }
 
     /// Synchronize `self.command_popup` with the current text in the
@@ -3978,8 +3983,15 @@ mod tests {
             "'/re' should activate slash popup via prefix match"
         );
 
-        // Case 3: invalid prefix "/zzz" – still allowed to open popup if it
-        // matches no built-in command, our current logic will *not* open popup.
+        // Case 3: fuzzy match "/ac" (subsequence of /compact and /feedback)
+        composer.set_text_content("/ac".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "'/ac' should activate slash popup via fuzzy match"
+        );
+
+        // Case 4: invalid prefix "/zzz" – still allowed to open popup if it
+        // matches no built-in command; our current logic will not open popup.
         // Verify that explicitly.
         composer.set_text_content("/zzz".to_string());
         assert!(

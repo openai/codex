@@ -34,6 +34,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
@@ -45,12 +46,16 @@ use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_EA;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
+use windows_sys::Win32::Storage::FileSystem::DELETE;
 const SE_KERNEL_OBJECT: u32 = 6;
 const INHERIT_ONLY_ACE: u8 = 0x08;
 const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
 const DENY_ACCESS: i32 = 3;
 
 /// Fetch DACL via handle-based query; caller must LocalFree the returned SD.
+///
+/// # Safety
+/// Caller must free the returned security descriptor with `LocalFree` and pass an existing path.
 pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void)> {
     let wpath = to_wide(path);
     let h = CreateFileW(
@@ -88,11 +93,13 @@ pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void)> 
     Ok((p_dacl, p_sd))
 }
 
-/// Fast mask-based check: does any ACE for provided SIDs grant at least one desired bit? Skips inherit-only.
-pub unsafe fn dacl_quick_mask_allows(
+/// Fast mask-based check: does an ACE for provided SIDs grant the desired mask? Skips inherit-only.
+/// When `require_all_bits` is true, all bits in `desired_mask` must be present; otherwise any bit suffices.
+pub unsafe fn dacl_mask_allows(
     p_dacl: *mut ACL,
     psids: &[*mut c_void],
     desired_mask: u32,
+    require_all_bits: bool,
 ) -> bool {
     if p_dacl.is_null() {
         return false;
@@ -141,22 +148,25 @@ pub unsafe fn dacl_quick_mask_allows(
         let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
         let mut mask = ace.Mask;
         MapGenericMask(&mut mask, &mapping);
-        if (mask & desired_mask) != 0 {
+        if (require_all_bits && (mask & desired_mask) == desired_mask)
+            || (!require_all_bits && (mask & desired_mask) != 0)
+        {
             return true;
         }
     }
     false
 }
 
-/// Path-based wrapper around the quick mask check (single DACL fetch).
-pub fn path_quick_mask_allows(
+/// Path-based wrapper around the mask check (single DACL fetch).
+pub fn path_mask_allows(
     path: &Path,
     psids: &[*mut c_void],
     desired_mask: u32,
+    require_all_bits: bool,
 ) -> Result<bool> {
     unsafe {
         let (p_dacl, sd) = fetch_dacl_handle(path)?;
-        let has = dacl_quick_mask_allows(p_dacl, psids, desired_mask);
+        let has = dacl_mask_allows(p_dacl, psids, desired_mask, require_all_bits);
         if !sd.is_null() {
             LocalFree(sd as HLOCAL);
         }
@@ -326,16 +336,23 @@ pub unsafe fn dacl_effective_allows_mask(
 }
 
 #[allow(dead_code)]
-const WRITE_ALLOW_MASK: u32 = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE;
+const WRITE_ALLOW_MASK: u32 = FILE_GENERIC_READ
+    | FILE_GENERIC_WRITE
+    | FILE_GENERIC_EXECUTE
+    | DELETE
+    | FILE_DELETE_CHILD;
 
 /// Ensure all provided SIDs have a write-capable allow ACE on the path.
 /// Returns true if any ACE was added.
+///
+/// # Safety
+/// Caller must pass valid SID pointers and an existing path; free the returned security descriptor with `LocalFree`.
 #[allow(dead_code)]
 pub unsafe fn ensure_allow_write_aces(path: &Path, sids: &[*mut c_void]) -> Result<bool> {
     let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
     let mut entries: Vec<EXPLICIT_ACCESS_W> = Vec::new();
     for sid in sids {
-        if dacl_quick_mask_allows(p_dacl, &[*sid], WRITE_ALLOW_MASK) {
+        if dacl_mask_allows(p_dacl, &[*sid], WRITE_ALLOW_MASK, true) {
             continue;
         }
         entries.push(EXPLICIT_ACCESS_W {

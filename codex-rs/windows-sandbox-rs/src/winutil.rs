@@ -14,6 +14,48 @@ pub fn to_wide<S: AsRef<OsStr>>(s: S) -> Vec<u16> {
     v
 }
 
+/// Quote a single Windows command-line argument following the rules used by
+/// CommandLineToArgvW/CRT so that spaces, quotes, and backslashes are preserved.
+/// Reference behavior matches Rust std::process::Command on Windows.
+#[cfg(target_os = "windows")]
+pub fn quote_windows_arg(arg: &str) -> String {
+    let needs_quotes = arg.is_empty()
+        || arg
+            .chars()
+            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'));
+    if !needs_quotes {
+        return arg.to_string();
+    }
+
+    let mut quoted = String::with_capacity(arg.len() + 2);
+    quoted.push('"');
+    let mut backslashes = 0;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => {
+                backslashes += 1;
+            }
+            '"' => {
+                quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+                quoted.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                if backslashes > 0 {
+                    quoted.push_str(&"\\".repeat(backslashes));
+                    backslashes = 0;
+                }
+                quoted.push(ch);
+            }
+        }
+    }
+    if backslashes > 0 {
+        quoted.push_str(&"\\".repeat(backslashes * 2));
+    }
+    quoted.push('"');
+    quoted
+}
+
 // Produce a readable description for a Win32 error code.
 pub fn format_last_error(err: i32) -> String {
     unsafe {
