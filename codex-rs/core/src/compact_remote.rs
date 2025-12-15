@@ -29,8 +29,9 @@ pub(crate) async fn run_remote_compact_task(sess: Arc<Session>, turn_context: Ar
 
 async fn run_remote_compact_task_inner(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
     if let Err(err) = run_remote_compact_task_inner_impl(sess, turn_context).await {
-        let error_event = err.to_error_event(Some("Error running remote compact task".to_string()));
-        let event = EventMsg::Error(error_event);
+        let event = EventMsg::Error(
+            err.to_error_event(Some("Error running remote compact task".to_string())),
+        );
         sess.send_event(turn_context, event).await;
     }
 }
