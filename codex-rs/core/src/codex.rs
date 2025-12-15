@@ -249,7 +249,7 @@ impl Codex {
 
         let config = Arc::new(config);
         let mut remote_models_error: Option<EventMsg> = None;
-        let is_up_to_date = compute_is_up_to_date(&config.codex_home);
+        let is_up_to_date = compute_is_up_to_date(&config);
 
         if config.features.enabled(Feature::RemoteModels)
             && let Err(err) = models_manager.refresh_available_models(&config).await
@@ -2703,7 +2703,11 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
     })
 }
 
-fn compute_is_up_to_date(codex_home: &std::path::Path) -> bool {
+fn compute_is_up_to_date(config: &Config) -> bool {
+    if !config.check_for_update_on_startup {
+        return true;
+    }
+    let codex_home = config.codex_home.clone();
     let version_file = codex_home.join(crate::version::VERSION_FILENAME);
     crate::version::read_latest_version(&version_file)
         .and_then(|latest| crate::version::is_up_to_date(&latest, env!("CARGO_PKG_VERSION")))
