@@ -536,4 +536,75 @@ mod tests {
             "stale cache refresh should fetch /models once"
         );
     }
+
+    #[tokio::test]
+    async fn refresh_available_models_drops_removed_remote_models() {
+        let server = MockServer::start().await;
+        let initial_models = vec![remote_model("remote-old", "Remote Old", 1)];
+        let initial_mock = mount_models_once(
+            &server,
+            ModelsResponse {
+                models: initial_models,
+                etag: String::new(),
+            },
+        )
+        .await;
+
+        let codex_home = tempdir().expect("temp dir");
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load default test config");
+        config.features.enable(Feature::RemoteModels);
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let provider = provider_for(server.uri());
+        let manager = ModelsManager::with_provider(auth_manager, provider);
+        manager.cache_ttl = Duration::ZERO;
+
+        manager
+            .refresh_available_models(&config)
+            .await
+            .expect("initial refresh succeeds");
+
+        server.reset().await;
+        let refreshed_models = vec![remote_model("remote-new", "Remote New", 1)];
+        let refreshed_mock = mount_models_once(
+            &server,
+            ModelsResponse {
+                models: refreshed_models,
+                etag: String::new(),
+            },
+        )
+        .await;
+
+        manager
+            .refresh_available_models(&config)
+            .await
+            .expect("second refresh succeeds");
+
+        let available = manager
+            .try_list_models()
+            .expect("models should be available");
+        assert!(
+            available.iter().any(|preset| preset.model == "remote-new"),
+            "new remote model should be listed"
+        );
+        assert!(
+            !available.iter().any(|preset| preset.model == "remote-old"),
+            "removed remote model should not be listed"
+        );
+        assert_eq!(
+            initial_mock.requests().len(),
+            1,
+            "initial refresh should only hit /models once"
+        );
+        assert_eq!(
+            refreshed_mock.requests().len(),
+            1,
+            "second refresh should only hit /models once"
+        );
+    }
 }
