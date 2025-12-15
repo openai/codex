@@ -27,8 +27,10 @@ use std::task::Poll;
 
 use crossterm::event::Event;
 use tokio::sync::broadcast;
+use tokio::sync::watch;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::WatchStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use super::TuiEvent;
@@ -48,6 +50,7 @@ pub trait EventSource: Send + 'static {
 /// This intermediate layer enables dropping/recreating the underlying EventStream (pause/resume) without rebuilding consumers.
 pub struct EventBroker<S: EventSource = CrosstermEventSource> {
     state: Mutex<EventBrokerState<S>>,
+    resume_tx: watch::Sender<()>,
 }
 
 /// Tracks state of underlying [`EventSource`].
@@ -76,8 +79,10 @@ impl<S: EventSource + Default> EventBrokerState<S> {
 
 impl<S: EventSource + Default> EventBroker<S> {
     pub fn new() -> Self {
+        let (resume_tx, _resume_rx) = watch::channel(());
         Self {
             state: Mutex::new(EventBrokerState::Start),
+            resume_tx,
         }
     }
 
@@ -97,6 +102,11 @@ impl<S: EventSource + Default> EventBroker<S> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *state = EventBrokerState::Start;
+        let _ = self.resume_tx.send(());
+    }
+
+    pub fn subscribe_resume(&self) -> watch::Receiver<()> {
+        self.resume_tx.subscribe()
     }
 }
 
@@ -131,6 +141,7 @@ impl EventSource for CrosstermEventSource {
 pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSource> {
     broker: Arc<EventBroker<S>>,
     draw_stream: BroadcastStream<()>,
+    resume_stream: WatchStream<()>,
     terminal_focused: Arc<AtomicBool>,
     poll_draw_first: bool,
     #[cfg(unix)]
@@ -147,9 +158,11 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         #[cfg(unix)] suspend_context: crate::tui::job_control::SuspendContext,
         #[cfg(unix)] alt_screen_active: Arc<AtomicBool>,
     ) -> Self {
+        let resume_stream = WatchStream::from_changes(broker.subscribe_resume());
         Self {
             broker,
             draw_stream: BroadcastStream::new(draw_rx),
+            resume_stream,
             terminal_focused,
             poll_draw_first: false,
             #[cfg(unix)]
@@ -176,7 +189,15 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let events = match state.active_event_source_mut() {
                     Some(events) => events,
-                    None => return Poll::Pending,
+                    None => {
+                        drop(state);
+                        // Poll resume_stream so resume_events wakes a stream paused here
+                        match Pin::new(&mut self.resume_stream).poll_next(cx) {
+                            Poll::Ready(Some(())) => continue,
+                            Poll::Ready(None) => return Poll::Ready(None),
+                            Poll::Pending => return Poll::Pending,
+                        }
+                    }
                 };
                 match Pin::new(events).poll_next(cx) {
                     Poll::Ready(Some(Ok(event))) => Some(event),
@@ -184,7 +205,15 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                         *state = EventBrokerState::Start;
                         return Poll::Ready(None);
                     }
-                    Poll::Pending => return Poll::Pending,
+                    Poll::Pending => {
+                        drop(state);
+                        // Poll resume_stream so resume_events can wake us even while waiting on stdin
+                        match Pin::new(&mut self.resume_stream).poll_next(cx) {
+                            Poll::Ready(Some(())) => continue,
+                            Poll::Ready(None) => return Poll::Ready(None),
+                            Poll::Pending => return Poll::Pending,
+                        }
+                    }
                 }
             };
 
@@ -273,8 +302,10 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::task::Context;
     use std::task::Poll;
+    use std::time::Duration;
     use tokio::sync::broadcast;
     use tokio::sync::mpsc;
+    use tokio::time::timeout;
     use tokio_stream::StreamExt;
 
     /// Simple fake event source for tests; feed events via the handle.
@@ -436,5 +467,52 @@ mod tests {
 
         let next = stream.next().await;
         assert!(next.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resume_wakes_paused_stream() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker.clone(), draw_rx, terminal_focused);
+
+        broker.pause_events();
+
+        let task = tokio::spawn(async move { stream.next().await });
+        tokio::task::yield_now().await;
+
+        broker.resume_events();
+        let expected_key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
+        handle.send(Ok(Event::Key(expected_key)));
+
+        let event = timeout(Duration::from_millis(100), task)
+            .await
+            .expect("timed out waiting for resumed event")
+            .expect("join failed");
+        match event {
+            Some(TuiEvent::Key(key)) => assert_eq!(key, expected_key),
+            other => panic!("expected key event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resume_wakes_pending_stream() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker.clone(), draw_rx, terminal_focused);
+
+        let task = tokio::spawn(async move { stream.next().await });
+        tokio::task::yield_now().await;
+
+        broker.pause_events();
+        broker.resume_events();
+        let expected_key = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE);
+        handle.send(Ok(Event::Key(expected_key)));
+
+        let event = timeout(Duration::from_millis(100), task)
+            .await
+            .expect("timed out waiting for resumed event")
+            .expect("join failed");
+        match event {
+            Some(TuiEvent::Key(key)) => assert_eq!(key, expected_key),
+            other => panic!("expected key event, got {other:?}"),
+        }
     }
 }
