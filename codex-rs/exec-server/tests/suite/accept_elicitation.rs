@@ -104,6 +104,7 @@ prefix_rule(
             name: Cow::Borrowed("shell"),
             arguments: Some(object(json!(
                 {
+                    "login": false,
                     "command": "git init .",
                     "workdir": project_root_path.to_string_lossy(),
                 }

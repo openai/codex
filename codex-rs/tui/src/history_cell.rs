@@ -1664,8 +1664,8 @@ mod tests {
         assert_eq!(
             rendered,
             vec![
-                "✔ You approved codex".to_string(),
-                "  to run echo something".to_string(),
+                "✔ You approved codex to".to_string(),
+                "  run echo something".to_string(),
                 "  really long to ensure".to_string(),
                 "  wrapping happens this".to_string(),
                 "  time".to_string(),

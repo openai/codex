@@ -57,6 +57,7 @@ mod markdown;
 mod markdown_render;
 mod markdown_stream;
 mod model_migration;
+mod notifications;
 pub mod onboarding;
 mod oss_selection;
 mod pager_overlay;
@@ -268,6 +269,7 @@ pub async fn run_main(
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_target(false)
+        .with_ansi(false)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_filter(env_filter());
 
