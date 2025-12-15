@@ -10,6 +10,7 @@ use tempfile::TempDir;
 fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
     let mut cmd = assert_cmd::Command::cargo_bin("codex")?;
     cmd.env("CODEX_HOME", codex_home);
+    cmd.current_dir(codex_home);
     Ok(cmd)
 }
 
@@ -22,9 +23,9 @@ async fn add_and_remove_server_updates_global_config() -> Result<()> {
         .args(["mcp", "add", "docs", "--", "echo", "hello"])
         .assert()
         .success()
-        .stdout(contains("Added global MCP server 'docs'."));
+        .stdout(contains("Added MCP server 'docs'"));
 
-    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    let servers = load_global_mcp_servers(codex_home.path(), None).await?;
     assert_eq!(servers.len(), 1);
     let docs = servers.get("docs").expect("server should exist");
     match &docs.transport {
@@ -50,9 +51,9 @@ async fn add_and_remove_server_updates_global_config() -> Result<()> {
         .args(["mcp", "remove", "docs"])
         .assert()
         .success()
-        .stdout(contains("Removed global MCP server 'docs'."));
+        .stdout(contains("Removed MCP server 'docs'."));
 
-    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    let servers = load_global_mcp_servers(codex_home.path(), None).await?;
     assert!(servers.is_empty());
 
     let mut remove_again_cmd = codex_command(codex_home.path())?;
@@ -62,7 +63,7 @@ async fn add_and_remove_server_updates_global_config() -> Result<()> {
         .success()
         .stdout(contains("No MCP server named 'docs' found."));
 
-    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    let servers = load_global_mcp_servers(codex_home.path(), None).await?;
     assert!(servers.is_empty());
 
     Ok(())
@@ -89,7 +90,7 @@ async fn add_with_env_preserves_key_order_and_values() -> Result<()> {
         .assert()
         .success();
 
-    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    let servers = load_global_mcp_servers(codex_home.path(), None).await?;
     let envy = servers.get("envy").expect("server should exist");
     let env = match &envy.transport {
         McpServerTransportConfig::Stdio { env: Some(env), .. } => env,
@@ -114,7 +115,7 @@ async fn add_streamable_http_without_manual_token() -> Result<()> {
         .assert()
         .success();
 
-    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    let servers = load_global_mcp_servers(codex_home.path(), None).await?;
     let github = servers.get("github").expect("github server should exist");
     match &github.transport {
         McpServerTransportConfig::StreamableHttp {
@@ -156,7 +157,7 @@ async fn add_streamable_http_with_custom_env_var() -> Result<()> {
         .assert()
         .success();
 
-    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    let servers = load_global_mcp_servers(codex_home.path(), None).await?;
     let issues = servers.get("issues").expect("issues server should exist");
     match &issues.transport {
         McpServerTransportConfig::StreamableHttp {
@@ -194,7 +195,7 @@ async fn add_streamable_http_rejects_removed_flag() -> Result<()> {
         .failure()
         .stderr(contains("--with-bearer-token"));
 
-    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    let servers = load_global_mcp_servers(codex_home.path(), None).await?;
     assert!(servers.is_empty());
 
     Ok(())
@@ -221,7 +222,7 @@ async fn add_cant_add_command_and_url() -> Result<()> {
         .failure()
         .stderr(contains("unexpected argument '--command' found"));
 
-    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    let servers = load_global_mcp_servers(codex_home.path(), None).await?;
     assert!(servers.is_empty());
 
     Ok(())

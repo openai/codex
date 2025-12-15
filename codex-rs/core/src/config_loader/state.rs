@@ -80,6 +80,11 @@ impl ConfigLayerStack {
     pub fn effective_config(&self) -> TomlValue {
         let mut merged = self.user.config.clone();
         if let Some(repo_user) = &self.repo_user {
+            if repo_user.config.get("mcp_servers").is_some()
+                && let Some(table) = merged.as_table_mut()
+            {
+                table.remove("mcp_servers");
+            }
             merge_toml_values(&mut merged, &repo_user.config);
         }
         merge_toml_values(&mut merged, &self.session_flags.config);

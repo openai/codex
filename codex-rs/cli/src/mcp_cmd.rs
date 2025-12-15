@@ -15,6 +15,7 @@ use codex_core::config::load_global_mcp_servers;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::features::Feature;
+use codex_core::git_info::resolve_root_git_project_for_trust;
 use codex_core::mcp::auth::compute_auth_statuses;
 use codex_core::protocol::McpAuthStatus;
 use codex_rmcp_client::delete_oauth_tokens;
@@ -212,9 +213,25 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     validate_server_name(&name)?;
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
-    let mut servers = load_global_mcp_servers(&codex_home)
+    let cwd = std::env::current_dir().context("failed to resolve current directory")?;
+    let target_config_dir = resolve_root_git_project_for_trust(&cwd)
+        .map(|repo_root| repo_root.join(".codex"))
+        .unwrap_or_else(|| codex_home.clone());
+    std::fs::create_dir_all(&target_config_dir).with_context(|| {
+        format!(
+            "failed to create config directory at {}",
+            target_config_dir.display()
+        )
+    })?;
+
+    let mut servers = load_global_mcp_servers(&target_config_dir, None)
         .await
-        .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
+        .with_context(|| {
+            format!(
+                "failed to load MCP servers from {}",
+                target_config_dir.display()
+            )
+        })?;
 
     let transport = match transport_args {
         AddMcpTransportArgs {
@@ -266,13 +283,21 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     servers.insert(name.clone(), new_entry);
 
-    ConfigEditsBuilder::new(&codex_home)
+    ConfigEditsBuilder::new(&target_config_dir)
         .replace_mcp_servers(&servers)
         .apply()
         .await
-        .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
+        .with_context(|| {
+            format!(
+                "failed to write MCP servers to {}",
+                target_config_dir.display()
+            )
+        })?;
 
-    println!("Added global MCP server '{name}'.");
+    println!(
+        "Added MCP server '{name}' to {}.",
+        target_config_dir.join("config.toml").display()
+    );
 
     if let McpServerTransportConfig::StreamableHttp {
         url,
@@ -322,22 +347,37 @@ async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveAr
     validate_server_name(&name)?;
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
-    let mut servers = load_global_mcp_servers(&codex_home)
+    let cwd = std::env::current_dir().context("failed to resolve current directory")?;
+    let target_config_dir = resolve_root_git_project_for_trust(&cwd)
+        .map(|repo_root| repo_root.join(".codex"))
+        .unwrap_or_else(|| codex_home.clone());
+
+    let mut servers = load_global_mcp_servers(&target_config_dir, None)
         .await
-        .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
+        .with_context(|| {
+            format!(
+                "failed to load MCP servers from {}",
+                target_config_dir.display()
+            )
+        })?;
 
     let removed = servers.remove(&name).is_some();
 
     if removed {
-        ConfigEditsBuilder::new(&codex_home)
+        ConfigEditsBuilder::new(&target_config_dir)
             .replace_mcp_servers(&servers)
             .apply()
             .await
-            .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to write MCP servers to {}",
+                    target_config_dir.display()
+                )
+            })?;
     }
 
     if removed {
-        println!("Removed global MCP server '{name}'.");
+        println!("Removed MCP server '{name}'.");
     } else {
         println!("No MCP server named '{name}' found.");
     }
