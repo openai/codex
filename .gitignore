@@ -41,6 +41,7 @@ AGENTS.override.md
 .jest/
 node-compile-cache/
 *.tsbuildinfo
+node-compile-cache/
 
 # logs
 *.log
