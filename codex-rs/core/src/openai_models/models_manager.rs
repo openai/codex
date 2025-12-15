@@ -36,7 +36,7 @@ const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
 #[derive(Debug)]
 pub struct ModelsManager {
     // todo(aibrahim) merge available_models and model family creation into one struct
-    available_models: RwLock<Vec<ModelPreset>>,
+    local_models: Vec<ModelPreset>,
     remote_models: RwLock<Vec<ModelInfo>>,
     auth_manager: Arc<AuthManager>,
     etag: RwLock<Option<String>>,
@@ -50,7 +50,7 @@ impl ModelsManager {
     pub fn new(auth_manager: Arc<AuthManager>) -> Self {
         let codex_home = auth_manager.codex_home().to_path_buf();
         Self {
-            available_models: RwLock::new(builtin_model_presets(auth_manager.get_auth_mode())),
+            local_models: builtin_model_presets(auth_manager.get_auth_mode()),
             remote_models: RwLock::new(Vec::new()),
             auth_manager,
             etag: RwLock::new(None),
@@ -65,7 +65,7 @@ impl ModelsManager {
     pub fn with_provider(auth_manager: Arc<AuthManager>, provider: ModelProviderInfo) -> Self {
         let codex_home = auth_manager.codex_home().to_path_buf();
         Self {
-            available_models: RwLock::new(builtin_model_presets(auth_manager.get_auth_mode())),
+            local_models: builtin_model_presets(auth_manager.get_auth_mode()),
             remote_models: RwLock::new(Vec::new()),
             auth_manager,
             etag: RwLock::new(None),
@@ -108,13 +108,15 @@ impl ModelsManager {
         if let Err(err) = self.refresh_available_models(config).await {
             error!("failed to refresh available models: {err}");
         }
-        let models = self.available_models.read().await.clone();
-        Self::filter_visible_models(models)
+        let remote_models = self.remote_models.read().await.clone();
+        let models_presets = self.build_available_models(remote_models);
+        Self::filter_visible_models(models_presets)
     }
 
     pub fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
-        let models = self.available_models.try_read()?.clone();
-        Ok(Self::filter_visible_models(models))
+        let remote_models = self.remote_models.try_read()?.clone();
+        let models_presets = self.build_available_models(remote_models);
+        Ok(Self::filter_visible_models(models_presets))
     }
 
     fn find_family_for_model(slug: &str) -> ModelFamily {
@@ -137,11 +139,10 @@ impl ModelsManager {
         }
         // if codex-auto-balanced exists & signed in with chatgpt mode, return it, otherwise return the default model
         let auth_mode = self.auth_manager.get_auth_mode();
+        let remote_models = self.remote_models.read().await.clone();
         if auth_mode == Some(AuthMode::ChatGPT)
             && self
-                .available_models
-                .read()
-                .await
+                .build_available_models(remote_models)
                 .iter()
                 .any(|m| m.model == CODEX_AUTO_BALANCED_MODEL)
         {
@@ -164,7 +165,6 @@ impl ModelsManager {
     /// Replace the cached remote models and rebuild the derived presets list.
     async fn apply_remote_models(&self, models: Vec<ModelInfo>) {
         *self.remote_models.write().await = models;
-        self.build_available_models().await;
     }
 
     /// Attempt to satisfy the refresh from the cache when it matches the provider and TTL.
@@ -205,12 +205,11 @@ impl ModelsManager {
     }
 
     /// Merge remote model metadata into picker-ready presets, preserving existing entries.
-    async fn build_available_models(&self) {
-        let mut remote_models = self.remote_models.read().await.clone();
+    fn build_available_models(&self, mut remote_models: Vec<ModelInfo>) -> Vec<ModelPreset> {
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
         let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
-        let existing_presets = self.available_models.read().await.clone();
+        let existing_presets = self.local_models.clone();
         let mut merged_presets = Self::merge_presets(remote_presets, existing_presets);
 
         let has_default = merged_presets.iter().any(|preset| preset.is_default);
@@ -220,8 +219,7 @@ impl ModelsManager {
             default.is_default = true;
         }
 
-        let mut available_models_guard = self.available_models.write().await;
-        *available_models_guard = merged_presets;
+        merged_presets
     }
 
     fn filter_visible_models(models: Vec<ModelPreset>) -> Vec<ModelPreset> {
