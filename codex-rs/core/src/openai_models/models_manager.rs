@@ -109,14 +109,12 @@ impl ModelsManager {
             error!("failed to refresh available models: {err}");
         }
         let remote_models = self.remote_models.read().await.clone();
-        let models_presets = self.build_available_models(remote_models);
-        Self::filter_visible_models(models_presets)
+        self.build_available_models(remote_models)
     }
 
     pub fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
         let remote_models = self.remote_models.try_read()?.clone();
-        let models_presets = self.build_available_models(remote_models);
-        Ok(Self::filter_visible_models(models_presets))
+        Ok(self.build_available_models(remote_models))
     }
 
     fn find_family_for_model(slug: &str) -> ModelFamily {
@@ -211,6 +209,7 @@ impl ModelsManager {
         let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
         let existing_presets = self.local_models.clone();
         let mut merged_presets = Self::merge_presets(remote_presets, existing_presets);
+        merged_presets = Self::filter_visible_models(merged_presets);
 
         let has_default = merged_presets.iter().any(|preset| preset.is_default);
         if let Some(default) = merged_presets.first_mut()
