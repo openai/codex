@@ -39,6 +39,7 @@ AGENTS.override.md
 .eslintcache
 .nyc_output/
 .jest/
+node-compile-cache/
 *.tsbuildinfo
 
 # logs
