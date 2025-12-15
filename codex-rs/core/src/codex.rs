@@ -2292,7 +2292,7 @@ pub(crate) async fn run_task(
     last_agent_message
 }
 
-#[instrument(
+#[instrument(level = "trace",
     skip_all,
     fields(
         turn_id = %turn_context.sub_id,
@@ -2432,7 +2432,7 @@ async fn drain_in_flight(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[instrument(
+#[instrument(level = "trace",
     skip_all,
     fields(
         turn_id = %turn_context.sub_id,
