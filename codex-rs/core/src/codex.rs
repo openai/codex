@@ -1638,6 +1638,7 @@ mod handlers {
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::TurnContext;
+    use crate::codex::run_auto_compact;
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
