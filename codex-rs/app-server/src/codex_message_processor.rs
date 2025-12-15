@@ -1270,7 +1270,7 @@ impl CodexMessageProcessor {
         let mut cli_overrides = cli_overrides.unwrap_or_default();
         if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
             cli_overrides.insert(
-                "features.enable_experimental_windows_sandbox".to_string(),
+                "features.experimental_windows_sandbox".to_string(),
                 serde_json::json!(true),
             );
         }
@@ -2187,7 +2187,7 @@ impl CodexMessageProcessor {
                 let mut cli_overrides = cli_overrides.unwrap_or_default();
                 if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
                     cli_overrides.insert(
-                        "features.enable_experimental_windows_sandbox".to_string(),
+                        "features.experimental_windows_sandbox".to_string(),
                         serde_json::json!(true),
                     );
                 }
