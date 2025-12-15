@@ -46,7 +46,7 @@ Supported features:
 | `apply_patch_freeform`                |  false  | Beta         | Include the freeform `apply_patch` tool               |
 | `view_image_tool`                     |  true   | Stable       | Include the `view_image` tool                         |
 | `web_search_request`                  |  false  | Stable       | Allow the model to issue web searches                 |
-| `ghost_commit`                        |  false  | Experimental | Create a ghost commit each turn                       |
+| `ghost_commit`                        |  true   | Experimental | Create a ghost commit each turn                       |
 | `enable_experimental_windows_sandbox` |  false  | Experimental | Use the Windows restricted-token sandbox              |
 | `tui2`                                |  false  | Experimental | Use the experimental TUI v2 (viewport) implementation |
 | `skills`                              |  false  | Experimental | Enable discovery and injection of skills              |

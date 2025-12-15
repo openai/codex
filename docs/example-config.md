@@ -218,7 +218,7 @@ rmcp_client = false
 apply_patch_freeform = false
 view_image_tool = true
 web_search_request = false
-ghost_commit = false
+ghost_commit = true
 enable_experimental_windows_sandbox = false
 skills = false
 
