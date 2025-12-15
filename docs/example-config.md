@@ -217,6 +217,7 @@ unified_exec = false
 rmcp_client = false
 apply_patch_freeform = false
 view_image_tool = true
+plan_tool = true
 web_search_request = false
 ghost_commit = false
 enable_experimental_windows_sandbox = false

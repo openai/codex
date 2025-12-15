@@ -45,6 +45,7 @@ Supported features:
 | `rmcp_client`                         |  false  | Experimental | Enable oauth support for streamable HTTP MCP servers  |
 | `apply_patch_freeform`                |  false  | Beta         | Include the freeform `apply_patch` tool               |
 | `view_image_tool`                     |  true   | Stable       | Include the `view_image` tool                         |
+| `plan_tool`                           |  true   | Stable       | Include the `update_plan` tool                        |
 | `web_search_request`                  |  false  | Stable       | Allow the model to issue web searches                 |
 | `ghost_commit`                        |  false  | Experimental | Create a ghost commit each turn                       |
 | `enable_experimental_windows_sandbox` |  false  | Experimental | Use the Windows restricted-token sandbox              |

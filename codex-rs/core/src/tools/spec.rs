@@ -22,6 +22,7 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
+    pub include_plan_tool: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -39,6 +40,7 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
+        let include_plan_tool = features.enabled(Feature::PlanTool);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -65,6 +67,7 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_request: include_web_search_request,
             include_view_image_tool,
+            include_plan_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
@@ -1037,8 +1040,10 @@ pub(crate) fn build_specs(
     builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
     builder.register_handler("read_mcp_resource", mcp_resource_handler);
 
-    builder.push_spec(PLAN_TOOL.clone());
-    builder.register_handler("update_plan", plan_handler);
+    if config.include_plan_tool {
+        builder.push_spec(PLAN_TOOL.clone());
+        builder.register_handler("update_plan", plan_handler);
+    }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
@@ -1408,6 +1413,23 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_gpt_5_defaults_without_plan_tool() {
+        let mut features = Features::with_defaults();
+        features.disable(Feature::PlanTool);
+        assert_model_tools(
+            "gpt-5",
+            &features,
+            &[
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
                 "view_image",
             ],
         );
