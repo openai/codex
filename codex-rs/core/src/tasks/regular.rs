@@ -6,8 +6,8 @@ use crate::state::TaskKind;
 use async_trait::async_trait;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
-use tracing::{trace_span, Instrument};
-use tracing::info_span;
+use tracing::Instrument;
+use tracing::trace_span;
 
 use super::SessionTask;
 use super::SessionTaskContext;
