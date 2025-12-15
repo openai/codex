@@ -13,6 +13,7 @@ use crate::graphiti::client::SearchQuery;
 use crate::graphiti::directives::GraphitiMemoryDirective;
 use crate::graphiti::directives::looks_like_secret_for_auto_promotion;
 use crate::graphiti::directives::parse_memory_directives;
+use crate::graphiti::group_ids;
 use chrono::Utc;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
@@ -37,16 +38,23 @@ use tracing::info;
 use tracing::warn;
 
 #[derive(Debug, Clone)]
+pub struct GraphitiGroupIdSet {
+    pub canonical: String,
+    pub legacy: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct GraphitiGroupIds {
-    pub session: String,
-    pub workspace: String,
-    pub global: Option<String>,
+    pub session: GraphitiGroupIdSet,
+    pub workspace: GraphitiGroupIdSet,
+    pub global: Option<GraphitiGroupIdSet>,
 }
 
 pub struct GraphitiMemoryService {
     client: GraphitiClient,
     config: Graphiti,
     group_ids: GraphitiGroupIds,
+    user_scope_key: Option<String>,
     source_description: String,
     workspace_basename: String,
     ingestion_queue: GraphitiIngestionQueue,
@@ -91,9 +99,14 @@ impl GraphitiMemoryService {
             }
         };
 
-        let session_key = conversation_id.to_string();
+        let legacy_session_key = conversation_id.to_string();
+        let session_key = format!("codex_session:{legacy_session_key}");
         let workspace_root = get_git_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
-        let workspace_key = workspace_root.to_string_lossy().to_string();
+        let legacy_workspace_key = workspace_root.to_string_lossy().to_string();
+        let workspace_key = group_ids::git_origin_url(&workspace_root, Duration::from_millis(500))
+            .await
+            .and_then(|url| group_ids::github_repo_key_from_remote_url(&url))
+            .unwrap_or_else(|| legacy_workspace_key.clone());
         let workspace_basename = workspace_root
             .file_name()
             .and_then(|name| name.to_str())
@@ -101,14 +114,43 @@ impl GraphitiMemoryService {
             .to_string();
         let group_id_strategy = config.graphiti.group_id_strategy.clone();
 
+        let user_scope_key = if let Some(user_scope_key) = config.graphiti.user_scope_key.clone() {
+            Some(user_scope_key)
+        } else {
+            group_ids::derive_user_scope_key(Duration::from_millis(500)).await
+        };
+
+        let legacy_global_group_id =
+            derive_legacy_global_group_id(&config.graphiti, &group_id_strategy);
+
         let group_ids = GraphitiGroupIds {
-            session: make_group_id("codex-session", &session_key, &group_id_strategy),
-            workspace: make_group_id("codex-workspace", &workspace_key, &group_id_strategy),
-            global: config
-                .graphiti
-                .global
-                .enabled
-                .then(|| derive_global_group_id(&config.graphiti, &group_id_strategy)),
+            session: GraphitiGroupIdSet {
+                canonical: group_ids::make_canonical_group_id("session", &session_key),
+                legacy: Some(make_legacy_group_id(
+                    "codex-session",
+                    &legacy_session_key,
+                    &group_id_strategy,
+                )),
+            },
+            workspace: GraphitiGroupIdSet {
+                canonical: group_ids::make_canonical_group_id("workspace", &workspace_key),
+                legacy: Some(make_legacy_group_id(
+                    "codex-workspace",
+                    &legacy_workspace_key,
+                    &group_id_strategy,
+                )),
+            },
+            global: config.graphiti.global.enabled.then(|| {
+                let canonical = user_scope_key
+                    .as_deref()
+                    .map(|key| group_ids::make_canonical_group_id("user", key))
+                    .unwrap_or_else(|| legacy_global_group_id.clone());
+                GraphitiGroupIdSet {
+                    canonical: canonical.clone(),
+                    legacy: (canonical != legacy_global_group_id)
+                        .then_some(legacy_global_group_id.clone()),
+                }
+            }),
         };
 
         let source_description = if config.graphiti.include_git_metadata {
@@ -124,6 +166,7 @@ impl GraphitiMemoryService {
             client,
             config: config.graphiti.clone(),
             group_ids,
+            user_scope_key,
             source_description,
             workspace_basename,
             ingestion_queue,
@@ -142,9 +185,13 @@ impl GraphitiMemoryService {
 
     fn group_id_for_scope(&self, scope: GraphitiScope) -> Option<String> {
         match scope {
-            GraphitiScope::Session => Some(self.group_ids.session.clone()),
-            GraphitiScope::Workspace => Some(self.group_ids.workspace.clone()),
-            GraphitiScope::Global => self.group_ids.global.clone(),
+            GraphitiScope::Session => Some(self.group_ids.session.canonical.clone()),
+            GraphitiScope::Workspace => Some(self.group_ids.workspace.canonical.clone()),
+            GraphitiScope::Global => self
+                .group_ids
+                .global
+                .as_ref()
+                .map(|set| set.canonical.clone()),
         }
     }
 
@@ -249,13 +296,40 @@ impl GraphitiMemoryService {
     fn recall_group_ids(&self) -> Vec<String> {
         let mut out = Vec::new();
         for scope in &self.config.recall.scopes {
-            if let Some(group_id) = self.group_id_for_scope(*scope) {
-                out.push(group_id);
-            }
+            out.extend(self.recall_group_ids_for_scope(*scope));
         }
         out.sort();
         out.dedup();
         out
+    }
+
+    fn recall_group_ids_for_scope(&self, scope: GraphitiScope) -> Vec<String> {
+        match scope {
+            GraphitiScope::Session => {
+                let mut out = vec![self.group_ids.session.canonical.clone()];
+                if let Some(legacy) = &self.group_ids.session.legacy {
+                    out.push(legacy.clone());
+                }
+                out
+            }
+            GraphitiScope::Workspace => {
+                let mut out = vec![self.group_ids.workspace.canonical.clone()];
+                if let Some(legacy) = &self.group_ids.workspace.legacy {
+                    out.push(legacy.clone());
+                }
+                out
+            }
+            GraphitiScope::Global => {
+                let Some(set) = &self.group_ids.global else {
+                    return Vec::new();
+                };
+                let mut out = vec![set.canonical.clone()];
+                if let Some(legacy) = &set.legacy {
+                    out.push(legacy.clone());
+                }
+                out
+            }
+        }
     }
 
     fn recall_group_ids_for_query(&self, query: &str) -> Vec<String> {
@@ -272,15 +346,11 @@ impl GraphitiMemoryService {
             if *scope == GraphitiScope::Global {
                 continue;
             }
-            if let Some(group_id) = self.group_id_for_scope(*scope) {
-                out.push(group_id);
-            }
+            out.extend(self.recall_group_ids_for_scope(*scope));
         }
 
-        if should_include_global_scope_for_auto_recall(query)
-            && let Some(group_id) = self.group_ids.global.clone()
-        {
-            out.push(group_id);
+        if should_include_global_scope_for_auto_recall(query) {
+            out.extend(self.recall_group_ids_for_scope(GraphitiScope::Global));
         }
 
         out.sort();
@@ -301,7 +371,7 @@ impl GraphitiMemoryService {
 
         let now = Utc::now();
         let scope_label = graphiti_scope_label(scope);
-        let owner_id = self.config.user_scope_key.as_deref().map(stable_owner_id);
+        let owner_id = self.user_scope_key.as_deref().map(stable_owner_id);
 
         let content = format_ownership_context_episode(
             scope_label,
@@ -363,16 +433,16 @@ impl GraphitiMemoryService {
 
         let mut scope = directive.scope;
         let group_id = match directive.scope {
-            GraphitiScope::Workspace => self.group_ids.workspace.clone(),
-            GraphitiScope::Global => match self.group_ids.global.clone() {
-                Some(id) => id,
+            GraphitiScope::Workspace => self.group_ids.workspace.canonical.clone(),
+            GraphitiScope::Global => match self.group_ids.global.as_ref() {
+                Some(id) => id.canonical.clone(),
                 None => {
                     debug!(
                         kind = %directive.kind.as_str(),
                         "Graphiti auto-promotion requested Global scope, but Global is disabled; falling back to Workspace"
                     );
                     scope = GraphitiScope::Workspace;
-                    self.group_ids.workspace.clone()
+                    self.group_ids.workspace.canonical.clone()
                 }
             },
             GraphitiScope::Session => return,
@@ -631,15 +701,15 @@ fn truncate_with_marker(text: &str, max_chars: usize) -> String {
     format!("{head}{marker}")
 }
 
-fn derive_global_group_id(config: &Graphiti, strategy: &GraphitiGroupIdStrategy) -> String {
+fn derive_legacy_global_group_id(config: &Graphiti, strategy: &GraphitiGroupIdStrategy) -> String {
     if let Some(user_scope_key) = config.user_scope_key.as_deref() {
-        return make_group_id("codex-global", user_scope_key, strategy);
+        return make_legacy_group_id("codex-global", user_scope_key, strategy);
     }
 
     config.global.group_id.clone()
 }
 
-fn make_group_id(prefix: &str, raw_key: &str, strategy: &GraphitiGroupIdStrategy) -> String {
+fn make_legacy_group_id(prefix: &str, raw_key: &str, strategy: &GraphitiGroupIdStrategy) -> String {
     match strategy {
         GraphitiGroupIdStrategy::Hashed => {
             let mut hasher = Sha256::new();
@@ -1044,12 +1114,12 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn derive_global_group_id_uses_user_scope_key_when_configured() {
+    fn derive_legacy_global_group_id_uses_user_scope_key_when_configured() {
         let graphiti = Graphiti {
             user_scope_key: Some("user-key-1".to_string()),
             ..Default::default()
         };
-        let id = derive_global_group_id(&graphiti, &GraphitiGroupIdStrategy::Hashed);
+        let id = derive_legacy_global_group_id(&graphiti, &GraphitiGroupIdStrategy::Hashed);
         assert!(id.starts_with("codex-global-"));
         assert_eq!(id.len(), "codex-global-".len() + 16);
     }
@@ -1067,13 +1137,13 @@ mod tests {
     }
 
     #[test]
-    fn group_id_hashed_is_stable_and_prefixed() {
-        let id1 = make_group_id(
+    fn legacy_group_id_hashed_is_stable_and_prefixed() {
+        let id1 = make_legacy_group_id(
             "codex-workspace",
             "/tmp/some path/with spaces",
             &GraphitiGroupIdStrategy::Hashed,
         );
-        let id2 = make_group_id(
+        let id2 = make_legacy_group_id(
             "codex-workspace",
             "/tmp/some path/with spaces",
             &GraphitiGroupIdStrategy::Hashed,
@@ -1084,9 +1154,9 @@ mod tests {
     }
 
     #[test]
-    fn group_id_raw_is_sanitized_and_capped() {
+    fn legacy_group_id_raw_is_sanitized_and_capped() {
         let raw = "this has spaces and /slashes/ and 😀";
-        let id = make_group_id("codex-session", raw, &GraphitiGroupIdStrategy::Raw);
+        let id = make_legacy_group_id("codex-session", raw, &GraphitiGroupIdStrategy::Raw);
         assert!(id.starts_with("codex-session-"));
         assert!(
             id.chars()

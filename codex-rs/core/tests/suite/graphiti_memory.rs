@@ -101,9 +101,11 @@ async fn injects_graphiti_memory_and_ingests_turn() -> Result<()> {
         .filter_map(|v| v.as_str())
         .collect::<Vec<_>>();
 
-    assert_eq!(group_ids.len(), 2);
+    assert_eq!(group_ids.len(), 4);
     assert!(
-        !group_ids.iter().any(|id| id.starts_with("codex-global-")),
+        !group_ids
+            .iter()
+            .any(|id| id.starts_with("graphiti_user_") || id.starts_with("codex-global-")),
         "expected auto recall to exclude global for this query; got group_ids={group_ids:?}"
     );
 
@@ -139,13 +141,15 @@ async fn injects_graphiti_memory_and_ingests_turn() -> Result<()> {
 
     group_ids.sort();
     assert!(
-        group_ids.iter().any(|id| id.starts_with("codex-session-")),
+        group_ids
+            .iter()
+            .any(|id| id.starts_with("graphiti_session_")),
         "expected a session-scoped group id; got: {group_ids:?}"
     );
     assert!(
         group_ids
             .iter()
-            .any(|id| id.starts_with("codex-workspace-")),
+            .any(|id| id.starts_with("graphiti_workspace_")),
         "expected a workspace-scoped group id; got: {group_ids:?}"
     );
 
@@ -221,7 +225,7 @@ async fn auto_promotes_memory_directives_to_global() -> Result<()> {
         let group_id = body["group_id"]
             .as_str()
             .expect("group_id should be string");
-        if group_id.starts_with("codex-global-") {
+        if group_id.starts_with("graphiti_user_") {
             saw_global = true;
             if let Some(messages) = body["messages"].as_array() {
                 saw_episode = messages.iter().any(|m| {

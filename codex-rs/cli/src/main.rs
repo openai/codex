@@ -578,16 +578,17 @@ async fn run_graphiti_cli(cli: GraphitiCli, config_profile: Option<String>) -> a
             };
 
             let (group_id, scope_label) = match args.scope {
-                GraphitiPromotionScope::Workspace => {
-                    (derive_workspace_group_id(&config), "workspace".to_string())
-                }
+                GraphitiPromotionScope::Workspace => (
+                    derive_workspace_group_id(&config).await,
+                    "workspace".to_string(),
+                ),
                 GraphitiPromotionScope::Global => {
                     if !config.graphiti.global.enabled {
                         anyhow::bail!(
                             "Global scope is disabled (set [graphiti.global].enabled = true)"
                         );
                     }
-                    (derive_global_group_id(&config), "global".to_string())
+                    (derive_global_group_id(&config).await, "global".to_string())
                 }
             };
 
@@ -785,16 +786,24 @@ async fn print_graphiti_status(config: &Config, healthcheck: bool) -> anyhow::Re
             "graphiti.global.group_id: {}",
             config.graphiti.global.group_id
         );
+        let legacy_global_group_id = derive_legacy_global_group_id(config);
+        let user_scope_key = derive_effective_user_scope_key(config).await;
+        let global_group_id = user_scope_key
+            .as_deref()
+            .map(|key| codex_core::graphiti::group_ids::make_canonical_group_id("user", key))
+            .unwrap_or_else(|| legacy_global_group_id.clone());
         println!(
-            "derived.global_group_id: {}",
-            derive_global_group_id(config)
+            "derived.user_scope_key: {}",
+            user_scope_key.as_deref().unwrap_or("<unset>")
         );
+        println!("derived.global_group_id: {global_group_id}");
+        println!("legacy.global_group_id: {legacy_global_group_id}");
     }
 
-    println!(
-        "derived.workspace_group_id: {}",
-        derive_workspace_group_id(config)
-    );
+    let workspace_group_id = derive_workspace_group_id(config).await;
+    let legacy_workspace_group_id = derive_legacy_workspace_group_id(config);
+    println!("derived.workspace_group_id: {workspace_group_id}");
+    println!("legacy.workspace_group_id: {legacy_workspace_group_id}");
 
     println!(
         "graphiti.include_system_messages: {}",
@@ -826,7 +835,22 @@ async fn print_graphiti_status(config: &Config, healthcheck: bool) -> anyhow::Re
     Ok(())
 }
 
-fn derive_workspace_group_id(config: &Config) -> String {
+async fn derive_workspace_group_id(config: &Config) -> String {
+    let workspace_root = get_git_repo_root(&config.cwd).unwrap_or_else(|| config.cwd.clone());
+    let legacy_workspace_key = workspace_root.to_string_lossy().to_string();
+
+    let workspace_key = codex_core::graphiti::group_ids::git_origin_url(
+        &workspace_root,
+        std::time::Duration::from_millis(500),
+    )
+    .await
+    .and_then(|url| codex_core::graphiti::group_ids::github_repo_key_from_remote_url(&url))
+    .unwrap_or_else(|| legacy_workspace_key.clone());
+
+    codex_core::graphiti::group_ids::make_canonical_group_id("workspace", &workspace_key)
+}
+
+fn derive_legacy_workspace_group_id(config: &Config) -> String {
     let workspace_key = get_git_repo_root(&config.cwd)
         .unwrap_or_else(|| config.cwd.clone())
         .to_string_lossy()
@@ -838,7 +862,16 @@ fn derive_workspace_group_id(config: &Config) -> String {
     )
 }
 
-fn derive_global_group_id(config: &Config) -> String {
+async fn derive_global_group_id(config: &Config) -> String {
+    let legacy_global_group_id = derive_legacy_global_group_id(config);
+    let user_scope_key = derive_effective_user_scope_key(config).await;
+    user_scope_key
+        .as_deref()
+        .map(|key| codex_core::graphiti::group_ids::make_canonical_group_id("user", key))
+        .unwrap_or(legacy_global_group_id)
+}
+
+fn derive_legacy_global_group_id(config: &Config) -> String {
     if let Some(user_scope_key) = config.graphiti.user_scope_key.as_deref() {
         return graphiti_make_group_id(
             "codex-global",
@@ -848,6 +881,14 @@ fn derive_global_group_id(config: &Config) -> String {
     }
 
     config.graphiti.global.group_id.clone()
+}
+
+async fn derive_effective_user_scope_key(config: &Config) -> Option<String> {
+    if let Some(user_scope_key) = config.graphiti.user_scope_key.clone() {
+        return Some(user_scope_key);
+    }
+    codex_core::graphiti::group_ids::derive_user_scope_key(std::time::Duration::from_millis(500))
+        .await
 }
 
 fn graphiti_make_group_id(
