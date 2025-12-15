@@ -2626,7 +2626,7 @@ async fn try_run_turn(
         }
     };
 
-    drain_in_flight(&mut in_flight, sess, turn_context).await?;
+    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
 
     if should_emit_turn_diff {
         let unified_diff = {
