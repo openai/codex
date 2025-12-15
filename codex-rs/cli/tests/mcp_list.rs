@@ -14,6 +14,7 @@ use tempfile::TempDir;
 fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
     let mut cmd = assert_cmd::Command::cargo_bin("codex")?;
     cmd.env("CODEX_HOME", codex_home);
+    cmd.current_dir(codex_home);
     Ok(cmd)
 }
 
@@ -49,7 +50,7 @@ async fn list_and_get_render_expected_output() -> Result<()> {
     .assert()
     .success();
 
-    let mut servers = load_global_mcp_servers(codex_home.path()).await?;
+    let mut servers = load_global_mcp_servers(codex_home.path(), None).await?;
     let docs_entry = servers
         .get_mut("docs")
         .expect("docs server should exist after add");
@@ -146,7 +147,7 @@ async fn get_disabled_server_shows_single_line() -> Result<()> {
         .assert()
         .success();
 
-    let mut servers = load_global_mcp_servers(codex_home.path()).await?;
+    let mut servers = load_global_mcp_servers(codex_home.path(), None).await?;
     let docs = servers
         .get_mut("docs")
         .expect("docs server should exist after add");

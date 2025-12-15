@@ -302,9 +302,14 @@ impl Config {
         overrides: ConfigOverrides,
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
+        let cwd = overrides
+            .cwd
+            .clone()
+            .or_else(|| std::env::current_dir().ok());
 
         let root_value = load_resolved_config(
             &codex_home,
+            cwd.as_deref(),
             cli_overrides,
             crate::config_loader::LoaderOverrides::default(),
         )
@@ -323,8 +328,10 @@ pub async fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
+    let cwd = std::env::current_dir().ok();
     let root_value = load_resolved_config(
         codex_home,
+        cwd.as_deref(),
         cli_overrides,
         crate::config_loader::LoaderOverrides::default(),
     )
@@ -340,10 +347,11 @@ pub async fn load_config_as_toml_with_cli_overrides(
 
 async fn load_resolved_config(
     codex_home: &Path,
+    cwd: Option<&Path>,
     cli_overrides: Vec<(String, TomlValue)>,
     overrides: crate::config_loader::LoaderOverrides,
 ) -> std::io::Result<TomlValue> {
-    let layers = load_config_layers_state(codex_home, &cli_overrides, overrides).await?;
+    let layers = load_config_layers_state(codex_home, cwd, &cli_overrides, overrides).await?;
     Ok(layers.effective_config())
 }
 
@@ -361,9 +369,11 @@ fn deserialize_config_toml_with_base(
 
 pub async fn load_global_mcp_servers(
     codex_home: &Path,
+    cwd: Option<&Path>,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
     let root_value = load_resolved_config(
         codex_home,
+        cwd,
         Vec::new(),
         crate::config_loader::LoaderOverrides::default(),
     )
@@ -1812,7 +1822,8 @@ trust_level = "trusted"
             managed_preferences_base64: None,
         };
 
-        let root_value = load_resolved_config(codex_home.path(), Vec::new(), overrides).await?;
+        let root_value =
+            load_resolved_config(codex_home.path(), None, Vec::new(), overrides).await?;
         let cfg =
             deserialize_config_toml_with_base(root_value, codex_home.path()).map_err(|e| {
                 tracing::error!("Failed to deserialize overridden config: {e}");
@@ -1840,7 +1851,7 @@ trust_level = "trusted"
     async fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
-        let servers = load_global_mcp_servers(codex_home.path()).await?;
+        let servers = load_global_mcp_servers(codex_home.path(), None).await?;
         assert!(servers.is_empty());
 
         Ok(())
@@ -1875,7 +1886,7 @@ trust_level = "trusted"
             &[ConfigEdit::ReplaceMcpServers(servers.clone())],
         )?;
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(codex_home.path(), None).await?;
         assert_eq!(loaded.len(), 1);
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
@@ -1904,7 +1915,7 @@ trust_level = "trusted"
             None,
             &[ConfigEdit::ReplaceMcpServers(empty.clone())],
         )?;
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(codex_home.path(), None).await?;
         assert!(loaded.is_empty());
 
         Ok(())
@@ -1929,6 +1940,7 @@ trust_level = "trusted"
 
         let root_value = load_resolved_config(
             codex_home.path(),
+            None,
             vec![("model".to_string(), TomlValue::String("cli".to_string()))],
             overrides,
         )
@@ -1959,7 +1971,7 @@ startup_timeout_ms = 2500
 "#,
         )?;
 
-        let servers = load_global_mcp_servers(codex_home.path()).await?;
+        let servers = load_global_mcp_servers(codex_home.path(), None).await?;
         let docs = servers.get("docs").expect("docs entry");
         assert_eq!(docs.startup_timeout_sec, Some(Duration::from_millis(2500)));
 
@@ -1980,7 +1992,7 @@ bearer_token = "secret"
 "#,
         )?;
 
-        let err = load_global_mcp_servers(codex_home.path())
+        let err = load_global_mcp_servers(codex_home.path(), None)
             .await
             .expect_err("bearer_token entries should be rejected");
 
@@ -2036,7 +2048,7 @@ ZIG_VAR = "3"
 "#
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(codex_home.path(), None).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::Stdio {
@@ -2097,7 +2109,7 @@ ZIG_VAR = "3"
             "serialized config missing env_vars field:\n{serialized}"
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(codex_home.path(), None).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::Stdio { env_vars, .. } => {
@@ -2145,7 +2157,7 @@ ZIG_VAR = "3"
             "serialized config missing cwd field:\n{serialized}"
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(codex_home.path(), None).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::Stdio { cwd, .. } => {
@@ -2195,7 +2207,7 @@ startup_timeout_sec = 2.0
 "#
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(codex_home.path(), None).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp {
@@ -2262,7 +2274,7 @@ X-Auth = "DOCS_AUTH"
 "#
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(codex_home.path(), None).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp {
@@ -2354,7 +2366,7 @@ url = "https://example.com/mcp"
 "#
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(codex_home.path(), None).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp {
@@ -2448,7 +2460,7 @@ url = "https://example.com/mcp"
             "serialized config should not add bearer token to logs:\n{serialized}"
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(codex_home.path(), None).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp {
@@ -2516,7 +2528,7 @@ url = "https://example.com/mcp"
             "serialized config missing disabled flag:\n{serialized}"
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(codex_home.path(), None).await?;
         let docs = loaded.get("docs").expect("docs entry");
         assert!(!docs.enabled);
 
@@ -2556,7 +2568,7 @@ url = "https://example.com/mcp"
         assert!(serialized.contains(r#"enabled_tools = ["allowed"]"#));
         assert!(serialized.contains(r#"disabled_tools = ["blocked"]"#));
 
-        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let loaded = load_global_mcp_servers(codex_home.path(), None).await?;
         let docs = loaded.get("docs").expect("docs entry");
         assert_eq!(
             docs.enabled_tools.as_ref(),

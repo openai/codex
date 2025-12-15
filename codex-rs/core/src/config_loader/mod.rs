@@ -42,6 +42,7 @@ const MDM_SOURCE: &str = "com.openai.codex/config_toml_base64";
 /// (*) Only available on macOS via managed device profiles.
 pub async fn load_config_layers_state(
     codex_home: &Path,
+    cwd: Option<&Path>,
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
 ) -> io::Result<ConfigLayerStack> {
@@ -51,6 +52,17 @@ pub async fn load_config_layers_state(
         .unwrap_or_else(|| layer_io::managed_config_default_path(codex_home));
 
     let layers = layer_io::load_config_layers_internal(codex_home, overrides).await?;
+
+    let repo_user_config = if let Some(cwd) = cwd
+        && let Some(repo_root) = crate::git_info::resolve_root_git_project_for_trust(cwd)
+    {
+        let path = repo_root.join(".codex").join(CONFIG_TOML_FILE);
+        layer_io::read_config_from_path(&path, false)
+            .await?
+            .map(|config| (path, config))
+    } else {
+        None
+    };
     let cli_overrides = overrides::build_cli_overrides_layer(cli_overrides);
 
     Ok(ConfigLayerStack {
@@ -59,6 +71,8 @@ pub async fn load_config_layers_state(
             codex_home.join(CONFIG_TOML_FILE),
             layers.base,
         ),
+        repo_user: repo_user_config
+            .map(|(path, config)| ConfigLayerEntry::new(ConfigLayerName::User, path, config)),
         session_flags: ConfigLayerEntry::new(
             ConfigLayerName::SessionFlags,
             PathBuf::from(SESSION_FLAGS_SOURCE),

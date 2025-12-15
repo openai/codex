@@ -310,8 +310,10 @@ impl ConfigService {
     }
 
     async fn load_layers_state(&self) -> std::io::Result<ConfigLayerStack> {
+        let cwd = std::env::current_dir().ok();
         load_config_layers_state(
             &self.codex_home,
+            cwd.as_deref(),
             &self.cli_overrides,
             self.loader_overrides.clone(),
         )
@@ -566,6 +568,11 @@ fn find_effective_layer(
         return Some(meta);
     }
     if let Some(meta) = check(&layers.session_flags) {
+        return Some(meta);
+    }
+    if let Some(repo_user) = &layers.repo_user
+        && let Some(meta) = check(repo_user)
+    {
         return Some(meta);
     }
     check(&layers.user)
