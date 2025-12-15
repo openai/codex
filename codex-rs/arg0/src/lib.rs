@@ -114,8 +114,20 @@ const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 /// Security: Do not allow `.env` files to create or modify any variables
 /// with names starting with `CODEX_`.
 fn load_dotenv() {
-    if let Ok(codex_home) = codex_core::config::find_codex_home()
+    let codex_home = codex_core::config::find_codex_home().ok();
+    if let Some(codex_home) = codex_home
         && let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env"))
+    {
+        // Load $CODEX_HOME/.env first so that repo-local settings can override it.
+        set_filtered(iter);
+    }
+
+    let repo_env = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| codex_core::git_info::resolve_root_git_project_for_trust(&cwd))
+        .map(|repo_root| repo_root.join(".codex").join(".env"));
+    if let Some(repo_env) = repo_env
+        && let Ok(iter) = dotenvy::from_path_iter(repo_env)
     {
         set_filtered(iter);
     }

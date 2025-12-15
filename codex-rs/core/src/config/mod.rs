@@ -302,9 +302,14 @@ impl Config {
         overrides: ConfigOverrides,
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
+        let cwd = overrides
+            .cwd
+            .clone()
+            .or_else(|| std::env::current_dir().ok());
 
         let root_value = load_resolved_config(
             &codex_home,
+            cwd.as_deref(),
             cli_overrides,
             crate::config_loader::LoaderOverrides::default(),
         )
@@ -323,8 +328,10 @@ pub async fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
+    let cwd = std::env::current_dir().ok();
     let root_value = load_resolved_config(
         codex_home,
+        cwd.as_deref(),
         cli_overrides,
         crate::config_loader::LoaderOverrides::default(),
     )
@@ -340,10 +347,11 @@ pub async fn load_config_as_toml_with_cli_overrides(
 
 async fn load_resolved_config(
     codex_home: &Path,
+    cwd: Option<&Path>,
     cli_overrides: Vec<(String, TomlValue)>,
     overrides: crate::config_loader::LoaderOverrides,
 ) -> std::io::Result<TomlValue> {
-    let layers = load_config_layers_state(codex_home, &cli_overrides, overrides).await?;
+    let layers = load_config_layers_state(codex_home, cwd, &cli_overrides, overrides).await?;
     Ok(layers.effective_config())
 }
 
@@ -364,6 +372,7 @@ pub async fn load_global_mcp_servers(
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
     let root_value = load_resolved_config(
         codex_home,
+        None,
         Vec::new(),
         crate::config_loader::LoaderOverrides::default(),
     )
@@ -1812,7 +1821,8 @@ trust_level = "trusted"
             managed_preferences_base64: None,
         };
 
-        let root_value = load_resolved_config(codex_home.path(), Vec::new(), overrides).await?;
+        let root_value =
+            load_resolved_config(codex_home.path(), None, Vec::new(), overrides).await?;
         let cfg =
             deserialize_config_toml_with_base(root_value, codex_home.path()).map_err(|e| {
                 tracing::error!("Failed to deserialize overridden config: {e}");
@@ -1929,6 +1939,7 @@ trust_level = "trusted"
 
         let root_value = load_resolved_config(
             codex_home.path(),
+            None,
             vec![("model".to_string(), TomlValue::String("cli".to_string()))],
             overrides,
         )

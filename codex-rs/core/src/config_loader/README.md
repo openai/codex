@@ -10,7 +10,7 @@ This module is the canonical place to **load and describe Codex configuration la
 
 Exported from `codex_core::config_loader`:
 
-- `load_config_layers_state(codex_home, cli_overrides, overrides) -> ConfigLayerStack`
+- `load_config_layers_state(codex_home, cwd, cli_overrides, overrides) -> ConfigLayerStack`
 - `ConfigLayerStack`
   - `effective_config() -> toml::Value`
   - `origins() -> HashMap<String, ConfigLayerMetadata>`
@@ -27,7 +27,8 @@ Precedence is **top overrides bottom**:
 1. **MDM** managed preferences (macOS only)
 2. **System** managed config (e.g. `managed_config.toml`)
 3. **Session flags** (CLI overrides, applied as dotted-path TOML writes)
-4. **User** config (`config.toml`)
+4. **User** config (repo-local `.codex/config.toml`, if `cwd` is inside a git repo)
+5. **User** config (`$CODEX_HOME/config.toml`)
 
 This is what `ConfigLayerStack::effective_config()` implements.
 
@@ -42,6 +43,7 @@ use toml::Value as TomlValue;
 let cli_overrides: Vec<(String, TomlValue)> = Vec::new();
 let layers = load_config_layers_state(
     &codex_home,
+    Some(&cwd),
     &cli_overrides,
     LoaderOverrides::default(),
 ).await?;
@@ -61,4 +63,3 @@ Implementation is split by concern:
 - `merge.rs`: recursive TOML merge.
 - `fingerprint.rs`: stable per-layer hashing and per-key origins traversal.
 - `macos.rs`: managed preferences integration (macOS only).
-

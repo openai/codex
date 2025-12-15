@@ -56,6 +56,7 @@ impl ConfigLayerEntry {
 #[derive(Debug, Clone)]
 pub struct ConfigLayerStack {
     pub user: ConfigLayerEntry,
+    pub repo_user: Option<ConfigLayerEntry>,
     pub session_flags: ConfigLayerEntry,
     pub system: Option<ConfigLayerEntry>,
     pub mdm: Option<ConfigLayerEntry>,
@@ -69,6 +70,7 @@ impl ConfigLayerStack {
                 self.user.source.clone(),
                 user_config,
             ),
+            repo_user: self.repo_user.clone(),
             session_flags: self.session_flags.clone(),
             system: self.system.clone(),
             mdm: self.mdm.clone(),
@@ -77,6 +79,9 @@ impl ConfigLayerStack {
 
     pub fn effective_config(&self) -> TomlValue {
         let mut merged = self.user.config.clone();
+        if let Some(repo_user) = &self.repo_user {
+            merge_toml_values(&mut merged, &repo_user.config);
+        }
         merge_toml_values(&mut merged, &self.session_flags.config);
         if let Some(system) = &self.system {
             merge_toml_values(&mut merged, &system.config);
@@ -97,6 +102,14 @@ impl ConfigLayerStack {
             &mut path,
             &mut origins,
         );
+        if let Some(repo_user) = &self.repo_user {
+            record_origins(
+                &repo_user.config,
+                &repo_user.metadata(),
+                &mut path,
+                &mut origins,
+            );
+        }
         record_origins(
             &self.session_flags.config,
             &self.session_flags.metadata(),
@@ -122,6 +135,9 @@ impl ConfigLayerStack {
             layers.push(system.as_layer());
         }
         layers.push(self.session_flags.as_layer());
+        if let Some(repo_user) = &self.repo_user {
+            layers.push(repo_user.as_layer());
+        }
         layers.push(self.user.as_layer());
         layers
     }
