@@ -26,6 +26,7 @@ const defaultBusiness = {
       contactType: "sales",
     },
   ],
+  telephone: ["+66 61 869 6057", "+66 82 286 5101"],
   priceRange: "฿฿",
   address: {
     "@type": "PostalAddress",
@@ -166,6 +167,18 @@ const createBreadcrumbList = (origin = defaultOrigin, pathname = "/") => {
       };
     }),
   ];
+  const itemListElement = segments.map((segment, index) => {
+    const position = index + 1;
+    const url = `${origin}/${segments.slice(0, position).join("/")}`;
+    const name = segment.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+
+    return {
+      "@type": "ListItem",
+      position,
+      name,
+      item: url,
+    };
+  });
 
   return {
     "@context": "https://schema.org",
@@ -231,6 +244,7 @@ const Schema = ({
           key={`${schema["@type"]}-${index}`}
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(schema, null, 2) }}
         />
       ))}
     </>
