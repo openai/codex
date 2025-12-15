@@ -1632,7 +1632,7 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                "↳ Interacting with background terminal · echo hello",
+                "↳ Interacted with background terminal · echo hello",
                 "  └ ls",
                 "    pwd",
             ],
@@ -1645,7 +1645,7 @@ mod tests {
         let lines = render_transcript(&cell);
         assert_eq!(
             lines,
-            vec!["↳ Interacting with background terminal", "  └ (waited)"],
+            vec!["↳ Interacted with background terminal", "  └ (waited)"],
         );
     }
 
