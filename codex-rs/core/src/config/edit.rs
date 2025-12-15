@@ -416,6 +416,10 @@ impl ConfigDocument {
             return false;
         };
 
+        let mut value = value;
+        if let Some(existing) = parent.get(last) {
+            Self::preserve_decor(existing, &mut value);
+        }
         parent[last] = value;
         true
     }
@@ -456,6 +460,37 @@ impl ConfigDocument {
         }
 
         Some(current)
+    }
+
+    fn preserve_decor(existing: &TomlItem, replacement: &mut TomlItem) {
+        match (existing, replacement) {
+            (TomlItem::Table(existing_table), TomlItem::Table(replacement_table)) => {
+                replacement_table
+                    .decor_mut()
+                    .clone_from(existing_table.decor());
+                for (key, existing_item) in existing_table.iter() {
+                    if let (Some(existing_key), Some(mut replacement_key)) =
+                        (existing_table.key(key), replacement_table.key_mut(key))
+                    {
+                        replacement_key
+                            .leaf_decor_mut()
+                            .clone_from(existing_key.leaf_decor());
+                        replacement_key
+                            .dotted_decor_mut()
+                            .clone_from(existing_key.dotted_decor());
+                    }
+                    if let Some(replacement_item) = replacement_table.get_mut(key) {
+                        Self::preserve_decor(existing_item, replacement_item);
+                    }
+                }
+            }
+            (TomlItem::Value(existing_value), TomlItem::Value(replacement_value)) => {
+                replacement_value
+                    .decor_mut()
+                    .clone_from(existing_value.decor());
+            }
+            _ => {}
+        }
     }
 }
 
