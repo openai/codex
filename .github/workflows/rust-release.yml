@@ -84,7 +84,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -101,7 +101,13 @@ jobs:
           sudo apt-get install -y musl-tools pkg-config
 
       - name: Cargo build
-        run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
+        shell: bash
+        run: |
+          if [[ "${{ contains(matrix.target, 'windows') }}" == 'true' ]]; then
+            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup --bin codex-command-runner
+          else
+            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
+          fi
 
       - if: ${{ contains(matrix.target, 'linux') }}
         name: Cosign Linux artifacts
@@ -395,7 +401,7 @@ jobs:
             fi
           fi
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.target }}
           # Upload the per-binary .zst files as well as the new .tar.gz
@@ -431,7 +437,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: dist
 

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::shell::ShellType;
@@ -57,7 +57,7 @@ pub(crate) fn try_find_powershellish_executable_blocking() -> Option<AbsolutePat
 }
 
 /// This function attempts to find a powershell.exe executable on the system.
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 pub(crate) fn try_find_powershell_executable_blocking() -> Option<AbsolutePathBuf> {
     try_find_powershellish_executable_in_path(&["powershell.exe"])
 }
@@ -72,7 +72,7 @@ pub(crate) fn try_find_powershell_executable_blocking() -> Option<AbsolutePathBu
 /// pwsh.exe must be installed separately by the user. And even when the user
 /// has installed pwsh.exe, it may not be available in the system PATH, in which
 /// case we attempt to locate it via other means.
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 pub(crate) fn try_find_pwsh_executable_blocking() -> Option<AbsolutePathBuf> {
     if let Some(ps_home) = std::process::Command::new("cmd")
         .args(["/C", "pwsh", "-NoProfile", "-Command", "$PSHOME"])
@@ -99,7 +99,7 @@ pub(crate) fn try_find_pwsh_executable_blocking() -> Option<AbsolutePathBuf> {
     try_find_powershellish_executable_in_path(&["pwsh.exe"])
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn try_find_powershellish_executable_in_path(candidates: &[&str]) -> Option<AbsolutePathBuf> {
     for candidate in candidates {
         let Ok(resolved_path) = which::which(candidate) else {
@@ -120,7 +120,7 @@ fn try_find_powershellish_executable_in_path(candidates: &[&str]) -> Option<Abso
     None
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn is_powershellish_executable_available(powershell_or_pwsh_exe: &std::path::Path) -> bool {
     // This test works for both powershell.exe and pwsh.exe.
     std::process::Command::new(powershell_or_pwsh_exe)

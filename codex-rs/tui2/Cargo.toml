@@ -4,17 +4,18 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[lib]
-name = "codex_tui2"
-path = "src/lib.rs"
-
 [[bin]]
 name = "codex-tui2"
 path = "src/main.rs"
 
+[lib]
+name = "codex_tui2"
+path = "src/lib.rs"
+
 [features]
-# Keep feature surface aligned with codex-tui while tui2 evolves separately.
+# Enable vt100-based tests (emulator) when running with `--features vt100-tests`.
 vt100-tests = []
+# Gate verbose debug logging inside the TUI implementation.
 debug-logs = []
 
 [lints]
@@ -40,6 +41,7 @@ codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 codex-tui = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
@@ -51,7 +53,6 @@ image = { workspace = true, features = ["jpeg", "png"] }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
 mcp-types = { workspace = true }
-opentelemetry-appender-tracing = { workspace = true }
 pathdiff = { workspace = true }
 pulldown-cmark = { workspace = true }
 rand = { workspace = true }

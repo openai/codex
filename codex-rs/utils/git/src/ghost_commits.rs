@@ -23,8 +23,10 @@ use crate::operations::run_git_for_stdout_all;
 
 /// Default commit message used for ghost commits when none is provided.
 const DEFAULT_COMMIT_MESSAGE: &str = "codex snapshot";
-/// Default threshold that triggers a warning about large untracked directories.
-const LARGE_UNTRACKED_WARNING_THRESHOLD: usize = 200;
+/// Default threshold for ignoring large untracked directories.
+const DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS: i64 = 200;
+/// Default threshold (10 MiB) for excluding large untracked files from ghost snapshots.
+const DEFAULT_IGNORE_LARGE_UNTRACKED_FILES: i64 = 10 * 1024 * 1024;
 /// Directories that should always be ignored when capturing ghost snapshots,
 /// even if they are not listed in .gitignore.
 ///
@@ -50,19 +52,49 @@ pub struct CreateGhostCommitOptions<'a> {
     pub repo_path: &'a Path,
     pub message: Option<&'a str>,
     pub force_include: Vec<PathBuf>,
+    pub ghost_snapshot: GhostSnapshotConfig,
+}
+
+/// Options to control ghost commit restoration.
+pub struct RestoreGhostCommitOptions<'a> {
+    pub repo_path: &'a Path,
+    pub ghost_snapshot: GhostSnapshotConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GhostSnapshotConfig {
+    pub ignore_large_untracked_files: Option<i64>,
+    pub ignore_large_untracked_dirs: Option<i64>,
+}
+
+impl Default for GhostSnapshotConfig {
+    fn default() -> Self {
+        Self {
+            ignore_large_untracked_files: Some(DEFAULT_IGNORE_LARGE_UNTRACKED_FILES),
+            ignore_large_untracked_dirs: Some(DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS),
+        }
+    }
 }
 
 /// Summary produced alongside a ghost snapshot.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct GhostSnapshotReport {
     pub large_untracked_dirs: Vec<LargeUntrackedDir>,
+    pub ignored_untracked_files: Vec<IgnoredUntrackedFile>,
 }
 
 /// Directory containing a large amount of untracked content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LargeUntrackedDir {
     pub path: PathBuf,
-    pub file_count: usize,
+    pub file_count: i64,
+}
+
+/// Untracked file excluded from the snapshot because of its size.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IgnoredUntrackedFile {
+    pub path: PathBuf,
+    pub byte_size: i64,
 }
 
 impl<'a> CreateGhostCommitOptions<'a> {
@@ -72,12 +104,31 @@ impl<'a> CreateGhostCommitOptions<'a> {
             repo_path,
             message: None,
             force_include: Vec::new(),
+            ghost_snapshot: GhostSnapshotConfig::default(),
         }
     }
 
     /// Sets a custom commit message for the ghost commit.
     pub fn message(mut self, message: &'a str) -> Self {
         self.message = Some(message);
+        self
+    }
+
+    pub fn ghost_snapshot(mut self, ghost_snapshot: GhostSnapshotConfig) -> Self {
+        self.ghost_snapshot = ghost_snapshot;
+        self
+    }
+
+    /// Exclude untracked files larger than `bytes` from the snapshot commit.
+    ///
+    /// These files are still treated as untracked for preservation purposes (i.e. they will not be
+    /// deleted by undo), but they will not be captured in the snapshot tree.
+    pub fn ignore_large_untracked_files(mut self, bytes: i64) -> Self {
+        if bytes > 0 {
+            self.ghost_snapshot.ignore_large_untracked_files = Some(bytes);
+        } else {
+            self.ghost_snapshot.ignore_large_untracked_files = None;
+        }
         self
     }
 
@@ -100,8 +151,56 @@ impl<'a> CreateGhostCommitOptions<'a> {
     }
 }
 
-fn detect_large_untracked_dirs(files: &[PathBuf], dirs: &[PathBuf]) -> Vec<LargeUntrackedDir> {
-    let mut counts: BTreeMap<PathBuf, usize> = BTreeMap::new();
+impl<'a> RestoreGhostCommitOptions<'a> {
+    /// Creates restore options scoped to the provided repository path.
+    pub fn new(repo_path: &'a Path) -> Self {
+        Self {
+            repo_path,
+            ghost_snapshot: GhostSnapshotConfig::default(),
+        }
+    }
+
+    pub fn ghost_snapshot(mut self, ghost_snapshot: GhostSnapshotConfig) -> Self {
+        self.ghost_snapshot = ghost_snapshot;
+        self
+    }
+
+    /// Exclude untracked files larger than `bytes` from undo cleanup.
+    ///
+    /// These files are treated as "always preserve" to avoid deleting large local artifacts.
+    pub fn ignore_large_untracked_files(mut self, bytes: i64) -> Self {
+        if bytes > 0 {
+            self.ghost_snapshot.ignore_large_untracked_files = Some(bytes);
+        } else {
+            self.ghost_snapshot.ignore_large_untracked_files = None;
+        }
+        self
+    }
+
+    /// Ignore untracked directories that contain at least `file_count` untracked files.
+    pub fn ignore_large_untracked_dirs(mut self, file_count: i64) -> Self {
+        if file_count > 0 {
+            self.ghost_snapshot.ignore_large_untracked_dirs = Some(file_count);
+        } else {
+            self.ghost_snapshot.ignore_large_untracked_dirs = None;
+        }
+        self
+    }
+}
+
+fn detect_large_untracked_dirs(
+    files: &[PathBuf],
+    dirs: &[PathBuf],
+    threshold: Option<i64>,
+) -> Vec<LargeUntrackedDir> {
+    let Some(threshold) = threshold else {
+        return Vec::new();
+    };
+    if threshold <= 0 {
+        return Vec::new();
+    }
+
+    let mut counts: BTreeMap<PathBuf, i64> = BTreeMap::new();
 
     let mut sorted_dirs: Vec<&PathBuf> = dirs.iter().collect();
     sorted_dirs.sort_by(|a, b| {
@@ -129,7 +228,7 @@ fn detect_large_untracked_dirs(files: &[PathBuf], dirs: &[PathBuf]) -> Vec<Large
 
     let mut result: Vec<LargeUntrackedDir> = counts
         .into_iter()
-        .filter(|(_, count)| *count >= LARGE_UNTRACKED_WARNING_THRESHOLD)
+        .filter(|(_, count)| *count >= threshold)
         .map(|(path, file_count)| LargeUntrackedDir { path, file_count })
         .collect();
     result.sort_by(|a, b| {
@@ -165,22 +264,35 @@ pub fn capture_ghost_snapshot_report(
 
     let repo_root = resolve_repository_root(options.repo_path)?;
     let repo_prefix = repo_subdir(repo_root.as_path(), options.repo_path);
-    let existing_untracked =
-        capture_existing_untracked(repo_root.as_path(), repo_prefix.as_deref())?;
+    let force_include = prepare_force_include(repo_prefix.as_deref(), &options.force_include)?;
+    let existing_untracked = capture_existing_untracked(
+        repo_root.as_path(),
+        repo_prefix.as_deref(),
+        options.ghost_snapshot.ignore_large_untracked_files,
+        options.ghost_snapshot.ignore_large_untracked_dirs,
+        &force_include,
+    )?;
 
-    let warning_files = existing_untracked
-        .files
+    let warning_ignored_files = existing_untracked
+        .ignored_untracked_files
         .iter()
-        .map(|path| to_session_relative_path(path, repo_prefix.as_deref()))
+        .map(|file| IgnoredUntrackedFile {
+            path: to_session_relative_path(file.path.as_path(), repo_prefix.as_deref()),
+            byte_size: file.byte_size,
+        })
         .collect::<Vec<_>>();
-    let warning_dirs = existing_untracked
-        .dirs
+    let warning_ignored_dirs = existing_untracked
+        .ignored_large_untracked_dirs
         .iter()
-        .map(|path| to_session_relative_path(path, repo_prefix.as_deref()))
+        .map(|dir| LargeUntrackedDir {
+            path: to_session_relative_path(dir.path.as_path(), repo_prefix.as_deref()),
+            file_count: dir.file_count,
+        })
         .collect::<Vec<_>>();
 
     Ok(GhostSnapshotReport {
-        large_untracked_dirs: detect_large_untracked_dirs(&warning_files, &warning_dirs),
+        large_untracked_dirs: warning_ignored_dirs,
+        ignored_untracked_files: warning_ignored_files,
     })
 }
 
@@ -193,28 +305,31 @@ pub fn create_ghost_commit_with_report(
     let repo_root = resolve_repository_root(options.repo_path)?;
     let repo_prefix = repo_subdir(repo_root.as_path(), options.repo_path);
     let parent = resolve_head(repo_root.as_path())?;
-    let existing_untracked =
-        capture_existing_untracked(repo_root.as_path(), repo_prefix.as_deref())?;
+    let force_include = prepare_force_include(repo_prefix.as_deref(), &options.force_include)?;
+    let existing_untracked = capture_existing_untracked(
+        repo_root.as_path(),
+        repo_prefix.as_deref(),
+        options.ghost_snapshot.ignore_large_untracked_files,
+        options.ghost_snapshot.ignore_large_untracked_dirs,
+        &force_include,
+    )?;
 
-    let warning_files = existing_untracked
-        .files
+    let warning_ignored_files = existing_untracked
+        .ignored_untracked_files
         .iter()
-        .map(|path| to_session_relative_path(path, repo_prefix.as_deref()))
+        .map(|file| IgnoredUntrackedFile {
+            path: to_session_relative_path(file.path.as_path(), repo_prefix.as_deref()),
+            byte_size: file.byte_size,
+        })
         .collect::<Vec<_>>();
-    let warning_dirs = existing_untracked
-        .dirs
+    let large_untracked_dirs = existing_untracked
+        .ignored_large_untracked_dirs
         .iter()
-        .map(|path| to_session_relative_path(path, repo_prefix.as_deref()))
+        .map(|dir| LargeUntrackedDir {
+            path: to_session_relative_path(dir.path.as_path(), repo_prefix.as_deref()),
+            file_count: dir.file_count,
+        })
         .collect::<Vec<_>>();
-    let large_untracked_dirs = detect_large_untracked_dirs(&warning_files, &warning_dirs);
-
-    let normalized_force = options
-        .force_include
-        .iter()
-        .map(|path| normalize_relative_path(path))
-        .collect::<Result<Vec<_>, _>>()?;
-    let force_include =
-        apply_repo_prefix_to_force_include(repo_prefix.as_deref(), &normalized_force);
     let index_tempdir = Builder::new().prefix("codex-git-index-").tempdir()?;
     let index_path = index_tempdir.path().join("index");
     let base_env = vec![(
@@ -238,6 +353,16 @@ pub fn create_ghost_commit_with_report(
     }
 
     run_git_for_status(repo_root.as_path(), add_args, Some(base_env.as_slice()))?;
+    remove_large_untracked_dirs_from_index(
+        repo_root.as_path(),
+        base_env.as_slice(),
+        &existing_untracked.ignored_large_untracked_dir_files,
+    )?;
+    remove_large_untracked_files_from_index(
+        repo_root.as_path(),
+        base_env.as_slice(),
+        &existing_untracked.ignored_untracked_files,
+    )?;
     if !force_include.is_empty() {
         let mut args = Vec::with_capacity(force_include.len() + 2);
         args.push(OsString::from("add"));
@@ -278,26 +403,46 @@ pub fn create_ghost_commit_with_report(
     let ghost_commit = GhostCommit::new(
         commit_id,
         parent,
-        existing_untracked.files,
-        existing_untracked.dirs,
+        merge_preserved_untracked_files(
+            existing_untracked.files,
+            &existing_untracked.ignored_untracked_files,
+        ),
+        merge_preserved_untracked_dirs(
+            existing_untracked.dirs,
+            &existing_untracked.ignored_large_untracked_dirs,
+        ),
     );
 
     Ok((
         ghost_commit,
         GhostSnapshotReport {
             large_untracked_dirs,
+            ignored_untracked_files: warning_ignored_files,
         },
     ))
 }
 
 /// Restore the working tree to match the provided ghost commit.
 pub fn restore_ghost_commit(repo_path: &Path, commit: &GhostCommit) -> Result<(), GitToolingError> {
-    ensure_git_repository(repo_path)?;
+    restore_ghost_commit_with_options(&RestoreGhostCommitOptions::new(repo_path), commit)
+}
 
-    let repo_root = resolve_repository_root(repo_path)?;
-    let repo_prefix = repo_subdir(repo_root.as_path(), repo_path);
-    let current_untracked =
-        capture_existing_untracked(repo_root.as_path(), repo_prefix.as_deref())?;
+/// Restore the working tree using the provided options.
+pub fn restore_ghost_commit_with_options(
+    options: &RestoreGhostCommitOptions<'_>,
+    commit: &GhostCommit,
+) -> Result<(), GitToolingError> {
+    ensure_git_repository(options.repo_path)?;
+
+    let repo_root = resolve_repository_root(options.repo_path)?;
+    let repo_prefix = repo_subdir(repo_root.as_path(), options.repo_path);
+    let current_untracked = capture_existing_untracked(
+        repo_root.as_path(),
+        repo_prefix.as_deref(),
+        options.ghost_snapshot.ignore_large_untracked_files,
+        options.ghost_snapshot.ignore_large_untracked_dirs,
+        &[],
+    )?;
     restore_to_commit_inner(repo_root.as_path(), repo_prefix.as_deref(), commit.id())?;
     remove_new_untracked(
         repo_root.as_path(),
@@ -345,6 +490,9 @@ fn restore_to_commit_inner(
 struct UntrackedSnapshot {
     files: Vec<PathBuf>,
     dirs: Vec<PathBuf>,
+    ignored_untracked_files: Vec<IgnoredUntrackedFile>,
+    ignored_large_untracked_dirs: Vec<LargeUntrackedDir>,
+    ignored_large_untracked_dir_files: Vec<PathBuf>,
 }
 
 /// Captures the untracked and ignored entries under `repo_root`, optionally limited by `repo_prefix`.
@@ -352,6 +500,9 @@ struct UntrackedSnapshot {
 fn capture_existing_untracked(
     repo_root: &Path,
     repo_prefix: Option<&Path>,
+    ignore_large_untracked_files: Option<i64>,
+    ignore_large_untracked_dirs: Option<i64>,
+    force_include: &[PathBuf],
 ) -> Result<UntrackedSnapshot, GitToolingError> {
     // Ask git for the zero-delimited porcelain status so we can enumerate
     // every untracked path (including ones filtered by prefix).
@@ -372,6 +523,7 @@ fn capture_existing_untracked(
     }
 
     let mut snapshot = UntrackedSnapshot::default();
+    let mut untracked_files_for_dir_scan: Vec<PathBuf> = Vec::new();
     // Each entry is of the form "<code> <path>" where code is '?' (untracked)
     // or '!' (ignored); everything else is irrelevant to this snapshot.
     for entry in output.split('\0') {
@@ -399,8 +551,61 @@ fn capture_existing_untracked(
         let is_dir = absolute.is_dir();
         if is_dir {
             snapshot.dirs.push(normalized);
+        } else if code == "?" {
+            untracked_files_for_dir_scan.push(normalized.clone());
+            if let Some(threshold) = ignore_large_untracked_files
+                && threshold > 0
+                && !is_force_included(&normalized, force_include)
+                && let Ok(Some(byte_size)) = untracked_file_size(&absolute)
+                && byte_size > threshold
+            {
+                snapshot.ignored_untracked_files.push(IgnoredUntrackedFile {
+                    path: normalized,
+                    byte_size,
+                });
+            } else {
+                snapshot.files.push(normalized);
+            }
         } else {
             snapshot.files.push(normalized);
+        }
+    }
+
+    if let Some(threshold) = ignore_large_untracked_dirs
+        && threshold > 0
+    {
+        let ignored_large_untracked_dirs = detect_large_untracked_dirs(
+            &untracked_files_for_dir_scan,
+            &snapshot.dirs,
+            Some(threshold),
+        )
+        .into_iter()
+        .filter(|entry| !entry.path.as_os_str().is_empty() && entry.path != Path::new("."))
+        .collect::<Vec<_>>();
+
+        if !ignored_large_untracked_dirs.is_empty() {
+            let ignored_dir_paths = ignored_large_untracked_dirs
+                .iter()
+                .map(|entry| entry.path.as_path())
+                .collect::<Vec<_>>();
+
+            snapshot
+                .files
+                .retain(|path| !ignored_dir_paths.iter().any(|dir| path.starts_with(dir)));
+            snapshot
+                .dirs
+                .retain(|path| !ignored_dir_paths.iter().any(|dir| path.starts_with(dir)));
+            snapshot.ignored_untracked_files.retain(|file| {
+                !ignored_dir_paths
+                    .iter()
+                    .any(|dir| file.path.starts_with(dir))
+            });
+
+            snapshot.ignored_large_untracked_dir_files = untracked_files_for_dir_scan
+                .into_iter()
+                .filter(|path| ignored_dir_paths.iter().any(|dir| path.starts_with(dir)))
+                .collect();
+            snapshot.ignored_large_untracked_dirs = ignored_large_untracked_dirs;
         }
     }
 
@@ -418,6 +623,111 @@ fn should_ignore_for_snapshot(path: &Path) -> bool {
         }
         false
     })
+}
+
+fn prepare_force_include(
+    repo_prefix: Option<&Path>,
+    force_include: &[PathBuf],
+) -> Result<Vec<PathBuf>, GitToolingError> {
+    let normalized_force = force_include
+        .iter()
+        .map(PathBuf::as_path)
+        .map(normalize_relative_path)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(apply_repo_prefix_to_force_include(
+        repo_prefix,
+        &normalized_force,
+    ))
+}
+
+fn is_force_included(path: &Path, force_include: &[PathBuf]) -> bool {
+    force_include
+        .iter()
+        .any(|candidate| path.starts_with(candidate.as_path()))
+}
+
+fn untracked_file_size(path: &Path) -> io::Result<Option<i64>> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(None);
+    };
+
+    let Ok(len_i64) = i64::try_from(metadata.len()) else {
+        return Ok(Some(i64::MAX));
+    };
+    Ok(Some(len_i64))
+}
+
+fn remove_large_untracked_files_from_index(
+    repo_root: &Path,
+    env: &[(OsString, OsString)],
+    ignored: &[IgnoredUntrackedFile],
+) -> Result<(), GitToolingError> {
+    let paths = ignored
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    remove_paths_from_index(repo_root, env, &paths)
+}
+
+fn remove_large_untracked_dirs_from_index(
+    repo_root: &Path,
+    env: &[(OsString, OsString)],
+    paths: &[PathBuf],
+) -> Result<(), GitToolingError> {
+    remove_paths_from_index(repo_root, env, paths)
+}
+
+fn remove_paths_from_index(
+    repo_root: &Path,
+    env: &[(OsString, OsString)],
+    paths: &[PathBuf],
+) -> Result<(), GitToolingError> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    const CHUNK_SIZE: usize = 64;
+    for chunk in paths.chunks(CHUNK_SIZE) {
+        let mut args = vec![
+            OsString::from("update-index"),
+            OsString::from("--force-remove"),
+            OsString::from("--"),
+        ];
+        args.extend(chunk.iter().map(|path| path.as_os_str().to_os_string()));
+        run_git_for_status(repo_root, args, Some(env))?;
+    }
+
+    Ok(())
+}
+
+fn merge_preserved_untracked_files(
+    mut files: Vec<PathBuf>,
+    ignored: &[IgnoredUntrackedFile],
+) -> Vec<PathBuf> {
+    if ignored.is_empty() {
+        return files;
+    }
+
+    files.extend(ignored.iter().map(|entry| entry.path.clone()));
+    files
+}
+
+fn merge_preserved_untracked_dirs(
+    mut dirs: Vec<PathBuf>,
+    ignored_large_dirs: &[LargeUntrackedDir],
+) -> Vec<PathBuf> {
+    if ignored_large_dirs.is_empty() {
+        return dirs;
+    }
+
+    for entry in ignored_large_dirs {
+        if dirs.iter().any(|dir| dir == &entry.path) {
+            continue;
+        }
+        dirs.push(entry.path.clone());
+    }
+
+    dirs
 }
 
 /// Removes untracked files and directories that were not present when the snapshot was captured.
@@ -514,6 +824,7 @@ mod tests {
     use crate::operations::run_git_for_stdout;
     use assert_matches::assert_matches;
     use pretty_assertions::assert_eq;
+    use std::fs::File;
     use std::process::Command;
     use walkdir::WalkDir;
 
@@ -542,6 +853,14 @@ mod tests {
     fn init_test_repo(repo: &Path) {
         run_git_in(repo, &["init", "--initial-branch=main"]);
         run_git_in(repo, &["config", "core.autocrlf", "false"]);
+    }
+
+    fn create_sparse_file(path: &Path, bytes: i64) -> io::Result<()> {
+        let file_len =
+            u64::try_from(bytes).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let file = File::create(path)?;
+        file.set_len(file_len)?;
+        Ok(())
     }
 
     #[test]
@@ -616,6 +935,62 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_ignores_large_untracked_files() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join("tracked.txt"), "contents\n")?;
+        run_git_in(repo, &["add", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let big = repo.join("big.bin");
+        let big_size = 2 * 1024 * 1024;
+        create_sparse_file(&big, big_size)?;
+
+        let (ghost, report) = create_ghost_commit_with_report(
+            &CreateGhostCommitOptions::new(repo).ignore_large_untracked_files(1024),
+        )?;
+        assert!(ghost.parent().is_some());
+        assert_eq!(
+            report.ignored_untracked_files,
+            vec![IgnoredUntrackedFile {
+                path: PathBuf::from("big.bin"),
+                byte_size: big_size,
+            }]
+        );
+
+        let exists_in_commit = Command::new("git")
+            .current_dir(repo)
+            .args(["cat-file", "-e", &format!("{}:big.bin", ghost.id())])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        assert!(!exists_in_commit);
+
+        std::fs::write(repo.join("ephemeral.txt"), "temp\n")?;
+        restore_ghost_commit(repo, &ghost)?;
+        assert!(
+            big.exists(),
+            "big.bin should be preserved during undo cleanup"
+        );
+        assert!(!repo.join("ephemeral.txt").exists());
+
+        Ok(())
+    }
+
+    #[test]
     fn create_snapshot_reports_large_untracked_dirs() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
@@ -638,7 +1013,8 @@ mod tests {
 
         let models = repo.join("models");
         std::fs::create_dir(&models)?;
-        for idx in 0..(LARGE_UNTRACKED_WARNING_THRESHOLD + 1) {
+        let threshold = DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS;
+        for idx in 0..(threshold + 1) {
             let file = models.join(format!("weights-{idx}.bin"));
             std::fs::write(file, "data\n")?;
         }
@@ -650,9 +1026,82 @@ mod tests {
             report.large_untracked_dirs,
             vec![LargeUntrackedDir {
                 path: PathBuf::from("models"),
-                file_count: LARGE_UNTRACKED_WARNING_THRESHOLD + 1,
+                file_count: threshold + 1,
             }]
         );
+
+        let exists_in_commit = Command::new("git")
+            .current_dir(repo)
+            .args([
+                "cat-file",
+                "-e",
+                &format!("{}:models/weights-0.bin", ghost.id()),
+            ])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        assert!(!exists_in_commit);
+
+        std::fs::write(repo.join("ephemeral.txt"), "temp\n")?;
+        restore_ghost_commit(repo, &ghost)?;
+        assert!(
+            repo.join("models/weights-0.bin").exists(),
+            "ignored untracked directories should be preserved during undo cleanup"
+        );
+        assert!(!repo.join("ephemeral.txt").exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn restore_preserves_large_untracked_dirs_when_threshold_disabled()
+    -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        init_test_repo(repo);
+
+        std::fs::write(repo.join("tracked.txt"), "contents\n")?;
+        run_git_in(repo, &["add", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let models = repo.join("models");
+        std::fs::create_dir(&models)?;
+        let threshold: i64 = 2;
+        for idx in 0..(threshold + 1) {
+            let file = models.join(format!("weights-{idx}.bin"));
+            std::fs::write(file, "data\n")?;
+        }
+
+        let snapshot_config = GhostSnapshotConfig {
+            ignore_large_untracked_files: Some(DEFAULT_IGNORE_LARGE_UNTRACKED_FILES),
+            ignore_large_untracked_dirs: Some(threshold),
+        };
+        let (ghost, _report) = create_ghost_commit_with_report(
+            &CreateGhostCommitOptions::new(repo).ghost_snapshot(snapshot_config),
+        )?;
+
+        std::fs::write(repo.join("ephemeral.txt"), "temp\n")?;
+        restore_ghost_commit_with_options(
+            &RestoreGhostCommitOptions::new(repo).ignore_large_untracked_dirs(0),
+            &ghost,
+        )?;
+
+        assert!(
+            repo.join("models/weights-0.bin").exists(),
+            "ignored untracked directories should be preserved during undo cleanup, even when the threshold is disabled at restore time"
+        );
+        assert!(!repo.join("ephemeral.txt").exists());
 
         Ok(())
     }
@@ -847,12 +1296,14 @@ mod tests {
         // Create a large untracked tree nested under the tracked src directory.
         let generated = src.join("generated").join("cache");
         std::fs::create_dir_all(&generated)?;
-        for idx in 0..(LARGE_UNTRACKED_WARNING_THRESHOLD + 1) {
+        let threshold = DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS;
+        for idx in 0..(threshold + 1) {
             let file = generated.join(format!("file-{idx}.bin"));
             std::fs::write(file, "data\n")?;
         }
 
-        let (_, report) = create_ghost_commit_with_report(&CreateGhostCommitOptions::new(repo))?;
+        let (ghost, report) =
+            create_ghost_commit_with_report(&CreateGhostCommitOptions::new(repo))?;
         assert_eq!(report.large_untracked_dirs.len(), 1);
         let entry = &report.large_untracked_dirs[0];
         assert_ne!(entry.path, PathBuf::from("src"));
@@ -861,7 +1312,19 @@ mod tests {
             "unexpected path for large untracked directory: {}",
             entry.path.display()
         );
-        assert_eq!(entry.file_count, LARGE_UNTRACKED_WARNING_THRESHOLD + 1);
+        assert_eq!(entry.file_count, threshold + 1);
+
+        let exists_in_commit = Command::new("git")
+            .current_dir(repo)
+            .args([
+                "cat-file",
+                "-e",
+                &format!("{}:src/generated/cache/file-0.bin", ghost.id()),
+            ])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        assert!(!exists_in_commit);
 
         Ok(())
     }

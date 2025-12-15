@@ -49,6 +49,7 @@ Supported features:
 | `ghost_commit`                        |  false  | Experimental | Create a ghost commit each turn                       |
 | `enable_experimental_windows_sandbox` |  false  | Experimental | Use the Windows restricted-token sandbox              |
 | `tui2`                                |  false  | Experimental | Use the experimental TUI v2 (viewport) implementation |
+| `skills`                              |  false  | Experimental | Enable discovery and injection of skills              |
 
 Notes:
 
@@ -943,6 +944,8 @@ Valid values:
 | `tui.animations`                                 | boolean                                                           | Enable terminal animations (welcome screen, shimmer, spinner). Defaults to true; set to `false` to disable visual motion.       |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                         |
 | `features.<feature-flag>`                        | boolean                                                           | See [feature flags](#feature-flags) for details                                                                                 |
+| `ghost_snapshot.ignore_large_untracked_files`    | number                                                            | Exclude untracked files larger than this many bytes from ghost snapshots (default: 10 MiB). Set to `0` to disable.              |
+| `ghost_snapshot.ignore_large_untracked_dirs`     | number                                                            | Ignore untracked directories with at least this many files (default: 200). Set to `0` to disable.                               |
 | `mcp_servers.<id>.command`                       | string                                                            | MCP server launcher command (stdio servers only).                                                                               |
 | `mcp_servers.<id>.args`                          | array<string>                                                     | MCP server args (stdio servers only).                                                                                           |
 | `mcp_servers.<id>.env`                           | map<string,string>                                                | MCP server env vars (stdio servers only).                                                                                       |

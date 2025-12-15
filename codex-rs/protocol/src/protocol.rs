@@ -23,6 +23,7 @@ use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::CallToolResult;
 use mcp_types::RequestId;
 use mcp_types::Resource as McpResource;
@@ -34,6 +35,7 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_with::serde_as;
 use strum_macros::Display;
+use tracing::error;
 use ts_rs::TS;
 
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
@@ -184,6 +186,15 @@ pub enum Op {
     /// Request the list of available custom prompts.
     ListCustomPrompts,
 
+    /// Request the list of skills for the provided `cwd` values or the session default.
+    ListSkills {
+        /// Working directories to scope repo skills discovery.
+        ///
+        /// When empty, the session default working directory is used.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        cwds: Vec<PathBuf>,
+    },
+
     /// Request the agent to summarize the current conversation context.
     /// The agent will use its existing context (either conversation history or previous response id)
     /// to generate a summary which will be returned as an AgentMessage event.
@@ -273,7 +284,7 @@ pub enum SandboxPolicy {
         /// Additional folders (beyond cwd and possibly TMPDIR) that should be
         /// writable from within the sandbox.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        writable_roots: Vec<PathBuf>,
+        writable_roots: Vec<AbsolutePathBuf>,
 
         /// When set to `true`, outbound network access is allowed. `false` by
         /// default.
@@ -299,11 +310,9 @@ pub enum SandboxPolicy {
 /// not modified by the agent.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
 pub struct WritableRoot {
-    /// Absolute path, by construction.
-    pub root: PathBuf,
+    pub root: AbsolutePathBuf,
 
-    /// Also absolute paths, by construction.
-    pub read_only_subpaths: Vec<PathBuf>,
+    pub read_only_subpaths: Vec<AbsolutePathBuf>,
 }
 
 impl WritableRoot {
@@ -385,16 +394,30 @@ impl SandboxPolicy {
                 network_access: _,
             } => {
                 // Start from explicitly configured writable roots.
-                let mut roots: Vec<PathBuf> = writable_roots.clone();
+                let mut roots: Vec<AbsolutePathBuf> = writable_roots.clone();
 
                 // Always include defaults: cwd, /tmp (if present on Unix), and
                 // on macOS, the per-user TMPDIR unless explicitly excluded.
-                roots.push(cwd.to_path_buf());
+                // TODO(mbolin): cwd param should be AbsolutePathBuf.
+                let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd);
+                match cwd_absolute {
+                    Ok(cwd) => {
+                        roots.push(cwd);
+                    }
+                    Err(e) => {
+                        error!(
+                            "Ignoring invalid cwd {:?} for sandbox writable root: {}",
+                            cwd, e
+                        );
+                    }
+                }
 
                 // Include /tmp on Unix unless explicitly excluded.
                 if cfg!(unix) && !exclude_slash_tmp {
-                    let slash_tmp = PathBuf::from("/tmp");
-                    if slash_tmp.is_dir() {
+                    #[allow(clippy::expect_used)]
+                    let slash_tmp =
+                        AbsolutePathBuf::from_absolute_path("/tmp").expect("/tmp is absolute");
+                    if slash_tmp.as_path().is_dir() {
                         roots.push(slash_tmp);
                     }
                 }
@@ -411,7 +434,16 @@ impl SandboxPolicy {
                     && let Some(tmpdir) = std::env::var_os("TMPDIR")
                     && !tmpdir.is_empty()
                 {
-                    roots.push(PathBuf::from(tmpdir));
+                    match AbsolutePathBuf::from_absolute_path(PathBuf::from(&tmpdir)) {
+                        Ok(tmpdir_path) => {
+                            roots.push(tmpdir_path);
+                        }
+                        Err(e) => {
+                            error!(
+                                "Ignoring invalid TMPDIR value {tmpdir:?} for sandbox writable root: {e}",
+                            );
+                        }
+                    }
                 }
 
                 // For each root, compute subpaths that should remain read-only.
@@ -419,8 +451,11 @@ impl SandboxPolicy {
                     .into_iter()
                     .map(|writable_root| {
                         let mut subpaths = Vec::new();
-                        let top_level_git = writable_root.join(".git");
-                        if top_level_git.is_dir() {
+                        #[allow(clippy::expect_used)]
+                        let top_level_git = writable_root
+                            .join(".git")
+                            .expect(".git is a valid relative path");
+                        if top_level_git.as_path().is_dir() {
                             subpaths.push(top_level_git);
                         }
                         WritableRoot {
@@ -561,6 +596,9 @@ pub enum EventMsg {
 
     /// List of custom prompts available to the agent.
     ListCustomPromptsResponse(ListCustomPromptsResponseEvent),
+
+    /// List of skills available to the agent.
+    ListSkillsResponse(ListSkillsResponseEvent),
 
     PlanUpdate(UpdatePlanArgs),
 
@@ -1624,11 +1662,26 @@ pub struct ListCustomPromptsResponseEvent {
     pub custom_prompts: Vec<CustomPrompt>,
 }
 
+/// Response payload for `Op::ListSkills`.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct SkillInfo {
+pub struct ListSkillsResponseEvent {
+    pub skills: Vec<SkillsListEntry>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SkillScope {
+    User,
+    Repo,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SkillMetadata {
     pub name: String,
     pub description: String,
     pub path: PathBuf,
+    pub scope: SkillScope,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1637,9 +1690,10 @@ pub struct SkillErrorInfo {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, Default)]
-pub struct SkillLoadOutcomeInfo {
-    pub skills: Vec<SkillInfo>,
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SkillsListEntry {
+    pub cwd: PathBuf,
+    pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillErrorInfo>,
 }
 
@@ -1677,9 +1731,6 @@ pub struct SessionConfiguredEvent {
     /// When present, UIs can use these to seed the history.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_messages: Option<Vec<EventMsg>>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub skill_load_outcome: Option<SkillLoadOutcomeInfo>,
 
     pub rollout_path: PathBuf,
 }
@@ -1808,7 +1859,6 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
-                skill_load_outcome: None,
                 rollout_path: rollout_file.path().to_path_buf(),
             }),
         };

@@ -297,7 +297,7 @@ For casual greetings, acknowledgements, or other one-off conversational messages
 When using the shell, you must adhere to the following guidelines:
 
 - When searching for text or files, prefer using `rg` or `rg --files` respectively because `rg` is much faster than alternatives like `grep`. (If the `rg` command is not found, then use alternatives.)
-- Read files in chunks with a max chunk size of 250 lines. Do not use python scripts to attempt to output larger chunks of a file. Command line output will be truncated after 10 kilobytes or 256 lines of output, regardless of the command used.
+- Do not use python scripts to attempt to output larger chunks of a file.
 
 ## `update_plan`
 

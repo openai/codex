@@ -857,6 +857,7 @@ async fn start_test_conversation(
     model: Option<&str>,
 ) -> (TempDir, Config, ConversationManager, Arc<CodexConversation>) {
     let model_provider = ModelProviderInfo {
+        name: "Non-OpenAI Model provider".into(),
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
     };

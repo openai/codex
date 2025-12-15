@@ -10,6 +10,7 @@ bytes = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
+opentelemetry = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
 serde = { workspace = true, features = ["derive"] }
@@ -17,6 +18,11 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
 tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+opentelemetry_sdk = { workspace = true }
+tracing-subscriber = { workspace = true }
