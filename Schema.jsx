@@ -14,6 +14,18 @@ const defaultBusiness = {
     "https://maps.google.com/maps/vt?pb=!1m5!1s5683579636760481711:0x4b0c6fb1f8b0c17f!5m2!1s2024-06-01!2i2!3m1!1e3",
     "https://maps.google.com/maps/api/staticmap?center=14.0604,100.6142&zoom=16&size=640x400&markers=color:green%7C14.0604,100.6142",
   ],
+  contactPoint: [
+    {
+      "@type": "ContactPoint",
+      telephone: "+66 61 869 6057",
+      contactType: "customer service",
+    },
+    {
+      "@type": "ContactPoint",
+      telephone: "+66 82 286 5101",
+      contactType: "sales",
+    },
+  ],
   telephone: ["+66 61 869 6057", "+66 82 286 5101"],
   priceRange: "฿฿",
   address: {
@@ -135,6 +147,26 @@ const createBreadcrumbList = (origin = defaultOrigin, pathname = "/") => {
   const trimmedPath = pathname.split("?")[0];
   const segments = trimmedPath.split("/").filter(Boolean);
 
+  const itemListElement = [
+    {
+      "@type": "ListItem",
+      position: 1,
+      name: "Home",
+      item: origin,
+    },
+    ...segments.map((segment, index) => {
+      const position = index + 2;
+      const url = `${origin}/${segments.slice(0, index + 1).join("/")}`;
+      const name = segment.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+
+      return {
+        "@type": "ListItem",
+        position,
+        name,
+        item: url,
+      };
+    }),
+  ];
   const itemListElement = segments.map((segment, index) => {
     const position = index + 1;
     const url = `${origin}/${segments.slice(0, position).join("/")}`;
@@ -211,6 +243,7 @@ const Schema = ({
         <script
           key={`${schema["@type"]}-${index}`}
           type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}
           dangerouslySetInnerHTML={{ __html: JSON.stringify(schema, null, 2) }}
         />
       ))}
