@@ -337,6 +337,12 @@ pub fn create_ghost_commit_with_report(
         OsString::from("GIT_INDEX_FILE"),
         OsString::from(index_path.as_os_str()),
     )];
+    // Use a temporary index so snapshotting does not disturb the user's index state.
+    // Example plumbing sequence:
+    //   GIT_INDEX_FILE=/tmp/index git read-tree HEAD
+    //   GIT_INDEX_FILE=/tmp/index git add --all -- <paths>
+    //   GIT_INDEX_FILE=/tmp/index git write-tree
+    //   GIT_INDEX_FILE=/tmp/index git commit-tree <tree> -p <parent> -m "codex snapshot"
 
     // Pre-populate the temporary index with HEAD so unchanged tracked files
     // are included in the snapshot tree.
@@ -351,6 +357,8 @@ pub fn create_ghost_commit_with_report(
     let mut index_paths = status_snapshot.tracked_paths;
     index_paths.extend(existing_untracked.untracked_files_for_index.iter().cloned());
     let index_paths = dedupe_paths(index_paths);
+    // Stage tracked + new files into the temp index so write-tree reflects the working tree.
+    // We use `git add --all` to make deletions show up in the snapshot tree too.
     add_paths_to_index(repo_root.as_path(), base_env.as_slice(), &index_paths)?;
     if !force_include.is_empty() {
         let mut args = Vec::with_capacity(force_include.len() + 2);
@@ -382,6 +390,8 @@ pub fn create_ghost_commit_with_report(
         result
     };
 
+    // `git commit-tree` writes a detached commit object without updating refs,
+    // which keeps snapshots out of the user's branch history.
     // Retrieve commit ID.
     let commit_id = run_git_for_stdout(
         repo_root.as_path(),
@@ -457,6 +467,9 @@ fn restore_to_commit_inner(
     repo_prefix: Option<&Path>,
     commit_id: &str,
 ) -> Result<(), GitToolingError> {
+    // `git restore` resets both the index and working tree to the snapshot commit.
+    // Example:
+    //   git restore --source <commit> --worktree --staged -- <prefix>
     let mut restore_args = vec![
         OsString::from("restore"),
         OsString::from("--source"),
@@ -502,6 +515,7 @@ fn capture_status_snapshot(
 ) -> Result<StatusSnapshot, GitToolingError> {
     // Ask git for the zero-delimited porcelain status so we can enumerate
     // tracked, untracked, and ignored entries (including ones filtered by prefix).
+    // This keeps the snapshot consistent without multiple git invocations.
     let mut args = vec![
         OsString::from("status"),
         OsString::from("--porcelain=2"),
@@ -746,6 +760,7 @@ fn add_paths_to_index(
             OsString::from("--"),
         ];
         args.extend(chunk.iter().map(|path| path.as_os_str().to_os_string()));
+        // Chunk the argv to avoid oversized command lines on large repos.
         run_git_for_status(repo_root, args, Some(env))?;
     }
 
