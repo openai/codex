@@ -866,7 +866,6 @@ impl ChatWidget {
             .find(|session| session.key == key)
             .map(|session| session.command_display.clone());
         self.add_to_history(history_cell::new_unified_exec_interaction(
-            ev.process_id,
             command_display,
             ev.stdin,
         ));

@@ -377,15 +377,13 @@ impl HistoryCell for PrefixedWrappedHistoryCell {
 
 #[derive(Debug)]
 pub(crate) struct UnifiedExecInteractionCell {
-    process_id: String,
     command_display: Option<String>,
     stdin: String,
 }
 
 impl UnifiedExecInteractionCell {
-    pub(crate) fn new(process_id: String, command_display: Option<String>, stdin: String) -> Self {
+    pub(crate) fn new(command_display: Option<String>, stdin: String) -> Self {
         Self {
-            process_id,
             command_display,
             stdin,
         }
@@ -399,13 +397,7 @@ impl HistoryCell for UnifiedExecInteractionCell {
         }
         let wrap_width = width as usize;
 
-        let process_id = &self.process_id;
-        let mut header_spans = vec![
-            "↳ ".dim(),
-            "Terminal interaction".bold(),
-            " · ".dim(),
-            format!("session {process_id}").dim(),
-        ];
+        let mut header_spans = vec!["↳ ".dim(), "Interacted with background terminal".bold()];
         if let Some(command) = &self.command_display
             && !command.is_empty()
         {
@@ -443,11 +435,10 @@ impl HistoryCell for UnifiedExecInteractionCell {
 }
 
 pub(crate) fn new_unified_exec_interaction(
-    process_id: String,
     command_display: Option<String>,
     stdin: String,
 ) -> UnifiedExecInteractionCell {
-    UnifiedExecInteractionCell::new(process_id, command_display, stdin)
+    UnifiedExecInteractionCell::new(command_display, stdin)
 }
 
 fn truncate_exec_snippet(full_cmd: &str) -> String {
@@ -1635,16 +1626,13 @@ mod tests {
 
     #[test]
     fn unified_exec_interaction_cell_renders_input() {
-        let cell = new_unified_exec_interaction(
-            "42".to_string(),
-            Some("echo hello".to_string()),
-            "ls\npwd".to_string(),
-        );
+        let cell =
+            new_unified_exec_interaction(Some("echo hello".to_string()), "ls\npwd".to_string());
         let lines = render_transcript(&cell);
         assert_eq!(
             lines,
             vec![
-                "↳ Terminal interaction · session 42 · echo hello",
+                "↳ Interacting with background terminal · echo hello",
                 "  └ ls",
                 "    pwd",
             ],
@@ -1653,11 +1641,11 @@ mod tests {
 
     #[test]
     fn unified_exec_interaction_cell_renders_wait() {
-        let cell = new_unified_exec_interaction("7".to_string(), None, String::new());
+        let cell = new_unified_exec_interaction(None, String::new());
         let lines = render_transcript(&cell);
         assert_eq!(
             lines,
-            vec!["↳ Terminal interaction · session 7", "  └ (waited)"],
+            vec!["↳ Interacting with background terminal", "  └ (waited)"],
         );
     }
 
