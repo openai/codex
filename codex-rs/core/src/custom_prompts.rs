@@ -12,6 +12,13 @@ pub fn default_prompts_dir() -> Option<PathBuf> {
         .map(|home| home.join("prompts"))
 }
 
+/// Return the project-local prompts directory: `<cwd>/.codex/prompts`.
+/// If `cwd` is missing or the directory does not exist, returns `None`.
+pub fn project_prompts_dir(cwd: &Path) -> Option<PathBuf> {
+    let prompts_dir = cwd.join(".codex").join("prompts");
+    prompts_dir.is_dir().then_some(prompts_dir)
+}
+
 /// Discover prompt files in the given directory, returning entries sorted by name.
 /// Non-files are ignored. If the directory does not exist or cannot be read, returns empty.
 pub async fn discover_prompts_in(dir: &Path) -> Vec<CustomPrompt> {
@@ -142,6 +149,32 @@ fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>, String) 
         content[consumed..].to_string()
     };
     (desc, hint, body)
+}
+
+/// Collect prompts from the project-local `.codex/prompts` (if present) and
+/// then fall back to the global `$CODEX_HOME/prompts`, deduping by prompt name.
+/// Prompts in the project directory take precedence over global ones.
+pub async fn collect_prompts(cwd: &Path) -> Vec<CustomPrompt> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<CustomPrompt> = Vec::new();
+
+    if let Some(project_dir) = project_prompts_dir(cwd) {
+        for prompt in discover_prompts_in(&project_dir).await {
+            if seen.insert(prompt.name.clone()) {
+                out.push(prompt);
+            }
+        }
+    }
+
+    if let Some(global_dir) = default_prompts_dir() {
+        for prompt in discover_prompts_in(&global_dir).await {
+            if seen.insert(prompt.name.clone()) {
+                out.push(prompt);
+            }
+        }
+    }
+
+    out
 }
 
 #[cfg(test)]
