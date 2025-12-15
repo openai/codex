@@ -1178,7 +1178,14 @@ impl ChatComposer {
                     }
                 }
 
-                let expanded_prompt = match expand_custom_prompt(&text, &self.custom_prompts) {
+                // If the first line is a custom prompt invocation (e.g. `/prompts:name ...`)
+                // and there is additional user text on subsequent lines, expand only the
+                // first line as the prompt and preserve the remaining lines verbatim.
+                let (first_line, trailing) = match text.split_once('\n') {
+                    Some((head, tail)) => (head, Some(tail)),
+                    None => (text.as_str(), None),
+                };
+                let expanded_prompt = match expand_custom_prompt(first_line, &self.custom_prompts) {
                     Ok(expanded) => expanded,
                     Err(err) => {
                         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
@@ -1190,7 +1197,15 @@ impl ChatComposer {
                     }
                 };
                 if let Some(expanded) = expanded_prompt {
-                    text = expanded;
+                    text = if let Some(rest) = trailing {
+                        if rest.is_empty() {
+                            expanded
+                        } else {
+                            format!("{expanded}\n{rest}")
+                        }
+                    } else {
+                        expanded
+                    };
                 }
                 if text.is_empty() && !has_attachments {
                     return (InputResult::None, true);
