@@ -39,3 +39,33 @@ async fn mcp_add_writes_to_repo_local_codex_dir_when_in_git_repo() -> Result<()>
 
     Ok(())
 }
+
+#[tokio::test]
+async fn mcp_add_with_global_flag_writes_to_codex_home_even_in_git_repo() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo = TempDir::new()?;
+
+    std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(repo.path())
+        .status()
+        .expect("git init");
+
+    let mut cmd = codex_command(codex_home.path(), repo.path())?;
+    cmd.args(["mcp", "add", "-g", "docs", "--", "echo", "hello"])
+        .assert()
+        .success()
+        .stdout(contains("Added MCP server 'docs'"));
+
+    let repo_codex_dir = repo.path().join(".codex");
+    let repo_servers = load_global_mcp_servers(&repo_codex_dir, None).await?;
+    assert!(
+        repo_servers.is_empty(),
+        "expected -g add to avoid writing repo-local config"
+    );
+
+    let home_servers = load_global_mcp_servers(codex_home.path(), None).await?;
+    assert!(home_servers.contains_key("docs"));
+
+    Ok(())
+}

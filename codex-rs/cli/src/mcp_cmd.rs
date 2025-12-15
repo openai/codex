@@ -85,6 +85,10 @@ pub struct AddArgs {
     /// Name for the MCP server configuration.
     pub name: String,
 
+    /// Write to `$CODEX_HOME/config.toml` even when inside a git repo.
+    #[arg(short = 'g', long = "global")]
+    pub global: bool,
+
     #[command(flatten)]
     pub transport_args: AddMcpTransportArgs,
 }
@@ -146,6 +150,10 @@ pub struct AddMcpStreamableHttpArgs {
 pub struct RemoveArgs {
     /// Name of the MCP server configuration to remove.
     pub name: String,
+
+    /// Remove from `$CODEX_HOME/config.toml` even when inside a git repo.
+    #[arg(short = 'g', long = "global")]
+    pub global: bool,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -207,6 +215,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     let AddArgs {
         name,
+        global,
         transport_args,
     } = add_args;
 
@@ -214,9 +223,13 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let cwd = std::env::current_dir().context("failed to resolve current directory")?;
-    let target_config_dir = resolve_root_git_project_for_trust(&cwd)
-        .map(|repo_root| repo_root.join(".codex"))
-        .unwrap_or_else(|| codex_home.clone());
+    let target_config_dir = if global {
+        codex_home.clone()
+    } else {
+        resolve_root_git_project_for_trust(&cwd)
+            .map(|repo_root| repo_root.join(".codex"))
+            .unwrap_or_else(|| codex_home.clone())
+    };
     std::fs::create_dir_all(&target_config_dir).with_context(|| {
         format!(
             "failed to create config directory at {}",
@@ -342,15 +355,19 @@ async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveAr
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
 
-    let RemoveArgs { name } = remove_args;
+    let RemoveArgs { name, global } = remove_args;
 
     validate_server_name(&name)?;
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let cwd = std::env::current_dir().context("failed to resolve current directory")?;
-    let target_config_dir = resolve_root_git_project_for_trust(&cwd)
-        .map(|repo_root| repo_root.join(".codex"))
-        .unwrap_or_else(|| codex_home.clone());
+    let target_config_dir = if global {
+        codex_home.clone()
+    } else {
+        resolve_root_git_project_for_trust(&cwd)
+            .map(|repo_root| repo_root.join(".codex"))
+            .unwrap_or_else(|| codex_home.clone())
+    };
 
     let mut servers = load_global_mcp_servers(&target_config_dir, None)
         .await
