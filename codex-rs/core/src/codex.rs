@@ -310,7 +310,7 @@ impl Codex {
             let event = Event {
                 id: session
                     .next_internal_sub_id
-                    .fetch_add(1, Ordering::SeqCst)
+                    .load(std::sync::atomic::Ordering::SeqCst)
                     .to_string(),
                 msg: remote_models_error,
             };
