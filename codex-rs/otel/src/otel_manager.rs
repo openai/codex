@@ -24,7 +24,8 @@ use std::time::Duration;
 use std::time::Instant;
 use strum_macros::Display;
 use tokio::time::error::Elapsed;
-use tracing::{trace_span, Span};
+use tracing::Span;
+use tracing::trace_span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[derive(Debug, Clone, Serialize, Display)]
