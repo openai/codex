@@ -64,6 +64,8 @@ pub use service::ConfigServiceError;
 
 const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex-max";
 
+pub use codex_git::GhostSnapshotConfig;
+
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
@@ -265,6 +267,9 @@ pub struct Config {
     /// If set to `true`, use the experimental official Rust MCP client.
     /// https://github.com/modelcontextprotocol/rust-sdk
     pub use_experimental_use_rmcp_client: bool,
+
+    /// Settings for ghost snapshots (used for undo).
+    pub ghost_snapshot: GhostSnapshotConfig,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
@@ -658,6 +663,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub features: Option<FeaturesToml>,
 
+    /// Settings for ghost snapshots (used for undo).
+    #[serde(default)]
+    pub ghost_snapshot: Option<GhostSnapshotToml>,
+
     /// When `true`, checks for Codex updates on startup and surfaces update prompts.
     /// Set to `false` only if your Codex updates are centrally managed.
     /// Defaults to `true`.
@@ -745,6 +754,17 @@ impl From<ToolsToml> for Tools {
             view_image: tools_toml.view_image,
         }
     }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct GhostSnapshotToml {
+    /// Exclude untracked files larger than this many bytes from ghost snapshots.
+    #[serde(alias = "ignore_untracked_files_over_bytes")]
+    pub ignore_large_untracked_files: Option<i64>,
+    /// Ignore untracked directories that contain this many files or more.
+    /// (Still emits a warning.)
+    #[serde(alias = "large_untracked_dir_warning_threshold")]
+    pub ignore_large_untracked_dirs: Option<i64>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1047,6 +1067,26 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
+        let ghost_snapshot = {
+            let mut config = GhostSnapshotConfig::default();
+            if let Some(ghost_snapshot) = cfg.ghost_snapshot.as_ref()
+                && let Some(ignore_over_bytes) = ghost_snapshot.ignore_large_untracked_files
+            {
+                config.ignore_large_untracked_files = if ignore_over_bytes > 0 {
+                    Some(ignore_over_bytes)
+                } else {
+                    None
+                };
+            }
+            if let Some(ghost_snapshot) = cfg.ghost_snapshot.as_ref()
+                && let Some(threshold) = ghost_snapshot.ignore_large_untracked_dirs
+            {
+                config.ignore_large_untracked_dirs =
+                    if threshold > 0 { Some(threshold) } else { None };
+            }
+            config
+        };
+
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
@@ -1179,6 +1219,7 @@ impl Config {
             tools_web_search_request,
             use_experimental_unified_exec_tool,
             use_experimental_use_rmcp_client,
+            ghost_snapshot,
             features,
             active_profile: active_profile_name,
             active_project,
@@ -2940,6 +2981,7 @@ model_verbosity = "high"
                 tools_web_search_request: false,
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
+                ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
@@ -3014,6 +3056,7 @@ model_verbosity = "high"
             tools_web_search_request: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
+            ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -3103,6 +3146,7 @@ model_verbosity = "high"
             tools_web_search_request: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
+            ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -3178,6 +3222,7 @@ model_verbosity = "high"
             tools_web_search_request: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
+            ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },
