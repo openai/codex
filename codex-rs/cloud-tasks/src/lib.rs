@@ -140,9 +140,9 @@ async fn resolve_git_ref_with_git_info(
     }
 
     if let Ok(cwd) = std::env::current_dir() {
-        if let Some(branch) = git_info.default_branch_name(&cwd).await {
+        if let Some(branch) = git_info.current_branch_name(&cwd).await {
             branch
-        } else if let Some(branch) = git_info.current_branch_name(&cwd).await {
+        } else if let Some(branch) = git_info.default_branch_name(&cwd).await {
             branch
         } else {
             "main".to_string()
@@ -158,7 +158,6 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
         environment,
         branch,
         attempts,
-        branch,
     } = args;
     let ctx = init_backend("codex_cloud_tasks_exec").await?;
     let prompt = resolve_query_input(query)?;
@@ -168,7 +167,7 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
         &*ctx.backend,
         &env_id,
         &prompt,
-        &branch,
+        &git_ref,
         false,
         attempts,
     )
@@ -2030,8 +2029,8 @@ fn pretty_lines_from_error(raw: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::resolve_git_ref_with_git_info;
     use super::*;
+    use crate::resolve_git_ref_with_git_info;
     use codex_cloud_tasks_client::DiffSummary;
     use codex_cloud_tasks_client::MockClient;
     use codex_cloud_tasks_client::TaskId;
@@ -2094,7 +2093,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_prefers_default_branch_when_available() {
+    async fn prefers_current_branch_when_available() {
         let git_ref = resolve_git_ref_with_git_info(
             None,
             &StubGitInfo::new(
@@ -2104,7 +2103,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(git_ref, "default-main");
+        assert_eq!(git_ref, "feature/current");
     }
 
     #[tokio::test]

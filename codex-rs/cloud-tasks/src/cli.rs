@@ -34,10 +34,6 @@ pub struct ExecCommand {
     #[arg(long = "env", value_name = "ENV_ID")]
     pub environment: String,
 
-    /// Git branch to run in Codex Cloud.
-    #[arg(long = "branch", value_name = "BRANCH", default_value = "main")]
-    pub branch: String,
-
     /// Number of assistant attempts (best-of-N).
     #[arg(
         long = "attempts",
@@ -46,7 +42,7 @@ pub struct ExecCommand {
     )]
     pub attempts: usize,
 
-    /// Git branch to attribute to the task (defaults to repo default/current branch).
+    /// Git branch to run in Codex Cloud (defaults to repo default/current branch).
     #[arg(long = "branch", value_name = "BRANCH")]
     pub branch: Option<String>,
 }
