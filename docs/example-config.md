@@ -152,6 +152,12 @@ group_id_strategy = "hashed"
 # Include git metadata (branch/commit/dirty) in message source_description (default: false)
 include_git_metadata = false
 
+# Include one-time ownership/system episodes per group (default: false)
+include_system_messages = false
+
+# Optional stable per-user key for deriving the Global scope group id (avoid cross-user sharing).
+# user_scope_key = "me@example.com"
+
 # Scopes to ingest automatically (default: ["session","workspace"])
 ingest_scopes = ["session", "workspace"]
 
@@ -167,6 +173,8 @@ retry_max_backoff_ms = 5000
 [graphiti.recall]
 # Enable recall + prompt injection (default: false)
 enabled = false
+# static (default) | auto
+scopes_mode = "static"
 timeout_ms = 750
 max_facts = 10
 max_fact_chars = 280
@@ -177,6 +185,10 @@ scopes = ["session", "workspace"]
 # Global scope is promotion-only by default.
 enabled = false
 group_id = "codex-global"
+
+[graphiti.auto_promote]
+# Detect supported "Memory Directives" in user turns and enqueue extra episodes (default: false)
+enabled = false
 
 ################################################################################
 # UI, Notifications, and Misc

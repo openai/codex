@@ -27,11 +27,21 @@ slowing the agent loop (ingestion is async; recall is time-bounded and fail-open
    consent = true
    endpoint = "http://localhost:8000"
    group_id_strategy = "hashed"
+   # Optional: include a one-time ownership context episode per group
+   include_system_messages = true
+   # Optional: stable per-user key for deriving Global scope group_id
+   # user_scope_key = "me@example.com"
    ingest_scopes = ["session", "workspace"]
 
    [graphiti.recall]
    enabled = true
+   # static (default) | auto (includes global only for "my preferences/terminology" queries)
+   scopes_mode = "auto"
    scopes = ["session", "workspace"]
+
+   [graphiti.auto_promote]
+   # Optional: promote explicit Memory Directives like "preference (global): …"
+   enabled = true
    ```
 
 3. Check resolved status:
@@ -40,10 +50,10 @@ slowing the agent loop (ingestion is async; recall is time-bounded and fail-open
 ## End-to-end scenario
 1. Start Codex in your repo (interactive):
    - `codex`
-2. In the first turn, tell Codex a stable preference:
-   - “In this repo, prefer `rg` over `grep` for searches.”
+2. In the first turn, promote a stable preference via a Memory Directive:
+   - `preference (global): I prefer rg over grep for searches.`
 3. Continue the conversation (or start a new one) and ask:
-   - “What should we use for searching in this repo?”
+   - “What is my preference for searching in this repo?”
 4. Confirm recall is being injected:
    - Use a prompt inspection tool, or enable request logging in your setup.
    - You should see a `<graphiti_memory>` section included as a system message when recall returns facts.
@@ -77,4 +87,3 @@ From the Graphiti repo:
 Common failure modes:
 - Neo4j not healthy → check `docker compose logs neo4j` and credentials.
 - `/search` errors → ensure your Graphiti container has required model env vars (e.g. `OPENAI_API_KEY`, `OPENAI_BASE_URL`).
-
