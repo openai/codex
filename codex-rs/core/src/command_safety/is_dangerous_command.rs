@@ -67,10 +67,10 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
 
     match cmd0 {
         Some(cmd) if cmd.ends_with("git") || cmd.ends_with("/git") => {
-            matches!(command.get(1).map(String::as_str), Some("reset" | "rm"))
+            matches!(command.get(1).map(String::as_str), Some("reset" | "rm" | "--force" ))
         }
 
-        Some("rm") => matches!(command.get(1).map(String::as_str), Some("-f" | "-rf")),
+        Some("rm") => matches!(command.get(1).map(String::as_str), Some("-f" | "-rf" | "-Rf" | "-fr" | "-fR" | "--force" | )),
 
         // for sudo <cmd> simply do the check for <cmd>
         Some("sudo") => is_dangerous_to_call_with_exec(&command[1..]),
