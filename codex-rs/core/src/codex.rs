@@ -2108,6 +2108,18 @@ pub(crate) async fn run_task(
     if input.is_empty() {
         return None;
     }
+
+    let subagent_directive = match turn_context.client.get_session_source() {
+        SessionSource::SubAgent(_) => None,
+        _ => match input.first() {
+            Some(UserInput::Text { text }) => {
+                crate::subagents::parse_subagent_invocation(text).unwrap_or_default()
+            }
+            _ => None,
+        },
+    };
+    let mut subagent_directive_applied = false;
+
     let event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
@@ -2123,15 +2135,17 @@ pub(crate) async fn run_task(
             .await;
     }
 
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    let response_item: ResponseItem = initial_input_for_turn.clone().into();
-    sess.record_response_item_and_emit_turn_item(turn_context.as_ref(), response_item)
-        .await;
-
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
             .await;
     }
+
+    // Record the user's input after any injected skill instructions so that the
+    // user's message remains the most recent "user" content for this turn.
+    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+    let response_item: ResponseItem = initial_input_for_turn.clone().into();
+    sess.record_response_item_and_emit_turn_item(turn_context.as_ref(), response_item)
+        .await;
 
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
         .await;
@@ -2152,11 +2166,28 @@ pub(crate) async fn run_task(
             .collect::<Vec<ResponseItem>>();
 
         // Construct the input that we will send to the model.
-        let turn_input: Vec<ResponseItem> = {
+        let mut turn_input: Vec<ResponseItem> = {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
             sess.clone_history().await.get_history_for_prompt()
         };
+        if let Some(invocation) = subagent_directive.as_ref()
+            && !subagent_directive_applied
+        {
+            subagent_directive_applied = true;
+            turn_input.push(ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!(
+                        "User explicitly requested to consult subagent `@{}` with prompt: {}\n\
+Call the `run_subagent` tool with {{\"name\":\"{}\",\"prompt\":...}} (subagent runs with no prior conversation history). \
+Do not mention internal tool names in your answer. Then respond to the user.",
+                        invocation.name, invocation.prompt, invocation.name
+                    ),
+                }],
+            });
+        }
 
         let turn_input_messages = turn_input
             .iter()
@@ -3344,6 +3375,7 @@ mod tests {
                 Arc::clone(&session),
                 Arc::clone(&turn_context),
                 tracker,
+                tokio_util::sync::CancellationToken::new(),
                 call,
             )
             .await
@@ -3521,6 +3553,7 @@ mod tests {
                 session: Arc::clone(&session),
                 turn: Arc::clone(&turn_context),
                 tracker: Arc::clone(&turn_diff_tracker),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
                 call_id,
                 tool_name: tool_name.to_string(),
                 payload: ToolPayload::Function {
@@ -3558,6 +3591,7 @@ mod tests {
                 session: Arc::clone(&session),
                 turn: Arc::clone(&turn_context),
                 tracker: Arc::clone(&turn_diff_tracker),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
                 call_id: "test-call-2".to_string(),
                 tool_name: tool_name.to_string(),
                 payload: ToolPayload::Function {
@@ -3613,6 +3647,7 @@ mod tests {
                 session: Arc::clone(&session),
                 turn: Arc::clone(&turn_context),
                 tracker: Arc::clone(&tracker),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
                 call_id: "exec-call".to_string(),
                 tool_name: "exec_command".to_string(),
                 payload: ToolPayload::Function {

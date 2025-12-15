@@ -58,6 +58,118 @@ use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
 
+#[derive(Debug)]
+pub(crate) struct SubAgentRunCell {
+    call_id: String,
+    name: String,
+    description: String,
+    color: Option<Color>,
+    prompt: String,
+    started: Option<Instant>,
+    completed: Option<(i64, bool)>,
+    animations_enabled: bool,
+}
+
+pub(crate) fn new_active_subagent_run(
+    call_id: String,
+    name: String,
+    description: String,
+    color: Option<String>,
+    prompt: String,
+    animations_enabled: bool,
+) -> SubAgentRunCell {
+    SubAgentRunCell {
+        call_id,
+        name,
+        description,
+        color: color.as_deref().and_then(parse_named_color),
+        prompt,
+        started: Some(Instant::now()),
+        completed: None,
+        animations_enabled,
+    }
+}
+
+impl SubAgentRunCell {
+    pub(crate) fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    pub(crate) fn complete(&mut self, duration_ms: i64, success: bool) {
+        self.completed = Some((duration_ms, success));
+    }
+
+    pub(crate) fn mark_failed(&mut self) {
+        let duration_ms = self
+            .started
+            .as_ref()
+            .map(|t| i64::try_from(t.elapsed().as_millis()).unwrap_or(i64::MAX))
+            .unwrap_or(0);
+        self.complete(duration_ms, false);
+    }
+
+    fn header_line(&self) -> Line<'static> {
+        let agent_span = match self.color {
+            Some(c) => Span::from(format!("@{}", self.name))
+                .style(Style::default().fg(c).add_modifier(Modifier::BOLD)),
+            None => format!("@{}", self.name).bold(),
+        };
+
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.push(spinner(self.started, self.animations_enabled));
+        spans.push(" Subagent ".into());
+        spans.push(agent_span);
+        if !self.description.is_empty() {
+            spans.push(" ".into());
+            spans.push(self.description.clone().dim());
+        }
+        if let Some((duration_ms, success)) = self.completed {
+            let status = if success { "ok" } else { "error" };
+            spans.push(" ".into());
+            spans.push(format!("({status}, {duration_ms}ms)").dim());
+        }
+        Line::from(spans)
+    }
+
+    fn prompt_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if self.prompt.trim().is_empty() {
+            return Vec::new();
+        }
+
+        // Use textwrap for plain-string wrapping as recommended.
+        let options = textwrap::Options::new(width as usize)
+            .initial_indent("  prompt: ")
+            .subsequent_indent("          ");
+        textwrap::wrap(&self.prompt, options)
+            .into_iter()
+            .map(|l| Line::from(l.into_owned().dim()))
+            .collect()
+    }
+}
+
+impl HistoryCell for SubAgentRunCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut out = Vec::new();
+        out.push(self.header_line());
+        out.extend(self.prompt_lines(width));
+        out
+    }
+}
+
+fn parse_named_color(raw: &str) -> Option<Color> {
+    match raw.to_ascii_lowercase().as_str() {
+        "black" => Some(Color::Black),
+        "red" => Some(Color::Red),
+        "green" => Some(Color::Green),
+        "yellow" => Some(Color::Yellow),
+        "blue" => Some(Color::Blue),
+        "magenta" => Some(Color::Magenta),
+        "cyan" => Some(Color::Cyan),
+        "gray" | "grey" => Some(Color::Gray),
+        _ => None,
+    }
+}
+
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
 /// scrollable list.

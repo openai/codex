@@ -19,6 +19,7 @@ use ratatui::widgets::WidgetRef;
 use super::chat_composer_history::ChatComposerHistory;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
+use super::file_search_popup::AtCompletionItem;
 use super::file_search_popup::FileSearchPopup;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
@@ -54,6 +55,7 @@ use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
+use crate::subagent_search::SubAgentMatch;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
@@ -348,6 +350,16 @@ impl ChatComposer {
 
     /// Integrate results from an asynchronous file search.
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
+        self.on_at_search_result(query, Vec::new(), matches);
+    }
+
+    /// Integrate results from an asynchronous `@` search (subagents + files).
+    pub(crate) fn on_at_search_result(
+        &mut self,
+        query: String,
+        subagents: Vec<SubAgentMatch>,
+        matches: Vec<FileMatch>,
+    ) {
         // Only apply if user is still editing a token starting with `query`.
         let current_opt = Self::current_at_token(&self.textarea);
         let Some(current_token) = current_opt else {
@@ -359,7 +371,7 @@ impl ChatComposer {
         }
 
         if let ActivePopup::File(popup) = &mut self.active_popup {
-            popup.set_matches(&query, matches);
+            popup.set_at_matches(&query, subagents, matches);
         }
     }
 
@@ -612,9 +624,6 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
-        let ActivePopup::File(popup) = &mut self.active_popup else {
-            unreachable!();
-        };
 
         match key_event {
             KeyEvent {
@@ -625,6 +634,9 @@ impl ChatComposer {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
+                let ActivePopup::File(popup) = &mut self.active_popup else {
+                    unreachable!();
+                };
                 popup.move_up();
                 (InputResult::None, true)
             }
@@ -637,6 +649,9 @@ impl ChatComposer {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
+                let ActivePopup::File(popup) = &mut self.active_popup else {
+                    unreachable!();
+                };
                 popup.move_down();
                 (InputResult::None, true)
             }
@@ -658,62 +673,76 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                let Some(sel) = popup.selected_match() else {
+                let selection = {
+                    let ActivePopup::File(popup) = &mut self.active_popup else {
+                        unreachable!();
+                    };
+                    popup.selected_item().cloned()
+                };
+
+                let Some(selection) = selection else {
                     self.active_popup = ActivePopup::None;
                     return (InputResult::None, true);
                 };
 
-                let sel_path = sel.to_string();
-                // If selected path looks like an image (png/jpeg), attach as image instead of inserting text.
-                let is_image = Self::is_image_path(&sel_path);
-                if is_image {
-                    // Determine dimensions; if that fails fall back to normal path insertion.
-                    let path_buf = PathBuf::from(&sel_path);
-                    if let Ok((w, h)) = image::image_dimensions(&path_buf) {
-                        // Remove the current @token (mirror logic from insert_selected_path without inserting text)
-                        // using the flat text and byte-offset cursor API.
-                        let cursor_offset = self.textarea.cursor();
-                        let text = self.textarea.text();
-                        // Clamp to a valid char boundary to avoid panics when slicing.
-                        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-                        let before_cursor = &text[..safe_cursor];
-                        let after_cursor = &text[safe_cursor..];
-
-                        // Determine token boundaries in the full text.
-                        let start_idx = before_cursor
-                            .char_indices()
-                            .rfind(|(_, c)| c.is_whitespace())
-                            .map(|(idx, c)| idx + c.len_utf8())
-                            .unwrap_or(0);
-                        let end_rel_idx = after_cursor
-                            .char_indices()
-                            .find(|(_, c)| c.is_whitespace())
-                            .map(|(idx, _)| idx)
-                            .unwrap_or(after_cursor.len());
-                        let end_idx = safe_cursor + end_rel_idx;
-
-                        self.textarea.replace_range(start_idx..end_idx, "");
-                        self.textarea.set_cursor(start_idx);
-
-                        let format_label = match Path::new(&sel_path)
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .map(str::to_ascii_lowercase)
-                        {
-                            Some(ext) if ext == "png" => "PNG",
-                            Some(ext) if ext == "jpg" || ext == "jpeg" => "JPEG",
-                            _ => "IMG",
-                        };
-                        self.attach_image(path_buf, w, h, format_label);
-                        // Add a trailing space to keep typing fluid.
-                        self.textarea.insert_str(" ");
-                    } else {
-                        // Fallback to plain path insertion if metadata read fails.
-                        self.insert_selected_path(&sel_path);
+                match selection {
+                    AtCompletionItem::SubAgent(subagent) => {
+                        self.insert_selected_subagent(&subagent.name);
                     }
-                } else {
-                    // Non-image: inserting file path.
-                    self.insert_selected_path(&sel_path);
+                    AtCompletionItem::File(file_match) => {
+                        let sel_path = file_match.path;
+                        // If selected path looks like an image (png/jpeg), attach as image instead of inserting text.
+                        let is_image = Self::is_image_path(&sel_path);
+                        if is_image {
+                            // Determine dimensions; if that fails fall back to normal path insertion.
+                            let path_buf = PathBuf::from(&sel_path);
+                            if let Ok((w, h)) = image::image_dimensions(&path_buf) {
+                                // Remove the current @token (mirror logic from insert_selected_path without inserting text)
+                                // using the flat text and byte-offset cursor API.
+                                let cursor_offset = self.textarea.cursor();
+                                let text = self.textarea.text();
+                                // Clamp to a valid char boundary to avoid panics when slicing.
+                                let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+                                let before_cursor = &text[..safe_cursor];
+                                let after_cursor = &text[safe_cursor..];
+
+                                // Determine token boundaries in the full text.
+                                let start_idx = before_cursor
+                                    .char_indices()
+                                    .rfind(|(_, c)| c.is_whitespace())
+                                    .map(|(idx, c)| idx + c.len_utf8())
+                                    .unwrap_or(0);
+                                let end_rel_idx = after_cursor
+                                    .char_indices()
+                                    .find(|(_, c)| c.is_whitespace())
+                                    .map(|(idx, _)| idx)
+                                    .unwrap_or(after_cursor.len());
+                                let end_idx = safe_cursor + end_rel_idx;
+
+                                self.textarea.replace_range(start_idx..end_idx, "");
+                                self.textarea.set_cursor(start_idx);
+
+                                let format_label = match Path::new(&sel_path)
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .map(str::to_ascii_lowercase)
+                                {
+                                    Some(ext) if ext == "png" => "PNG",
+                                    Some(ext) if ext == "jpg" || ext == "jpeg" => "JPEG",
+                                    _ => "IMG",
+                                };
+                                self.attach_image(path_buf, w, h, format_label);
+                                // Add a trailing space to keep typing fluid.
+                                self.textarea.insert_str(" ");
+                            } else {
+                                // Fallback to plain path insertion if metadata read fails.
+                                self.insert_selected_path(&sel_path);
+                            }
+                        } else {
+                            // Non-image: inserting file path.
+                            self.insert_selected_path(&sel_path);
+                        }
+                    }
                 }
                 // No selection: treat Enter as closing the popup/session.
                 self.active_popup = ActivePopup::None;
@@ -999,6 +1028,41 @@ impl ChatComposer {
         let end_idx = safe_cursor + end_rel_idx;
 
         let inserted = format!("${skill_name}");
+
+        let mut new_text =
+            String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
+        new_text.push_str(&text[..start_idx]);
+        new_text.push_str(&inserted);
+        new_text.push(' ');
+        new_text.push_str(&text[end_idx..]);
+
+        self.textarea.set_text(&new_text);
+        let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
+        self.textarea.set_cursor(new_cursor);
+    }
+
+    fn insert_selected_subagent(&mut self, subagent_name: &str) {
+        let cursor_offset = self.textarea.cursor();
+        let text = self.textarea.text();
+        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+
+        let before_cursor = &text[..safe_cursor];
+        let after_cursor = &text[safe_cursor..];
+
+        let start_idx = before_cursor
+            .char_indices()
+            .rfind(|(_, c)| c.is_whitespace())
+            .map(|(idx, c)| idx + c.len_utf8())
+            .unwrap_or(0);
+
+        let end_rel_idx = after_cursor
+            .char_indices()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(after_cursor.len());
+        let end_idx = safe_cursor + end_rel_idx;
+
+        let inserted = format!("@{subagent_name}");
 
         let mut new_text =
             String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
@@ -1629,6 +1693,10 @@ impl ChatComposer {
         }
 
         let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
+        if prompt_prefix.starts_with(name) {
+            return true;
+        }
+
         self.custom_prompts
             .iter()
             .any(|p| fuzzy_match(&format!("{prompt_prefix}{}", p.name), name).is_some())
@@ -3997,6 +4065,35 @@ mod tests {
         assert!(
             matches!(composer.active_popup, ActivePopup::None),
             "'/zzz' should not activate slash popup because it is not a prefix of any built-in command"
+        );
+    }
+
+    #[test]
+    fn slash_popup_activated_for_custom_prompt_name_prefix() {
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "handover".to_string(),
+            path: "/tmp/handover.md".to_string().into(),
+            content: "body".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer.set_text_content("/han".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "custom prompt name prefix should activate slash popup"
         );
     }
 }

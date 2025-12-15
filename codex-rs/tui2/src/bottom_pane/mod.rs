@@ -497,6 +497,16 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn on_at_search_result(
+        &mut self,
+        query: String,
+        subagents: Vec<crate::subagent_search::SubAgentMatch>,
+        matches: Vec<FileMatch>,
+    ) {
+        self.composer.on_at_search_result(query, subagents, matches);
+        self.request_redraw();
+    }
+
     pub(crate) fn attach_image(
         &mut self,
         path: PathBuf,

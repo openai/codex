@@ -9,6 +9,7 @@ use codex_protocol::openai_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
+use crate::subagent_search::SubAgentMatch;
 
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
@@ -40,8 +41,9 @@ pub(crate) enum AppEvent {
     /// Result of a completed asynchronous file search. The `query` echoes the
     /// original search term so the UI can decide whether the results are
     /// still relevant.
-    FileSearchResult {
+    AtSearchResult {
         query: String,
+        subagents: Vec<SubAgentMatch>,
         matches: Vec<FileMatch>,
     },
 

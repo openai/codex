@@ -983,6 +983,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
+    use crate::tools::handlers::RunSubagentHandler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
@@ -1000,6 +1001,7 @@ pub(crate) fn build_specs(
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
+    let run_subagent_handler = Arc::new(RunSubagentHandler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1039,6 +1041,9 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+
+    builder.push_spec(create_run_subagent_tool());
+    builder.register_handler("run_subagent", run_subagent_handler);
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
@@ -1116,6 +1121,36 @@ pub(crate) fn build_specs(
     }
 
     builder
+}
+
+fn create_run_subagent_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "name".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Subagent name (file stem under .codex/agents or CODEX_HOME/agents).".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "prompt".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Prompt to send to the subagent as the only user message.".to_string(),
+            ),
+        },
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: "run_subagent".to_string(),
+        description: "Run a named subagent with an explicit prompt. The subagent runs in an isolated session (no prior conversation history).".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["name".to_string(), "prompt".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
 }
 
 #[cfg(test)]
@@ -1254,6 +1289,7 @@ mod tests {
             create_list_mcp_resource_templates_tool(),
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
+            create_run_subagent_tool(),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {},
             create_view_image_tool(),
@@ -1299,6 +1335,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "run_subagent",
                 "apply_patch",
                 "view_image",
             ],
@@ -1316,6 +1353,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "run_subagent",
                 "apply_patch",
                 "view_image",
             ],
@@ -1336,6 +1374,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "run_subagent",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1357,6 +1396,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "run_subagent",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1375,6 +1415,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "run_subagent",
                 "view_image",
             ],
         );
@@ -1391,6 +1432,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "run_subagent",
                 "apply_patch",
                 "view_image",
             ],
@@ -1408,6 +1450,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "run_subagent",
                 "view_image",
             ],
         );
@@ -1424,6 +1467,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "run_subagent",
                 "apply_patch",
                 "view_image",
             ],
@@ -1442,6 +1486,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "run_subagent",
                 "apply_patch",
                 "view_image",
             ],
@@ -1462,6 +1507,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "run_subagent",
                 "web_search",
                 "view_image",
             ],

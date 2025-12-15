@@ -33,6 +33,12 @@ fn compute_desc_col(
     content_width: u16,
 ) -> usize {
     let visible_range = start_idx..(start_idx + visible_items);
+    let content_width = content_width.max(1) as usize;
+    let has_description = rows_all
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| visible_range.contains(i))
+        .any(|(_, r)| r.description.is_some());
     let max_name_width = rows_all
         .iter()
         .enumerate()
@@ -40,10 +46,24 @@ fn compute_desc_col(
         .map(|(_, r)| Line::from(r.name.clone()).width())
         .max()
         .unwrap_or(0);
-    let mut desc_col = max_name_width.saturating_add(2);
-    if (desc_col as u16) >= content_width {
-        desc_col = content_width.saturating_sub(1) as usize;
-    }
+
+    // When there are described items (e.g. agents), don't let unrelated long
+    // names (e.g. file paths) push the description column far to the right.
+    let max_name_width_for_desc = if has_description {
+        rows_all
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| visible_range.contains(i))
+            .filter(|(_, r)| r.description.is_some())
+            .map(|(_, r)| Line::from(r.name.clone()).width())
+            .max()
+            .unwrap_or(max_name_width)
+    } else {
+        max_name_width
+    };
+
+    let mut desc_col = max_name_width_for_desc.saturating_add(2);
+    desc_col = desc_col.min(content_width.saturating_sub(1));
     desc_col
 }
 

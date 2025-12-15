@@ -46,6 +46,8 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SkillLoadOutcomeInfo;
 use codex_core::protocol::StreamErrorEvent;
+use codex_core::protocol::SubAgentRunBeginEvent;
+use codex_core::protocol::SubAgentRunEndEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TerminalInteractionEvent;
 use codex_core::protocol::TokenUsage;
@@ -104,6 +106,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::SubAgentRunCell;
 use crate::markdown::append_markdown;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
@@ -113,6 +116,7 @@ use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
+use crate::subagent_search::SubAgentMatch;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod interrupts;
@@ -920,6 +924,57 @@ impl ChatWidget {
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(message);
+    }
+
+    fn on_subagent_run_begin(&mut self, ev: SubAgentRunBeginEvent) {
+        self.flush_answer_stream_with_separator();
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(history_cell::new_active_subagent_run(
+            ev.call_id,
+            ev.name,
+            ev.description,
+            ev.color,
+            ev.prompt,
+            self.config.animations,
+        )));
+        self.request_redraw();
+    }
+
+    fn on_subagent_run_end(&mut self, ev: SubAgentRunEndEvent) {
+        self.flush_answer_stream_with_separator();
+
+        let SubAgentRunEndEvent {
+            call_id,
+            duration_ms,
+            success,
+        } = ev;
+
+        let extra_cell = match self
+            .active_cell
+            .as_mut()
+            .and_then(|cell| cell.as_any_mut().downcast_mut::<SubAgentRunCell>())
+        {
+            Some(cell) if cell.call_id() == call_id.as_str() => cell.complete(duration_ms, success),
+            _ => {
+                self.flush_active_cell();
+                let mut cell = history_cell::new_active_subagent_run(
+                    call_id,
+                    "<unknown>".to_string(),
+                    "subagent".to_string(),
+                    None,
+                    String::new(),
+                    self.config.animations,
+                );
+                let extra_cell = cell.complete(duration_ms, success);
+                self.active_cell = Some(Box::new(cell));
+                extra_cell
+            }
+        };
+
+        self.flush_active_cell();
+        if let Some(extra) = extra_cell {
+            self.add_boxed_history(extra);
+        }
     }
 
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
@@ -1885,6 +1940,8 @@ impl ChatWidget {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 self.on_background_event(message)
             }
+            EventMsg::SubAgentRunBegin(ev) => self.on_subagent_run_begin(ev),
+            EventMsg::SubAgentRunEnd(ev) => self.on_subagent_run_end(ev),
             EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
             EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
             EventMsg::StreamError(StreamErrorEvent { message, .. }) => {
@@ -3019,9 +3076,15 @@ impl ChatWidget {
         }
     }
 
-    /// Forward file-search results to the bottom pane.
-    pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
-        self.bottom_pane.on_file_search_result(query, matches);
+    /// Forward `@` completion results to the bottom pane.
+    pub(crate) fn apply_at_search_result(
+        &mut self,
+        query: String,
+        subagents: Vec<SubAgentMatch>,
+        matches: Vec<FileMatch>,
+    ) {
+        self.bottom_pane
+            .on_at_search_result(query, subagents, matches);
     }
 
     /// Handle Ctrl-C key press.

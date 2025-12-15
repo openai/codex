@@ -2140,10 +2140,21 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
 async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let python = match which::which("python").or_else(|_| which::which("python3")) {
-        Ok(path) => path,
-        Err(_) => {
-            eprintln!("python not found in PATH, skipping test.");
+    let mut python_candidates = Vec::new();
+    if let Ok(paths) = which::which_all("python") {
+        python_candidates.extend(paths);
+    }
+    if let Ok(paths) = which::which_all("python3") {
+        python_candidates.extend(paths);
+    }
+
+    let python = match python_candidates
+        .into_iter()
+        .find(|path| !path.starts_with("/usr/bin"))
+    {
+        Some(path) => path,
+        None => {
+            eprintln!("non-system python not found in PATH, skipping test.");
             return Ok(());
         }
     };

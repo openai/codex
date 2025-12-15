@@ -3,6 +3,7 @@ use ratatui::layout::Rect;
 // Note: Table-based layout previously used Constraint; the manual renderer
 // below no longer requires it.
 use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -21,6 +22,7 @@ pub(crate) struct GenericDisplayRow {
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
     pub wrap_indent: Option<usize>,        // optional indent for wrapped lines
+    pub name_style: Option<Style>,         // optional style for name spans
 }
 
 /// Compute a shared description-column start based on the widest visible name
@@ -33,6 +35,12 @@ fn compute_desc_col(
     content_width: u16,
 ) -> usize {
     let visible_range = start_idx..(start_idx + visible_items);
+    let content_width = content_width.max(1) as usize;
+    let has_description = rows_all
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| visible_range.contains(i))
+        .any(|(_, r)| r.description.is_some());
     let max_name_width = rows_all
         .iter()
         .enumerate()
@@ -40,10 +48,24 @@ fn compute_desc_col(
         .map(|(_, r)| Line::from(r.name.clone()).width())
         .max()
         .unwrap_or(0);
-    let mut desc_col = max_name_width.saturating_add(2);
-    if (desc_col as u16) >= content_width {
-        desc_col = content_width.saturating_sub(1) as usize;
-    }
+
+    // When there are described items (e.g. agents), don't let unrelated long
+    // names (e.g. file paths) push the description column far to the right.
+    let max_name_width_for_desc = if has_description {
+        rows_all
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| visible_range.contains(i))
+            .filter(|(_, r)| r.description.is_some())
+            .map(|(_, r)| Line::from(r.name.clone()).width())
+            .max()
+            .unwrap_or(max_name_width)
+    } else {
+        max_name_width
+    };
+
+    let mut desc_col = max_name_width_for_desc.saturating_add(2);
+    desc_col = desc_col.min(content_width.saturating_sub(1));
     desc_col
 }
 
@@ -76,6 +98,7 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
     let mut used_width = 0usize;
     let mut truncated = false;
 
+    let base_name_style = row.name_style.unwrap_or_default();
     if let Some(idxs) = row.match_indices.as_ref() {
         let mut idx_iter = idxs.iter().peekable();
         for (char_idx, ch) in row.name.chars().enumerate() {
@@ -89,9 +112,12 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
 
             if idx_iter.peek().is_some_and(|next| **next == char_idx) {
                 idx_iter.next();
-                name_spans.push(ch.to_string().bold());
+                name_spans.push(Span::styled(
+                    ch.to_string(),
+                    base_name_style.add_modifier(Modifier::BOLD),
+                ));
             } else {
-                name_spans.push(ch.to_string().into());
+                name_spans.push(Span::styled(ch.to_string(), base_name_style));
             }
         }
     } else {
@@ -103,14 +129,14 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
                 break;
             }
             used_width = next_width;
-            name_spans.push(ch.to_string().into());
+            name_spans.push(Span::styled(ch.to_string(), base_name_style));
         }
     }
 
     if truncated {
         // If there is at least one cell available, add an ellipsis.
         // When name_limit is 0, we still show an ellipsis to indicate truncation.
-        name_spans.push("…".into());
+        name_spans.push(Span::styled("…", base_name_style));
     }
 
     let this_name_width = Line::from(name_spans.clone()).width();
@@ -182,10 +208,13 @@ pub(crate) fn render_rows(
 
         let mut full_line = build_full_line(row, desc_col);
         if Some(i) == state.selected_idx {
-            // Match previous behavior: cyan + bold for the selected row.
-            // Reset the style first to avoid inheriting dim from keyboard shortcuts.
+            // Highlight selection without overriding per-span foreground colors (e.g. subagent color).
             full_line.spans.iter_mut().for_each(|span| {
-                span.style = Style::default().fg(Color::Cyan).bold();
+                span.style = span
+                    .style
+                    .add_modifier(Modifier::BOLD)
+                    .remove_modifier(Modifier::DIM)
+                    .bg(Color::DarkGray);
             });
         }
 

@@ -532,6 +532,10 @@ pub enum EventMsg {
 
     McpToolCallEnd(McpToolCallEndEvent),
 
+    SubAgentRunBegin(SubAgentRunBeginEvent),
+
+    SubAgentRunEnd(SubAgentRunEndEvent),
+
     WebSearchBegin(WebSearchBeginEvent),
 
     WebSearchEnd(WebSearchEndEvent),
@@ -1496,6 +1500,22 @@ pub struct TerminalInteractionEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct BackgroundEventEvent {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SubAgentRunBeginEvent {
+    pub call_id: String,
+    pub name: String,
+    pub description: String,
+    pub color: Option<String>,
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SubAgentRunEndEvent {
+    pub call_id: String,
+    pub duration_ms: i64,
+    pub success: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
