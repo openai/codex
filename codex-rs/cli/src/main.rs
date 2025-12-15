@@ -44,6 +44,7 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::types::GraphitiGroupIdStrategy;
+use codex_core::config::types::GraphitiRecallScopesMode;
 use codex_core::features::Feature;
 use codex_core::features::FeatureOverrides;
 use codex_core::features::Features;
@@ -484,6 +485,7 @@ enum GraphitiEpisodeKind {
     Preference,
     Procedure,
     TaskUpdate,
+    Terminology,
 }
 
 #[derive(Debug, Args)]
@@ -585,10 +587,7 @@ async fn run_graphiti_cli(cli: GraphitiCli, config_profile: Option<String>) -> a
                             "Global scope is disabled (set [graphiti.global].enabled = true)"
                         );
                     }
-                    (
-                        config.graphiti.global.group_id.clone(),
-                        "global".to_string(),
-                    )
+                    (derive_global_group_id(&config), "global".to_string())
                 }
             };
 
@@ -760,6 +759,13 @@ async fn print_graphiti_status(config: &Config, healthcheck: bool) -> anyhow::Re
         config.graphiti.recall.enabled
     );
     println!(
+        "graphiti.recall.scopes_mode: {}",
+        match config.graphiti.recall.scopes_mode {
+            GraphitiRecallScopesMode::Static => "static",
+            GraphitiRecallScopesMode::Auto => "auto",
+        }
+    );
+    println!(
         "graphiti.recall.scopes: {}",
         config
             .graphiti
@@ -779,11 +785,32 @@ async fn print_graphiti_status(config: &Config, healthcheck: bool) -> anyhow::Re
             "graphiti.global.group_id: {}",
             config.graphiti.global.group_id
         );
+        println!(
+            "derived.global_group_id: {}",
+            derive_global_group_id(config)
+        );
     }
 
     println!(
         "derived.workspace_group_id: {}",
         derive_workspace_group_id(config)
+    );
+
+    println!(
+        "graphiti.include_system_messages: {}",
+        config.graphiti.include_system_messages
+    );
+    println!(
+        "graphiti.user_scope_key: {}",
+        if config.graphiti.user_scope_key.is_some() {
+            "<set>"
+        } else {
+            "<unset>"
+        }
+    );
+    println!(
+        "graphiti.auto_promote.enabled: {}",
+        config.graphiti.auto_promote.enabled
     );
 
     if healthcheck {
@@ -809,6 +836,18 @@ fn derive_workspace_group_id(config: &Config) -> String {
         &workspace_key,
         &config.graphiti.group_id_strategy,
     )
+}
+
+fn derive_global_group_id(config: &Config) -> String {
+    if let Some(user_scope_key) = config.graphiti.user_scope_key.as_deref() {
+        return graphiti_make_group_id(
+            "codex-global",
+            user_scope_key,
+            &config.graphiti.group_id_strategy,
+        );
+    }
+
+    config.graphiti.global.group_id.clone()
 }
 
 fn graphiti_make_group_id(
@@ -870,6 +909,7 @@ fn build_promotion_template(kind: GraphitiEpisodeKind, title: Option<&str>, text
         GraphitiEpisodeKind::Preference => "preference",
         GraphitiEpisodeKind::Procedure => "procedure",
         GraphitiEpisodeKind::TaskUpdate => "task_update",
+        GraphitiEpisodeKind::Terminology => "terminology",
     };
     let mut out = format!("<graphiti_episode kind=\"{kind_str}\">\n");
     if let Some(title) = title {

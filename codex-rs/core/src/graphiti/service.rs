@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::config::types::Graphiti;
 use crate::config::types::GraphitiGroupIdStrategy;
+use crate::config::types::GraphitiRecallScopesMode;
 use crate::config::types::GraphitiScope;
 use crate::git_info::get_git_repo_root;
 use crate::graphiti::client::AddMessagesRequest;
@@ -9,6 +10,9 @@ use crate::graphiti::client::GraphitiClientError;
 use crate::graphiti::client::GraphitiMessage;
 use crate::graphiti::client::GraphitiRoleType;
 use crate::graphiti::client::SearchQuery;
+use crate::graphiti::directives::GraphitiMemoryDirective;
+use crate::graphiti::directives::looks_like_secret_for_auto_promotion;
+use crate::graphiti::directives::parse_memory_directives;
 use chrono::Utc;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
@@ -28,6 +32,7 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
@@ -43,10 +48,14 @@ pub struct GraphitiMemoryService {
     config: Graphiti,
     group_ids: GraphitiGroupIds,
     source_description: String,
+    workspace_basename: String,
     ingestion_queue: GraphitiIngestionQueue,
     ingested_turn_keys: Mutex<HashSet<String>>,
     recall_cache: Mutex<HashMap<String, Option<String>>>,
 }
+
+const OWNERSHIP_CONTEXT_TURN_KEY: &str = "codex.graphiti.ownership_context.v1";
+const AUTO_PROMOTION_TURN_KEY_PREFIX: &str = "codex.graphiti.auto_promotion.v1";
 
 impl GraphitiMemoryService {
     pub async fn new_if_enabled(
@@ -83,9 +92,12 @@ impl GraphitiMemoryService {
         };
 
         let session_key = conversation_id.to_string();
-        let workspace_key = get_git_repo_root(cwd)
-            .unwrap_or_else(|| cwd.to_path_buf())
-            .to_string_lossy()
+        let workspace_root = get_git_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+        let workspace_key = workspace_root.to_string_lossy().to_string();
+        let workspace_basename = workspace_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("workspace")
             .to_string();
         let group_id_strategy = config.graphiti.group_id_strategy.clone();
 
@@ -96,7 +108,7 @@ impl GraphitiMemoryService {
                 .graphiti
                 .global
                 .enabled
-                .then(|| config.graphiti.global.group_id.clone()),
+                .then(|| derive_global_group_id(&config.graphiti, &group_id_strategy)),
         };
 
         let source_description = if config.graphiti.include_git_metadata {
@@ -113,6 +125,7 @@ impl GraphitiMemoryService {
             config: config.graphiti.clone(),
             group_ids,
             source_description,
+            workspace_basename,
             ingestion_queue,
             ingested_turn_keys: Mutex::new(HashSet::new()),
             recall_cache: Mutex::new(HashMap::new()),
@@ -125,6 +138,14 @@ impl GraphitiMemoryService {
 
     pub fn is_recall_enabled(&self) -> bool {
         self.config.recall.enabled
+    }
+
+    fn group_id_for_scope(&self, scope: GraphitiScope) -> Option<String> {
+        match scope {
+            GraphitiScope::Session => Some(self.group_ids.session.clone()),
+            GraphitiScope::Workspace => Some(self.group_ids.workspace.clone()),
+            GraphitiScope::Global => self.group_ids.global.clone(),
+        }
     }
 
     pub async fn recall_prompt_item(&self, turn_id: &str, query: &str) -> Option<ResponseItem> {
@@ -141,7 +162,7 @@ impl GraphitiMemoryService {
             return cached.map(memory_to_prompt_item);
         }
 
-        let group_ids = self.recall_group_ids();
+        let group_ids = self.recall_group_ids_for_query(query);
         if group_ids.is_empty() {
             return None;
         }
@@ -197,7 +218,9 @@ impl GraphitiMemoryService {
             return;
         }
 
-        for group_id in self.ingest_group_ids() {
+        for (scope, group_id) in self.ingest_groups() {
+            self.maybe_enqueue_ownership_context(scope, &group_id).await;
+
             let key = format!("{group_id}:{turn_id}");
             let should_enqueue = self.ingested_turn_keys.lock().await.insert(key);
             if !should_enqueue {
@@ -207,42 +230,193 @@ impl GraphitiMemoryService {
                 .enqueue(group_id, messages.clone())
                 .await;
         }
+
+        self.maybe_enqueue_auto_promotions(turn_id, user_text).await;
     }
 
-    fn ingest_group_ids(&self) -> Vec<String> {
-        let mut out = Vec::new();
+    fn ingest_groups(&self) -> Vec<(GraphitiScope, String)> {
+        let mut out: Vec<(GraphitiScope, String)> = Vec::new();
         for scope in &self.config.ingest_scopes {
-            match scope {
-                GraphitiScope::Session => out.push(self.group_ids.session.clone()),
-                GraphitiScope::Workspace => out.push(self.group_ids.workspace.clone()),
-                GraphitiScope::Global => {
-                    if let Some(group_id) = self.group_ids.global.clone() {
-                        out.push(group_id);
-                    }
-                }
+            if let Some(group_id) = self.group_id_for_scope(*scope) {
+                out.push((*scope, group_id));
             }
         }
-        out.sort();
-        out.dedup();
+        out.sort_by(|a, b| a.1.cmp(&b.1));
+        out.dedup_by(|a, b| a.1 == b.1);
         out
     }
 
     fn recall_group_ids(&self) -> Vec<String> {
         let mut out = Vec::new();
         for scope in &self.config.recall.scopes {
-            match scope {
-                GraphitiScope::Session => out.push(self.group_ids.session.clone()),
-                GraphitiScope::Workspace => out.push(self.group_ids.workspace.clone()),
-                GraphitiScope::Global => {
-                    if let Some(group_id) = self.group_ids.global.clone() {
-                        out.push(group_id);
-                    }
-                }
+            if let Some(group_id) = self.group_id_for_scope(*scope) {
+                out.push(group_id);
             }
         }
         out.sort();
         out.dedup();
         out
+    }
+
+    fn recall_group_ids_for_query(&self, query: &str) -> Vec<String> {
+        match self.config.recall.scopes_mode {
+            GraphitiRecallScopesMode::Static => self.recall_group_ids(),
+            GraphitiRecallScopesMode::Auto => self.recall_group_ids_auto(query),
+        }
+    }
+
+    fn recall_group_ids_auto(&self, query: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+
+        for scope in &self.config.recall.scopes {
+            if *scope == GraphitiScope::Global {
+                continue;
+            }
+            if let Some(group_id) = self.group_id_for_scope(*scope) {
+                out.push(group_id);
+            }
+        }
+
+        if should_include_global_scope_for_auto_recall(query)
+            && let Some(group_id) = self.group_ids.global.clone()
+        {
+            out.push(group_id);
+        }
+
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    async fn maybe_enqueue_ownership_context(&self, scope: GraphitiScope, group_id: &str) {
+        if !self.config.include_system_messages {
+            return;
+        }
+
+        let key = format!("{group_id}:{OWNERSHIP_CONTEXT_TURN_KEY}");
+        let inserted = self.ingested_turn_keys.lock().await.insert(key);
+        if !inserted {
+            return;
+        }
+
+        let now = Utc::now();
+        let scope_label = graphiti_scope_label(scope);
+        let owner_id = self.config.user_scope_key.as_deref().map(stable_owner_id);
+
+        let content = format_ownership_context_episode(
+            scope_label,
+            owner_id.as_deref(),
+            &self.workspace_basename,
+            &self.source_description,
+            now,
+        );
+
+        self.ingestion_queue
+            .enqueue(
+                group_id.to_string(),
+                vec![GraphitiMessage {
+                    content,
+                    uuid: None,
+                    name: String::new(),
+                    role_type: GraphitiRoleType::System,
+                    role: None,
+                    timestamp: now,
+                    source_description: format!(
+                        "{} ownership_context scope={scope_label}",
+                        self.source_description
+                    ),
+                }],
+            )
+            .await;
+    }
+
+    async fn maybe_enqueue_auto_promotions(&self, turn_id: &str, user_text: &str) {
+        if !self.config.auto_promote.enabled {
+            return;
+        }
+
+        let directives = parse_memory_directives(user_text);
+        if directives.is_empty() {
+            return;
+        }
+
+        for (i, directive) in directives.into_iter().enumerate() {
+            self.maybe_enqueue_auto_promotion_directive(turn_id, i, directive)
+                .await;
+        }
+    }
+
+    async fn maybe_enqueue_auto_promotion_directive(
+        &self,
+        turn_id: &str,
+        index: usize,
+        directive: GraphitiMemoryDirective,
+    ) {
+        if looks_like_secret_for_auto_promotion(&directive.content) {
+            debug!(
+                kind = %directive.kind.as_str(),
+                scope = ?directive.scope,
+                "Graphiti auto-promotion skipped (possible secret)"
+            );
+            return;
+        }
+
+        let mut scope = directive.scope;
+        let group_id = match directive.scope {
+            GraphitiScope::Workspace => self.group_ids.workspace.clone(),
+            GraphitiScope::Global => match self.group_ids.global.clone() {
+                Some(id) => id,
+                None => {
+                    debug!(
+                        kind = %directive.kind.as_str(),
+                        "Graphiti auto-promotion requested Global scope, but Global is disabled; falling back to Workspace"
+                    );
+                    scope = GraphitiScope::Workspace;
+                    self.group_ids.workspace.clone()
+                }
+            },
+            GraphitiScope::Session => return,
+        };
+
+        let idempotency_key = format!(
+            "{group_id}:{AUTO_PROMOTION_TURN_KEY_PREFIX}:{turn_id}:{index}:{}",
+            directive.kind.as_str()
+        );
+        let inserted = self.ingested_turn_keys.lock().await.insert(idempotency_key);
+        if !inserted {
+            return;
+        }
+
+        self.maybe_enqueue_ownership_context(scope, &group_id).await;
+
+        let now = Utc::now();
+        let scope_label = graphiti_scope_label(scope);
+        let content = format_auto_promotion_episode(
+            directive.kind.as_str(),
+            scope_label,
+            &directive.content,
+            now,
+            self.config.ingest.max_content_chars,
+        );
+
+        self.ingestion_queue
+            .enqueue(
+                group_id.clone(),
+                vec![GraphitiMessage {
+                    content,
+                    uuid: None,
+                    name: String::new(),
+                    role_type: GraphitiRoleType::System,
+                    role: None,
+                    timestamp: now,
+                    source_description: format!(
+                        "{} auto_promotion scope={scope_label} kind={}",
+                        self.source_description,
+                        directive.kind.as_str()
+                    ),
+                }],
+            )
+            .await;
     }
 }
 
@@ -252,6 +426,115 @@ fn memory_to_prompt_item(memory: String) -> ResponseItem {
         role: "system".to_string(),
         content: vec![ContentItem::InputText { text: memory }],
     }
+}
+
+fn graphiti_scope_label(scope: GraphitiScope) -> &'static str {
+    match scope {
+        GraphitiScope::Session => "session",
+        GraphitiScope::Workspace => "workspace",
+        GraphitiScope::Global => "global",
+    }
+}
+
+fn should_include_global_scope_for_auto_recall(query: &str) -> bool {
+    let normalized = query.to_lowercase();
+
+    if normalized.contains("preference")
+        || normalized.contains("preferences")
+        || normalized.contains("terminology")
+    {
+        return true;
+    }
+    if normalized.contains("i prefer") || normalized.contains("we prefer") {
+        return true;
+    }
+    if normalized.contains("what do i call") || normalized.contains("what do we call") {
+        return true;
+    }
+
+    if normalized.contains("my ") {
+        let keywords = [
+            "preference",
+            "terminology",
+            "setup",
+            "workflow",
+            "style",
+            "convention",
+            "config",
+            "settings",
+            "alias",
+            "aliases",
+            "naming",
+            "username",
+            "email",
+            "id",
+        ];
+        if keywords.iter().any(|k| normalized.contains(k)) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn stable_owner_id(user_scope_key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(user_scope_key.as_bytes());
+    let digest = hasher.finalize();
+    let hex = hex_encode(digest.as_slice());
+    let short = &hex[..16];
+    format!("sha256:{short}")
+}
+
+fn format_ownership_context_episode(
+    scope: &str,
+    owner_id: Option<&str>,
+    workspace_basename: &str,
+    source_description: &str,
+    now: chrono::DateTime<Utc>,
+) -> String {
+    let owner_line = match owner_id {
+        Some(id) => format!("Owner: {id}."),
+        None => "Owner: (unknown).".to_string(),
+    };
+
+    let mut lines = vec![
+        "<graphiti_episode kind=\"ownership_context\">".to_string(),
+        "source: codex".to_string(),
+        format!("timestamp: {}", now.to_rfc3339()),
+        format!("scope: {scope}"),
+        owner_line,
+        format!("Workspace basename: {workspace_basename}."),
+    ];
+
+    if !source_description.trim().is_empty() {
+        lines.push(format!("Source: {source_description}."));
+    }
+    lines.push(format!("The Owner owns this {scope} scope and its assets."));
+    lines.push("</graphiti_episode>".to_string());
+
+    lines.join("\n")
+}
+
+fn format_auto_promotion_episode(
+    kind: &str,
+    scope: &str,
+    text: &str,
+    now: chrono::DateTime<Utc>,
+    max_chars: usize,
+) -> String {
+    let timestamp = now.to_rfc3339();
+
+    let empty = format!(
+        "<graphiti_episode kind=\"{kind}\">\nsource: codex\nscope: {scope}\ntimestamp: {timestamp}\ncontent:\n\n</graphiti_episode>"
+    );
+    let overhead = empty.chars().count();
+    let budget = max_chars.saturating_sub(overhead);
+    let content = truncate_with_marker(text.trim(), budget);
+
+    format!(
+        "<graphiti_episode kind=\"{kind}\">\nsource: codex\nscope: {scope}\ntimestamp: {timestamp}\ncontent:\n{content}\n</graphiti_episode>"
+    )
 }
 
 fn build_turn_messages(
@@ -346,6 +629,14 @@ fn truncate_with_marker(text: &str, max_chars: usize) -> String {
     }
     let head = truncate_chars(text, max_chars - marker_len);
     format!("{head}{marker}")
+}
+
+fn derive_global_group_id(config: &Graphiti, strategy: &GraphitiGroupIdStrategy) -> String {
+    if let Some(user_scope_key) = config.user_scope_key.as_deref() {
+        return make_group_id("codex-global", user_scope_key, strategy);
+    }
+
+    config.global.group_id.clone()
 }
 
 fn make_group_id(prefix: &str, raw_key: &str, strategy: &GraphitiGroupIdStrategy) -> String {
@@ -751,6 +1042,29 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+
+    #[test]
+    fn derive_global_group_id_uses_user_scope_key_when_configured() {
+        let graphiti = Graphiti {
+            user_scope_key: Some("user-key-1".to_string()),
+            ..Default::default()
+        };
+        let id = derive_global_group_id(&graphiti, &GraphitiGroupIdStrategy::Hashed);
+        assert!(id.starts_with("codex-global-"));
+        assert_eq!(id.len(), "codex-global-".len() + 16);
+    }
+
+    #[test]
+    fn auto_recall_includes_global_for_user_specific_queries() {
+        assert_eq!(
+            should_include_global_scope_for_auto_recall("what is my preference for linting?"),
+            true
+        );
+        assert_eq!(
+            should_include_global_scope_for_auto_recall("how do we build this project?"),
+            false
+        );
+    }
 
     #[test]
     fn group_id_hashed_is_stable_and_prefixed() {

@@ -650,6 +650,10 @@ pub struct GraphitiRecall {
     #[serde(default)]
     pub enabled: bool,
 
+    /// Scope selection mode for recall (default: static).
+    #[serde(default = "default_graphiti_recall_scopes_mode")]
+    pub scopes_mode: GraphitiRecallScopesMode,
+
     /// Request timeout for `POST /search`.
     #[serde(default = "default_graphiti_recall_timeout_ms")]
     pub timeout_ms: u64,
@@ -675,6 +679,7 @@ impl Default for GraphitiRecall {
     fn default() -> Self {
         Self {
             enabled: false,
+            scopes_mode: default_graphiti_recall_scopes_mode(),
             timeout_ms: default_graphiti_recall_timeout_ms(),
             max_facts: default_graphiti_recall_max_facts(),
             max_fact_chars: default_graphiti_recall_max_fact_chars(),
@@ -682,6 +687,17 @@ impl Default for GraphitiRecall {
             scopes: default_graphiti_scopes_session_workspace(),
         }
     }
+}
+
+#[derive(Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum GraphitiRecallScopesMode {
+    Static,
+    Auto,
+}
+
+fn default_graphiti_recall_scopes_mode() -> GraphitiRecallScopesMode {
+    GraphitiRecallScopesMode::Static
 }
 
 fn default_graphiti_global_group_id() -> String {
@@ -708,6 +724,13 @@ impl Default for GraphitiGlobal {
     }
 }
 
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct GraphitiAutoPromote {
+    /// If true, parse supported "Memory Directives" in user messages and enqueue extra episodes.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct Graphiti {
     /// Master enable switch (default: false).
@@ -732,6 +755,13 @@ pub struct Graphiti {
     #[serde(default)]
     pub include_git_metadata: bool,
 
+    /// If true, include one-time ownership/system episodes per group (default: false).
+    #[serde(default)]
+    pub include_system_messages: bool,
+
+    /// Stable per-user key for deriving the Global scope group id (optional).
+    pub user_scope_key: Option<String>,
+
     /// Scopes to ingest automatically (default: session + workspace).
     #[serde(default = "default_graphiti_scopes_session_workspace")]
     pub ingest_scopes: Vec<GraphitiScope>,
@@ -744,6 +774,9 @@ pub struct Graphiti {
 
     #[serde(default)]
     pub global: GraphitiGlobal,
+
+    #[serde(default)]
+    pub auto_promote: GraphitiAutoPromote,
 }
 
 impl Default for Graphiti {
@@ -755,10 +788,13 @@ impl Default for Graphiti {
             bearer_token_env_var: None,
             group_id_strategy: GraphitiGroupIdStrategy::default(),
             include_git_metadata: false,
+            include_system_messages: false,
+            user_scope_key: None,
             ingest_scopes: default_graphiti_scopes_session_workspace(),
             ingest: GraphitiIngest::default(),
             recall: GraphitiRecall::default(),
             global: GraphitiGlobal::default(),
+            auto_promote: GraphitiAutoPromote::default(),
         }
     }
 }
