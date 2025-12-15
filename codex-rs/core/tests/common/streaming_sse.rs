@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -10,14 +9,14 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::oneshot;
 
-/// Streaming SSE chunk payload with a per-chunk delay.
-#[derive(Clone, Debug)]
+/// Streaming SSE chunk payload gated by a per-chunk signal.
+#[derive(Debug)]
 pub struct StreamingSseChunk {
-    pub delay: Duration,
+    pub gate: oneshot::Receiver<()>,
     pub body: String,
 }
 
-/// Minimal streaming SSE server for tests that need per-chunk delays.
+/// Minimal streaming SSE server for tests that need gated per-chunk delivery.
 pub struct StreamingSseServer {
     uri: String,
     shutdown: oneshot::Sender<()>,
@@ -37,7 +36,7 @@ impl StreamingSseServer {
 
 /// Starts a lightweight HTTP server that supports:
 /// - GET /v1/models -> empty models response
-/// - POST /v1/responses -> SSE stream with per-chunk delays, served in order
+/// - POST /v1/responses -> SSE stream gated per-chunk, served in order
 ///
 /// Returns the server handle and a list of receivers that fire when each
 /// response stream finishes sending its final chunk.
@@ -99,8 +98,8 @@ pub async fn start_streaming_sse_server(
                             }
 
                             for chunk in chunks {
-                                if !chunk.delay.is_zero() {
-                                    tokio::time::sleep(chunk.delay).await;
+                                if chunk.gate.await.is_err() {
+                                    return;
                                 }
                                 if stream.write_all(chunk.body.as_bytes()).await.is_err() {
                                     return;
