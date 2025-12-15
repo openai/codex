@@ -291,7 +291,6 @@ async fn tool_results_grouped() -> anyhow::Result<()> {
 async fn shell_tools_start_before_response_completed_when_stream_delayed() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let mock_server = start_mock_server().await;
     let output_file = tempfile::NamedTempFile::new()?;
     let output_path = output_file.path();
     let first_response_id = "resp-1";
@@ -338,14 +337,9 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
     .await;
 
     let mut builder = test_codex().with_model("gpt-5.1");
-    let base_url = format!("{}/v1", streaming_server.uri());
-    builder = builder.with_config(move |config| {
-        config.model_provider.base_url = Some(base_url);
-        config.model_provider.request_max_retries = Some(0);
-        config.model_provider.stream_max_retries = Some(0);
-        config.model_provider.stream_idle_timeout_ms = Some(5_000);
-    });
-    let test = builder.build(&mock_server).await?;
+    let test = builder
+        .build_with_streaming_server(&streaming_server)
+        .await?;
 
     run_turn(&test, "stream delayed completion").await?;
 

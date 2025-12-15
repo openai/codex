@@ -16,7 +16,6 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use futures::Future;
-use tracing::Instrument;
 use tracing::debug;
 use tracing::instrument;
 
