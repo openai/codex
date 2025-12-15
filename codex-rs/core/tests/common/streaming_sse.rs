@@ -12,7 +12,7 @@ use tokio::sync::oneshot;
 /// Streaming SSE chunk payload gated by a per-chunk signal.
 #[derive(Debug)]
 pub struct StreamingSseChunk {
-    pub gate: oneshot::Receiver<()>,
+    pub gate: Option<oneshot::Receiver<()>>,
     pub body: String,
 }
 
@@ -98,8 +98,10 @@ pub async fn start_streaming_sse_server(
                             }
 
                             for chunk in chunks {
-                                if chunk.gate.await.is_err() {
-                                    return;
+                                if let Some(gate) = chunk.gate {
+                                    if gate.await.is_err() {
+                                        return;
+                                    }
                                 }
                                 if stream.write_all(chunk.body.as_bytes()).await.is_err() {
                                     return;

@@ -325,16 +325,16 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
     let (streaming_server, completion_receivers) = start_streaming_sse_server(vec![
         vec![
             StreamingSseChunk {
-                gate: first_gate_rx,
+                gate: Some(first_gate_rx),
                 body: first_chunk,
             },
             StreamingSseChunk {
-                gate: completion_gate_rx,
+                gate: Some(completion_gate_rx),
                 body: second_chunk,
             },
         ],
         vec![StreamingSseChunk {
-            gate: follow_up_gate_rx,
+            gate: Some(follow_up_gate_rx),
             body: follow_up,
         }],
     ])
