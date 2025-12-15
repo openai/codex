@@ -3,6 +3,7 @@ use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
+use crate::update_nudge::update_available_nudge;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
@@ -24,7 +25,6 @@ pub type Result<T> = std::result::Result<T, CodexErr>;
 
 /// Limit UI error messages to a reasonable size while keeping useful context.
 const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024; // 4 KiB
-const UPDATE_AVAILABLE_NUDGE: &str = "Update available. Run `codex update`.";
 
 pub(crate) fn error_event_with_update_nudge(
     message: String,
@@ -50,13 +50,16 @@ pub(crate) fn stream_error_event_with_update_nudge(
 }
 
 fn maybe_append_update_nudge(message: String, is_up_to_date: bool) -> String {
-    if is_up_to_date {
+    // skip if version is 0.0.0
+    let is_dev = env!("CARGO_PKG_VERSION") == "0.0.0";
+    if is_up_to_date || is_dev {
         return message;
     }
+    let nudge = update_available_nudge();
     if message.is_empty() {
-        UPDATE_AVAILABLE_NUDGE.to_string()
+        nudge
     } else {
-        format!("{message}\n{UPDATE_AVAILABLE_NUDGE}")
+        format!("{message}\n{nudge}")
     }
 }
 
