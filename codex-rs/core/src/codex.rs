@@ -311,10 +311,7 @@ impl Codex {
 
         if let Some(remote_models_error) = remote_models_error {
             let event = Event {
-                id: session
-                    .next_internal_sub_id
-                    .load(std::sync::atomic::Ordering::SeqCst)
-                    .to_string(),
+                id: INITIAL_SUBMIT_ID.to_string(),
                 msg: remote_models_error,
             };
             session.send_event_raw(event).await;
