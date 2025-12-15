@@ -552,8 +552,19 @@ fn read_ca_certificates(path: &Path) -> io::Result<Vec<CertificateDer<'static>>>
         )
     })?;
 
+    // Support both standard CERTIFICATE and TRUSTED CERTIFICATE labels by
+    // normalizing the latter to the former before parsing.
+    let normalized_pem = String::from_utf8(pem_data.clone())
+        .map(|s| {
+            s.replace("BEGIN TRUSTED CERTIFICATE", "BEGIN CERTIFICATE")
+                .replace("END TRUSTED CERTIFICATE", "END CERTIFICATE")
+        })
+        .unwrap_or_else(|_| String::from_utf8_lossy(&pem_data).into_owned());
+
     let mut certificates = Vec::new();
-    for cert_result in CertificateDer::pem_slice_iter(&pem_data) {
+    for cert_result in
+        <CertificateDer<'static> as PemObject>::pem_slice_iter(normalized_pem.as_bytes())
+    {
         let cert = cert_result.map_err(|error| pem_parse_error(path, &error))?;
         certificates.push(cert);
     }
@@ -572,8 +583,11 @@ fn read_ca_certificates(path: &Path) -> io::Result<Vec<CertificateDer<'static>>>
 /// system roots alone cannot validate the OAuth exchange. We allow opt-in CA
 /// overrides via `CODEX_CA_CERTIFICATE` (preferred) or `SSL_CERT_FILE`.
 pub fn build_login_http_client() -> io::Result<reqwest::Client> {
+    build_login_http_client_with_env(&ProcessEnv)
+}
+
+pub fn build_login_http_client_with_env(env_source: &dyn EnvSource) -> io::Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder();
-    let env_source = ProcessEnv;
 
     if let Some(path) = login_ca_certificate_path(&env_source) {
         let certificates = read_ca_certificates(&path)?;
@@ -831,6 +845,9 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
 
     struct MapEnv {
         values: HashMap<String, String>,
@@ -885,5 +902,93 @@ mod tests {
             login_ca_certificate_path(&env),
             Some(PathBuf::from("/tmp/fallback.pem"))
         );
+    }
+
+    fn build_client(env: MapEnv) -> io::Result<reqwest::Client> {
+        build_login_http_client_with_env(&env)
+    }
+
+    fn write_test_cert(temp_dir: &TempDir, file_name: &str, contents: &str) -> PathBuf {
+        let path = temp_dir.path().join(file_name);
+        fs::write(&path, contents).expect("write cert fixture");
+        path
+    }
+
+    #[test]
+    fn build_client_uses_codex_ca_cert_env() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = write_test_cert(&temp_dir, "ca.pem", TEST_CERT_1);
+        let env = map_env(&[(CODEX_CA_CERT_ENV, cert_path.to_str().unwrap())]);
+
+        let client = build_client(env);
+
+        assert!(client.is_ok(), "Failed to build client: {:?}", client.err());
+    }
+
+    #[test]
+    fn build_client_uses_ssl_cert_file_fallback() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = write_test_cert(&temp_dir, "ssl-cert.pem", TEST_CERT_1);
+        let env = map_env(&[(SSL_CERT_FILE_ENV, cert_path.to_str().unwrap())]);
+
+        let client = build_client(env);
+
+        assert!(client.is_ok(), "Failed to build client: {:?}", client.err());
+    }
+
+    #[test]
+    fn build_client_rejects_invalid_certificate_data() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = write_test_cert(&temp_dir, "invalid.pem", "not-a-certificate");
+        let env = map_env(&[(CODEX_CA_CERT_ENV, cert_path.to_str().unwrap())]);
+
+        let client = build_client(env);
+
+        let err = client.expect_err("client should fail for invalid cert");
+        assert!(err.to_string().contains("no certificates found"));
+    }
+
+    #[test]
+    fn build_client_handles_multi_certificate_bundle() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let bundle = format!("{TEST_CERT_1}\\n{TEST_CERT_2}");
+        let cert_path = write_test_cert(&temp_dir, "bundle.pem", &bundle);
+        let env = map_env(&[(CODEX_CA_CERT_ENV, cert_path.to_str().unwrap())]);
+
+        let client = build_client(env);
+
+        assert!(
+            client.is_ok(),
+            "Failed to build client with bundle: {:?}",
+            client.err()
+        );
+    }
+
+    #[test]
+    fn build_client_rejects_empty_pem_file() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = write_test_cert(&temp_dir, "empty.pem", "");
+        let env = map_env(&[(CODEX_CA_CERT_ENV, cert_path.to_str().unwrap())]);
+
+        let client = build_client(env);
+
+        let err = client.expect_err("client should fail for empty cert file");
+        assert!(err.to_string().contains("no certificates found"));
+    }
+
+    #[test]
+    fn build_client_rejects_malformed_pem() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cert_path = write_test_cert(
+            &temp_dir,
+            "malformed.pem",
+            "-----BEGIN CERTIFICATE-----\\nMIIBroken",
+        );
+        let env = map_env(&[(CODEX_CA_CERT_ENV, cert_path.to_str().unwrap())]);
+
+        let client = build_client(env);
+
+        let err = client.expect_err("client should fail for malformed cert");
+        assert!(err.to_string().contains("failed to parse PEM file"));
     }
 }
