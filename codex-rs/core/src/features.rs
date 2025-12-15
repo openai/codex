@@ -333,7 +333,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::UnifiedExec,
         key: "unified_exec",
         stage: Stage::Beta {
-            menu_description: "Background terminals for long running processes.",
+            menu_description: "Run long-running terminal commands in the background.",
             announcement: "NEW! Try Background terminals for long running processes. Enable in /experimental!",
         },
         default_enabled: false,
