@@ -4,6 +4,7 @@ use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
+use codex_core::built_in_model_providers;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InitialHistory;
 use codex_core::protocol::ResumedHistory;
@@ -16,7 +17,11 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
 
-fn resume_history(config: &codex_core::config::Config, previous_model: &str, rollout_path: &std::path::Path) -> InitialHistory {
+fn resume_history(
+    config: &codex_core::config::Config,
+    previous_model: &str,
+    rollout_path: &std::path::Path,
+) -> InitialHistory {
     let turn_ctx = TurnContextItem {
         cwd: config.cwd.clone(),
         approval_policy: config.approval_policy,
@@ -38,7 +43,7 @@ async fn emits_warning_when_resumed_model_differs() {
     // Arrange a config with a current model and a prior rollout recorded under a different model.
     let home = TempDir::new().expect("tempdir");
     let mut config = load_default_config_for_test(&home);
-    config.model = "current-model".to_string();
+    config.model = Some("current-model".to_string());
     // Ensure cwd is absolute (the helper sets it to the temp dir already).
     assert!(config.cwd.is_absolute());
 
@@ -47,7 +52,10 @@ async fn emits_warning_when_resumed_model_differs() {
 
     let initial_history = resume_history(&config, "previous-model", &rollout_path);
 
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("test"));
+    let conversation_manager = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("test"),
+        config.model_provider.clone(),
+    );
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
 
     // Act: resume the conversation.

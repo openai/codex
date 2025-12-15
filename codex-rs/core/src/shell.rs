@@ -1,6 +1,9 @@
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use crate::shell_snapshot::ShellSnapshot;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum ShellType {
@@ -15,6 +18,8 @@ pub enum ShellType {
 pub struct Shell {
     pub(crate) shell_type: ShellType,
     pub(crate) shell_path: PathBuf,
+    #[serde(skip_serializing, skip_deserializing, default)]
+    pub(crate) shell_snapshot: Option<Arc<ShellSnapshot>>,
 }
 
 impl Shell {
@@ -134,6 +139,7 @@ fn get_zsh_shell(path: Option<&PathBuf>) -> Option<Shell> {
     shell_path.map(|shell_path| Shell {
         shell_type: ShellType::Zsh,
         shell_path,
+        shell_snapshot: None,
     })
 }
 
@@ -143,6 +149,7 @@ fn get_bash_shell(path: Option<&PathBuf>) -> Option<Shell> {
     shell_path.map(|shell_path| Shell {
         shell_type: ShellType::Bash,
         shell_path,
+        shell_snapshot: None,
     })
 }
 
@@ -152,6 +159,7 @@ fn get_sh_shell(path: Option<&PathBuf>) -> Option<Shell> {
     shell_path.map(|shell_path| Shell {
         shell_type: ShellType::Sh,
         shell_path,
+        shell_snapshot: None,
     })
 }
 
@@ -167,6 +175,7 @@ fn get_powershell_shell(path: Option<&PathBuf>) -> Option<Shell> {
     shell_path.map(|shell_path| Shell {
         shell_type: ShellType::PowerShell,
         shell_path,
+        shell_snapshot: None,
     })
 }
 
@@ -176,6 +185,7 @@ fn get_cmd_shell(path: Option<&PathBuf>) -> Option<Shell> {
     shell_path.map(|shell_path| Shell {
         shell_type: ShellType::Cmd,
         shell_path,
+        shell_snapshot: None,
     })
 }
 
@@ -184,11 +194,13 @@ fn ultimate_fallback_shell() -> Shell {
         Shell {
             shell_type: ShellType::Cmd,
             shell_path: PathBuf::from("cmd.exe"),
+            shell_snapshot: None,
         }
     } else {
         Shell {
             shell_type: ShellType::Sh,
             shell_path: PathBuf::from("/bin/sh"),
+            shell_snapshot: None,
         }
     }
 }
@@ -408,6 +420,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn derive_exec_args() {
+        let test_bash_shell = Shell {
+            shell_type: ShellType::Bash,
+            shell_path: PathBuf::from("/bin/bash"),
+            shell_snapshot: None,
+        };
+        assert_eq!(
+            test_bash_shell.derive_exec_args("echo hello", false),
+            vec!["/bin/bash", "-c", "echo hello"]
+        );
+        assert_eq!(
+            test_bash_shell.derive_exec_args("echo hello", true),
+            vec!["/bin/bash", "-lc", "echo hello"]
+        );
+
+        let test_zsh_shell = Shell {
+            shell_type: ShellType::Zsh,
+            shell_path: PathBuf::from("/bin/zsh"),
+            shell_snapshot: None,
+        };
+        assert_eq!(
+            test_zsh_shell.derive_exec_args("echo hello", false),
+            vec!["/bin/zsh", "-c", "echo hello"]
+        );
+        assert_eq!(
+            test_zsh_shell.derive_exec_args("echo hello", true),
+            vec!["/bin/zsh", "-lc", "echo hello"]
+        );
+
+        let test_powershell_shell = Shell {
+            shell_type: ShellType::PowerShell,
+            shell_path: PathBuf::from("pwsh.exe"),
+            shell_snapshot: None,
+        };
+        assert_eq!(
+            test_powershell_shell.derive_exec_args("echo hello", false),
+            vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"]
+        );
+        assert_eq!(
+            test_powershell_shell.derive_exec_args("echo hello", true),
+            vec!["pwsh.exe", "-Command", "echo hello"]
+        );
+    }
+
     #[tokio::test]
     async fn test_current_shell_detects_zsh() {
         let shell = Command::new("sh")
@@ -423,6 +480,7 @@ mod tests {
                 Shell {
                     shell_type: ShellType::Zsh,
                     shell_path: PathBuf::from(shell_path),
+                    shell_snapshot: None,
                 }
             );
         }

@@ -28,6 +28,7 @@ use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::ExecEnv;
 use crate::sandboxing::SandboxManager;
+use crate::sandboxing::SandboxPermissions;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 use crate::text_encoding::bytes_to_string_smart;
@@ -55,7 +56,7 @@ pub struct ExecParams {
     pub cwd: PathBuf,
     pub expiration: ExecExpiration,
     pub env: HashMap<String, String>,
-    pub with_escalated_permissions: Option<bool>,
+    pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub arg0: Option<String>,
 }
@@ -144,7 +145,7 @@ pub async fn process_exec_tool_call(
         cwd,
         expiration,
         env,
-        with_escalated_permissions,
+        sandbox_permissions,
         justification,
         arg0: _,
     } = params;
@@ -162,7 +163,7 @@ pub async fn process_exec_tool_call(
         cwd,
         env,
         expiration,
-        with_escalated_permissions,
+        sandbox_permissions,
         justification,
     };
 
@@ -192,7 +193,7 @@ pub(crate) async fn execute_exec_env(
         env,
         expiration,
         sandbox,
-        with_escalated_permissions,
+        sandbox_permissions,
         justification,
         arg0,
     } = env;
@@ -202,7 +203,7 @@ pub(crate) async fn execute_exec_env(
         cwd,
         expiration,
         env,
-        with_escalated_permissions,
+        sandbox_permissions,
         justification,
         arg0,
     };
@@ -219,7 +220,9 @@ async fn exec_windows_sandbox(
     sandbox_policy: &SandboxPolicy,
 ) -> Result<RawExecToolCallOutput> {
     use crate::config::find_codex_home;
+    use crate::safety::is_windows_elevated_sandbox_enabled;
     use codex_windows_sandbox::run_windows_sandbox_capture;
+    use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
 
     let ExecParams {
         command,
@@ -243,16 +246,29 @@ async fn exec_windows_sandbox(
             "windows sandbox: failed to resolve codex_home: {err}"
         )))
     })?;
+    let use_elevated = is_windows_elevated_sandbox_enabled();
     let spawn_res = tokio::task::spawn_blocking(move || {
-        run_windows_sandbox_capture(
-            policy_str.as_str(),
-            &sandbox_cwd,
-            codex_home.as_ref(),
-            command,
-            &cwd,
-            env,
-            timeout_ms,
-        )
+        if use_elevated {
+            run_windows_sandbox_capture_elevated(
+                policy_str.as_str(),
+                &sandbox_cwd,
+                codex_home.as_ref(),
+                command,
+                &cwd,
+                env,
+                timeout_ms,
+            )
+        } else {
+            run_windows_sandbox_capture(
+                policy_str.as_str(),
+                &sandbox_cwd,
+                codex_home.as_ref(),
+                command,
+                &cwd,
+                env,
+                timeout_ms,
+            )
+        }
     })
     .await;
 
@@ -483,6 +499,19 @@ pub struct ExecToolCallOutput {
     pub aggregated_output: StreamOutput<String>,
     pub duration: Duration,
     pub timed_out: bool,
+}
+
+impl Default for ExecToolCallOutput {
+    fn default() -> Self {
+        Self {
+            exit_code: 0,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(String::new()),
+            duration: Duration::ZERO,
+            timed_out: false,
+        }
+    }
 }
 
 #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
@@ -844,7 +873,7 @@ mod tests {
             cwd: std::env::current_dir()?,
             expiration: 500.into(),
             env,
-            with_escalated_permissions: None,
+            sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
             arg0: None,
         };
@@ -889,7 +918,7 @@ mod tests {
             cwd: cwd.clone(),
             expiration: ExecExpiration::Cancellation(cancel_token),
             env,
-            with_escalated_permissions: None,
+            sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
             arg0: None,
         };

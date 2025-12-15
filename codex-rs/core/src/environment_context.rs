@@ -1,3 +1,4 @@
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display as DeriveDisplay;
@@ -6,7 +7,6 @@ use crate::codex::TurnContext;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use crate::shell::Shell;
-use crate::shell::default_user_shell;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -28,7 +28,7 @@ pub(crate) struct EnvironmentContext {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub network_access: Option<NetworkAccess>,
-    pub writable_roots: Option<Vec<PathBuf>>,
+    pub writable_roots: Option<Vec<AbsolutePathBuf>>,
     pub shell: Shell,
 }
 
@@ -95,7 +95,7 @@ impl EnvironmentContext {
             && self.writable_roots == *writable_roots
     }
 
-    pub fn diff(before: &TurnContext, after: &TurnContext) -> Self {
+    pub fn diff(before: &TurnContext, after: &TurnContext, shell: &Shell) -> Self {
         let cwd = if before.cwd != after.cwd {
             Some(after.cwd.clone())
         } else {
@@ -111,18 +111,15 @@ impl EnvironmentContext {
         } else {
             None
         };
-        EnvironmentContext::new(cwd, approval_policy, sandbox_policy, default_user_shell())
+        EnvironmentContext::new(cwd, approval_policy, sandbox_policy, shell.clone())
     }
-}
 
-impl From<&TurnContext> for EnvironmentContext {
-    fn from(turn_context: &TurnContext) -> Self {
+    pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
         Self::new(
             Some(turn_context.cwd.clone()),
             Some(turn_context.approval_policy),
             Some(turn_context.sandbox_policy.clone()),
-            // Shell is not configurable from turn to turn
-            default_user_shell(),
+            shell.clone(),
         )
     }
 }
@@ -195,18 +192,24 @@ mod tests {
     use crate::shell::ShellType;
 
     use super::*;
+    use core_test_support::test_path_buf;
+    use core_test_support::test_tmp_path_buf;
     use pretty_assertions::assert_eq;
 
     fn fake_shell() -> Shell {
         Shell {
             shell_type: ShellType::Bash,
             shell_path: PathBuf::from("/bin/bash"),
+            shell_snapshot: None,
         }
     }
 
     fn workspace_write_policy(writable_roots: Vec<&str>, network_access: bool) -> SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {
-            writable_roots: writable_roots.into_iter().map(PathBuf::from).collect(),
+            writable_roots: writable_roots
+                .into_iter()
+                .map(|s| AbsolutePathBuf::try_from(s).unwrap())
+                .collect(),
             network_access,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -215,24 +218,37 @@ mod tests {
 
     #[test]
     fn serialize_workspace_write_environment_context() {
+        let cwd = test_path_buf("/repo");
+        let writable_root = test_tmp_path_buf();
+        let cwd_str = cwd.to_str().expect("cwd is valid utf-8");
+        let writable_root_str = writable_root
+            .to_str()
+            .expect("writable root is valid utf-8");
         let context = EnvironmentContext::new(
-            Some(PathBuf::from("/repo")),
+            Some(cwd.clone()),
             Some(AskForApproval::OnRequest),
-            Some(workspace_write_policy(vec!["/repo", "/tmp"], false)),
+            Some(workspace_write_policy(
+                vec![cwd_str, writable_root_str],
+                false,
+            )),
             fake_shell(),
         );
 
-        let expected = r#"<environment_context>
-  <cwd>/repo</cwd>
+        let expected = format!(
+            r#"<environment_context>
+  <cwd>{cwd}</cwd>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>workspace-write</sandbox_mode>
   <network_access>restricted</network_access>
   <writable_roots>
-    <root>/repo</root>
-    <root>/tmp</root>
+    <root>{cwd}</root>
+    <root>{writable_root}</root>
   </writable_roots>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#,
+            cwd = cwd.display(),
+            writable_root = writable_root.display(),
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -338,6 +354,7 @@ mod tests {
             Shell {
                 shell_type: ShellType::Bash,
                 shell_path: "/bin/bash".into(),
+                shell_snapshot: None,
             },
         );
         let context2 = EnvironmentContext::new(
@@ -347,6 +364,7 @@ mod tests {
             Shell {
                 shell_type: ShellType::Zsh,
                 shell_path: "/bin/zsh".into(),
+                shell_snapshot: None,
             },
         );
 

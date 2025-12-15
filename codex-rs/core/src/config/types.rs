@@ -3,13 +3,15 @@
 // Note this file should generally be restricted to simple struct/enum
 // definitions that do not contain business logic.
 
-use serde::Deserializer;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
 
@@ -256,8 +258,8 @@ pub struct History {
     /// If true, history entries will not be written to disk.
     pub persistence: HistoryPersistence,
 
-    /// If set, the maximum size of the history file in bytes.
-    /// TODO(mbolin): Not currently honored.
+    /// If set, the maximum size of the history file in bytes. The oldest entries
+    /// are dropped once the file exceeds this limit.
     pub max_bytes: Option<usize>,
 }
 
@@ -285,9 +287,9 @@ pub enum OtelHttpProtocol {
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct OtelTlsConfig {
-    pub ca_certificate: Option<PathBuf>,
-    pub client_certificate: Option<PathBuf>,
-    pub client_private_key: Option<PathBuf>,
+    pub ca_certificate: Option<AbsolutePathBuf>,
+    pub client_certificate: Option<AbsolutePathBuf>,
+    pub client_private_key: Option<AbsolutePathBuf>,
 }
 
 /// Which OTEL exporter to use.
@@ -321,8 +323,11 @@ pub struct OtelConfigToml {
     /// Mark traces with environment (dev, staging, prod, test). Defaults to dev.
     pub environment: Option<String>,
 
-    /// Exporter to use. Defaults to `otlp-file`.
+    /// Optional log exporter
     pub exporter: Option<OtelExporterKind>,
+
+    /// Optional trace exporter
+    pub trace_exporter: Option<OtelExporterKind>,
 }
 
 /// Effective OTEL settings after defaults are applied.
@@ -331,6 +336,7 @@ pub struct OtelConfig {
     pub log_user_prompt: bool,
     pub environment: String,
     pub exporter: OtelExporterKind,
+    pub trace_exporter: OtelExporterKind,
 }
 
 impl Default for OtelConfig {
@@ -339,6 +345,7 @@ impl Default for OtelConfig {
             log_user_prompt: false,
             environment: DEFAULT_OTEL_ENVIRONMENT.to_owned(),
             exporter: OtelExporterKind::None,
+            trace_exporter: OtelExporterKind::None,
         }
     }
 }
@@ -368,6 +375,11 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub animations: bool,
+
+    /// Show startup tooltips in the TUI welcome screen.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub show_tooltips: bool,
 }
 
 const fn default_true() -> bool {
@@ -390,6 +402,9 @@ pub struct Notice {
     /// Tracks whether the user has seen the gpt-5.1-codex-max migration prompt
     #[serde(rename = "hide_gpt-5.1-codex-max_migration_prompt")]
     pub hide_gpt_5_1_codex_max_migration_prompt: Option<bool>,
+    /// Tracks acknowledged model migrations as old->new model slug mappings.
+    #[serde(default)]
+    pub model_migrations: BTreeMap<String, String>,
 }
 
 impl Notice {
@@ -400,7 +415,7 @@ impl Notice {
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]
-    pub writable_roots: Vec<PathBuf>,
+    pub writable_roots: Vec<AbsolutePathBuf>,
     #[serde(default)]
     pub network_access: bool,
     #[serde(default)]
@@ -514,14 +529,6 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             use_profile,
         }
     }
-}
-
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq, Default, Hash)]
-#[serde(rename_all = "kebab-case")]
-pub enum ReasoningSummaryFormat {
-    #[default]
-    None,
-    Experimental,
 }
 
 #[cfg(test)]

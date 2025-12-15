@@ -17,6 +17,7 @@ use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
+use tracing::instrument;
 
 pub struct ResponsesClient<T: HttpTransport, A: AuthProvider> {
     streaming: StreamingClient<T, A>,
@@ -57,6 +58,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         self.stream(request.body, request.headers).await
     }
 
+    #[instrument(skip_all, err)]
     pub async fn stream_prompt(
         &self,
         model: &str,

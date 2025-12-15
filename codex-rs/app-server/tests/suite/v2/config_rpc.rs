@@ -1,6 +1,9 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::test_path_buf_with_windows;
+use app_test_support::test_tmp_path_buf;
 use app_test_support::to_response;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigLayerName;
@@ -12,6 +15,8 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::ToolsV2;
 use codex_app_server_protocol::WriteStatus;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -57,7 +62,7 @@ sandbox_mode = "workspace-write"
         layers,
     } = to_response(resp)?;
 
-    assert_eq!(config.get("model"), Some(&json!("gpt-user")));
+    assert_eq!(config.model.as_deref(), Some("gpt-user"));
     assert_eq!(
         origins.get("model").expect("origin").name,
         ConfigLayerName::User
@@ -71,31 +76,97 @@ sandbox_mode = "workspace-write"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_read_includes_system_layer_and_overrides() -> Result<()> {
+async fn config_read_includes_tools() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(
         &codex_home,
         r#"
 model = "gpt-user"
+
+[tools]
+web_search = true
+view_image = false
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse {
+        config,
+        origins,
+        layers,
+    } = to_response(resp)?;
+
+    let tools = config.tools.expect("tools present");
+    assert_eq!(
+        tools,
+        ToolsV2 {
+            web_search: Some(true),
+            view_image: Some(false),
+        }
+    );
+    assert_eq!(
+        origins.get("tools.web_search").expect("origin").name,
+        ConfigLayerName::User
+    );
+    assert_eq!(
+        origins.get("tools.view_image").expect("origin").name,
+        ConfigLayerName::User
+    );
+
+    let layers = layers.expect("layers present");
+    assert_eq!(layers.len(), 2);
+    assert_eq!(layers[0].name, ConfigLayerName::SessionFlags);
+    assert_eq!(layers[1].name, ConfigLayerName::User);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_system_layer_and_overrides() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let user_dir = test_path_buf_with_windows("/user", Some(r"C:\Users\user"));
+    let system_dir = test_path_buf_with_windows("/system", Some(r"C:\System"));
+    write_config(
+        &codex_home,
+        &format!(
+            r#"
+model = "gpt-user"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
-writable_roots = ["/user"]
+writable_roots = [{}]
 network_access = true
 "#,
+            serde_json::json!(user_dir)
+        ),
     )?;
 
     let managed_path = codex_home.path().join("managed_config.toml");
     std::fs::write(
         &managed_path,
-        r#"
+        format!(
+            r#"
 model = "gpt-system"
 approval_policy = "never"
 
 [sandbox_workspace_write]
-writable_roots = ["/system"]
+writable_roots = [{}]
 "#,
+            serde_json::json!(system_dir.clone())
+        ),
     )?;
 
     let managed_path_str = managed_path.display().to_string();
@@ -123,30 +194,29 @@ writable_roots = ["/system"]
         layers,
     } = to_response(resp)?;
 
-    assert_eq!(config.get("model"), Some(&json!("gpt-system")));
+    assert_eq!(config.model.as_deref(), Some("gpt-system"));
     assert_eq!(
         origins.get("model").expect("origin").name,
         ConfigLayerName::System
     );
 
-    assert_eq!(config.get("approval_policy"), Some(&json!("never")));
+    assert_eq!(config.approval_policy, Some(AskForApproval::Never));
     assert_eq!(
         origins.get("approval_policy").expect("origin").name,
         ConfigLayerName::System
     );
 
-    assert_eq!(config.get("sandbox_mode"), Some(&json!("workspace-write")));
+    assert_eq!(config.sandbox_mode, Some(SandboxMode::WorkspaceWrite));
     assert_eq!(
         origins.get("sandbox_mode").expect("origin").name,
         ConfigLayerName::User
     );
 
-    assert_eq!(
-        config
-            .get("sandbox_workspace_write")
-            .and_then(|v| v.get("writable_roots")),
-        Some(&json!(["/system"]))
-    );
+    let sandbox = config
+        .sandbox_workspace_write
+        .as_ref()
+        .expect("sandbox workspace write");
+    assert_eq!(sandbox.writable_roots, vec![system_dir]);
     assert_eq!(
         origins
             .get("sandbox_workspace_write.writable_roots.0")
@@ -155,12 +225,7 @@ writable_roots = ["/system"]
         ConfigLayerName::System
     );
 
-    assert_eq!(
-        config
-            .get("sandbox_workspace_write")
-            .and_then(|v| v.get("network_access")),
-        Some(&json!(true))
-    );
+    assert!(sandbox.network_access);
     assert_eq!(
         origins
             .get("sandbox_workspace_write.network_access")
@@ -206,7 +271,7 @@ model = "gpt-old"
 
     let write_id = mcp
         .send_config_value_write_request(ConfigValueWriteParams {
-            file_path: codex_home.path().join("config.toml").display().to_string(),
+            file_path: None,
             key_path: "model".to_string(),
             value: json!("gpt-new"),
             merge_strategy: MergeStrategy::Replace,
@@ -219,8 +284,16 @@ model = "gpt-old"
     )
     .await??;
     let write: ConfigWriteResponse = to_response(write_resp)?;
+    let expected_file_path = codex_home
+        .path()
+        .join("config.toml")
+        .canonicalize()
+        .unwrap()
+        .display()
+        .to_string();
 
     assert_eq!(write.status, WriteStatus::Ok);
+    assert_eq!(write.file_path, expected_file_path);
     assert!(write.overridden_metadata.is_none());
 
     let verify_id = mcp
@@ -234,7 +307,7 @@ model = "gpt-old"
     )
     .await??;
     let verify: ConfigReadResponse = to_response(verify_resp)?;
-    assert_eq!(verify.config.get("model"), Some(&json!("gpt-new")));
+    assert_eq!(verify.config.model.as_deref(), Some("gpt-new"));
 
     Ok(())
 }
@@ -254,7 +327,7 @@ model = "gpt-old"
 
     let write_id = mcp
         .send_config_value_write_request(ConfigValueWriteParams {
-            file_path: codex_home.path().join("config.toml").display().to_string(),
+            file_path: Some(codex_home.path().join("config.toml").display().to_string()),
             key_path: "model".to_string(),
             value: json!("gpt-new"),
             merge_strategy: MergeStrategy::Replace,
@@ -286,9 +359,10 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
+    let writable_root = test_tmp_path_buf();
     let batch_id = mcp
         .send_config_batch_write_request(ConfigBatchWriteParams {
-            file_path: codex_home.path().join("config.toml").display().to_string(),
+            file_path: Some(codex_home.path().join("config.toml").display().to_string()),
             edits: vec![
                 ConfigEdit {
                     key_path: "sandbox_mode".to_string(),
@@ -298,7 +372,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
                 ConfigEdit {
                     key_path: "sandbox_workspace_write".to_string(),
                     value: json!({
-                        "writable_roots": ["/tmp"],
+                        "writable_roots": [writable_root.clone()],
                         "network_access": false
                     }),
                     merge_strategy: MergeStrategy::Replace,
@@ -314,6 +388,14 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     .await??;
     let batch_write: ConfigWriteResponse = to_response(batch_resp)?;
     assert_eq!(batch_write.status, WriteStatus::Ok);
+    let expected_file_path = codex_home
+        .path()
+        .join("config.toml")
+        .canonicalize()
+        .unwrap()
+        .display()
+        .to_string();
+    assert_eq!(batch_write.file_path, expected_file_path);
 
     let read_id = mcp
         .send_config_read_request(ConfigReadParams {
@@ -326,22 +408,14 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     )
     .await??;
     let read: ConfigReadResponse = to_response(read_resp)?;
-    assert_eq!(
-        read.config.get("sandbox_mode"),
-        Some(&json!("workspace-write"))
-    );
-    assert_eq!(
-        read.config
-            .get("sandbox_workspace_write")
-            .and_then(|v| v.get("writable_roots")),
-        Some(&json!(["/tmp"]))
-    );
-    assert_eq!(
-        read.config
-            .get("sandbox_workspace_write")
-            .and_then(|v| v.get("network_access")),
-        Some(&json!(false))
-    );
+    assert_eq!(read.config.sandbox_mode, Some(SandboxMode::WorkspaceWrite));
+    let sandbox = read
+        .config
+        .sandbox_workspace_write
+        .as_ref()
+        .expect("sandbox workspace write");
+    assert_eq!(sandbox.writable_roots, vec![writable_root]);
+    assert!(!sandbox.network_access);
 
     Ok(())
 }

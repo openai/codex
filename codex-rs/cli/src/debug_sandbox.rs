@@ -136,7 +136,9 @@ async fn run_command_under_sandbox(
     if let SandboxType::Windows = sandbox_type {
         #[cfg(target_os = "windows")]
         {
+            use codex_core::features::Feature;
             use codex_windows_sandbox::run_windows_sandbox_capture;
+            use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
 
             let policy_str = serde_json::to_string(&config.sandbox_policy)?;
 
@@ -145,18 +147,32 @@ async fn run_command_under_sandbox(
             let env_map = env.clone();
             let command_vec = command.clone();
             let base_dir = config.codex_home.clone();
+            let use_elevated = config.features.enabled(Feature::WindowsSandbox)
+                && config.features.enabled(Feature::WindowsSandboxElevated);
 
             // Preflight audit is invoked elsewhere at the appropriate times.
             let res = tokio::task::spawn_blocking(move || {
-                run_windows_sandbox_capture(
-                    policy_str.as_str(),
-                    &sandbox_cwd,
-                    base_dir.as_path(),
-                    command_vec,
-                    &cwd_clone,
-                    env_map,
-                    None,
-                )
+                if use_elevated {
+                    run_windows_sandbox_capture_elevated(
+                        policy_str.as_str(),
+                        &sandbox_cwd,
+                        base_dir.as_path(),
+                        command_vec,
+                        &cwd_clone,
+                        env_map,
+                        None,
+                    )
+                } else {
+                    run_windows_sandbox_capture(
+                        policy_str.as_str(),
+                        &sandbox_cwd,
+                        base_dir.as_path(),
+                        command_vec,
+                        &cwd_clone,
+                        env_map,
+                        None,
+                    )
+                }
             })
             .await;
 

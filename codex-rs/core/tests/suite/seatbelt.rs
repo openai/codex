@@ -76,7 +76,7 @@ async fn if_parent_of_repo_is_writable_then_dot_git_folder_is_writable() {
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let test_scenario = create_test_scenario(&tmp);
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![test_scenario.repo_parent.clone()],
+        writable_roots: vec![test_scenario.repo_parent.as_path().try_into().unwrap()],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -102,7 +102,7 @@ async fn if_git_repo_is_writable_root_then_dot_git_folder_is_read_only() {
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let test_scenario = create_test_scenario(&tmp);
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![test_scenario.repo_root.clone()],
+        writable_roots: vec![test_scenario.repo_root.as_path().try_into().unwrap()],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -159,23 +159,18 @@ async fn read_only_forbids_all_writes() {
         .await;
 }
 
-/// Verify that user lookups via `pwd.getpwuid(os.getuid())` work under the
-/// seatbelt sandbox. Prior to allowing the necessary mach‑lookup for
-/// OpenDirectory libinfo, this would fail with `KeyError: getpwuid(): uid not found`.
 #[tokio::test]
-async fn python_getpwuid_works_under_seatbelt() {
+async fn openpty_works_under_seatbelt() {
     if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
         eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
         return;
     }
 
-    // For local dev.
     if which::which("python3").is_err() {
         eprintln!("python3 not found in PATH, skipping test.");
         return;
     }
 
-    // ReadOnly is sufficient here since we are only exercising user lookup.
     let policy = SandboxPolicy::ReadOnly;
     let command_cwd = std::env::current_dir().expect("getcwd");
     let sandbox_cwd = command_cwd.clone();
@@ -184,8 +179,12 @@ async fn python_getpwuid_works_under_seatbelt() {
         vec![
             "python3".to_string(),
             "-c".to_string(),
-            // Print the passwd struct; success implies lookup worked.
-            "import pwd, os; print(pwd.getpwuid(os.getuid()))".to_string(),
+            r#"import os
+
+master, slave = os.openpty()
+os.write(slave, b"ping")
+assert os.read(master, 4) == b"ping""#
+                .to_string(),
         ],
         command_cwd,
         &policy,

@@ -1,6 +1,7 @@
 #![cfg(unix)]
 use codex_core::protocol::SandboxPolicy;
 use codex_core::spawn::StdioPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
@@ -58,14 +59,14 @@ async fn spawn_command_under_sandbox(
 async fn python_multiprocessing_lock_works_under_sandbox() {
     core_test_support::skip_if_sandbox!();
     #[cfg(target_os = "macos")]
-    let writable_roots = Vec::<PathBuf>::new();
+    let writable_roots = Vec::<AbsolutePathBuf>::new();
 
     // From https://man7.org/linux/man-pages/man7/sem_overview.7.html
     //
     // > On Linux, named semaphores are created in a virtual filesystem,
     // > normally mounted under /dev/shm.
     #[cfg(target_os = "linux")]
-    let writable_roots = vec![PathBuf::from("/dev/shm")];
+    let writable_roots: Vec<AbsolutePathBuf> = vec!["/dev/shm".try_into().unwrap()];
 
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots,
@@ -106,6 +107,45 @@ if __name__ == '__main__':
     .expect("should be able to spawn python under sandbox");
 
     let status = child.wait().await.expect("should wait for child process");
+    assert!(status.success(), "python exited with {status:?}");
+}
+
+#[tokio::test]
+async fn python_getpwuid_works_under_sandbox() {
+    core_test_support::skip_if_sandbox!();
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .status()
+        .is_err()
+    {
+        eprintln!("python3 not found in PATH, skipping test.");
+        return;
+    }
+
+    let policy = SandboxPolicy::ReadOnly;
+    let command_cwd = std::env::current_dir().expect("should be able to get current dir");
+    let sandbox_cwd = command_cwd.clone();
+
+    let mut child = spawn_command_under_sandbox(
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            "import pwd, os; print(pwd.getpwuid(os.getuid()))".to_string(),
+        ],
+        command_cwd,
+        &policy,
+        sandbox_cwd.as_path(),
+        StdioPolicy::RedirectForShellTool,
+        HashMap::new(),
+    )
+    .await
+    .expect("should be able to spawn python under sandbox");
+
+    let status = child
+        .wait()
+        .await
+        .expect("should be able to wait for child process");
     assert!(status.success(), "python exited with {status:?}");
 }
 

@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use base64::Engine;
 use codex_utils_image::load_and_resize_to_fit;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
@@ -14,6 +13,25 @@ use crate::user_input::UserInput;
 use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
+
+/// Controls whether a command should use the session sandbox or bypass it.
+#[derive(
+    Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxPermissions {
+    /// Run with the configured sandbox
+    #[default]
+    UseDefault,
+    /// Request to run outside the sandbox
+    RequireEscalated,
+}
+
+impl SandboxPermissions {
+    pub fn requires_escalated_permissions(self) -> bool {
+        matches!(self, SandboxPermissions::RequireEscalated)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -132,7 +150,8 @@ pub enum ResponseItem {
     GhostSnapshot {
         ghost_commit: GhostCommit,
     },
-    CompactionSummary {
+    #[serde(alias = "compaction_summary")]
+    Compaction {
         encrypted_content: String,
     },
     #[serde(other)]
@@ -170,6 +189,16 @@ fn invalid_image_error_placeholder(
             "Image located at `{}` is invalid: {}",
             path.display(),
             error
+        ),
+    }
+}
+
+fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> ContentItem {
+    ContentItem::InputText {
+        text: format!(
+            "Codex cannot attach image at `{}`: unsupported image format `{}`.",
+            path.display(),
+            mime
         ),
     }
 }
@@ -271,53 +300,37 @@ impl From<Vec<UserInput>> for ResponseInputItem {
             role: "user".to_string(),
             content: items
                 .into_iter()
-                .map(|c| match c {
-                    UserInput::Text { text } => ContentItem::InputText { text },
-                    UserInput::Image { image_url } => ContentItem::InputImage { image_url },
+                .filter_map(|c| match c {
+                    UserInput::Text { text } => Some(ContentItem::InputText { text }),
+                    UserInput::Image { image_url } => Some(ContentItem::InputImage { image_url }),
                     UserInput::LocalImage { path } => match load_and_resize_to_fit(&path) {
-                        Ok(image) => ContentItem::InputImage {
+                        Ok(image) => Some(ContentItem::InputImage {
                             image_url: image.into_data_url(),
-                        },
+                        }),
                         Err(err) => {
                             if matches!(&err, ImageProcessingError::Read { .. }) {
-                                local_image_error_placeholder(&path, &err)
+                                Some(local_image_error_placeholder(&path, &err))
                             } else if err.is_invalid_image() {
-                                invalid_image_error_placeholder(&path, &err)
+                                Some(invalid_image_error_placeholder(&path, &err))
                             } else {
-                                match std::fs::read(&path) {
-                                    Ok(bytes) => {
-                                        let Some(mime_guess) = mime_guess::from_path(&path).first()
-                                        else {
-                                            return local_image_error_placeholder(
-                                                &path,
-                                                "unsupported MIME type (unknown)",
-                                            );
-                                        };
-                                        let mime = mime_guess.essence_str().to_owned();
-                                        if !mime.starts_with("image/") {
-                                            return local_image_error_placeholder(
-                                                &path,
-                                                format!("unsupported MIME type `{mime}`"),
-                                            );
-                                        }
-                                        let encoded =
-                                            base64::engine::general_purpose::STANDARD.encode(bytes);
-                                        ContentItem::InputImage {
-                                            image_url: format!("data:{mime};base64,{encoded}"),
-                                        }
-                                    }
-                                    Err(read_err) => {
-                                        tracing::warn!(
-                                            "Skipping image {} – could not read file: {}",
-                                            path.display(),
-                                            read_err
-                                        );
-                                        local_image_error_placeholder(&path, &read_err)
-                                    }
+                                let Some(mime_guess) = mime_guess::from_path(&path).first() else {
+                                    return Some(local_image_error_placeholder(
+                                        &path,
+                                        "unsupported MIME type (unknown)",
+                                    ));
+                                };
+                                let mime = mime_guess.essence_str().to_owned();
+                                if !mime.starts_with("image/") {
+                                    return Some(local_image_error_placeholder(
+                                        &path,
+                                        format!("unsupported MIME type `{mime}`"),
+                                    ));
                                 }
+                                Some(unsupported_image_error_placeholder(&path, &mime))
                             }
                         }
                     },
+                    UserInput::Skill { .. } => None, // Skill bodies are injected later in core
                 })
                 .collect::<Vec<ContentItem>>(),
         }
@@ -334,8 +347,9 @@ pub struct ShellToolCallParams {
     /// This is the maximum time in milliseconds that the command is allowed to run.
     #[serde(alias = "timeout")]
     pub timeout_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub with_escalated_permissions: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sandbox_permissions: Option<SandboxPermissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -347,11 +361,15 @@ pub struct ShellCommandToolCallParams {
     pub command: String,
     pub workdir: Option<String>,
 
+    /// Whether to run the shell with login shell semantics
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login: Option<bool>,
     /// This is the maximum time in milliseconds that the command is allowed to run.
     #[serde(alias = "timeout")]
     pub timeout_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub with_escalated_permissions: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sandbox_permissions: Option<SandboxPermissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -537,6 +555,7 @@ mod tests {
     use anyhow::Result;
     use mcp_types::ImageContent;
     use mcp_types::TextContent;
+    use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
     #[test]
@@ -651,6 +670,21 @@ mod tests {
     }
 
     #[test]
+    fn deserializes_compaction_alias() -> Result<()> {
+        let json = r#"{"type":"compaction_summary","encrypted_content":"abc"}"#;
+
+        let item: ResponseItem = serde_json::from_str(json)?;
+
+        assert_eq!(
+            item,
+            ResponseItem::Compaction {
+                encrypted_content: "abc".into(),
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
     fn roundtrips_web_search_call_actions() -> Result<()> {
         let cases = vec![
             (
@@ -730,7 +764,7 @@ mod tests {
                 command: vec!["ls".to_string(), "-l".to_string()],
                 workdir: Some("/tmp".to_string()),
                 timeout_ms: Some(1000),
-                with_escalated_permissions: None,
+                sandbox_permissions: None,
                 justification: None,
             },
             params
@@ -795,6 +829,38 @@ mod tests {
                             "placeholder should mention path: {text}"
                         );
                     }
+                    other => panic!("expected placeholder text but found {other:?}"),
+                }
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn local_image_unsupported_image_format_adds_placeholder() -> Result<()> {
+        let dir = tempdir()?;
+        let svg_path = dir.path().join("example.svg");
+        std::fs::write(
+            &svg_path,
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#,
+        )?;
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            path: svg_path.clone(),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(content.len(), 1);
+                let expected = format!(
+                    "Codex cannot attach image at `{}`: unsupported image format `image/svg+xml`.",
+                    svg_path.display()
+                );
+                match &content[0] {
+                    ContentItem::InputText { text } => assert_eq!(text, &expected),
                     other => panic!("expected placeholder text but found {other:?}"),
                 }
             }

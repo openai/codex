@@ -1,17 +1,17 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_core::features::Feature;
-use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::start_mock_server;
@@ -72,9 +72,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.features.disable(Feature::ApplyPatchFreeform);
-            config.model = "codex-mini-latest".to_string();
-            config.model_family = find_family_for_model("codex-mini-latest")
-                .expect("model family for codex-mini-latest");
+            config.model = Some("codex-mini-latest".to_string());
         })
         .build(&server)
         .await?;
@@ -126,13 +124,30 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
     let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
-    let TestCodex { codex, config, .. } = test_codex()
+    let TestCodex {
+        codex,
+        config,
+        conversation_manager,
+        ..
+    } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
+            config.model = Some("gpt-5.1-codex-max".to_string());
         })
         .build(&server)
         .await?;
-    let base_instructions = config.model_family.base_instructions.clone();
+    let base_instructions = conversation_manager
+        .get_models_manager()
+        .construct_model_family(
+            config
+                .model
+                .as_deref()
+                .expect("test config should have a model"),
+            &config,
+        )
+        .await
+        .base_instructions
+        .clone();
 
     codex
         .submit(Op::UserInput {
@@ -303,7 +318,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![writable.path().to_path_buf()],
+                writable_roots: vec![writable.path().try_into().unwrap()],
                 network_access: true,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
@@ -493,7 +508,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             cwd: new_cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![writable.path().to_path_buf()],
+                writable_roots: vec![AbsolutePathBuf::try_from(writable.path()).unwrap()],
                 network_access: true,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
@@ -565,7 +580,12 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
     let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
-    let TestCodex { codex, config, .. } = test_codex()
+    let TestCodex {
+        codex,
+        config,
+        session_configured,
+        ..
+    } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
         })
@@ -575,7 +595,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let default_cwd = config.cwd.clone();
     let default_approval_policy = config.approval_policy;
     let default_sandbox_policy = config.sandbox_policy.clone();
-    let default_model = config.model.clone();
+    let default_model = session_configured.model;
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
 
@@ -652,7 +672,12 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
 
     let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
     let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
-    let TestCodex { codex, config, .. } = test_codex()
+    let TestCodex {
+        codex,
+        config,
+        session_configured,
+        ..
+    } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
         })
@@ -662,7 +687,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let default_cwd = config.cwd.clone();
     let default_approval_policy = config.approval_policy;
     let default_sandbox_policy = config.sandbox_policy.clone();
-    let default_model = config.model.clone();
+    let default_model = session_configured.model;
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
 

@@ -1,0 +1,6 @@
+*** Begin Patch
+*** Update File: modify.txt
+@@
+-missing
++changed
+*** End Patch

@@ -1,4 +1,4 @@
-use codex_app_server_protocol::AuthMode;
+use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ContentItem;
 use codex_core::ConversationManager;
@@ -15,25 +15,33 @@ use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::error::CodexErr;
-use codex_core::model_family::find_family_for_model;
+use codex_core::features::Feature;
+use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
-use codex_otel::otel_event_manager::OtelEventManager;
+use codex_otel::otel_manager::OtelManager;
 use codex_protocol::ConversationId;
-use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
-use core_test_support::responses;
+use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::get_responses_requests;
+use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::sse;
+use core_test_support::responses::sse_failed;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use dunce::canonicalize as normalize_path;
 use futures::StreamExt;
 use serde_json::json;
 use std::io::Write;
@@ -238,7 +246,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
     // Mock server that will receive the resumed request
     let server = MockServer::start().await;
-    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     // Configure Codex to resume from our file
     let model_provider = ModelProviderInfo {
@@ -251,8 +259,11 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     // Also configure user instructions to ensure they are NOT delivered on resume.
     config.user_instructions = Some("be nice".to_string());
 
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
+        CodexAuth::from_api_key("Test API Key"),
+        config.model_provider.clone(),
+        config.codex_home.clone(),
+    );
     let auth_manager =
         codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let NewConversation {
@@ -335,8 +346,11 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
 
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
+        CodexAuth::from_api_key("Test API Key"),
+        config.model_provider.clone(),
+        config.codex_home.clone(),
+    );
     let NewConversation {
         conversation: codex,
         conversation_id,
@@ -358,7 +372,10 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // get request from the server
-    let request = &server.received_requests().await.unwrap()[0];
+    let requests = get_responses_requests(&server).await;
+    let request = requests
+        .first()
+        .expect("expected POST request to /responses");
     let request_conversation_id = request.headers.get("conversation_id").unwrap();
     let request_authorization = request.headers.get("authorization").unwrap();
     let request_originator = request.headers.get("originator").unwrap();
@@ -379,7 +396,7 @@ async fn includes_base_instructions_override_in_request() {
     skip_if_no_network!();
     // Mock server
     let server = MockServer::start().await;
-    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -391,8 +408,11 @@ async fn includes_base_instructions_override_in_request() {
     config.base_instructions = Some("test instructions".to_string());
     config.model_provider = model_provider;
 
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
+        CodexAuth::from_api_key("Test API Key"),
+        config.model_provider.clone(),
+        config.codex_home.clone(),
+    );
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -449,7 +469,11 @@ async fn chatgpt_auth_sends_correct_request() {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
-    let conversation_manager = ConversationManager::with_auth(create_dummy_codex_auth());
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
+        create_dummy_codex_auth(),
+        config.model_provider.clone(),
+        config.codex_home.clone(),
+    );
     let NewConversation {
         conversation: codex,
         conversation_id,
@@ -471,7 +495,10 @@ async fn chatgpt_auth_sends_correct_request() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // get request from the server
-    let request = &server.received_requests().await.unwrap()[0];
+    let requests = get_responses_requests(&server).await;
+    let request = requests
+        .first()
+        .expect("expected POST request to /responses");
     let request_conversation_id = request.headers.get("conversation_id").unwrap();
     let request_authorization = request.headers.get("authorization").unwrap();
     let request_originator = request.headers.get("originator").unwrap();
@@ -567,7 +594,7 @@ async fn includes_user_instructions_message_in_request() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
-    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -579,8 +606,11 @@ async fn includes_user_instructions_message_in_request() {
     config.model_provider = model_provider;
     config.user_instructions = Some("be nice".to_string());
 
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
+        CodexAuth::from_api_key("Test API Key"),
+        config.model_provider.clone(),
+        config.codex_home.clone(),
+    );
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -621,11 +651,83 @@ async fn includes_user_instructions_message_in_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skills_append_to_instructions_when_feature_enabled() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let skill_dir = codex_home.path().join("skills/demo");
+    std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: demo\ndescription: build charts\n---\n\n# body\n",
+    )
+    .expect("write skill");
+
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = model_provider;
+    config.features.enable(Feature::Skills);
+    config.cwd = codex_home.path().to_path_buf();
+
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
+        CodexAuth::from_api_key("Test API Key"),
+        config.model_provider.clone(),
+        config.codex_home.clone(),
+    );
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation")
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_message_role(&request_body["input"][0], "user");
+    let instructions_text = request_body["input"][0]["content"][0]["text"]
+        .as_str()
+        .expect("instructions text");
+    assert!(
+        instructions_text.contains("## Skills"),
+        "expected skills section present"
+    );
+    assert!(
+        instructions_text.contains("demo: build charts"),
+        "expected skill summary"
+    );
+    let expected_path = normalize_path(skill_dir.join("SKILL.md")).unwrap();
+    let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
+    assert!(
+        instructions_text.contains(&expected_path_str),
+        "expected path {expected_path_str} in instructions"
+    );
+    let _codex_home_guard = codex_home;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
         .with_model("gpt-5.1-codex")
         .with_config(|config| {
@@ -664,7 +766,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
         .with_model("gpt-5.1-codex")
         .build(&server)
@@ -701,7 +803,7 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_fami
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex().with_model("gpt-5.1").build(&server).await?;
 
     codex
@@ -730,11 +832,86 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_fami
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.model_reasoning_summary = ReasoningSummary::Concise;
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    pretty_assertions::assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("summary"))
+            .and_then(|value| value.as_str()),
+        Some("concise")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.model_reasoning_summary = ReasoningSummary::None;
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    pretty_assertions::assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("summary")),
+        None
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_default_verbosity_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex().with_model("gpt-5.1").build(&server).await?;
 
     codex
@@ -767,7 +944,7 @@ async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::R
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
         .with_model("gpt-5.1-codex")
         .with_config(|config| {
@@ -805,7 +982,7 @@ async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
     let TestCodex { codex, .. } = test_codex()
         .with_model("gpt-5.1")
         .with_config(|config| {
@@ -844,7 +1021,7 @@ async fn includes_developer_instructions_message_in_request() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
-    let resp_mock = responses::mount_sse_once(&server, sse_completed("resp1")).await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -857,8 +1034,11 @@ async fn includes_developer_instructions_message_in_request() {
     config.user_instructions = Some("be nice".to_string());
     config.developer_instructions = Some("be useful".to_string());
 
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
+        CodexAuth::from_api_key("Test API Key"),
+        config.model_provider.clone(),
+        config.codex_home.clone(),
+    );
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -944,30 +1124,34 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     config.model_provider = provider.clone();
     let effort = config.model_reasoning_effort;
     let summary = config.model_reasoning_summary;
+    let model = ModelsManager::get_model_offline(config.model.as_deref());
+    config.model = Some(model.clone());
     let config = Arc::new(config);
-
+    let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
     let conversation_id = ConversationId::new();
-
-    let otel_event_manager = OtelEventManager::new(
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let otel_manager = OtelManager::new(
         conversation_id,
-        config.model.as_str(),
-        config.model_family.slug.as_str(),
+        model.as_str(),
+        model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        Some(AuthMode::ChatGPT),
+        auth_manager.get_auth_mode(),
         false,
         "test".to_string(),
+        SessionSource::Exec,
     );
 
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
-        otel_event_manager,
+        model_family,
+        otel_manager,
         provider,
         effort,
         summary,
         conversation_id,
-        codex_protocol::protocol::SessionSource::Exec,
+        SessionSource::Exec,
     );
 
     let mut prompt = Prompt::default();
@@ -1032,11 +1216,8 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         }
     }
 
-    let requests = server
-        .received_requests()
-        .await
-        .expect("mock server collected requests");
-    assert_eq!(requests.len(), 1, "expected a single request");
+    let requests = get_responses_requests(&server).await;
+    assert_eq!(requests.len(), 1, "expected a single POST request");
     let body: serde_json::Value = requests[0]
         .body_json()
         .expect("request body to be valid JSON");
@@ -1057,7 +1238,7 @@ async fn token_count_includes_rate_limits_snapshot() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
-    let sse_body = responses::sse(vec![responses::ev_completed_with_tokens("resp_rate", 123)]);
+    let sse_body = sse(vec![ev_completed_with_tokens("resp_rate", 123)]);
 
     let response = ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
@@ -1083,7 +1264,11 @@ async fn token_count_includes_rate_limits_snapshot() {
     let mut config = load_default_config_for_test(&home);
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("test"));
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
+        CodexAuth::from_api_key("test"),
+        config.model_provider.clone(),
+        config.codex_home.clone(),
+    );
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -1122,7 +1307,8 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "window_minutes": 60,
                     "resets_at": 1704074400
                 },
-                "credits": null
+                "credits": null,
+                "plan_type": null
             }
         })
     );
@@ -1170,7 +1356,8 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "window_minutes": 60,
                     "resets_at": 1704074400
                 },
-                "credits": null
+                "credits": null,
+                "plan_type": null
             }
         })
     );
@@ -1241,7 +1428,8 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
             "window_minutes": 60,
             "resets_at": null
         },
-        "credits": null
+        "credits": null,
+        "plan_type": null
     });
 
     let submission_id = codex
@@ -1287,10 +1475,10 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
 
     const EFFECTIVE_CONTEXT_WINDOW: i64 = (272_000 * 95) / 100;
 
-    responses::mount_sse_once_match(
+    mount_sse_once_match(
         &server,
         body_string_contains("trigger context window"),
-        responses::sse_failed(
+        sse_failed(
             "resp_context_window",
             "context_length_exceeded",
             "Your input exceeds the context window of this model. Please adjust your input and try again.",
@@ -1298,7 +1486,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
     )
     .await;
 
-    responses::mount_sse_once_match(
+    mount_sse_once_match(
         &server,
         body_string_contains("seed turn"),
         sse_completed("resp_seed"),
@@ -1307,9 +1495,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.model = "gpt-5.1".to_string();
-            config.model_family =
-                find_family_for_model("gpt-5.1").expect("known gpt-5.1 model family");
+            config.model = Some("gpt-5.1".to_string());
             config.model_context_window = Some(272_000);
         })
         .build(&server)
@@ -1433,7 +1619,11 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_auth(create_dummy_codex_auth());
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
+        create_dummy_codex_auth(),
+        config.model_provider.clone(),
+        config.codex_home.clone(),
+    );
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -1511,7 +1701,11 @@ async fn env_var_overrides_loaded_auth() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_auth(create_dummy_codex_auth());
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
+        create_dummy_codex_auth(),
+        config.model_provider.clone(),
+        config.codex_home.clone(),
+    );
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -1589,8 +1783,11 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
 
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
+        CodexAuth::from_api_key("Test API Key"),
+        config.model_provider.clone(),
+        config.codex_home.clone(),
+    );
     let NewConversation {
         conversation: codex,
         ..
@@ -1627,7 +1824,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Inspect the three captured requests.
-    let requests = server.received_requests().await.unwrap();
+    let requests = get_responses_requests(&server).await;
     assert_eq!(requests.len(), 3, "expected 3 requests (one per turn)");
 
     // Replace full-array compare with tail-only raw JSON compare using a single hard-coded value.

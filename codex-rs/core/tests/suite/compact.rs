@@ -28,6 +28,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::get_responses_requests;
 use core_test_support::responses::mount_compact_json_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
@@ -37,6 +38,7 @@ use core_test_support::responses::sse_failed;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use wiremock::MockServer;
 // --- Test helpers -----------------------------------------------------------
 
 pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
@@ -99,6 +101,13 @@ fn json_fragment(text: &str) -> String {
         .to_string()
 }
 
+fn non_openai_model_provider(server: &MockServer) -> ModelProviderInfo {
+    let mut provider = built_in_model_providers()["openai"].clone();
+    provider.name = "OpenAI (test)".into();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() {
     skip_if_no_network!();
@@ -126,16 +135,16 @@ async fn summarize_context_three_requests_and_instructions() {
     let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3]).await;
 
     // Build config pointing to the mock server and spawn Codex.
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
+    let model_provider = non_openai_model_provider(&server);
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let conversation_manager = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
     let NewConversation {
         conversation: codex,
         session_configured,
@@ -320,16 +329,16 @@ async fn manual_compact_uses_custom_prompt() {
 
     let custom_prompt = "Use this compact prompt instead";
 
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
+    let model_provider = non_openai_model_provider(&server);
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
     config.compact_prompt = Some(custom_prompt.to_string());
 
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let conversation_manager = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -344,7 +353,7 @@ async fn manual_compact_uses_custom_prompt() {
     assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("collect requests");
+    let requests = get_responses_requests(&server).await;
     let body = requests
         .iter()
         .find_map(|req| req.body_json::<serde_json::Value>().ok())
@@ -400,16 +409,16 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
     ]);
     mount_sse_once(&server, sse_compact).await;
 
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
+    let model_provider = non_openai_model_provider(&server);
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
 
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let conversation_manager = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
     let NewConversation {
         conversation: codex,
         ..
@@ -457,7 +466,11 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
 
     let server = start_mock_server().await;
 
+    let non_openai_provider_name = non_openai_model_provider(&server).name;
     let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider.name = non_openai_provider_name;
+        })
         .build(&server)
         .await
         .expect("build codex")
@@ -570,7 +583,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // collect the requests payloads from the model
-    let requests_payloads = server.received_requests().await.unwrap();
+    let requests_payloads = get_responses_requests(&server).await;
 
     let body = requests_payloads[0]
         .body_json::<serde_json::Value>()
@@ -1040,17 +1053,17 @@ async fn auto_compact_runs_after_token_limit_hit() {
     };
     mount_sse_once_match(&server, fourth_matcher, sse4).await;
 
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
+    let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let conversation_manager = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -1090,7 +1103,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests = server.received_requests().await.unwrap();
+    let requests = get_responses_requests(&server).await;
     assert_eq!(
         requests.len(),
         5,
@@ -1286,16 +1299,16 @@ async fn auto_compact_persists_rollout_entries() {
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
 
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
+    let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let conversation_manager = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
     let NewConversation {
         conversation: codex,
         session_configured,
@@ -1387,21 +1400,21 @@ async fn manual_compact_retries_after_context_window_error() {
     )
     .await;
 
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
+    let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
-    let codex = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"))
-        .new_conversation(config)
-        .await
-        .unwrap()
-        .conversation;
+    let codex = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    )
+    .new_conversation(config)
+    .await
+    .unwrap()
+    .conversation;
 
     codex
         .submit(Op::UserInput {
@@ -1520,20 +1533,20 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     )
     .await;
 
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
+    let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
-    let codex = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"))
-        .new_conversation(config)
-        .await
-        .unwrap()
-        .conversation;
+    let codex = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    )
+    .new_conversation(config)
+    .await
+    .unwrap()
+    .conversation;
 
     codex
         .submit(Op::UserInput {
@@ -1721,17 +1734,17 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
 
     mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4, sse5, sse6]).await;
 
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
+    let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200);
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let conversation_manager = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -1771,10 +1784,8 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         "auto compact should not emit task lifecycle events"
     );
 
-    let request_bodies: Vec<String> = server
-        .received_requests()
-        .await
-        .unwrap()
+    let requests = get_responses_requests(&server).await;
+    let request_bodies: Vec<String> = requests
         .into_iter()
         .map(|request| String::from_utf8(request.body).unwrap_or_default())
         .collect();
@@ -1833,10 +1844,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     // We don't assert on the post-compact request, so no need to keep its mock.
     mount_sse_once(&server, post_auto_compact_turn).await;
 
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
+    let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
@@ -1845,11 +1853,14 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     config.model_context_window = Some(context_window);
     config.model_auto_compact_token_limit = Some(limit);
 
-    let codex = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"))
-        .new_conversation(config)
-        .await
-        .unwrap()
-        .conversation;
+    let codex = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    )
+    .new_conversation(config)
+    .await
+    .unwrap()
+    .conversation;
 
     codex
         .submit(Op::UserInput {
@@ -1935,13 +1946,18 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     )
     .await;
 
-    let compacted_history = vec![codex_protocol::models::ResponseItem::Message {
-        id: None,
-        role: "assistant".to_string(),
-        content: vec![codex_protocol::models::ContentItem::OutputText {
-            text: "REMOTE_COMPACT_SUMMARY".to_string(),
-        }],
-    }];
+    let compacted_history = vec![
+        codex_protocol::models::ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![codex_protocol::models::ContentItem::OutputText {
+                text: "REMOTE_COMPACT_SUMMARY".to_string(),
+            }],
+        },
+        codex_protocol::models::ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        },
+    ];
     let compact_mock =
         mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
 
@@ -2001,5 +2017,9 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     assert!(
         resume_body.contains("REMOTE_COMPACT_SUMMARY") || resume_body.contains(FINAL_REPLY),
         "resume request should follow remote compact and use compacted history"
+    );
+    assert!(
+        resume_body.contains("ENCRYPTED_COMPACTION_SUMMARY"),
+        "resume request should include compaction summary item"
     );
 }

@@ -8,6 +8,7 @@ use codex_core::MCP_SANDBOX_STATE_CAPABILITY;
 use codex_core::MCP_SANDBOX_STATE_NOTIFICATION;
 use codex_core::SandboxState;
 use codex_core::protocol::SandboxPolicy;
+use codex_execpolicy::Policy;
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
 use rmcp::ServerHandler;
@@ -27,7 +28,6 @@ use tracing::debug;
 
 use crate::posix::escalate_server::EscalateServer;
 use crate::posix::escalate_server::{self};
-use crate::posix::mcp_escalation_policy::ExecPolicy;
 use crate::posix::mcp_escalation_policy::McpEscalationPolicy;
 use crate::posix::stopwatch::Stopwatch;
 
@@ -54,7 +54,7 @@ pub struct ExecParams {
     pub login: Option<bool>,
 }
 
-#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ExecResult {
     pub exit_code: i32,
     pub output: String,
@@ -78,18 +78,25 @@ pub struct ExecTool {
     tool_router: ToolRouter<ExecTool>,
     bash_path: PathBuf,
     execve_wrapper: PathBuf,
-    policy: ExecPolicy,
+    policy: Arc<RwLock<Policy>>,
+    preserve_program_paths: bool,
     sandbox_state: Arc<RwLock<Option<SandboxState>>>,
 }
 
 #[tool_router]
 impl ExecTool {
-    pub fn new(bash_path: PathBuf, execve_wrapper: PathBuf, policy: ExecPolicy) -> Self {
+    pub fn new(
+        bash_path: PathBuf,
+        execve_wrapper: PathBuf,
+        policy: Arc<RwLock<Policy>>,
+        preserve_program_paths: bool,
+    ) -> Self {
         Self {
             tool_router: Self::tool_router(),
             bash_path,
             execve_wrapper,
             policy,
+            preserve_program_paths,
             sandbox_state: Arc::new(RwLock::new(None)),
         }
     }
@@ -121,7 +128,12 @@ impl ExecTool {
         let escalate_server = EscalateServer::new(
             self.bash_path.clone(),
             self.execve_wrapper.clone(),
-            McpEscalationPolicy::new(self.policy, context, stopwatch.clone()),
+            McpEscalationPolicy::new(
+                self.policy.clone(),
+                context,
+                stopwatch.clone(),
+                self.preserve_program_paths,
+            ),
         );
 
         let result = escalate_server
@@ -198,9 +210,10 @@ impl ServerHandler for ExecTool {
 pub(crate) async fn serve(
     bash_path: PathBuf,
     execve_wrapper: PathBuf,
-    policy: ExecPolicy,
+    policy: Arc<RwLock<Policy>>,
+    preserve_program_paths: bool,
 ) -> Result<RunningService<RoleServer, ExecTool>, rmcp::service::ServerInitializeError> {
-    let tool = ExecTool::new(bash_path, execve_wrapper, policy);
+    let tool = ExecTool::new(bash_path, execve_wrapper, policy, preserve_program_paths);
     tool.serve(stdio()).await
 }
 
