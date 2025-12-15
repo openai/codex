@@ -180,7 +180,7 @@ reqwest = "0.12"
 rmcp = { version = "0.10.0", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
-sentry = "0.34.0"
+sentry = "0.46.0"
 serde = "1"
 serde_json = "1"
 serde_with = "3.16"
