@@ -156,12 +156,14 @@ windows_wsl_setup_acknowledged = false
 
 # External notifier program (argv array). When unset: disabled.
 # Example: notify = ["notify-send", "Codex"]
+# [FIXED] 'notify' is a top-level key in the config, not under [tui].
 # notify = [ ]
 
 # In-product notices (mostly set automatically by Codex).
 [notice]
 # hide_full_access_warning = true
 # hide_rate_limit_model_nudge = true
+
 
 ################################################################################
 # Authentication & Login
