@@ -761,16 +761,6 @@ impl Session {
         state.get_total_token_usage()
     }
 
-    async fn mark_pending_auto_compact(&self) {
-        let mut state = self.state.lock().await;
-        state.mark_pending_auto_compact();
-    }
-
-    async fn take_pending_auto_compact(&self) -> bool {
-        let mut state = self.state.lock().await;
-        state.take_pending_auto_compact()
-    }
-
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
         let turn_context = self.new_turn(SessionSettingsUpdate::default()).await;
         match conversation_history {
@@ -1638,7 +1628,6 @@ mod handlers {
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::TurnContext;
-    use crate::codex::run_auto_compact;
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
@@ -1945,7 +1934,6 @@ mod handlers {
         let turn_context = sess
             .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
             .await;
-        sess.take_pending_auto_compact().await;
 
         sess.spawn_task(
             Arc::clone(&turn_context),
@@ -2002,9 +1990,6 @@ mod handlers {
         let turn_context = sess
             .new_turn_with_sub_id(sub_id.clone(), SessionSettingsUpdate::default())
             .await;
-        if sess.take_pending_auto_compact().await {
-            run_auto_compact(sess, &turn_context).await;
-        }
         match resolve_review_request(review_request, config.cwd.as_path()) {
             Ok(resolved) => {
                 spawn_review_thread(
@@ -2166,7 +2151,13 @@ pub(crate) async fn run_task(
         return None;
     }
 
-    if sess.take_pending_auto_compact().await {
+    let auto_compact_limit = turn_context
+        .client
+        .get_model_family()
+        .auto_compact_token_limit()
+        .unwrap_or(i64::MAX);
+    let total_usage_tokens = sess.get_total_token_usage().await;
+    if total_usage_tokens >= auto_compact_limit {
         run_auto_compact(&sess, &turn_context).await;
     }
     let event = EventMsg::TaskStarted(TaskStartedEvent {
@@ -2251,22 +2242,13 @@ pub(crate) async fn run_task(
                     needs_follow_up,
                     last_agent_message: turn_last_agent_message,
                 } = turn_output;
-                let limit = turn_context
-                    .client
-                    .get_model_family()
-                    .auto_compact_token_limit()
-                    .unwrap_or(i64::MAX);
                 let total_usage_tokens = sess.get_total_token_usage().await;
-                let token_limit_reached = total_usage_tokens >= limit;
+                let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
                     run_auto_compact(&sess, &turn_context).await;
                     continue;
-                }
-
-                if token_limit_reached {
-                    sess.mark_pending_auto_compact().await;
                 }
 
                 if !needs_follow_up {
