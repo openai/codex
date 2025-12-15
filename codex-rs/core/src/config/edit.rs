@@ -786,6 +786,68 @@ profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
     }
 
     #[test]
+    fn batch_write_table_upsert_preserves_inline_comments() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        let original = r#"approval_policy = "never"
+
+[mcp_servers.linear]
+name = "linear"
+# ok
+url = "https://linear.example"
+
+[mcp_servers.linear.http_headers]
+foo = "bar"
+
+[sandbox_workspace_write]
+# ok 3
+network_access = false
+"#;
+        std::fs::write(codex_home.join(CONFIG_TOML_FILE), original).expect("seed config");
+
+        apply_blocking(
+            codex_home,
+            None,
+            &[
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "mcp_servers".to_string(),
+                        "linear".to_string(),
+                        "url".to_string(),
+                    ],
+                    value: value("https://linear.example/v2"),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "sandbox_workspace_write".to_string(),
+                        "network_access".to_string(),
+                    ],
+                    value: value(true),
+                },
+            ],
+        )
+        .expect("apply");
+
+        let updated =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"approval_policy = "never"
+
+[mcp_servers.linear]
+name = "linear"
+# ok
+url = "https://linear.example/v2"
+
+[mcp_servers.linear.http_headers]
+foo = "bar"
+
+[sandbox_workspace_write]
+# ok 3
+network_access = true
+"#;
+        assert_eq!(updated, expected);
+    }
+
+    #[test]
     fn blocking_clear_model_removes_inline_table_entry() {
         let tmp = tempdir().expect("tmpdir");
         let codex_home = tmp.path();
