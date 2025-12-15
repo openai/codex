@@ -249,17 +249,20 @@ impl Codex {
 
         let config = Arc::new(config);
         let mut remote_models_error: Option<EventMsg> = None;
+        let is_up_to_date = compute_is_up_to_date(&config.codex_home);
+
         if config.features.enabled(Feature::RemoteModels)
             && let Err(err) = models_manager.refresh_available_models(&config).await
         {
             error!("failed to refresh available models: {err:?}");
-            remote_models_error = Some(EventMsg::Error(ErrorEvent {
-                message: "failed to refresh available models.".to_string(),
-                codex_error_info: None,
-            }));
+            if !is_up_to_date {
+                remote_models_error = Some(EventMsg::Error(ErrorEvent {
+                    message: "failed to refresh available models.".to_string(),
+                    codex_error_info: None,
+                }));
+            }
         }
         let model = models_manager.get_model(&config.model, &config).await;
-        let is_up_to_date = compute_is_up_to_date(&config.codex_home);
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             model: model.clone(),
