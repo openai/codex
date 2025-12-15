@@ -190,7 +190,7 @@ model = "mistral"
 
 ### model_reasoning_effort
 
-If the selected model is known to support reasoning (for example: `o3`, `o4-mini`, `codex-*`, `gpt-5.1-codex-max`, `gpt-5.1`, `gpt-5.1-codex`), reasoning is enabled by default when using the Responses API. As explained in the [OpenAI Platform documentation](https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning), this can be set to:
+If the selected model is known to support reasoning (for example: `o3`, `o4-mini`, `codex-*`, `gpt-5.1-codex-max`, `gpt-5.1`, `gpt-5.1-codex`, `gpt5-2`), reasoning is enabled by default when using the Responses API. As explained in the [OpenAI Platform documentation](https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning), this can be set to:
 
 - `"minimal"`
 - `"low"`
@@ -977,7 +977,7 @@ Valid values:
 | `hide_agent_reasoning`                           | boolean                                                           | Hide model reasoning events.                                                                                                    |
 | `check_for_update_on_startup`                    | boolean                                                           | Check for Codex updates on startup (default: true). Set to `false` only if updates are centrally managed.                       |
 | `show_raw_agent_reasoning`                       | boolean                                                           | Show raw reasoning (when available).                                                                                            |
-| `model_reasoning_effort`                         | `minimal` \| `low` \| `medium` \| `high`                          | Responses API reasoning effort.                                                                                                 |
+| `model_reasoning_effort`                         | `minimal` \| `low` \| `medium` \| `high`\|`xhigh`                  | Responses API reasoning effort.                                                                                                 |
 | `model_reasoning_summary`                        | `auto` \| `concise` \| `detailed` \| `none`                       | Reasoning summaries.                                                                                                            |
 | `model_verbosity`                                | `low` \| `medium` \| `high`                                       | GPT‑5 text verbosity (Responses API).                                                                                           |
 | `model_supports_reasoning_summaries`             | boolean                                                           | Force‑enable reasoning summaries.                                                                                               |
