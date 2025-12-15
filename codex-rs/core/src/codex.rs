@@ -2001,6 +2001,9 @@ mod handlers {
         let turn_context = sess
             .new_turn_with_sub_id(sub_id.clone(), SessionSettingsUpdate::default())
             .await;
+        if sess.take_pending_auto_compact().await {
+            run_auto_compact(sess, &turn_context).await;
+        }
         match resolve_review_request(review_request, config.cwd.as_path()) {
             Ok(resolved) => {
                 spawn_review_thread(
