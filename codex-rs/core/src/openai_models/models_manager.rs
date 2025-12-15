@@ -299,6 +299,15 @@ mod tests {
     use wiremock::MockServer;
 
     fn remote_model(slug: &str, display: &str, priority: i32) -> ModelInfo {
+        remote_model_with_visibility(slug, display, priority, "list")
+    }
+
+    fn remote_model_with_visibility(
+        slug: &str,
+        display: &str,
+        priority: i32,
+        visibility: &str,
+    ) -> ModelInfo {
         serde_json::from_value(json!({
             "slug": slug,
             "display_name": display,
@@ -306,7 +315,7 @@ mod tests {
             "default_reasoning_level": "medium",
             "supported_reasoning_levels": [{"effort": "low", "description": "low"}, {"effort": "medium", "description": "medium"}],
             "shell_type": "shell_command",
-            "visibility": "list",
+            "visibility": visibility,
             "minimal_client_version": [0, 1, 0],
             "supported_in_api": true,
             "priority": priority,
@@ -605,5 +614,24 @@ mod tests {
             1,
             "second refresh should only hit /models once"
         );
+    }
+
+    #[test]
+    fn build_available_models_picks_default_after_hiding_hidden_models() {
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let provider = provider_for("http://example.test".to_string());
+        let mut manager = ModelsManager::with_provider(auth_manager, provider);
+        manager.local_models = Vec::new();
+
+        let hidden_model = remote_model_with_visibility("hidden", "Hidden", 0, "hide");
+        let visible_model = remote_model_with_visibility("visible", "Visible", 1, "list");
+
+        let mut expected = ModelPreset::from(visible_model.clone());
+        expected.is_default = true;
+
+        let available = manager.build_available_models(vec![hidden_model, visible_model]);
+
+        assert_eq!(available, vec![expected]);
     }
 }
