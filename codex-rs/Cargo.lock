@@ -2056,6 +2056,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "notify",
+ "pretty_assertions",
  "regex-lite",
  "serde_json",
  "shlex",
