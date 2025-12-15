@@ -857,8 +857,19 @@ impl ChatWidget {
         // TODO: Handle streaming exec output if/when implemented
     }
 
-    fn on_terminal_interaction(&mut self, _ev: TerminalInteractionEvent) {
-        // TODO: Handle once design is ready
+    fn on_terminal_interaction(&mut self, ev: TerminalInteractionEvent) {
+        self.flush_answer_stream_with_separator();
+        let key = Self::unified_exec_session_key(Some(&ev.process_id), &ev.call_id);
+        let command_display = self
+            .unified_exec_sessions
+            .iter()
+            .find(|session| session.key == key)
+            .map(|session| session.command_display.clone());
+        self.add_to_history(history_cell::new_unified_exec_interaction(
+            ev.process_id,
+            command_display,
+            ev.stdin,
+        ));
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {

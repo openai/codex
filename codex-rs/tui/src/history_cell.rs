@@ -375,6 +375,81 @@ impl HistoryCell for PrefixedWrappedHistoryCell {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct UnifiedExecInteractionCell {
+    process_id: String,
+    command_display: Option<String>,
+    stdin: String,
+}
+
+impl UnifiedExecInteractionCell {
+    pub(crate) fn new(process_id: String, command_display: Option<String>, stdin: String) -> Self {
+        Self {
+            process_id,
+            command_display,
+            stdin,
+        }
+    }
+}
+
+impl HistoryCell for UnifiedExecInteractionCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width == 0 {
+            return Vec::new();
+        }
+        let wrap_width = width as usize;
+
+        let process_id = &self.process_id;
+        let mut header_spans = vec![
+            "↳ ".dim(),
+            "Terminal interaction".bold(),
+            " · ".dim(),
+            format!("session {process_id}").dim(),
+        ];
+        if let Some(command) = &self.command_display
+            && !command.is_empty()
+        {
+            header_spans.push(" · ".dim());
+            header_spans.push(command.clone().dim());
+        }
+        let header = Line::from(header_spans);
+
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let header_wrapped = word_wrap_line(&header, RtOptions::new(wrap_width));
+        push_owned_lines(&header_wrapped, &mut out);
+
+        let input_lines: Vec<Line<'static>> = if self.stdin.is_empty() {
+            vec![vec!["(waited)".dim()].into()]
+        } else {
+            self.stdin
+                .lines()
+                .map(|line| Line::from(line.to_string()))
+                .collect()
+        };
+
+        let input_wrapped = word_wrap_lines(
+            input_lines,
+            RtOptions::new(wrap_width)
+                .initial_indent(Line::from("  └ ".dim()))
+                .subsequent_indent(Line::from("    ".dim())),
+        );
+        out.extend(input_wrapped);
+        out
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.display_lines(width).len() as u16
+    }
+}
+
+pub(crate) fn new_unified_exec_interaction(
+    process_id: String,
+    command_display: Option<String>,
+    stdin: String,
+) -> UnifiedExecInteractionCell {
+    UnifiedExecInteractionCell::new(process_id, command_display, stdin)
+}
+
 fn truncate_exec_snippet(full_cmd: &str) -> String {
     let mut snippet = match full_cmd.split_once('\n') {
         Some((first, _)) => format!("{first} ..."),
@@ -1556,6 +1631,34 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
+    }
+
+    #[test]
+    fn unified_exec_interaction_cell_renders_input() {
+        let cell = new_unified_exec_interaction(
+            "42".to_string(),
+            Some("echo hello".to_string()),
+            "ls\npwd".to_string(),
+        );
+        let lines = render_transcript(&cell);
+        assert_eq!(
+            lines,
+            vec![
+                "↳ Terminal interaction · session 42 · echo hello",
+                "  └ ls",
+                "    pwd",
+            ],
+        );
+    }
+
+    #[test]
+    fn unified_exec_interaction_cell_renders_wait() {
+        let cell = new_unified_exec_interaction("7".to_string(), None, String::new());
+        let lines = render_transcript(&cell);
+        assert_eq!(
+            lines,
+            vec!["↳ Terminal interaction · session 7", "  └ (waited)"],
+        );
     }
 
     #[test]
