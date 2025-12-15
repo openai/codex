@@ -932,4 +932,151 @@ remote_compaction = true
         assert_eq!(overridden.overriding_layer.name, ConfigLayerName::System);
         assert_eq!(overridden.effective_value, serde_json::json!("never"));
     }
+
+    #[tokio::test]
+    async fn batch_write_table_upsert_preserves_inline_comments() -> Result<()> {
+        let tmp = tempdir().expect("tempdir");
+        let original = r#"approval_policy = "never"
+
+[mcp_servers.linear]
+name = "linear"
+# ok
+url = "https://linear.example"
+
+[mcp_servers.linear.http_headers]
+foo = "bar"
+
+[sandbox_workspace_write]
+# ok 3
+network_access = false
+"#;
+        std::fs::write(tmp.path().join(CONFIG_FILE_NAME), original)?;
+
+        let api = ConfigApi::new(tmp.path().to_path_buf(), vec![]);
+        api.batch_write(ConfigBatchWriteParams {
+            edits: vec![
+                RpcConfigEdit {
+                    key_path: "mcp_servers.linear".to_string(),
+                    value: json!({
+                        "url": "https://linear.example/v2"
+                    }),
+                    merge_strategy: MergeStrategy::Upsert,
+                },
+                RpcConfigEdit {
+                    key_path: "sandbox_workspace_write.network_access".to_string(),
+                    value: json!(true),
+                    merge_strategy: MergeStrategy::Upsert,
+                },
+            ],
+            file_path: Some(tmp.path().join(CONFIG_FILE_NAME).display().to_string()),
+            expected_version: None,
+        })
+        .await
+        .expect("write succeeds");
+
+        let updated =
+            std::fs::read_to_string(tmp.path().join(CONFIG_FILE_NAME)).expect("read config");
+        let expected = r#"approval_policy = "never"
+
+[mcp_servers.linear]
+name = "linear"
+# ok
+url = "https://linear.example/v2"
+
+[mcp_servers.linear.http_headers]
+foo = "bar"
+
+[sandbox_workspace_write]
+# ok 3
+network_access = true
+"#;
+        assert_eq!(updated, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_merges_tables_replace_overwrites() -> Result<()> {
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join(CONFIG_FILE_NAME);
+        let base = r#"[mcp_servers.linear]
+bearer_token_env_var = "TOKEN"
+name = "linear"
+url = "https://linear.example"
+
+[mcp_servers.linear.env_http_headers]
+existing = "keep"
+
+[mcp_servers.linear.http_headers]
+alpha = "a"
+"#;
+
+        let overlay = json!({
+            "bearer_token_env_var": "NEW_TOKEN",
+            "http_headers": {
+                "alpha": "updated",
+                "beta": "b"
+            },
+            "name": "linear",
+            "url": "https://linear.example"
+        });
+
+        std::fs::write(&path, base)?;
+
+        let api = ConfigApi::new(tmp.path().to_path_buf(), vec![]);
+        api.write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "mcp_servers.linear".to_string(),
+            value: overlay.clone(),
+            merge_strategy: MergeStrategy::Upsert,
+            expected_version: None,
+        })
+        .await
+        .expect("upsert succeeds");
+
+        let upserted: TomlValue = toml::from_str(&std::fs::read_to_string(&path)?)?;
+        let expected_upsert: TomlValue = toml::from_str(
+            r#"[mcp_servers.linear]
+bearer_token_env_var = "NEW_TOKEN"
+name = "linear"
+url = "https://linear.example"
+
+[mcp_servers.linear.env_http_headers]
+existing = "keep"
+
+[mcp_servers.linear.http_headers]
+alpha = "updated"
+beta = "b"
+"#,
+        )?;
+        assert_eq!(upserted, expected_upsert);
+
+        std::fs::write(&path, base)?;
+
+        api.write_value(ConfigValueWriteParams {
+            file_path: Some(path.display().to_string()),
+            key_path: "mcp_servers.linear".to_string(),
+            value: overlay,
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("replace succeeds");
+
+        let replaced: TomlValue = toml::from_str(&std::fs::read_to_string(&path)?)?;
+        let expected_replace: TomlValue = toml::from_str(
+            r#"[mcp_servers.linear]
+bearer_token_env_var = "NEW_TOKEN"
+name = "linear"
+url = "https://linear.example"
+
+[mcp_servers.linear.http_headers]
+alpha = "updated"
+beta = "b"
+"#,
+        )?;
+        assert_eq!(replaced, expected_replace);
+
+        Ok(())
+    }
 }
