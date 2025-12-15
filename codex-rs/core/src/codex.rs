@@ -254,7 +254,7 @@ impl Codex {
         {
             error!("failed to refresh available models: {err:?}");
             remote_models_error = Some(EventMsg::Error(ErrorEvent {
-                message: format!("failed to refresh available models."),
+                message: "failed to refresh available models.".to_string(),
                 codex_error_info: None,
             }));
         }
@@ -1684,6 +1684,7 @@ mod handlers {
     use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
+    use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
