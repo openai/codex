@@ -944,6 +944,28 @@ impl App {
                     }
                 }
             }
+            AppEvent::UpdateFeatureFlags { updates } => {
+                if updates.is_empty() {
+                    return Ok(true);
+                }
+                let mut builder = ConfigEditsBuilder::new(&self.config.codex_home);
+                for (feature, enabled) in &updates {
+                    if *enabled {
+                        self.config.features.enable(*feature);
+                        self.chat_widget.set_feature_enabled(*feature, true);
+                    } else {
+                        self.config.features.disable(*feature);
+                        self.chat_widget.set_feature_enabled(*feature, false);
+                    }
+                    builder = builder.set_feature_enabled(feature.key(), *enabled);
+                }
+                if let Err(err) = builder.apply().await {
+                    tracing::error!(error = %err, "failed to persist feature flags");
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to update experimental features: {err}"
+                    ));
+                }
+            }
             AppEvent::SkipNextWorldWritableScan => {
                 self.skip_world_writable_scan_once = true;
             }
