@@ -3,7 +3,7 @@ use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
-use crate::update_nudge::update_available_nudge;
+use crate::update_action::update_available_nudge;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
