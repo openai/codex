@@ -2327,8 +2327,7 @@ pub(crate) async fn run_task(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
-                let error_event = e.to_error_event(None);
-                let event = EventMsg::Error(error_event);
+                let event = EventMsg::Error(e.to_error_event(None));
                 sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
                 break;
