@@ -14,6 +14,7 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    pending_auto_compact: bool,
 }
 
 impl SessionState {
@@ -24,6 +25,7 @@ impl SessionState {
             session_configuration,
             history,
             latest_rate_limits: None,
+            pending_auto_compact: false,
         }
     }
 
@@ -80,6 +82,14 @@ impl SessionState {
 
     pub(crate) fn get_total_token_usage(&self) -> i64 {
         self.history.get_total_token_usage()
+    }
+
+    pub(crate) fn mark_pending_auto_compact(&mut self) {
+        self.pending_auto_compact = true;
+    }
+
+    pub(crate) fn take_pending_auto_compact(&mut self) -> bool {
+        std::mem::take(&mut self.pending_auto_compact)
     }
 }
 

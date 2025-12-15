@@ -761,6 +761,16 @@ impl Session {
         state.get_total_token_usage()
     }
 
+    async fn mark_pending_auto_compact(&self) {
+        let mut state = self.state.lock().await;
+        state.mark_pending_auto_compact();
+    }
+
+    async fn take_pending_auto_compact(&self) -> bool {
+        let mut state = self.state.lock().await;
+        state.take_pending_auto_compact()
+    }
+
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
         let turn_context = self.new_turn(SessionSettingsUpdate::default()).await;
         match conversation_history {
@@ -1934,6 +1944,7 @@ mod handlers {
         let turn_context = sess
             .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
             .await;
+        sess.take_pending_auto_compact().await;
 
         sess.spawn_task(
             Arc::clone(&turn_context),
@@ -2150,6 +2161,10 @@ pub(crate) async fn run_task(
     if input.is_empty() {
         return None;
     }
+
+    if sess.take_pending_auto_compact().await {
+        run_auto_compact(&sess, &turn_context).await;
+    }
     let event = EventMsg::TaskStarted(TaskStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
@@ -2241,17 +2256,13 @@ pub(crate) async fn run_task(
                 let token_limit_reached = total_usage_tokens >= limit;
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if token_limit_reached {
-                    if should_use_remote_compact_task(
-                        sess.as_ref(),
-                        &turn_context.client.get_provider(),
-                    ) {
-                        run_inline_remote_auto_compact_task(sess.clone(), turn_context.clone())
-                            .await;
-                    } else {
-                        run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
-                    }
+                if token_limit_reached && needs_follow_up {
+                    run_auto_compact(&sess, &turn_context).await;
                     continue;
+                }
+
+                if token_limit_reached {
+                    sess.mark_pending_auto_compact().await;
                 }
 
                 if !needs_follow_up {
@@ -2290,6 +2301,14 @@ pub(crate) async fn run_task(
     }
 
     last_agent_message
+}
+
+async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
+    if should_use_remote_compact_task(sess.as_ref(), &turn_context.client.get_provider()) {
+        run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
+    } else {
+        run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
+    }
 }
 
 #[instrument(
