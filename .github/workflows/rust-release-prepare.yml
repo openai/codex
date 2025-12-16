@@ -1,6 +1,8 @@
 name: rust-release-prepare
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 */4 * * *"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -44,5 +46,6 @@ jobs:
           title: "Update models.json"
           body: "Automated update of models.json."
           branch: "bot/update-models-json"
+          reviewers: "pakrym-oai,aibrahim-oai"
           delete-branch: true
           path: codex-rs
