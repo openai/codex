@@ -125,8 +125,7 @@ async fn run_compact_task_inner(
                     continue;
                 }
                 sess.set_total_tokens_full(turn_context.as_ref()).await;
-                let error_event = e.to_error_event(None);
-                let event = EventMsg::Error(error_event);
+                let event = EventMsg::Error(e.to_error_event(None));
                 sess.send_event(&turn_context, event).await;
                 return;
             }
@@ -143,8 +142,7 @@ async fn run_compact_task_inner(
                     tokio::time::sleep(delay).await;
                     continue;
                 } else {
-                    let error_event = e.to_error_event(None);
-                    let event = EventMsg::Error(error_event);
+                    let event = EventMsg::Error(e.to_error_event(None));
                     sess.send_event(&turn_context, event).await;
                     return;
                 }
