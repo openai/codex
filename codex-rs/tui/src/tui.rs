@@ -16,7 +16,6 @@ use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
-use crossterm::event::Event;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PopKeyboardEnhancementFlags;
@@ -32,7 +31,6 @@ use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::layout::Offset;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
-use tokio::select;
 use tokio::sync::broadcast;
 use tokio_stream::Stream;
 
@@ -42,11 +40,12 @@ use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::NotificationBackendKind;
 use crate::notifications::detect_backend;
-#[cfg(unix)]
-use crate::tui::job_control::SUSPEND_KEY;
+use crate::tui::event_stream::EventBroker;
+use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
 
+mod event_stream;
 mod frame_requester;
 #[cfg(unix)]
 mod job_control;
@@ -156,7 +155,7 @@ fn set_panic_hook() {
     }));
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum TuiEvent {
     Key(KeyEvent),
     Paste(String),
@@ -166,6 +165,7 @@ pub enum TuiEvent {
 pub struct Tui {
     frame_requester: FrameRequester,
     draw_tx: broadcast::Sender<()>,
+    event_broker: Arc<EventBroker>,
     pub(crate) terminal: Terminal,
     pending_history_lines: Vec<Line<'static>>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
@@ -194,6 +194,7 @@ impl Tui {
         Self {
             frame_requester,
             draw_tx,
+            event_broker: Arc::new(EventBroker::new()),
             terminal,
             pending_history_lines: vec![],
             alt_saved_viewport: None,
@@ -212,6 +213,18 @@ impl Tui {
 
     pub fn enhanced_keys_supported(&self) -> bool {
         self.enhanced_keys_supported
+    }
+
+    // todo(sayan) unused for now; intend to use to enable opening external editors
+    #[allow(unused)]
+    pub fn pause_events(&mut self) {
+        self.event_broker.pause_events();
+    }
+
+    // todo(sayan) unused for now; intend to use to enable opening external editors
+    #[allow(unused)]
+    pub fn resume_events(&mut self) {
+        self.event_broker.resume_events();
     }
 
     /// Emit a desktop notification now if the terminal is unfocused.
@@ -262,79 +275,21 @@ impl Tui {
     }
 
     pub fn event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
-        use tokio_stream::StreamExt;
-
-        let mut crossterm_events = crossterm::event::EventStream::new();
-        let mut draw_rx = self.draw_tx.subscribe();
-
-        // State for tracking how we should resume from ^Z suspend.
         #[cfg(unix)]
-        let suspend_context = self.suspend_context.clone();
-        #[cfg(unix)]
-        let alt_screen_active = self.alt_screen_active.clone();
-
-        let terminal_focused = self.terminal_focused.clone();
-        let event_stream = async_stream::stream! {
-            loop {
-                select! {
-                    event_result = crossterm_events.next() => {
-                        match event_result {
-                            Some(Ok(event)) => {
-                                match event {
-                                    Event::Key(key_event) => {
-                                        #[cfg(unix)]
-                                        if SUSPEND_KEY.is_press(key_event) {
-                                            let _ = suspend_context.suspend(&alt_screen_active);
-                                            // We continue here after resume.
-                                            yield TuiEvent::Draw;
-                                            continue;
-                                        }
-                                        yield TuiEvent::Key(key_event);
-                                    }
-                                    Event::Resize(_, _) => {
-                                        yield TuiEvent::Draw;
-                                    }
-                                    Event::Paste(pasted) => {
-                                        yield TuiEvent::Paste(pasted);
-                                    }
-                                    Event::FocusGained => {
-                                        terminal_focused.store(true, Ordering::Relaxed);
-                                        crate::terminal_palette::requery_default_colors();
-                                        yield TuiEvent::Draw;
-                                    }
-                                    Event::FocusLost => {
-                                        terminal_focused.store(false, Ordering::Relaxed);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            Some(Err(_)) | None => {
-                                // Exit the loop in case of broken pipe as we will never
-                                // recover from it
-                                break;
-                            }
-                        }
-                    }
-                    result = draw_rx.recv() => {
-                        match result {
-                            Ok(_) => {
-                                yield TuiEvent::Draw;
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                // We dropped one or more draw notifications; coalesce to a single draw.
-                                yield TuiEvent::Draw;
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                // Sender dropped. This stream likely outlived its owning `Tui`;
-                                // exit to avoid spinning on a permanently-closed receiver.
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        };
-        Box::pin(event_stream)
+        let stream = TuiEventStream::new(
+            self.event_broker.clone(),
+            self.draw_tx.subscribe(),
+            self.terminal_focused.clone(),
+            self.suspend_context.clone(),
+            self.alt_screen_active.clone(),
+        );
+        #[cfg(not(unix))]
+        let stream = TuiEventStream::new(
+            self.event_broker.clone(),
+            self.draw_tx.subscribe(),
+            self.terminal_focused.clone(),
+        );
+        Box::pin(stream)
     }
 
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current

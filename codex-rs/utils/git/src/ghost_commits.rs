@@ -306,13 +306,14 @@ pub fn create_ghost_commit_with_report(
     let repo_prefix = repo_subdir(repo_root.as_path(), options.repo_path);
     let parent = resolve_head(repo_root.as_path())?;
     let force_include = prepare_force_include(repo_prefix.as_deref(), &options.force_include)?;
-    let existing_untracked = capture_existing_untracked(
+    let status_snapshot = capture_status_snapshot(
         repo_root.as_path(),
         repo_prefix.as_deref(),
         options.ghost_snapshot.ignore_large_untracked_files,
         options.ghost_snapshot.ignore_large_untracked_dirs,
         &force_include,
     )?;
+    let existing_untracked = status_snapshot.untracked;
 
     let warning_ignored_files = existing_untracked
         .ignored_untracked_files
@@ -336,6 +337,12 @@ pub fn create_ghost_commit_with_report(
         OsString::from("GIT_INDEX_FILE"),
         OsString::from(index_path.as_os_str()),
     )];
+    // Use a temporary index so snapshotting does not disturb the user's index state.
+    // Example plumbing sequence:
+    //   GIT_INDEX_FILE=/tmp/index git read-tree HEAD
+    //   GIT_INDEX_FILE=/tmp/index git add --all -- <paths>
+    //   GIT_INDEX_FILE=/tmp/index git write-tree
+    //   GIT_INDEX_FILE=/tmp/index git commit-tree <tree> -p <parent> -m "codex snapshot"
 
     // Pre-populate the temporary index with HEAD so unchanged tracked files
     // are included in the snapshot tree.
@@ -347,22 +354,12 @@ pub fn create_ghost_commit_with_report(
         )?;
     }
 
-    let mut add_args = vec![OsString::from("add"), OsString::from("--all")];
-    if let Some(prefix) = repo_prefix.as_deref() {
-        add_args.extend([OsString::from("--"), prefix.as_os_str().to_os_string()]);
-    }
-
-    run_git_for_status(repo_root.as_path(), add_args, Some(base_env.as_slice()))?;
-    remove_large_untracked_dirs_from_index(
-        repo_root.as_path(),
-        base_env.as_slice(),
-        &existing_untracked.ignored_large_untracked_dir_files,
-    )?;
-    remove_large_untracked_files_from_index(
-        repo_root.as_path(),
-        base_env.as_slice(),
-        &existing_untracked.ignored_untracked_files,
-    )?;
+    let mut index_paths = status_snapshot.tracked_paths;
+    index_paths.extend(existing_untracked.untracked_files_for_index.iter().cloned());
+    let index_paths = dedupe_paths(index_paths);
+    // Stage tracked + new files into the temp index so write-tree reflects the working tree.
+    // We use `git add --all` to make deletions show up in the snapshot tree too.
+    add_paths_to_index(repo_root.as_path(), base_env.as_slice(), &index_paths)?;
     if !force_include.is_empty() {
         let mut args = Vec::with_capacity(force_include.len() + 2);
         args.push(OsString::from("add"));
@@ -393,6 +390,8 @@ pub fn create_ghost_commit_with_report(
         result
     };
 
+    // `git commit-tree` writes a detached commit object without updating refs,
+    // which keeps snapshots out of the user's branch history.
     // Retrieve commit ID.
     let commit_id = run_git_for_stdout(
         repo_root.as_path(),
@@ -468,6 +467,9 @@ fn restore_to_commit_inner(
     repo_prefix: Option<&Path>,
     commit_id: &str,
 ) -> Result<(), GitToolingError> {
+    // `git restore` resets both the index and working tree to the snapshot commit.
+    // Example:
+    //   git restore --source <commit> --worktree --staged -- <prefix>
     let mut restore_args = vec![
         OsString::from("restore"),
         OsString::from("--source"),
@@ -490,22 +492,30 @@ fn restore_to_commit_inner(
 struct UntrackedSnapshot {
     files: Vec<PathBuf>,
     dirs: Vec<PathBuf>,
+    untracked_files_for_index: Vec<PathBuf>,
     ignored_untracked_files: Vec<IgnoredUntrackedFile>,
     ignored_large_untracked_dirs: Vec<LargeUntrackedDir>,
     ignored_large_untracked_dir_files: Vec<PathBuf>,
 }
 
-/// Captures the untracked and ignored entries under `repo_root`, optionally limited by `repo_prefix`.
-/// Returns the result as an `UntrackedSnapshot`.
-fn capture_existing_untracked(
+#[derive(Default)]
+struct StatusSnapshot {
+    tracked_paths: Vec<PathBuf>,
+    untracked: UntrackedSnapshot,
+}
+
+/// Captures the working tree status under `repo_root`, optionally limited by `repo_prefix`.
+/// Returns the result as a `StatusSnapshot`.
+fn capture_status_snapshot(
     repo_root: &Path,
     repo_prefix: Option<&Path>,
     ignore_large_untracked_files: Option<i64>,
     ignore_large_untracked_dirs: Option<i64>,
     force_include: &[PathBuf],
-) -> Result<UntrackedSnapshot, GitToolingError> {
+) -> Result<StatusSnapshot, GitToolingError> {
     // Ask git for the zero-delimited porcelain status so we can enumerate
-    // every untracked path (including ones filtered by prefix).
+    // tracked, untracked, and ignored entries (including ones filtered by prefix).
+    // This keeps the snapshot consistent without multiple git invocations.
     let mut args = vec![
         OsString::from("status"),
         OsString::from("--porcelain=2"),
@@ -519,55 +529,90 @@ fn capture_existing_untracked(
 
     let output = run_git_for_stdout_all(repo_root, args, None)?;
     if output.is_empty() {
-        return Ok(UntrackedSnapshot::default());
+        return Ok(StatusSnapshot::default());
     }
 
-    let mut snapshot = UntrackedSnapshot::default();
+    let mut snapshot = StatusSnapshot::default();
     let mut untracked_files_for_dir_scan: Vec<PathBuf> = Vec::new();
-    // Each entry is of the form "<code> <path>" where code is '?' (untracked)
-    // or '!' (ignored); everything else is irrelevant to this snapshot.
+    let mut expect_rename_source = false;
     for entry in output.split('\0') {
         if entry.is_empty() {
             continue;
         }
-        let mut parts = entry.splitn(2, ' ');
-        let code = parts.next();
-        let path_part = parts.next();
-        let (Some(code), Some(path_part)) = (code, path_part) else {
-            continue;
-        };
-        if code != "?" && code != "!" {
-            continue;
-        }
-        if path_part.is_empty() {
+        if expect_rename_source {
+            let normalized = normalize_relative_path(Path::new(entry))?;
+            snapshot.tracked_paths.push(normalized);
+            expect_rename_source = false;
             continue;
         }
 
-        let normalized = normalize_relative_path(Path::new(path_part))?;
-        if should_ignore_for_snapshot(&normalized) {
-            continue;
-        }
-        let absolute = repo_root.join(&normalized);
-        let is_dir = absolute.is_dir();
-        if is_dir {
-            snapshot.dirs.push(normalized);
-        } else if code == "?" {
-            untracked_files_for_dir_scan.push(normalized.clone());
-            if let Some(threshold) = ignore_large_untracked_files
-                && threshold > 0
-                && !is_force_included(&normalized, force_include)
-                && let Ok(Some(byte_size)) = untracked_file_size(&absolute)
-                && byte_size > threshold
-            {
-                snapshot.ignored_untracked_files.push(IgnoredUntrackedFile {
-                    path: normalized,
-                    byte_size,
-                });
-            } else {
-                snapshot.files.push(normalized);
+        let record_type = entry.as_bytes().first().copied().unwrap_or(b' ');
+        match record_type {
+            b'?' | b'!' => {
+                let mut parts = entry.splitn(2, ' ');
+                let code = parts.next();
+                let path_part = parts.next();
+                let (Some(code), Some(path_part)) = (code, path_part) else {
+                    continue;
+                };
+                if path_part.is_empty() {
+                    continue;
+                }
+
+                let normalized = normalize_relative_path(Path::new(path_part))?;
+                if should_ignore_for_snapshot(&normalized) {
+                    continue;
+                }
+                let absolute = repo_root.join(&normalized);
+                let is_dir = absolute.is_dir();
+                if is_dir {
+                    snapshot.untracked.dirs.push(normalized);
+                } else if code == "?" {
+                    untracked_files_for_dir_scan.push(normalized.clone());
+                    if let Some(threshold) = ignore_large_untracked_files
+                        && threshold > 0
+                        && !is_force_included(&normalized, force_include)
+                        && let Ok(Some(byte_size)) = untracked_file_size(&absolute)
+                        && byte_size > threshold
+                    {
+                        snapshot
+                            .untracked
+                            .ignored_untracked_files
+                            .push(IgnoredUntrackedFile {
+                                path: normalized,
+                                byte_size,
+                            });
+                    } else {
+                        snapshot.untracked.files.push(normalized.clone());
+                        snapshot
+                            .untracked
+                            .untracked_files_for_index
+                            .push(normalized);
+                    }
+                } else {
+                    snapshot.untracked.files.push(normalized);
+                }
             }
-        } else {
-            snapshot.files.push(normalized);
+            b'1' => {
+                if let Some(path) = extract_status_path_after_fields(entry, 8) {
+                    let normalized = normalize_relative_path(Path::new(path))?;
+                    snapshot.tracked_paths.push(normalized);
+                }
+            }
+            b'2' => {
+                if let Some(path) = extract_status_path_after_fields(entry, 9) {
+                    let normalized = normalize_relative_path(Path::new(path))?;
+                    snapshot.tracked_paths.push(normalized);
+                }
+                expect_rename_source = true;
+            }
+            b'u' => {
+                if let Some(path) = extract_status_path_after_fields(entry, 10) {
+                    let normalized = normalize_relative_path(Path::new(path))?;
+                    snapshot.tracked_paths.push(normalized);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -576,7 +621,7 @@ fn capture_existing_untracked(
     {
         let ignored_large_untracked_dirs = detect_large_untracked_dirs(
             &untracked_files_for_dir_scan,
-            &snapshot.dirs,
+            &snapshot.untracked.dirs,
             Some(threshold),
         )
         .into_iter()
@@ -590,26 +635,67 @@ fn capture_existing_untracked(
                 .collect::<Vec<_>>();
 
             snapshot
+                .untracked
                 .files
                 .retain(|path| !ignored_dir_paths.iter().any(|dir| path.starts_with(dir)));
             snapshot
+                .untracked
                 .dirs
                 .retain(|path| !ignored_dir_paths.iter().any(|dir| path.starts_with(dir)));
-            snapshot.ignored_untracked_files.retain(|file| {
+            snapshot
+                .untracked
+                .untracked_files_for_index
+                .retain(|path| !ignored_dir_paths.iter().any(|dir| path.starts_with(dir)));
+            snapshot.untracked.ignored_untracked_files.retain(|file| {
                 !ignored_dir_paths
                     .iter()
                     .any(|dir| file.path.starts_with(dir))
             });
 
-            snapshot.ignored_large_untracked_dir_files = untracked_files_for_dir_scan
+            snapshot.untracked.ignored_large_untracked_dir_files = untracked_files_for_dir_scan
                 .into_iter()
                 .filter(|path| ignored_dir_paths.iter().any(|dir| path.starts_with(dir)))
                 .collect();
-            snapshot.ignored_large_untracked_dirs = ignored_large_untracked_dirs;
+            snapshot.untracked.ignored_large_untracked_dirs = ignored_large_untracked_dirs;
         }
     }
 
     Ok(snapshot)
+}
+
+/// Captures the untracked and ignored entries under `repo_root`, optionally limited by `repo_prefix`.
+/// Returns the result as an `UntrackedSnapshot`.
+fn capture_existing_untracked(
+    repo_root: &Path,
+    repo_prefix: Option<&Path>,
+    ignore_large_untracked_files: Option<i64>,
+    ignore_large_untracked_dirs: Option<i64>,
+    force_include: &[PathBuf],
+) -> Result<UntrackedSnapshot, GitToolingError> {
+    Ok(capture_status_snapshot(
+        repo_root,
+        repo_prefix,
+        ignore_large_untracked_files,
+        ignore_large_untracked_dirs,
+        force_include,
+    )?
+    .untracked)
+}
+
+fn extract_status_path_after_fields(record: &str, fields_before_path: i64) -> Option<&str> {
+    if fields_before_path <= 0 {
+        return None;
+    }
+    let mut spaces = 0_i64;
+    for (idx, byte) in record.as_bytes().iter().enumerate() {
+        if *byte == b' ' {
+            spaces += 1;
+            if spaces == fields_before_path {
+                return record.get((idx + 1)..).filter(|path| !path.is_empty());
+            }
+        }
+    }
+    None
 }
 
 fn should_ignore_for_snapshot(path: &Path) -> bool {
@@ -657,27 +743,7 @@ fn untracked_file_size(path: &Path) -> io::Result<Option<i64>> {
     Ok(Some(len_i64))
 }
 
-fn remove_large_untracked_files_from_index(
-    repo_root: &Path,
-    env: &[(OsString, OsString)],
-    ignored: &[IgnoredUntrackedFile],
-) -> Result<(), GitToolingError> {
-    let paths = ignored
-        .iter()
-        .map(|entry| entry.path.clone())
-        .collect::<Vec<_>>();
-    remove_paths_from_index(repo_root, env, &paths)
-}
-
-fn remove_large_untracked_dirs_from_index(
-    repo_root: &Path,
-    env: &[(OsString, OsString)],
-    paths: &[PathBuf],
-) -> Result<(), GitToolingError> {
-    remove_paths_from_index(repo_root, env, paths)
-}
-
-fn remove_paths_from_index(
+fn add_paths_to_index(
     repo_root: &Path,
     env: &[(OsString, OsString)],
     paths: &[PathBuf],
@@ -686,18 +752,30 @@ fn remove_paths_from_index(
         return Ok(());
     }
 
-    const CHUNK_SIZE: usize = 64;
-    for chunk in paths.chunks(CHUNK_SIZE) {
+    let chunk_size = usize::try_from(64_i64).unwrap_or(1);
+    for chunk in paths.chunks(chunk_size) {
         let mut args = vec![
-            OsString::from("update-index"),
-            OsString::from("--force-remove"),
+            OsString::from("add"),
+            OsString::from("--all"),
             OsString::from("--"),
         ];
         args.extend(chunk.iter().map(|path| path.as_os_str().to_os_string()));
+        // Chunk the argv to avoid oversized command lines on large repos.
         run_git_for_status(repo_root, args, Some(env))?;
     }
 
     Ok(())
+}
+
+fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for path in paths {
+        if seen.insert(path.clone()) {
+            result.push(path);
+        }
+    }
+    result
 }
 
 fn merge_preserved_untracked_files(

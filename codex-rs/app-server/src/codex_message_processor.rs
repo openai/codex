@@ -368,13 +368,6 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadList { request_id, params } => {
                 self.thread_list(request_id, params).await;
             }
-            ClientRequest::ThreadCompact {
-                request_id,
-                params: _,
-            } => {
-                self.send_unimplemented_error(request_id, "thread/compact")
-                    .await;
-            }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
             }
@@ -513,15 +506,6 @@ impl CodexMessageProcessor {
                 self.upload_feedback(request_id, params).await;
             }
         }
-    }
-
-    async fn send_unimplemented_error(&self, request_id: RequestId, method: &str) {
-        let error = JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: format!("{method} is not implemented yet"),
-            data: None,
-        };
-        self.outgoing.send_error(request_id, error).await;
     }
 
     async fn login_v2(&mut self, request_id: RequestId, params: LoginAccountParams) {
@@ -1270,7 +1254,7 @@ impl CodexMessageProcessor {
         let mut cli_overrides = cli_overrides.unwrap_or_default();
         if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
             cli_overrides.insert(
-                "features.enable_experimental_windows_sandbox".to_string(),
+                "features.experimental_windows_sandbox".to_string(),
                 serde_json::json!(true),
             );
         }
@@ -2187,7 +2171,7 @@ impl CodexMessageProcessor {
                 let mut cli_overrides = cli_overrides.unwrap_or_default();
                 if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
                     cli_overrides.insert(
-                        "features.enable_experimental_windows_sandbox".to_string(),
+                        "features.experimental_windows_sandbox".to_string(),
                         serde_json::json!(true),
                     );
                 }

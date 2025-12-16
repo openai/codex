@@ -25,6 +25,7 @@ use wiremock::MockServer;
 use crate::load_default_config_for_test;
 use crate::responses::get_responses_request_bodies;
 use crate::responses::start_mock_server;
+use crate::streaming_sse::StreamingSseServer;
 use crate::wait_for_event;
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
@@ -89,6 +90,16 @@ impl TestCodexBuilder {
         self.build_with_home(server, home, None).await
     }
 
+    pub async fn build_with_streaming_server(
+        &mut self,
+        server: &StreamingSseServer,
+    ) -> anyhow::Result<TestCodex> {
+        let base_url = server.uri();
+        let home = Arc::new(TempDir::new()?);
+        self.build_with_home_and_base_url(format!("{base_url}/v1"), home, None)
+            .await
+    }
+
     pub async fn resume(
         &mut self,
         server: &wiremock::MockServer,
@@ -104,8 +115,28 @@ impl TestCodexBuilder {
         home: Arc<TempDir>,
         resume_from: Option<PathBuf>,
     ) -> anyhow::Result<TestCodex> {
-        let (config, cwd) = self.prepare_config(server, &home).await?;
+        let base_url = format!("{}/v1", server.uri());
+        let (config, cwd) = self.prepare_config(base_url, &home).await?;
+        self.build_from_config(config, cwd, home, resume_from).await
+    }
 
+    async fn build_with_home_and_base_url(
+        &mut self,
+        base_url: String,
+        home: Arc<TempDir>,
+        resume_from: Option<PathBuf>,
+    ) -> anyhow::Result<TestCodex> {
+        let (config, cwd) = self.prepare_config(base_url, &home).await?;
+        self.build_from_config(config, cwd, home, resume_from).await
+    }
+
+    async fn build_from_config(
+        &mut self,
+        config: Config,
+        cwd: Arc<TempDir>,
+        home: Arc<TempDir>,
+        resume_from: Option<PathBuf>,
+    ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
         let conversation_manager = ConversationManager::with_models_provider_and_home(
             auth.clone(),
@@ -139,11 +170,11 @@ impl TestCodexBuilder {
 
     async fn prepare_config(
         &mut self,
-        server: &wiremock::MockServer,
+        base_url: String,
         home: &TempDir,
     ) -> anyhow::Result<(Config, Arc<TempDir>)> {
         let model_provider = ModelProviderInfo {
-            base_url: Some(format!("{}/v1", server.uri())),
+            base_url: Some(base_url),
             ..built_in_model_providers()["openai"].clone()
         };
         let cwd = Arc::new(TempDir::new()?);

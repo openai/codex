@@ -47,7 +47,7 @@ impl ToolCallRuntime {
 
     #[instrument(skip_all, fields(call = ?call))]
     pub(crate) fn handle_tool_call(
-        &self,
+        self,
         call: ToolCall,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {

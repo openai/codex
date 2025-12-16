@@ -118,6 +118,9 @@ pub(crate) struct ChatComposer {
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
+    transcript_scrolled: bool,
+    transcript_selection_active: bool,
+    transcript_scroll_position: Option<(usize, usize)>,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
 }
@@ -166,6 +169,9 @@ impl ChatComposer {
             footer_hint_override: None,
             context_window_percent: None,
             context_window_used_tokens: None,
+            transcript_scrolled: false,
+            transcript_selection_active: false,
+            transcript_scroll_position: None,
             skills: None,
             dismissed_skill_popup_token: None,
         };
@@ -1531,6 +1537,9 @@ impl ChatComposer {
             is_task_running: self.is_task_running,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
+            transcript_scrolled: self.transcript_scrolled,
+            transcript_selection_active: self.transcript_selection_active,
+            transcript_scroll_position: self.transcript_scroll_position,
         }
     }
 
@@ -1549,6 +1558,23 @@ impl ChatComposer {
         self.footer_hint_override
             .as_ref()
             .map(|items| if items.is_empty() { 0 } else { 1 })
+    }
+
+    /// Update the footer's view of transcript scroll state for the inline viewport.
+    ///
+    /// This state is derived from the main `App`'s transcript viewport and passed
+    /// through the bottom pane so the footer can indicate when the transcript is
+    /// scrolled away from the bottom, whether a selection is active, and the
+    /// current `(visible_top, total)` position.
+    pub(crate) fn set_transcript_ui_state(
+        &mut self,
+        scrolled: bool,
+        selection_active: bool,
+        scroll_position: Option<(usize, usize)>,
+    ) {
+        self.transcript_scrolled = scrolled;
+        self.transcript_selection_active = selection_active;
+        self.transcript_scroll_position = scroll_position;
     }
 
     fn sync_popups(&mut self) {

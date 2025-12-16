@@ -3073,6 +3073,30 @@ impl ChatWidget {
     pub(crate) fn clear_esc_backtrack_hint(&mut self) {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
+
+    /// Return true when the bottom pane currently has an active task.
+    ///
+    /// This is used by the viewport to decide when mouse selections should
+    /// disengage auto-follow behavior while responses are streaming.
+    pub(crate) fn is_task_running(&self) -> bool {
+        self.bottom_pane.is_task_running()
+    }
+
+    /// Inform the bottom pane about the current transcript scroll state.
+    ///
+    /// This is used by the footer to surface when the inline transcript is
+    /// scrolled away from the bottom and to display the current
+    /// `(visible_top, total)` scroll position alongside other shortcuts.
+    pub(crate) fn set_transcript_ui_state(
+        &mut self,
+        scrolled: bool,
+        selection_active: bool,
+        scroll_position: Option<(usize, usize)>,
+    ) {
+        self.bottom_pane
+            .set_transcript_ui_state(scrolled, selection_active, scroll_position);
+    }
+
     /// Forward an `Op` directly to codex.
     pub(crate) fn submit_op(&self, op: Op) {
         // Record outbound operation for session replay fidelity.
