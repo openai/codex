@@ -25,10 +25,12 @@ Historically, the legacy TUI tried to “cooperate” with the terminal’s own 
 This had several failure modes:
 
 - **Terminal‑dependent behavior.**
+
   - Different terminals handle scroll regions, clears, and resize semantics differently.
   - What looked correct in one terminal could drop or duplicate content in another.
 
 - **Resizes and layout churn.**
+
   - The TUI reacts to resizes, focus changes, and overlay transitions.
   - When the viewport moved or its size changed, our attempts to keep scrollback “aligned” with the
     in‑memory history could go out of sync.
@@ -57,24 +59,28 @@ order, and appears exactly once” across terminals, resizes, suspend/resume, an
 The redesign is guided by a few explicit goals:
 
 1. **Codex, not the terminal, owns the viewport.**
+
    - The in‑memory transcript (a list of history entries) is the single source of truth for what’s
      on screen.
    - The TUI decides how to map that transcript into the current viewport; scrollback becomes an
      output target, not an extra data structure we try to maintain.
 
 2. **History must be correct, ordered, and never silently dropped.**
+
    - Every logical history cell should either:
      - Be visible in the TUI, or
      - Have been printed into scrollback as part of a suspend/exit flow.
    - We would rather (rarely) duplicate content than risk losing it.
 
 3. **Avoid unnecessary duplication.**
+
    - When emitting history to scrollback (on suspend or exit), print each logical cell’s content at
      most once.
    - Streaming cells are allowed to be “re‑seen” as they grow, but finished cells should not keep
      reappearing.
 
 4. **Behave sensibly under resizes.**
+
    - TUI rendering should reflow to the current width on every frame.
    - History printed to scrollback may have been wrapped at different widths over time; that is
      acceptable, but it must not cause missing content or unbounded duplication.
@@ -136,10 +142,12 @@ The TUI uses the terminal’s alternate screen for:
 Conceptually:
 
 - Entering alt screen:
+
   - Switches the terminal into alt screen and expands the viewport to cover the full terminal.
   - Clears that alt‑screen buffer.
 
 - Leaving alt screen:
+
   - Disables “alternate scroll” so mouse wheel events behave predictably.
   - Returns to the normal screen.
 
@@ -159,11 +167,13 @@ is the in‑memory state.
 Mouse interaction is a first‑class part of the new design:
 
 - **Scrolling.**
+
   - Mouse wheel scrolls the transcript in fixed line increments.
   - Keyboard shortcuts (PgUp/PgDn/Home/End) use the same scroll model, so the footer can show
     consistent hints regardless of input device.
 
 - **Selection.**
+
   - A click‑and‑drag gesture defines a linear text selection in terms of the flattened transcript
     lines (not raw buffer coordinates).
   - Selection tracks the _content_ rather than a fixed screen row. When the transcript scrolls, the
@@ -410,16 +420,103 @@ prints those lines before the token usage and resume hints.
 
 ## 10. Future Work and Open Questions
 
+### 10.1 Current status
+
+This design shipped behind the `tui2` feature flag (as a separate crate, duplicating the legacy
+`tui` crate to enable rollout without breaking existing behavior). The following items from early
+feedback are already implemented:
+
+- Bottom pane positioning is pegged high with an empty transcript and moves down as the transcript
+  fills (including on resume).
+- Wheel-based transcript scrolling is enabled on top of the new scroll model.
+- While a selection is active, streaming stops “follow latest output” so the selection remains
+  stable, and follow mode resumes after the selection is cleared.
+
+### 10.2 Roadmap (prioritized)
+
+This section captures a prioritized list of improvements we want to add to TUI2 based on early
+feedback, with the goal of making scrolling/selection/copy feel as close to “native terminal” (and
+Vim) behavior as we can while still owning the viewport.
+
+**P0 — must-have (usability/correctness):**
+
+- **Scrolling behavior.** Default to small scroll increments (ideally 1 line per wheel tick) with
+  acceleration/velocity for faster navigation, and ensure we stop scrolling when the user stops
+  input (avoid redraw/event-loop backlog that makes scrolling feel “janky”).
+- **Mouse event bounds.** Ignore mouse events outside the transcript region so clicks in the
+  composer/footer don’t start or mutate transcript selection state.
+- **Copy includes offscreen lines.** Make copy operate on the full selection range even when part (or
+  all) of the selection is outside the current viewport.
+- **Copy fidelity.** Preserve meaningful indentation (especially code blocks), treat soft-wrapped
+  prose as a single logical line when copying, and copy markdown _source_ (including backticks and
+  heading markers) even if we render it differently.
+
+**P1 — should-have (UX polish and power user workflows):**
+
+- **Streaming wrapping polish.** Ensure all streaming paths use display-time wrapping only, and add
+  tests that cover resizing after streaming has started.
+- **Copy shortcut and discoverability.** Switch copy from `Ctrl+Y` to `Ctrl+Shift+C`, and add an
+  on-screen copy affordance (e.g. a small button near the selection) that also displays the
+  shortcut.
+- **Selection semantics.** Define and implement selection behavior across multi-step output (and
+  whether step boundaries should be copy boundaries), while continuing to exclude the left gutter
+  from copied text.
+- **Auto-scroll during drag.** While dragging a selection, auto-scroll when the cursor is at/near the
+  top or bottom of the transcript viewport to allow selecting beyond the visible window.
+- **Width-aware selection.** Ensure selection highlighting and copy reconstruction handle wide glyphs
+  correctly (emoji, CJK), matching terminal display width rather than raw character count.
+- **Multi-click selection.** Support double/triple/quad click selection (word/line/paragraph),
+  implemented on top of the transcript/viewport model rather than terminal buffer coordinates.
+- **Find in transcript.** Add text search over the transcript (and consider integrating match
+  markers with any future scroll indicator work).
+- **Cross-terminal behavior checks.** Validate copy/selection behavior across common terminals (incl.
+  terminal-provided “override selection” modes like holding Shift) and document the tradeoffs.
+
+**P2 — nice-to-have (polish, configuration, and interactivity):**
+
+- **Suspend printing.** Decide whether printing history on suspend is desirable at all (it is not
+  implemented yet). If we keep it, finalize the config shape/defaults, wire it through TUI startup,
+  and document it in the appropriate config docs.
+- **Terminal integration.** Consider guiding (or optionally managing) terminal-emulator-specific
+  settings that affect TUI behavior (for example iTerm’s clipboard opt-in prompts or Ghostty
+  keybinding quirks), so the “works well out of the box” path is consistent across terminals.
+- **Interactive cells (unlocked by transcript ownership).** Because transcript entries are structured
+  objects (not dead text in terminal scrollback), we can attach metadata to rendered regions and map
+  mouse/keys back to the underlying cell reliably across resizes and reflow. Examples:
+  - **Drill into a specific tool/command output.** Click (or press Enter) on a tool call / command
+    cell to open a focused overlay that shows the command, exit status, timing, and stdout/stderr as
+    separate sections, with dedicated “copy output” actions. This enables copying _just_ one command’s
+    output even when multiple commands are interleaved in a turn.
+  - **Copy an entire cell or entire turn.** Provide an action to copy a whole logical unit (one cell,
+    or “user prompt + assistant response”), without gutters and with well-defined boundaries. This is
+    hard to do with raw selection because step boundaries and padding aren’t reliably expressible in
+    terminal coordinates once the viewport moves or reflows.
+  - **Expand/collapse structured subregions with source-aware copy.** Tool calls, diffs, and
+    markdown can render in a compact form by default and expand in place. Copy actions can choose
+    between “copy rendered view” and “copy source” (e.g. raw markdown, raw JSON arguments, raw diff),
+    since we retain the original source alongside the rendered lines.
+  - **Cell-scoped actions.** Actions like “copy command”, “yank into composer”, “retry tool call”, or
+    “open related view” (diff/pager) can be offered per cell and behave deterministically, because the
+    UI can address cells by stable IDs rather than by fragile screen coordinates.
+- **Additional affordances.** Consider an ephemeral scrollbar and/or a more explicit “selecting…”
+  status if footer hints aren’t sufficient.
+- **UX capture.** Maintain short “golden path” clips showing scrolling (mouse + keys), selection and
+  copy, streaming under resize, and suspend/resume + exit printing.
+
+### 10.3 Open questions
+
 This section collects design questions that follow naturally from the current model and are worth
 explicit discussion before we commit to further UI changes.
 
 - **“Scroll mode” vs “live follow” UI.**
+
   - We already distinguish “scrolled away from bottom” vs “following the latest output” in the
     footer and scroll state. Do we need a more explicit “scroll mode vs live mode” affordance (e.g.,
     a dedicated indicator or toggle), or is the current behavior sufficient and adding more chrome
     would be noise?
 
 - **Ephemeral scroll indicator.**
+
   - For long sessions, a more visible sense of “where am I?” could help. One option is a minimalist
     scrollbar that appears while the user is actively scrolling and fades out when idle. A full
     “mini‑map” is probably too heavy for a TUI given the limited vertical space, but we could
@@ -427,16 +524,19 @@ explicit discussion before we commit to further UI changes.
     where text search matches are, without trying to render a full preview of the buffer.
 
 - **Selection affordances.**
+
   - Today, the primary hint that selection is active is the reversed text and the “Ctrl+Y copy
     selection” footer text. Do we want an explicit “Selecting… (Esc to cancel)” status while a drag
     is in progress, or would that be redundant/clutter for most users?
 
 - **Suspend banners in scrollback.**
+
   - When printing history on suspend, should we also emit a small banner such as
     `--- codex suspended; history up to here ---` to make those boundaries obvious in scrollback?
     This would slightly increase noise but could make multi‑suspend sessions easier to read.
 
 - **Configuring suspend printing behavior.**
+
   - The design already assumes that suspend‑time printing can be gated by config. Questions to
     resolve:
     - Should printing on suspend be on or off by default?
@@ -451,4 +551,3 @@ explicit discussion before we commit to further UI changes.
     suspend‑time printing be our escape hatch for users who care about exact de‑duplication?\*\*\*
 
 ---
-
