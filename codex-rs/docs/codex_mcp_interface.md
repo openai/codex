@@ -20,6 +20,7 @@ At a glance:
 - Configuration and info
   - `getUserSavedConfig`, `setDefaultModel`, `getUserAgent`, `userInfo`
   - `model/list` → enumerate available models and reasoning options
+  - notifications: `model/presets/updated`
 - Auth
   - `account/read`, `account/login/start`, `account/login/cancel`, `account/logout`, `account/rateLimits/read`
   - notifications: `account/login/completed`, `account/updated`, `account/rateLimits/updated`
@@ -94,12 +95,17 @@ Each response yields:
   - `isDefault` – whether the model is recommended for most users
 - `nextCursor` – pass into the next request to continue paging (optional)
 
+The server also emits `model/presets/updated` notifications after initialization and after auth state changes (login/logout). The payload is:
+
+- `models` – the full list of available models, with the same shape as `model/list` items.
+
 ## Event stream
 
 While a conversation runs, the server sends notifications:
 
 - `codex/event` with the serialized Codex event payload. The shape matches `core/src/protocol.rs`’s `Event` and `EventMsg` types. Some notifications include a `_meta.requestId` to correlate with the originating request.
 - Auth notifications via method names `loginChatGptComplete` and `authStatusChange`.
+- Model catalog notifications via method name `model/presets/updated`.
 
 Clients should render events and, when present, surface approval requests (see next section).
 

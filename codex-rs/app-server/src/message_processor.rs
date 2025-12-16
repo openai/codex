@@ -128,6 +128,9 @@ impl MessageProcessor {
                     self.outgoing.send_response(request_id, response).await;
 
                     self.initialized = true;
+                    self.codex_message_processor
+                        .send_model_presets_notification()
+                        .await;
 
                     return;
                 }

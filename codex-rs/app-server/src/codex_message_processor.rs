@@ -61,6 +61,7 @@ use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::ModelPresetsUpdatedNotification;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RemoveConversationListenerParams;
@@ -231,6 +232,17 @@ pub(crate) enum ApiVersion {
     V2,
 }
 
+async fn emit_model_presets_notification(
+    outgoing: Arc<OutgoingMessageSender>,
+    conversation_manager: Arc<ConversationManager>,
+    config: Arc<Config>,
+) {
+    let models = supported_models(conversation_manager, &config).await;
+    let notification =
+        ServerNotification::ModelPresetsUpdated(ModelPresetsUpdatedNotification { models });
+    outgoing.send_server_notification(notification).await;
+}
+
 impl CodexMessageProcessor {
     async fn conversation_from_thread_id(
         &self,
@@ -279,6 +291,15 @@ impl CodexMessageProcessor {
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             feedback,
         }
+    }
+
+    pub(crate) async fn send_model_presets_notification(&self) {
+        emit_model_presets_notification(
+            self.outgoing.clone(),
+            self.conversation_manager.clone(),
+            self.config.clone(),
+        )
+        .await;
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
@@ -573,6 +594,7 @@ impl CodexMessageProcessor {
                 self.outgoing
                     .send_server_notification(ServerNotification::AuthStatusChange(payload))
                     .await;
+                self.send_model_presets_notification().await;
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -603,6 +625,7 @@ impl CodexMessageProcessor {
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
                     .await;
+                self.send_model_presets_notification().await;
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -659,6 +682,8 @@ impl CodexMessageProcessor {
                     let outgoing_clone = self.outgoing.clone();
                     let active_login = self.active_login.clone();
                     let auth_manager = self.auth_manager.clone();
+                    let conversation_manager = self.conversation_manager.clone();
+                    let config = self.config.clone();
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
                         let (success, error_msg) = match tokio::time::timeout(
@@ -699,6 +724,12 @@ impl CodexMessageProcessor {
                                     payload,
                                 ))
                                 .await;
+                            emit_model_presets_notification(
+                                outgoing_clone,
+                                conversation_manager,
+                                config,
+                            )
+                            .await;
                         }
 
                         // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
@@ -749,6 +780,8 @@ impl CodexMessageProcessor {
                     let outgoing_clone = self.outgoing.clone();
                     let active_login = self.active_login.clone();
                     let auth_manager = self.auth_manager.clone();
+                    let conversation_manager = self.conversation_manager.clone();
+                    let config = self.config.clone();
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
                         let (success, error_msg) = match tokio::time::timeout(
@@ -789,6 +822,12 @@ impl CodexMessageProcessor {
                                     payload_v2,
                                 ))
                                 .await;
+                            emit_model_presets_notification(
+                                outgoing_clone,
+                                conversation_manager,
+                                config,
+                            )
+                            .await;
                         }
 
                         // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
@@ -908,6 +947,7 @@ impl CodexMessageProcessor {
                 self.outgoing
                     .send_server_notification(ServerNotification::AuthStatusChange(payload))
                     .await;
+                self.send_model_presets_notification().await;
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -928,6 +968,7 @@ impl CodexMessageProcessor {
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
                     .await;
+                self.send_model_presets_notification().await;
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
