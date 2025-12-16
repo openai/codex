@@ -41,6 +41,7 @@ mod procthreadattr;
 mod psuedocon;
 
 pub use conpty::ConPtySystem;
+pub use psuedocon::conpty_supported;
 
 #[derive(Debug)]
 pub struct WinChild {
