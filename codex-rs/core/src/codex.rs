@@ -1935,6 +1935,7 @@ mod handlers {
     use crate::review_prompts::resolve_review_request;
     use crate::tasks::CollaborationTask;
     use crate::tasks::CompactTask;
+    use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
@@ -2015,8 +2016,13 @@ mod handlers {
                     .await;
             }
 
-            sess.spawn_task(Arc::clone(&current_context), items, CollaborationTask)
-                .await;
+            if sess.enabled(Feature::MultiAgents) {
+                sess.spawn_task(Arc::clone(&current_context), items, CollaborationTask)
+                    .await;
+            } else {
+                sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
+                    .await;
+            }
             *previous_context = Some(current_context);
         }
     }

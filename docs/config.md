@@ -51,6 +51,7 @@ Supported features:
 | `enable_experimental_windows_sandbox` |  false  | Experimental | Use the Windows restricted-token sandbox              |
 | `tui2`                                |  false  | Experimental | Use the experimental TUI v2 (viewport) implementation |
 | `skills`                              |  false  | Experimental | Enable discovery and injection of skills              |
+| `multi_agents`                        |  false  | Experimental | Enable multi-agent collaboration workflows            |
 
 Notes:
 
@@ -59,7 +60,7 @@ Notes:
 
 ## Agent profiles
 
-Codex can optionally load multi-agent profiles from `$CODEX_HOME/agents.toml`. When this file exists and is valid, Codex starts as the `main` profile (agent 0) and, on supported models, exposes the `collaboration_*` tools. Each profile can control which sub-agents it can spawn.
+Codex can optionally load multi-agent profiles from `$CODEX_HOME/agents.toml`. When this file exists and is valid, Codex starts as the `main` profile (agent 0) and, on supported models, exposes the `collaboration_*` tools. Each profile can control which sub-agents it can spawn. Enable the `multi_agents` feature flag to run the collaboration workflow.
 
 Example:
 
