@@ -133,8 +133,13 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
         .unwrap_or_default();
 
     assert!(
-        skills.is_empty(),
-        "expected no skills loaded, got {skills:?}"
+        skills.iter().all(|skill| {
+            !skill
+                .path
+                .to_string_lossy()
+                .ends_with("skills/broken/SKILL.md")
+        }),
+        "expected broken skill not loaded, got {skills:?}"
     );
     assert_eq!(errors.len(), 1, "expected one load error");
     let error_path = errors[0].path.to_string_lossy();

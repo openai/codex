@@ -1674,6 +1674,7 @@ pub struct ListSkillsResponseEvent {
 pub enum SkillScope {
     User,
     Repo,
+    Public,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
