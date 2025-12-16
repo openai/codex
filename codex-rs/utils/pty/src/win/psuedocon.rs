@@ -80,7 +80,7 @@ shared_library!(ConPtyFuncs,
 
 shared_library!(Ntdll,
     pub fn RtlGetVersion(
-        version_info: *mut OSVERSIONINFOW,
+        version_info: *mut OSVERSIONINFOW
     ) -> NTSTATUS,
 );
 
