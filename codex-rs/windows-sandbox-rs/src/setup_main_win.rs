@@ -20,6 +20,7 @@ use rand::RngCore;
 use rand::SeedableRng;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::ffi::c_void;
 use std::ffi::OsStr;
 use std::fs::File;
@@ -392,8 +393,8 @@ fn run_netsh_firewall(sid: &str, log: &mut File) -> Result<()> {
             log_line(
                 log,
                 &format!(
-                "firewall rule configured via COM with LocalUserAuthorizedList={local_user_spec}"
-            ),
+                    "firewall rule configured via COM with LocalUserAuthorizedList={local_user_spec}"
+                ),
             )?;
             Ok(())
         })()
@@ -647,7 +648,7 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
             string_from_sid_bytes(&online_sid).map_err(anyhow::Error::msg)?
         ),
     )?;
-    let caps = load_or_create_cap_sids(&payload.codex_home);
+    let caps = load_or_create_cap_sids(&payload.codex_home)?;
     let cap_psid = unsafe {
         convert_string_sid_to_sid(&caps.workspace)
             .ok_or_else(|| anyhow::anyhow!("convert capability SID failed"))?
@@ -758,7 +759,19 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
         }
     }
 
+    let cap_sid_str = caps.workspace.clone();
+    let online_sid_str = string_from_sid_bytes(&online_sid).map_err(anyhow::Error::msg)?;
+    let sid_strings = vec![offline_sid_str.clone(), online_sid_str, cap_sid_str];
+    let write_mask =
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
+    let mut grant_tasks: Vec<PathBuf> = Vec::new();
+
+    let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
+
     for root in &payload.write_roots {
+        if !seen_write_roots.insert(root.clone()) {
+            continue;
+        }
         if !root.exists() {
             log_line(
                 log,
@@ -766,12 +779,6 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
             )?;
             continue;
         }
-        let sids = vec![offline_psid, online_psid, cap_psid];
-        let write_mask = FILE_GENERIC_READ
-            | FILE_GENERIC_WRITE
-            | FILE_GENERIC_EXECUTE
-            | DELETE
-            | FILE_DELETE_CHILD;
         let mut need_grant = false;
         for (label, psid) in [
             ("offline", offline_psid),
@@ -817,25 +824,7 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
                     root.display()
                 ),
             )?;
-            match unsafe { ensure_allow_write_aces(root, &sids) } {
-                Ok(res) => {
-                    log_line(
-                        log,
-                        &format!(
-                            "write ACE {} on {}",
-                            if res { "added" } else { "already present" },
-                            root.display()
-                        ),
-                    )?;
-                }
-                Err(e) => {
-                    refresh_errors.push(format!("write ACE failed on {}: {}", root.display(), e));
-                    log_line(
-                        log,
-                        &format!("write ACE grant failed on {}: {}", root.display(), e),
-                    )?;
-                }
-            }
+            grant_tasks.push(root.clone());
         } else {
             log_line(
                 log,
@@ -846,6 +835,65 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
             )?;
         }
     }
+
+    let (tx, rx) = mpsc::channel::<(PathBuf, Result<bool>)>();
+    std::thread::scope(|scope| {
+        for root in grant_tasks {
+            let sid_strings = sid_strings.clone();
+            let tx = tx.clone();
+            scope.spawn(move || {
+                // Convert SID strings to psids locally in this thread.
+                let mut psids: Vec<*mut c_void> = Vec::new();
+                for sid_str in &sid_strings {
+                    if let Some(psid) = unsafe { convert_string_sid_to_sid(sid_str) } {
+                        psids.push(psid);
+                    } else {
+                        let _ = tx.send((root.clone(), Err(anyhow::anyhow!("convert SID failed"))));
+                        return;
+                    }
+                }
+
+                let res = unsafe { ensure_allow_write_aces(&root, &psids) };
+
+                for psid in psids {
+                    unsafe {
+                        LocalFree(psid as HLOCAL);
+                    }
+                }
+                let _ = tx.send((root, res));
+            });
+        }
+        drop(tx);
+        for (root, res) in rx {
+            match res {
+                Ok(added) => {
+                    if log_line(
+                        log,
+                        &format!(
+                            "write ACE {} on {}",
+                            if added { "added" } else { "already present" },
+                            root.display()
+                        ),
+                    )
+                    .is_err()
+                    {
+                        // ignore log errors inside scoped thread
+                    }
+                }
+                Err(e) => {
+                    refresh_errors.push(format!("write ACE failed on {}: {}", root.display(), e));
+                    if log_line(
+                        log,
+                        &format!("write ACE grant failed on {}: {}", root.display(), e),
+                    )
+                    .is_err()
+                    {
+                        // ignore log errors inside scoped thread
+                    }
+                }
+            }
+        }
+    });
 
     if refresh_only {
         log_line(
