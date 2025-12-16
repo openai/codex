@@ -1050,7 +1050,7 @@ impl App {
             .map(|(idx, line)| {
                 let is_user_row = line_meta
                     .get(idx)
-                    .and_then(|entry| entry.cell_index())
+                    .and_then(TranscriptLineMeta::cell_index)
                     .map(|cell_index| is_user_cell.get(cell_index).copied().unwrap_or(false))
                     .unwrap_or(false);
 
