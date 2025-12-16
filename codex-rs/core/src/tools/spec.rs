@@ -1250,7 +1250,10 @@ mod tests {
     fn strip_descriptions_schema(schema: &mut JsonSchema) {
         match schema {
             JsonSchema::Boolean { description }
-            | JsonSchema::String { description }
+            | JsonSchema::String {
+                description,
+                enum_values: _,
+            }
             | JsonSchema::Number { description } => {
                 *description = None;
             }
@@ -1717,7 +1720,10 @@ mod tests {
                     properties: BTreeMap::from([
                         (
                             "string_argument".to_string(),
-                            JsonSchema::String { description: None }
+                            JsonSchema::String {
+                                description: None,
+                                enum_values: None,
+                            }
                         ),
                         (
                             "number_argument".to_string(),
@@ -1729,7 +1735,10 @@ mod tests {
                                 properties: BTreeMap::from([
                                     (
                                         "string_property".to_string(),
-                                        JsonSchema::String { description: None }
+                                        JsonSchema::String {
+                                            description: None,
+                                            enum_values: None,
+                                        }
                                     ),
                                     (
                                         "number_property".to_string(),
@@ -1874,7 +1883,8 @@ mod tests {
                     properties: BTreeMap::from([(
                         "query".to_string(),
                         JsonSchema::String {
-                            description: Some("search query".to_string())
+                            description: Some("search query".to_string()),
+                            enum_values: None,
                         }
                     )]),
                     required: None,
@@ -1983,7 +1993,10 @@ mod tests {
                     properties: BTreeMap::from([(
                         "tags".to_string(),
                         JsonSchema::Array {
-                            items: Box::new(JsonSchema::String { description: None }),
+                            items: Box::new(JsonSchema::String {
+                                description: None,
+                                enum_values: None,
+                            }),
                             description: None
                         }
                     )]),
@@ -2038,7 +2051,10 @@ mod tests {
                 parameters: JsonSchema::Object {
                     properties: BTreeMap::from([(
                         "value".to_string(),
-                        JsonSchema::String { description: None }
+                        JsonSchema::String {
+                            description: None,
+                            enum_values: None,
+                        }
                     )]),
                     required: None,
                     additional_properties: None,
@@ -2176,7 +2192,10 @@ Examples of valid command strings:
                     properties: BTreeMap::from([
                         (
                             "string_argument".to_string(),
-                            JsonSchema::String { description: None }
+                            JsonSchema::String {
+                                description: None,
+                                enum_values: None,
+                            }
                         ),
                         (
                             "number_argument".to_string(),
@@ -2188,7 +2207,10 @@ Examples of valid command strings:
                                 properties: BTreeMap::from([
                                     (
                                         "string_property".to_string(),
-                                        JsonSchema::String { description: None }
+                                        JsonSchema::String {
+                                            description: None,
+                                            enum_values: None,
+                                        }
                                     ),
                                     (
                                         "number_property".to_string(),
@@ -2203,7 +2225,10 @@ Examples of valid command strings:
                                     JsonSchema::Object {
                                         properties: BTreeMap::from([(
                                             "addtl_prop".to_string(),
-                                            JsonSchema::String { description: None }
+                                            JsonSchema::String {
+                                                description: None,
+                                                enum_values: None,
+                                            }
                                         ),]),
                                         required: Some(vec!["addtl_prop".to_string(),]),
                                         additional_properties: Some(false.into()),
@@ -2225,7 +2250,13 @@ Examples of valid command strings:
     #[test]
     fn chat_tools_include_top_level_name() {
         let mut properties = BTreeMap::new();
-        properties.insert("foo".to_string(), JsonSchema::String { description: None });
+        properties.insert(
+            "foo".to_string(),
+            JsonSchema::String {
+                description: None,
+                enum_values: None,
+            },
+        );
         let tools = vec![ToolSpec::Function(ResponsesApiTool {
             name: "demo".to_string(),
             description: "A demo tool".to_string(),

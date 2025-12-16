@@ -168,7 +168,7 @@ fn build_agent_system_message(
     parent_id: AgentId,
     depth: i32,
 ) -> ResponseItem {
-    let lines = vec![format!(
+    let lines = [format!(
         "You are agent {agent_id} ({agent_name}) (parent {parent_id}, depth {depth}).",
         agent_id = agent_id.0,
         parent_id = parent_id.0
@@ -333,7 +333,10 @@ async fn handle_init_agent(
     }
     let Some(parent) = collab.agent(parent_id).cloned() else {
         let output = CollaborationInitAgentOutput {
-            result: Err(format!("unknown caller agent {}", parent_id.0)),
+            result: Err(format!(
+                "unknown caller agent {parent_id}",
+                parent_id = parent_id.0
+            )),
         };
         return serialize_function_output(&output, false);
     };
@@ -357,7 +360,10 @@ async fn handle_init_agent(
 
     let Some(parent_definition) = agents_config.agent(parent.name.as_str()) else {
         let output = CollaborationInitAgentOutput {
-            result: Err(format!("unknown parent agent type {}", parent.name)),
+            result: Err(format!(
+                "unknown parent agent type {parent_name}",
+                parent_name = parent.name
+            )),
         };
         return serialize_function_output(&output, false);
     };
@@ -433,7 +439,11 @@ async fn handle_init_agent(
         .map_err(FunctionCallError::RespondToModel)?;
     let has_message = !input.message.trim().is_empty();
     if has_message {
-        let text = format!("From agent {}: {}", parent_id.0, input.message);
+        let text = format!(
+            "From agent {parent_id}: {message}",
+            parent_id = parent_id.0,
+            message = input.message
+        );
         collab.record_message_for_agent(
             assigned_id,
             ResponseItem::Message {
@@ -500,7 +510,10 @@ async fn handle_send(
 
         let Some(sender_name) = collab.agent(sender_id).map(|agent| agent.name.clone()) else {
             let output = CollaborationSendOutput {
-                content: Err(format!("unknown caller agent {}", sender_id.0)),
+                content: Err(format!(
+                    "unknown caller agent {sender_id}",
+                    sender_id = sender_id.0
+                )),
             };
             return serialize_function_output(&output, false);
         };
@@ -576,7 +589,11 @@ async fn handle_send(
             )
         } else {
             for recipient in &valid_recipients {
-                let text = format!("From agent {}: {}", sender_id.0, input.message);
+                let text = format!(
+                    "From agent {sender_id}: {message}",
+                    sender_id = sender_id.0,
+                    message = input.message
+                );
                 collab.record_message_for_agent(
                     *recipient,
                     ResponseItem::Message {
@@ -868,6 +885,9 @@ async fn handle_get_state(
     }
     states.extend(error_states);
 
+    let success = states
+        .iter()
+        .all(|state| !matches!(state.state, State::Error(_)));
     let output = CollaborationGetStateOutput { states };
     info!(
         "collaboration_get_state: caller={}, targets={:?}",
@@ -1221,6 +1241,7 @@ mod tests {
         collab.ensure_root_agent(&session_configuration, &session_history);
         let grandchild = InternalAgentState::new_child(
             AgentId(2),
+            "grandchild".to_string(),
             AgentId(1),
             2,
             session_configuration,

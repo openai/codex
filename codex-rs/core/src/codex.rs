@@ -200,6 +200,7 @@ fn maybe_push_chat_wire_api_deprecation(
 
     post_session_configured_events.push(Event {
         id: INITIAL_SUBMIT_ID.to_owned(),
+        agent_idx: None,
         msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
             summary: CHAT_WIRE_API_DEPRECATION_SUMMARY.to_string(),
             details: None,
@@ -602,7 +603,7 @@ impl Session {
             .await;
         let mut turn_context = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
-            &self.services.otel_event_manager,
+            &self.services.otel_manager,
             agent.config.provider.clone(),
             &agent.config,
             per_turn_config,
@@ -611,12 +612,12 @@ impl Session {
             sub_id,
             agent.id,
         );
-        if let Some(agents_config) = self.agents_config() {
-            if let Some(agent_config) = agents_config.agent(agent.name.as_str()) {
-                let allowlist = agent_config.sub_agents.clone();
-                if !allowlist.is_empty() {
-                    turn_context.tools_config.collaboration_agent_allowlist = Some(allowlist);
-                }
+        if let Some(agents_config) = self.agents_config()
+            && let Some(agent_config) = agents_config.agent(agent.name.as_str())
+        {
+            let allowlist = agent_config.sub_agents.clone();
+            if !allowlist.is_empty() {
+                turn_context.tools_config.collaboration_agent_allowlist = Some(allowlist);
             }
         }
         Arc::new(turn_context)
@@ -2228,6 +2229,7 @@ mod handlers {
         };
         let event = Event {
             id: sub_id,
+            agent_idx: None,
             msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
         };
         sess.send_event_raw(event).await;
@@ -3447,6 +3449,8 @@ mod tests {
             features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
+            agents_config: None,
+            default_sandbox_policy: session_configuration.sandbox_policy,
             collaboration: Mutex::new(collaboration),
             collaboration_supervisor: Mutex::new(None),
             next_internal_sub_id: AtomicU64::new(0),
@@ -3542,6 +3546,8 @@ mod tests {
             features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
+            agents_config: None,
+            default_sandbox_policy: session_configuration.sandbox_policy,
             collaboration: Mutex::new(collaboration),
             collaboration_supervisor: Mutex::new(None),
             next_internal_sub_id: AtomicU64::new(0),

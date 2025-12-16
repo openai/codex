@@ -122,10 +122,6 @@ impl CollaborationSupervisor {
             .map_err(|err| format!("collaboration supervisor unavailable: {err}"))
     }
 
-    pub(crate) async fn kick_agent(&self, agent: AgentId) {
-        let _ = self.start_agents(vec![agent], i32::MAX).await;
-    }
-
     pub(crate) async fn close_agents(&self, targets: Vec<AgentId>) {
         let _ = self
             .tx
