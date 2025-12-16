@@ -209,13 +209,26 @@ v2_enum_from_core!(
 );
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum ConfigLayerName {
-    Mdm,
-    System,
-    SessionFlags,
-    User,
+    /// Managed preferences layer delivered by MDM (macOS only).
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Mdm { domain: String, key: String },
+    /// Managed config layer from a file (usually `managed_config.toml`).
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    System { file: AbsolutePathBuf },
+    /// Session-layer overrides supplied via `-c`/`--config`.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    SessionFlags { override_keys: Vec<String> },
+    /// User config layer from a file (usually `config.toml`).
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    User { file: AbsolutePathBuf },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
@@ -289,7 +302,6 @@ pub struct Config {
 #[ts(export_to = "v2/")]
 pub struct ConfigLayerMetadata {
     pub name: ConfigLayerName,
-    pub source: String,
     pub version: String,
 }
 
@@ -298,7 +310,6 @@ pub struct ConfigLayerMetadata {
 #[ts(export_to = "v2/")]
 pub struct ConfigLayer {
     pub name: ConfigLayerName,
-    pub source: String,
     pub version: String,
     pub config: JsonValue,
 }

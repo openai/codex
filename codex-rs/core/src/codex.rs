@@ -2476,6 +2476,7 @@ async fn try_run_turn(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
+    let mut should_emit_turn_diff = false;
     let receiving_span = info_span!("receiving_stream");
     let outcome: CodexResult<TurnRunResult> = loop {
         let handle_responses = info_span!(
@@ -2551,14 +2552,7 @@ async fn try_run_turn(
             } => {
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
-                let unified_diff = {
-                    let mut tracker = turn_diff_tracker.lock().await;
-                    tracker.get_unified_diff()
-                };
-                if let Ok(Some(unified_diff)) = unified_diff {
-                    let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
-                    sess.send_event(&turn_context, msg).await;
-                }
+                should_emit_turn_diff = true;
 
                 break Ok(TurnRunResult {
                     needs_follow_up,
@@ -2632,7 +2626,18 @@ async fn try_run_turn(
         }
     };
 
-    drain_in_flight(&mut in_flight, sess, turn_context).await?;
+    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+
+    if should_emit_turn_diff {
+        let unified_diff = {
+            let mut tracker = turn_diff_tracker.lock().await;
+            tracker.get_unified_diff()
+        };
+        if let Ok(Some(unified_diff)) = unified_diff {
+            let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
+            sess.clone().send_event(&turn_context, msg).await;
+        }
+    }
 
     outcome
 }

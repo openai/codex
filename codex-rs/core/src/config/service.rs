@@ -499,10 +499,10 @@ fn value_at_path<'a>(root: &'a TomlValue, segments: &[String]) -> Option<&'a Tom
 
 fn override_message(layer: &ConfigLayerName) -> String {
     match layer {
-        ConfigLayerName::Mdm => "Overridden by managed policy (mdm)".to_string(),
-        ConfigLayerName::System => "Overridden by managed config (system)".to_string(),
-        ConfigLayerName::SessionFlags => "Overridden by session flags".to_string(),
-        ConfigLayerName::User => "Overridden by user config".to_string(),
+        ConfigLayerName::Mdm { .. } => "Overridden by managed policy (mdm)".to_string(),
+        ConfigLayerName::System { .. } => "Overridden by managed config (system)".to_string(),
+        ConfigLayerName::SessionFlags { .. } => "Overridden by session flags".to_string(),
+        ConfigLayerName::User { .. } => "Overridden by user config".to_string(),
     }
 }
 
@@ -576,6 +576,7 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use codex_app_server_protocol::AskForApproval;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
@@ -677,16 +678,19 @@ remote_compaction = true
     #[tokio::test]
     async fn read_includes_origins_and_layers() {
         let tmp = tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"").unwrap();
+        let user_path = tmp.path().join(CONFIG_TOML_FILE);
+        std::fs::write(&user_path, "model = \"user\"").unwrap();
+        let user_file = AbsolutePathBuf::try_from(user_path.clone()).expect("user file");
 
         let managed_path = tmp.path().join("managed_config.toml");
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
+        let managed_file = AbsolutePathBuf::try_from(managed_path.clone()).expect("managed file");
 
         let service = ConfigService::with_overrides(
             tmp.path().to_path_buf(),
             vec![],
             LoaderOverrides {
-                managed_config_path: Some(managed_path),
+                managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
             },
@@ -707,12 +711,25 @@ remote_compaction = true
                 .get("approval_policy")
                 .expect("origin")
                 .name,
-            ConfigLayerName::System
+            ConfigLayerName::System {
+                file: managed_file.clone(),
+            }
         );
         let layers = response.layers.expect("layers present");
-        assert_eq!(layers.first().unwrap().name, ConfigLayerName::System);
-        assert_eq!(layers.get(1).unwrap().name, ConfigLayerName::SessionFlags);
-        assert_eq!(layers.last().unwrap().name, ConfigLayerName::User);
+        assert_eq!(
+            layers.first().unwrap().name,
+            ConfigLayerName::System { file: managed_file }
+        );
+        assert_eq!(
+            layers.get(1).unwrap().name,
+            ConfigLayerName::SessionFlags {
+                override_keys: Vec::new(),
+            }
+        );
+        assert_eq!(
+            layers.last().unwrap().name,
+            ConfigLayerName::User { file: user_file }
+        );
     }
 
     #[tokio::test]
@@ -726,12 +743,13 @@ remote_compaction = true
 
         let managed_path = tmp.path().join("managed_config.toml");
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
+        let managed_file = AbsolutePathBuf::try_from(managed_path.clone()).expect("managed file");
 
         let service = ConfigService::with_overrides(
             tmp.path().to_path_buf(),
             vec![],
             LoaderOverrides {
-                managed_config_path: Some(managed_path),
+                managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
             },
@@ -764,7 +782,7 @@ remote_compaction = true
                 .get("approval_policy")
                 .expect("origin")
                 .name,
-            ConfigLayerName::System
+            ConfigLayerName::System { file: managed_file }
         );
         assert_eq!(result.status, WriteStatus::Ok);
         assert!(result.overridden_metadata.is_none());
@@ -773,7 +791,8 @@ remote_compaction = true
     #[tokio::test]
     async fn version_conflict_rejected() {
         let tmp = tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"").unwrap();
+        let user_path = tmp.path().join(CONFIG_TOML_FILE);
+        std::fs::write(&user_path, "model = \"user\"").unwrap();
 
         let service = ConfigService::new(tmp.path().to_path_buf(), vec![]);
         let error = service
@@ -830,7 +849,7 @@ remote_compaction = true
             tmp.path().to_path_buf(),
             vec![],
             LoaderOverrides {
-                managed_config_path: Some(managed_path),
+                managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
             },
@@ -860,10 +879,13 @@ remote_compaction = true
     #[tokio::test]
     async fn read_reports_managed_overrides_user_and_session_flags() {
         let tmp = tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"").unwrap();
+        let user_path = tmp.path().join(CONFIG_TOML_FILE);
+        std::fs::write(&user_path, "model = \"user\"").unwrap();
+        let user_file = AbsolutePathBuf::try_from(user_path.clone()).expect("user file");
 
         let managed_path = tmp.path().join("managed_config.toml");
         std::fs::write(&managed_path, "model = \"system\"").unwrap();
+        let managed_file = AbsolutePathBuf::try_from(managed_path.clone()).expect("managed file");
 
         let cli_overrides = vec![(
             "model".to_string(),
@@ -874,7 +896,7 @@ remote_compaction = true
             tmp.path().to_path_buf(),
             cli_overrides,
             LoaderOverrides {
-                managed_config_path: Some(managed_path),
+                managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
             },
@@ -890,12 +912,25 @@ remote_compaction = true
         assert_eq!(response.config.model.as_deref(), Some("system"));
         assert_eq!(
             response.origins.get("model").expect("origin").name,
-            ConfigLayerName::System
+            ConfigLayerName::System {
+                file: managed_file.clone(),
+            }
         );
         let layers = response.layers.expect("layers");
-        assert_eq!(layers.first().unwrap().name, ConfigLayerName::System);
-        assert_eq!(layers.get(1).unwrap().name, ConfigLayerName::SessionFlags);
-        assert_eq!(layers.get(2).unwrap().name, ConfigLayerName::User);
+        assert_eq!(
+            layers.first().unwrap().name,
+            ConfigLayerName::System { file: managed_file }
+        );
+        assert_eq!(
+            layers.get(1).unwrap().name,
+            ConfigLayerName::SessionFlags {
+                override_keys: vec!["model".to_string()],
+            }
+        );
+        assert_eq!(
+            layers.get(2).unwrap().name,
+            ConfigLayerName::User { file: user_file }
+        );
     }
 
     #[tokio::test]
@@ -905,12 +940,13 @@ remote_compaction = true
 
         let managed_path = tmp.path().join("managed_config.toml");
         std::fs::write(&managed_path, "approval_policy = \"never\"").unwrap();
+        let managed_file = AbsolutePathBuf::try_from(managed_path.clone()).expect("managed file");
 
         let service = ConfigService::with_overrides(
             tmp.path().to_path_buf(),
             vec![],
             LoaderOverrides {
-                managed_config_path: Some(managed_path),
+                managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
                 managed_preferences_base64: None,
             },
@@ -929,7 +965,10 @@ remote_compaction = true
 
         assert_eq!(result.status, WriteStatus::OkOverridden);
         let overridden = result.overridden_metadata.expect("overridden metadata");
-        assert_eq!(overridden.overriding_layer.name, ConfigLayerName::System);
+        assert_eq!(
+            overridden.overriding_layer.name,
+            ConfigLayerName::System { file: managed_file }
+        );
         assert_eq!(overridden.effective_value, serde_json::json!("never"));
     }
 
