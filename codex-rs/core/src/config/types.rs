@@ -394,6 +394,40 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[derive(Default)]
+pub enum NetworkProxyMode {
+    Limited,
+    #[default]
+    Full,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct NetworkProxyConfigToml {
+    pub enabled: Option<bool>,
+    pub proxy_url: Option<String>,
+    pub admin_url: Option<String>,
+    pub config_path: Option<PathBuf>,
+    pub mode: Option<NetworkProxyMode>,
+    pub no_proxy: Option<Vec<String>>,
+    pub prompt_on_block: Option<bool>,
+    pub poll_interval_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NetworkProxyConfig {
+    pub enabled: bool,
+    pub proxy_url: String,
+    pub admin_url: String,
+    pub config_path: PathBuf,
+    pub mode: NetworkProxyMode,
+    pub no_proxy: Vec<String>,
+    pub prompt_on_block: bool,
+    pub poll_interval_ms: i64,
+    pub mitm_ca_cert_path: Option<PathBuf>,
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellEnvironmentPolicyInherit {

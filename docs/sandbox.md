@@ -63,6 +63,31 @@ approval_policy = "never"
 sandbox_mode    = "read-only"
 ```
 
+### Network proxy approvals
+
+Codex can optionally route outbound network traffic through a proxy (for example the `network_proxy` sandbox proxy) and prompt you when new domains are blocked by policy.
+
+Key behaviors:
+
+- The OS sandbox is still the first line of defense. If network access is disabled, outbound requests are blocked at the OS level.
+- When network is enabled and `network_proxy.prompt_on_block = true`, Codex polls the proxy admin API (`/blocked`) and immediately notifies you about blocked domains.
+- For exec commands that include HTTP/HTTPS URLs, Codex preflights the host against the proxy config and prompts before running the command.
+- You can choose to:
+  - **Deny** the request (adds the domain to the proxy denylist).
+  - **Allow once** (temporary exception via the proxy admin API).
+  - **Allow permanently** (adds the domain to the proxy allowlist and reloads policy).
+
+Network access is controlled through a proxy server running outside the sandbox:
+
+- **Domain restrictions:** Only approved domains can be accessed (denylist takes precedence).
+- **User confirmation:** New domain requests trigger permission prompts.
+- **Custom proxy support:** Advanced users can implement custom rules on outgoing traffic.
+- **Comprehensive coverage:** Restrictions apply to all scripts, programs, and subprocesses spawned by Codex.
+
+`NO_PROXY` is supported via `[network_proxy].no_proxy` and is passed to subprocesses as `NO_PROXY/no_proxy`. Any domains or IPs in that list bypass the proxy and are not filtered by proxy policy.
+
+When MITM is enabled in the proxy config, Codex injects common CA environment variables (for example `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `PIP_CERT`, and `NPM_CONFIG_CAFILE`) pointing at the proxy CA cert to reduce per‑tool configuration. It also sets common tool‑specific proxy variables (Yarn/npm/Electron) and, when possible, appends Gradle proxy flags via `GRADLE_OPTS`.
+
 ### Sandbox mechanics by platform {#platform-sandboxing-details}
 
 The mechanism Codex uses to enforce the sandbox policy depends on your OS:

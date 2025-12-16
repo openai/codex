@@ -56,6 +56,7 @@ pub use auth::AuthManager;
 pub use auth::CodexAuth;
 pub mod default_client;
 pub mod model_family;
+pub mod network_proxy;
 mod openai_model_info;
 pub mod project_doc;
 mod rollout;

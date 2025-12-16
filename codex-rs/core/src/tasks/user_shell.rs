@@ -15,7 +15,7 @@ use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
 use crate::exec::execute_exec_env;
-use crate::exec_env::create_env;
+use crate::exec_env::create_env_with_network_proxy;
 use crate::parse_command::parse_command;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
@@ -85,10 +85,15 @@ impl SessionTask for UserShellCommandTask {
             )
             .await;
 
+        let sandbox_policy = SandboxPolicy::DangerFullAccess;
         let exec_env = ExecEnv {
             command: shell_invocation,
             cwd: turn_context.cwd.clone(),
-            env: create_env(&turn_context.shell_environment_policy),
+            env: create_env_with_network_proxy(
+                &turn_context.shell_environment_policy,
+                &sandbox_policy,
+                &turn_context.network_proxy,
+            ),
             timeout_ms: None,
             sandbox: SandboxType::None,
             with_escalated_permissions: None,
@@ -102,7 +107,6 @@ impl SessionTask for UserShellCommandTask {
             tx_event: session.get_tx_event(),
         });
 
-        let sandbox_policy = SandboxPolicy::DangerFullAccess;
         let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream)
             .or_cancel(&cancellation_token)
             .await;

@@ -341,6 +341,29 @@ This is reasonable to use if Codex is running in an environment that provides it
 
 Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
 
+### network_proxy
+
+Codex can route subprocess network traffic through an external proxy (for example, the `network_proxy` sandbox proxy) and surface approval prompts when requests are blocked by policy.
+
+```toml
+[network_proxy]
+enabled = true
+proxy_url = "http://127.0.0.1:3128"
+admin_url = "http://127.0.0.1:8080"
+config_path = "~/.codex/network_proxy/config.toml"
+mode = "limited" # limited | full (default)
+no_proxy = ["localhost", "127.0.0.1"]
+prompt_on_block = true
+poll_interval_ms = 1000
+```
+
+Notes:
+
+- Proxy settings are injected only when sandbox network access is enabled (or full access mode). If the sandbox blocks network access, requests are blocked at the OS layer.
+- `proxy_url` is used for `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` env vars.
+- `no_proxy` entries bypass the proxy; use sparingly because bypassed traffic is not filtered by the proxy policy.
+- When `prompt_on_block = true`, Codex polls the proxy admin API (`/blocked`) and surfaces a prompt to allow once, allow always (add to allowlist), or deny (add to denylist). Codex writes changes to `config_path` and calls `/reload`.
+
 ### tools.\*
 
 Use the optional `[tools]` table to toggle built-in tools that the agent may call. `web_search` stays off unless you opt in, while `view_image` is now enabled by default:
@@ -917,6 +940,14 @@ Valid values:
 | `sandbox_workspace_write.network_access`         | boolean                                                           | Allow network in workspace‑write (default: false).                                                                         |
 | `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean                                                           | Exclude `$TMPDIR` from writable roots (default: false).                                                                    |
 | `sandbox_workspace_write.exclude_slash_tmp`      | boolean                                                           | Exclude `/tmp` from writable roots (default: false).                                                                       |
+| `network_proxy.enabled`                          | boolean                                                           | Enable proxy environment injection + admin polling (default: false).                                                       |
+| `network_proxy.proxy_url`                        | string                                                            | Proxy URL used for `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` (default: `http://127.0.0.1:3128`).                               |
+| `network_proxy.admin_url`                        | string                                                            | Proxy admin API base URL (default: `http://127.0.0.1:8080`).                                                               |
+| `network_proxy.config_path`                      | string (path)                                                     | Proxy config path to edit on approvals (default: `$CODEX_HOME/network_proxy/config.toml`).                                 |
+| `network_proxy.mode`                             | `limited` \| `full`                                                | Default proxy mode for policy hints (default: `full`).                                                                     |
+| `network_proxy.no_proxy`                         | array<string>                                                     | Hosts/IPs that bypass the proxy (default includes `localhost`, `127.0.0.1`, `::1`).                                         |
+| `network_proxy.prompt_on_block`                  | boolean                                                           | Poll `/blocked` and prompt on denied requests (default: true).                                                             |
+| `network_proxy.poll_interval_ms`                 | number                                                            | Admin poll interval in ms (default: 1000).                                                                                |
 | `notify`                                         | array<string>                                                     | External program for notifications.                                                                                        |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                    |
 | `features.<feature-flag>`                        | boolean                                                           | See [feature flags](#feature-flags) for details                                                                            |

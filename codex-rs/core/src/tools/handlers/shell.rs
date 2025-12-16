@@ -7,10 +7,12 @@ use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::codex::TurnContext;
+use crate::command_safety::is_dangerous_command::requires_initial_appoval;
 use crate::exec::ExecParams;
-use crate::exec_env::create_env;
+use crate::exec_env::create_env_with_network_proxy;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
+use crate::network_proxy;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -35,7 +37,11 @@ impl ShellHandler {
             command: params.command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
             timeout_ms: params.timeout_ms,
-            env: create_env(&turn_context.shell_environment_policy),
+            env: create_env_with_network_proxy(
+                &turn_context.shell_environment_policy,
+                &turn_context.sandbox_policy,
+                &turn_context.network_proxy,
+            ),
             with_escalated_permissions: params.with_escalated_permissions,
             justification: params.justification,
             arg0: None,
@@ -57,7 +63,11 @@ impl ShellCommandHandler {
             command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
             timeout_ms: params.timeout_ms,
-            env: create_env(&turn_context.shell_environment_policy),
+            env: create_env_with_network_proxy(
+                &turn_context.shell_environment_policy,
+                &turn_context.sandbox_policy,
+                &turn_context.network_proxy,
+            ),
             with_escalated_permissions: params.with_escalated_permissions,
             justification: params.justification,
             arg0: None,
@@ -285,6 +295,26 @@ impl ShellHandler {
         }
 
         // Regular shell execution path.
+        let network_preflight_blocked = match network_proxy::preflight_blocked_host_if_enabled(
+            &turn.network_proxy,
+            &turn.sandbox_policy,
+            &exec_params.command,
+        ) {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(err) => {
+                tracing::debug!(error = %err, "network proxy preflight failed");
+                false
+            }
+        };
+        let network_preflight_only = network_preflight_blocked
+            && !requires_initial_appoval(
+                turn.approval_policy,
+                &turn.sandbox_policy,
+                &exec_params.command,
+                exec_params.with_escalated_permissions.unwrap_or(false),
+            );
+
         let emitter = ToolEmitter::shell(
             exec_params.command.clone(),
             exec_params.cwd.clone(),
@@ -300,6 +330,8 @@ impl ShellHandler {
             env: exec_params.env.clone(),
             with_escalated_permissions: exec_params.with_escalated_permissions,
             justification: exec_params.justification.clone(),
+            network_preflight_blocked,
+            network_preflight_only,
         };
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = ShellRuntime::new();

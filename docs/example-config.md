@@ -101,6 +101,28 @@ exclude_tmpdir_env_var = false
 exclude_slash_tmp = false
 
 ################################################################################
+# Network Proxy (optional)
+################################################################################
+
+[network_proxy]
+# Enable proxy env injection + approval prompts for blocked domains. Default: false
+enabled = false
+# HTTP/HTTPS/ALL proxy URL. Default: "http://127.0.0.1:3128"
+proxy_url = "http://127.0.0.1:3128"
+# Admin API for the proxy (for /blocked, /allow_once, /reload). Default: "http://127.0.0.1:8080"
+admin_url = "http://127.0.0.1:8080"
+# Proxy config file to edit when approvals are granted/denied.
+config_path = "~/.codex/network_proxy/config.toml"
+# limited | full (default: full)
+mode = "full"
+# Hosts/IPs that bypass the proxy. Default includes localhost + loopback.
+no_proxy = ["localhost", "127.0.0.1", "::1"]
+# Poll proxy /blocked and prompt the user. Default: true
+prompt_on_block = true
+# Poll interval in milliseconds. Default: 1000
+poll_interval_ms = 1000
+
+################################################################################
 # Shell Environment Policy for spawned processes
 ################################################################################
 

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::model_presets::ModelPreset;
+use codex_core::network_proxy::NetworkProxyBlockedRequest;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
@@ -144,6 +145,15 @@ pub(crate) enum AppEvent {
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
 
+    /// Prompt for a blocked network request from the proxy.
+    NetworkProxyApprovalRequest(NetworkProxyBlockedRequest),
+
+    /// User decision for a blocked network request.
+    NetworkProxyDecision {
+        host: String,
+        decision: NetworkProxyDecision,
+    },
+
     /// Open the feedback note entry overlay after the user selects a category.
     OpenFeedbackNote {
         category: FeedbackCategory,
@@ -154,6 +164,13 @@ pub(crate) enum AppEvent {
     OpenFeedbackConsent {
         category: FeedbackCategory,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NetworkProxyDecision {
+    AllowOnce,
+    AllowAlways,
+    Deny,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

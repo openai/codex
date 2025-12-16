@@ -23,7 +23,10 @@ use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::types::NetworkProxyConfig;
+use codex_core::default_client::create_client;
 use codex_core::model_family::find_family_for_model;
+use codex_core::network_proxy;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -35,6 +38,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -165,6 +169,8 @@ pub(crate) struct App {
 
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
+
+    network_proxy_pending: HashSet<String>,
 }
 
 impl App {
@@ -261,7 +267,15 @@ impl App {
             feedback: feedback.clone(),
             pending_update_action: None,
             skip_world_writable_scan_once: false,
+            network_proxy_pending: HashSet::new(),
         };
+
+        if app.config.network_proxy.enabled && app.config.network_proxy.prompt_on_block {
+            Self::spawn_network_proxy_poller(
+                app.config.network_proxy.clone(),
+                app.app_event_tx.clone(),
+            );
+        }
 
         // On startup, if Auto mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -678,7 +692,135 @@ impl App {
                         "E X E C".to_string(),
                     ));
                 }
+                ApprovalRequest::Network { request } => {
+                    let mut lines = Vec::new();
+                    if !request.host.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            "Host: ".into(),
+                            request.host.clone().bold(),
+                        ]));
+                    }
+                    if !request.reason.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            "Reason: ".into(),
+                            request.reason.clone().into(),
+                        ]));
+                    }
+                    if let Some(method) = request.method.as_ref().filter(|value| !value.is_empty())
+                    {
+                        lines.push(Line::from(vec![
+                            "Method: ".into(),
+                            method.to_string().into(),
+                        ]));
+                    }
+                    if !request.protocol.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            "Protocol: ".into(),
+                            request.protocol.clone().into(),
+                        ]));
+                    }
+                    if let Some(mode) = request.mode {
+                        let label = match mode {
+                            codex_core::config::types::NetworkProxyMode::Limited => "limited",
+                            codex_core::config::types::NetworkProxyMode::Full => "full",
+                        };
+                        lines.push(Line::from(vec!["Mode: ".into(), label.into()]));
+                    }
+                    if let Some(client) = request.client.as_ref().filter(|value| !value.is_empty())
+                    {
+                        lines.push(Line::from(vec![
+                            "Client: ".into(),
+                            client.to_string().dim(),
+                        ]));
+                    }
+                    let _ = tui.enter_alt_screen();
+                    self.overlay = Some(Overlay::new_static_with_lines(lines, "N E T".to_string()));
+                }
             },
+            AppEvent::NetworkProxyApprovalRequest(request) => {
+                if !self.config.network_proxy.prompt_on_block {
+                    return Ok(true);
+                }
+                let host = request.host.trim().to_string();
+                if host.is_empty() || self.network_proxy_pending.contains(&host) {
+                    return Ok(true);
+                }
+                self.network_proxy_pending.insert(host);
+                self.chat_widget.on_network_approval_request(request);
+            }
+            AppEvent::NetworkProxyDecision { host, decision } => {
+                let host = host.trim().to_string();
+                if host.is_empty() {
+                    return Ok(true);
+                }
+                self.network_proxy_pending.remove(&host);
+                let client = create_client();
+                let admin_url = self.config.network_proxy.admin_url.clone();
+                let should_resume_exec = matches!(
+                    decision,
+                    crate::app_event::NetworkProxyDecision::AllowOnce
+                        | crate::app_event::NetworkProxyDecision::AllowAlways
+                );
+                match decision {
+                    crate::app_event::NetworkProxyDecision::AllowOnce => {
+                        if let Err(err) =
+                            network_proxy::allow_once(&client, &admin_url, &host).await
+                        {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to allow {host} once: {err}"));
+                        }
+                    }
+                    crate::app_event::NetworkProxyDecision::AllowAlways => {
+                        match network_proxy::add_allowed_domain(
+                            &self.config.network_proxy.config_path,
+                            &host,
+                        ) {
+                            Ok(changed) => {
+                                if changed
+                                    && let Err(err) =
+                                        network_proxy::reload(&client, &admin_url).await
+                                {
+                                    self.chat_widget.add_error_message(format!(
+                                            "Failed to reload network proxy after allowlist update: {err}"
+                                        ));
+                                }
+                            }
+                            Err(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to add {host} to allowlist: {err}"
+                                ));
+                            }
+                        }
+                    }
+                    crate::app_event::NetworkProxyDecision::Deny => {
+                        match network_proxy::add_denied_domain(
+                            &self.config.network_proxy.config_path,
+                            &host,
+                        ) {
+                            Ok(changed) => {
+                                if changed
+                                    && let Err(err) =
+                                        network_proxy::reload(&client, &admin_url).await
+                                {
+                                    self.chat_widget.add_error_message(format!(
+                                            "Failed to reload network proxy after denylist update: {err}"
+                                        ));
+                                }
+                            }
+                            Err(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to add {host} to denylist: {err}"
+                                ));
+                            }
+                        }
+                    }
+                }
+                if should_resume_exec {
+                    self.chat_widget.resume_pending_exec_approval();
+                } else {
+                    self.chat_widget.reject_pending_exec_approval();
+                }
+            }
         }
         Ok(true)
     }
@@ -750,6 +892,35 @@ impl App {
                 // Ignore Release key events.
             }
         };
+    }
+
+    fn spawn_network_proxy_poller(network_proxy: NetworkProxyConfig, tx: AppEventSender) {
+        if !network_proxy.enabled || !network_proxy.prompt_on_block {
+            return;
+        }
+        let poll_interval_ms = if network_proxy.poll_interval_ms > 0 {
+            network_proxy.poll_interval_ms
+        } else {
+            1000
+        };
+        let poll_interval = Duration::from_secs_f64(poll_interval_ms as f64 / 1000.0);
+        let admin_url = network_proxy.admin_url;
+        tokio::spawn(async move {
+            let client = create_client();
+            loop {
+                match network_proxy::fetch_blocked(&client, &admin_url).await {
+                    Ok(blocked) => {
+                        for request in blocked {
+                            tx.send(AppEvent::NetworkProxyApprovalRequest(request));
+                        }
+                    }
+                    Err(err) => {
+                        tracing::debug!(error = %err, "network proxy poll failed");
+                    }
+                }
+                tokio::time::sleep(poll_interval).await;
+            }
+        });
     }
 
     #[cfg(target_os = "windows")]
@@ -855,6 +1026,7 @@ mod tests {
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
             skip_world_writable_scan_once: false,
+            network_proxy_pending: HashSet::new(),
         }
     }
 

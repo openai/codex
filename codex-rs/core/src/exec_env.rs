@@ -1,6 +1,9 @@
 use crate::config::types::EnvironmentVariablePattern;
+use crate::config::types::NetworkProxyConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyInherit;
+use crate::network_proxy;
+use crate::protocol::SandboxPolicy;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -13,6 +16,18 @@ use std::collections::HashSet;
 /// for [`ShellEnvironmentPolicy`].
 pub fn create_env(policy: &ShellEnvironmentPolicy) -> HashMap<String, String> {
     populate_env(std::env::vars(), policy)
+}
+
+pub fn create_env_with_network_proxy(
+    policy: &ShellEnvironmentPolicy,
+    sandbox_policy: &SandboxPolicy,
+    network_proxy: &NetworkProxyConfig,
+) -> HashMap<String, String> {
+    let mut env_map = create_env(policy);
+    if should_apply_network_proxy(network_proxy, sandbox_policy) {
+        apply_network_proxy_env(&mut env_map, network_proxy);
+    }
+    env_map
 }
 
 fn populate_env<I>(vars: I, policy: &ShellEnvironmentPolicy) -> HashMap<String, String>
@@ -66,6 +81,85 @@ where
     }
 
     env_map
+}
+
+fn should_apply_network_proxy(
+    network_proxy: &NetworkProxyConfig,
+    sandbox_policy: &SandboxPolicy,
+) -> bool {
+    if !network_proxy.enabled {
+        return false;
+    }
+    match sandbox_policy {
+        SandboxPolicy::WorkspaceWrite { network_access, .. } => *network_access,
+        SandboxPolicy::DangerFullAccess => true,
+        SandboxPolicy::ReadOnly => false,
+    }
+}
+
+fn apply_network_proxy_env(
+    env_map: &mut HashMap<String, String>,
+    network_proxy: &NetworkProxyConfig,
+) {
+    let proxy_url = network_proxy.proxy_url.trim();
+    if !proxy_url.is_empty() {
+        for key in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "YARN_HTTP_PROXY",
+            "YARN_HTTPS_PROXY",
+            "npm_config_http_proxy",
+            "npm_config_https_proxy",
+            "npm_config_proxy",
+        ] {
+            env_map.insert(key.to_string(), proxy_url.to_string());
+        }
+        env_map.insert("ELECTRON_GET_USE_PROXY".to_string(), "true".to_string());
+
+        if let Some((host, port)) = network_proxy::proxy_host_port(proxy_url) {
+            let gradle_opts = format!(
+                "-Dhttp.proxyHost={host} -Dhttp.proxyPort={port} -Dhttps.proxyHost={host} -Dhttps.proxyPort={port}"
+            );
+            match env_map.get_mut("GRADLE_OPTS") {
+                Some(existing) => {
+                    if !existing.contains("http.proxyHost") && !existing.contains("https.proxyHost")
+                    {
+                        if !existing.ends_with(' ') {
+                            existing.push(' ');
+                        }
+                        existing.push_str(&gradle_opts);
+                    }
+                }
+                None => {
+                    env_map.insert("GRADLE_OPTS".to_string(), gradle_opts);
+                }
+            }
+        }
+    }
+
+    let no_proxy = normalize_no_proxy_value(&network_proxy.no_proxy);
+    if !no_proxy.is_empty() {
+        env_map.insert("NO_PROXY".to_string(), no_proxy.clone());
+        env_map.insert("no_proxy".to_string(), no_proxy);
+    }
+
+    network_proxy::apply_mitm_ca_env_if_enabled(env_map, network_proxy);
+}
+
+fn normalize_no_proxy_value(entries: &[String]) -> String {
+    let mut out = Vec::new();
+    for entry in entries {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        out.push(trimmed.to_string());
+    }
+    out.join(",")
 }
 
 #[cfg(test)]

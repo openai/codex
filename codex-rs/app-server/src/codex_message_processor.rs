@@ -2688,6 +2688,7 @@ async fn apply_bespoke_event_handling(
             reason,
             risk,
             parsed_cmd,
+            network_preflight_only,
         }) => {
             let params = ExecCommandApprovalParams {
                 conversation_id,
@@ -2697,6 +2698,7 @@ async fn apply_bespoke_event_handling(
                 reason,
                 risk,
                 parsed_cmd,
+                network_preflight_only,
             };
             let rx = outgoing
                 .send_request(ServerRequestPayload::ExecCommandApproval(params))

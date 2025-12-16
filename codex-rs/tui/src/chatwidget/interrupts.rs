@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use codex_core::network_proxy::NetworkProxyBlockedRequest;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
@@ -14,6 +15,7 @@ use super::ChatWidget;
 pub(crate) enum QueuedInterrupt {
     ExecApproval(String, ExecApprovalRequestEvent),
     ApplyPatchApproval(String, ApplyPatchApprovalRequestEvent),
+    NetworkApproval(NetworkProxyBlockedRequest),
     ExecBegin(ExecCommandBeginEvent),
     ExecEnd(ExecCommandEndEvent),
     McpBegin(McpToolCallBeginEvent),
@@ -51,6 +53,11 @@ impl InterruptManager {
             .push_back(QueuedInterrupt::ApplyPatchApproval(id, ev));
     }
 
+    pub(crate) fn push_network_approval(&mut self, request: NetworkProxyBlockedRequest) {
+        self.queue
+            .push_back(QueuedInterrupt::NetworkApproval(request));
+    }
+
     pub(crate) fn push_exec_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.queue.push_back(QueuedInterrupt::ExecBegin(ev));
     }
@@ -77,6 +84,9 @@ impl InterruptManager {
                 QueuedInterrupt::ExecApproval(id, ev) => chat.handle_exec_approval_now(id, ev),
                 QueuedInterrupt::ApplyPatchApproval(id, ev) => {
                     chat.handle_apply_patch_approval_now(id, ev)
+                }
+                QueuedInterrupt::NetworkApproval(request) => {
+                    chat.handle_network_approval_request(request)
                 }
                 QueuedInterrupt::ExecBegin(ev) => chat.handle_exec_begin_now(ev),
                 QueuedInterrupt::ExecEnd(ev) => chat.handle_exec_end_now(ev),

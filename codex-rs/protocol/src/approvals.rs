@@ -8,6 +8,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxRiskLevel {
@@ -47,6 +51,8 @@ pub struct ExecApprovalRequestEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk: Option<SandboxCommandAssessment>,
     pub parsed_cmd: Vec<ParsedCommand>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub network_preflight_only: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

@@ -36,6 +36,8 @@ pub struct UnifiedExecRequest {
     pub env: HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
+    pub network_preflight_blocked: bool,
+    pub network_preflight_only: bool,
 }
 
 impl ProvidesSandboxRetryData for UnifiedExecRequest {
@@ -65,6 +67,8 @@ impl UnifiedExecRequest {
         env: HashMap<String, String>,
         with_escalated_permissions: Option<bool>,
         justification: Option<String>,
+        network_preflight_blocked: bool,
+        network_preflight_only: bool,
     ) -> Self {
         Self {
             command,
@@ -72,6 +76,8 @@ impl UnifiedExecRequest {
             env,
             with_escalated_permissions,
             justification,
+            network_preflight_blocked,
+            network_preflight_only,
         }
     }
 }
@@ -122,7 +128,15 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         Box::pin(async move {
             with_cached_approval(&session.services, key, || async move {
                 session
-                    .request_command_approval(turn, call_id, command, cwd, reason, risk)
+                    .request_command_approval(
+                        turn,
+                        call_id,
+                        command,
+                        cwd,
+                        reason,
+                        risk,
+                        req.network_preflight_only,
+                    )
                     .await
             })
             .await
@@ -135,6 +149,9 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         policy: AskForApproval,
         sandbox_policy: &SandboxPolicy,
     ) -> bool {
+        if req.network_preflight_blocked {
+            return true;
+        }
         requires_initial_appoval(
             policy,
             sandbox_policy,

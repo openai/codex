@@ -21,6 +21,10 @@ use serde::Serialize;
 use strum_macros::Display;
 use ts_rs::TS;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
 #[ts(type = "string")]
 pub struct GitSha(pub String);
@@ -459,6 +463,8 @@ pub struct ExecCommandApprovalParams {
     pub reason: Option<String>,
     pub risk: Option<SandboxCommandAssessment>,
     pub parsed_cmd: Vec<ParsedCommand>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub network_preflight_only: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -623,6 +629,7 @@ mod tests {
             parsed_cmd: vec![ParsedCommand::Unknown {
                 cmd: "echo hello".to_string(),
             }],
+            network_preflight_only: false,
         };
         let request = ServerRequest::ExecCommandApproval {
             request_id: RequestId::Integer(7),

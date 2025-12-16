@@ -33,6 +33,8 @@ pub struct ShellRequest {
     pub env: std::collections::HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
+    pub network_preflight_blocked: bool,
+    pub network_preflight_only: bool,
 }
 
 impl ProvidesSandboxRetryData for ShellRequest {
@@ -107,7 +109,15 @@ impl Approvable<ShellRequest> for ShellRuntime {
         Box::pin(async move {
             with_cached_approval(&session.services, key, move || async move {
                 session
-                    .request_command_approval(turn, call_id, command, cwd, reason, risk)
+                    .request_command_approval(
+                        turn,
+                        call_id,
+                        command,
+                        cwd,
+                        reason,
+                        risk,
+                        req.network_preflight_only,
+                    )
                     .await
             })
             .await
@@ -120,6 +130,9 @@ impl Approvable<ShellRequest> for ShellRuntime {
         policy: AskForApproval,
         sandbox_policy: &SandboxPolicy,
     ) -> bool {
+        if req.network_preflight_blocked {
+            return true;
+        }
         requires_initial_appoval(
             policy,
             sandbox_policy,

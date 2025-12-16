@@ -8,7 +8,8 @@ use tokio::time::Instant;
 
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
-use crate::exec_env::create_env;
+use crate::exec_env::create_env_with_network_proxy;
+use crate::network_proxy;
 use crate::sandboxing::ExecEnv;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -329,12 +330,38 @@ impl UnifiedExecSessionManager {
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
+        let network_preflight_blocked = match network_proxy::preflight_blocked_host_if_enabled(
+            &context.turn.network_proxy,
+            &context.turn.sandbox_policy,
+            &command,
+        ) {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(err) => {
+                tracing::debug!(error = %err, "network proxy preflight failed");
+                false
+            }
+        };
+        let network_preflight_only = network_preflight_blocked
+            && !crate::command_safety::is_dangerous_command::requires_initial_appoval(
+                context.turn.approval_policy,
+                &context.turn.sandbox_policy,
+                &command,
+                with_escalated_permissions.unwrap_or(false),
+            );
+
         let req = UnifiedExecToolRequest::new(
             command,
             cwd,
-            create_env(&context.turn.shell_environment_policy),
+            create_env_with_network_proxy(
+                &context.turn.shell_environment_policy,
+                &context.turn.sandbox_policy,
+                &context.turn.network_proxy,
+            ),
             with_escalated_permissions,
             justification,
+            network_preflight_blocked,
+            network_preflight_only,
         );
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),

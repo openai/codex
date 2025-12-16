@@ -127,6 +127,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                             cwd,
                             Some(reason),
                             risk,
+                            false,
                         )
                         .await
                 } else if user_explicitly_approved {

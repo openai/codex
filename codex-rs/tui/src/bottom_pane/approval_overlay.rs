@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::app_event::AppEvent;
+use crate::app_event::NetworkProxyDecision;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
@@ -16,6 +17,8 @@ use crate::key_hint::KeyBinding;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
+use codex_core::config::types::NetworkProxyMode;
+use codex_core::network_proxy::NetworkProxyBlockedRequest;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
@@ -47,6 +50,9 @@ pub(crate) enum ApprovalRequest {
         reason: Option<String>,
         cwd: PathBuf,
         changes: HashMap<PathBuf, FileChange>,
+    },
+    Network {
+        request: NetworkProxyBlockedRequest,
     },
 }
 
@@ -105,6 +111,10 @@ impl ApprovalOverlay {
                 patch_options(),
                 "Would you like to make the following edits?".to_string(),
             ),
+            ApprovalVariant::Network { .. } => (
+                network_options(),
+                "Allow network access to this domain?".to_string(),
+            ),
         };
 
         let header = Box::new(ColumnRenderable::with([
@@ -149,13 +159,17 @@ impl ApprovalOverlay {
             return;
         };
         if let Some(variant) = self.current_variant.as_ref() {
-            match (&variant, option.decision) {
-                (ApprovalVariant::Exec { id, command }, decision) => {
-                    self.handle_exec_decision(id, command, decision);
+            match (&variant, &option.decision) {
+                (ApprovalVariant::Exec { id, command }, ApprovalDecision::Review(decision)) => {
+                    self.handle_exec_decision(id, command, *decision);
                 }
-                (ApprovalVariant::ApplyPatch { id, .. }, decision) => {
-                    self.handle_patch_decision(id, decision);
+                (ApprovalVariant::ApplyPatch { id, .. }, ApprovalDecision::Review(decision)) => {
+                    self.handle_patch_decision(id, *decision);
                 }
+                (ApprovalVariant::Network { host }, ApprovalDecision::Network(decision)) => {
+                    self.handle_network_decision(host, *decision);
+                }
+                _ => {}
             }
         }
 
@@ -177,6 +191,15 @@ impl ApprovalOverlay {
             id: id.to_string(),
             decision,
         }));
+    }
+
+    fn handle_network_decision(&self, host: &str, decision: NetworkProxyDecision) {
+        let cell = history_cell::new_network_approval_decision_cell(host.to_string(), decision);
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        self.app_event_tx.send(AppEvent::NetworkProxyDecision {
+            host: host.to_string(),
+            decision,
+        });
     }
 
     fn advance_queue(&mut self) {
@@ -243,6 +266,9 @@ impl BottomPaneView for ApprovalOverlay {
                 }
                 ApprovalVariant::ApplyPatch { id, .. } => {
                     self.handle_patch_decision(id, ReviewDecision::Abort);
+                }
+                ApprovalVariant::Network { host } => {
+                    self.handle_network_decision(host, NetworkProxyDecision::Deny);
                 }
             }
         }
@@ -336,6 +362,52 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     header: Box::new(ColumnRenderable::with(header)),
                 }
             }
+            ApprovalRequest::Network { request } => {
+                let mut header: Vec<Line<'static>> = Vec::new();
+                let host = request.host.trim().to_string();
+                if !host.is_empty() {
+                    header.push(Line::from(vec!["Host: ".into(), host.bold()]));
+                }
+                let reason = request.reason.trim().to_string();
+                if !reason.is_empty() {
+                    let reason_label = network_reason_label(&reason);
+                    header.push(Line::from(vec!["Reason: ".into(), reason_label.into()]));
+                    if let Some(hint) = network_reason_hint(&reason) {
+                        header.push(Line::from(vec!["Hint: ".into(), hint.dim()]));
+                    }
+                }
+                if let Some(method) = request
+                    .method
+                    .as_ref()
+                    .filter(|value| !value.is_empty())
+                    .cloned()
+                {
+                    header.push(Line::from(vec!["Method: ".into(), method.into()]));
+                }
+                let protocol = request.protocol.trim().to_string();
+                if !protocol.is_empty() {
+                    header.push(Line::from(vec!["Protocol: ".into(), protocol.into()]));
+                }
+                if let Some(mode) = request.mode {
+                    let label = match mode {
+                        NetworkProxyMode::Limited => "limited",
+                        NetworkProxyMode::Full => "full",
+                    };
+                    header.push(Line::from(vec!["Mode: ".into(), label.into()]));
+                }
+                if let Some(client) = request
+                    .client
+                    .as_ref()
+                    .filter(|value| !value.is_empty())
+                    .cloned()
+                {
+                    header.push(Line::from(vec!["Client: ".into(), client.dim()]));
+                }
+                Self {
+                    variant: ApprovalVariant::Network { host: request.host },
+                    header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
+                }
+            }
         }
     }
 }
@@ -362,16 +434,43 @@ fn render_risk_lines(risk: &SandboxCommandAssessment) -> Vec<Line<'static>> {
     lines
 }
 
+fn network_reason_label(reason: &str) -> String {
+    match reason {
+        "not_allowed" => "Domain not in allowlist".to_string(),
+        "not_allowed_local" => "Loopback blocked by policy".to_string(),
+        "denied" => "Domain denied by denylist".to_string(),
+        "method_not_allowed" => "Method blocked by network mode".to_string(),
+        "mitm_required" => "MITM required for limited HTTPS".to_string(),
+        _ => reason.to_string(),
+    }
+}
+
+fn network_reason_hint(reason: &str) -> Option<&'static str> {
+    match reason {
+        "not_allowed_local" => Some("Allow loopback or add the host to the allowlist."),
+        "method_not_allowed" => Some("Switch to full mode or enable MITM to allow this method."),
+        "mitm_required" => Some("Enable MITM or switch to full mode for HTTPS tunneling."),
+        _ => None,
+    }
+}
+
 #[derive(Clone)]
 enum ApprovalVariant {
     Exec { id: String, command: Vec<String> },
     ApplyPatch { id: String },
+    Network { host: String },
+}
+
+#[derive(Clone)]
+enum ApprovalDecision {
+    Review(ReviewDecision),
+    Network(NetworkProxyDecision),
 }
 
 #[derive(Clone)]
 struct ApprovalOption {
     label: String,
-    decision: ReviewDecision,
+    decision: ApprovalDecision,
     display_shortcut: Option<KeyBinding>,
     additional_shortcuts: Vec<KeyBinding>,
 }
@@ -388,19 +487,19 @@ fn exec_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
             label: "Yes, proceed".to_string(),
-            decision: ReviewDecision::Approved,
+            decision: ApprovalDecision::Review(ReviewDecision::Approved),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
         },
         ApprovalOption {
             label: "Yes, and don't ask again for this command".to_string(),
-            decision: ReviewDecision::ApprovedForSession,
+            decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
         },
         ApprovalOption {
             label: "No, and tell Codex what to do differently".to_string(),
-            decision: ReviewDecision::Abort,
+            decision: ApprovalDecision::Review(ReviewDecision::Abort),
             display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },
@@ -411,13 +510,36 @@ fn patch_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
             label: "Yes, proceed".to_string(),
-            decision: ReviewDecision::Approved,
+            decision: ApprovalDecision::Review(ReviewDecision::Approved),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
         },
         ApprovalOption {
             label: "No, and tell Codex what to do differently".to_string(),
-            decision: ReviewDecision::Abort,
+            decision: ApprovalDecision::Review(ReviewDecision::Abort),
+            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+        },
+    ]
+}
+
+fn network_options() -> Vec<ApprovalOption> {
+    vec![
+        ApprovalOption {
+            label: "Allow once".to_string(),
+            decision: ApprovalDecision::Network(NetworkProxyDecision::AllowOnce),
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
+        },
+        ApprovalOption {
+            label: "Allow always (add to allowlist)".to_string(),
+            decision: ApprovalDecision::Network(NetworkProxyDecision::AllowAlways),
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
+        },
+        ApprovalOption {
+            label: "Deny (add to denylist)".to_string(),
+            decision: ApprovalDecision::Network(NetworkProxyDecision::Deny),
             display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },

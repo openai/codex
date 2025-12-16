@@ -7,6 +7,8 @@ use codex_core::config::Config;
 use codex_core::config::types::Notifications;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
+use codex_core::network_proxy;
+use codex_core::network_proxy::NetworkProxyBlockedRequest;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -31,6 +33,7 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
+use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
@@ -282,12 +285,19 @@ pub(crate) struct ChatWidget {
     is_review_mode: bool,
     // Whether to add a final message separator after the last message
     needs_final_message_separator: bool,
+    pending_exec_approval: Option<PendingExecApproval>,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
+}
+
+struct PendingExecApproval {
+    id: String,
+    event: ExecApprovalRequestEvent,
+    host: String,
 }
 
 struct UserMessage {
@@ -630,6 +640,14 @@ impl ChatWidget {
         );
     }
 
+    pub(crate) fn on_network_approval_request(&mut self, request: NetworkProxyBlockedRequest) {
+        let request2 = request.clone();
+        self.defer_or_handle(
+            |q| q.push_network_approval(request),
+            |s| s.handle_network_approval_request(request2),
+        );
+    }
+
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         let ev2 = ev.clone();
@@ -884,6 +902,24 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
+        if self.pending_exec_approval.is_none()
+            && let Some(request) = self.preflight_network_request(&ev.command)
+        {
+            self.pending_exec_approval = Some(PendingExecApproval {
+                id,
+                event: ev,
+                host: request.host.clone(),
+            });
+            self.bottom_pane
+                .push_approval_request(ApprovalRequest::Network { request });
+            self.request_redraw();
+            return;
+        }
+
+        self.show_exec_approval(id, ev);
+    }
+
+    fn show_exec_approval(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
         let command = shlex::try_join(ev.command.iter().map(String::as_str))
             .unwrap_or_else(|_| ev.command.join(" "));
@@ -897,6 +933,46 @@ impl ChatWidget {
         };
         self.bottom_pane.push_approval_request(request);
         self.request_redraw();
+    }
+
+    pub(crate) fn resume_pending_exec_approval(&mut self) {
+        if let Some(pending) = self.pending_exec_approval.take() {
+            if pending.event.network_preflight_only {
+                self.submit_op(Op::ExecApproval {
+                    id: pending.id,
+                    decision: ReviewDecision::Approved,
+                });
+                return;
+            }
+            self.show_exec_approval(pending.id, pending.event);
+        }
+    }
+
+    pub(crate) fn reject_pending_exec_approval(&mut self) {
+        if let Some(pending) = self.pending_exec_approval.take() {
+            self.add_to_history(history_cell::new_error_event(format!(
+                "Exec canceled because network access to {} was denied.",
+                pending.host
+            )));
+            self.submit_op(Op::ExecApproval {
+                id: pending.id,
+                decision: ReviewDecision::Denied,
+            });
+        }
+    }
+
+    fn preflight_network_request(&self, command: &[String]) -> Option<NetworkProxyBlockedRequest> {
+        match network_proxy::preflight_blocked_request_if_enabled(
+            &self.config.network_proxy,
+            &self.config.sandbox_policy,
+            command,
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                tracing::debug!(error = %err, "network proxy preflight failed");
+                None
+            }
+        }
     }
 
     pub(crate) fn handle_apply_patch_approval_now(
@@ -918,6 +994,15 @@ impl ChatWidget {
             cwd: self.config.cwd.clone(),
             changes: ev.changes.keys().cloned().collect(),
         });
+    }
+
+    pub(crate) fn handle_network_approval_request(&mut self, request: NetworkProxyBlockedRequest) {
+        self.flush_answer_stream_with_separator();
+        let host = request.host.clone();
+        self.notify(Notification::NetworkApprovalRequested { host });
+        self.bottom_pane
+            .push_approval_request(ApprovalRequest::Network { request });
+        self.request_redraw();
     }
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
@@ -1053,6 +1138,7 @@ impl ChatWidget {
             pending_notification: None,
             is_review_mode: false,
             needs_final_message_separator: false,
+            pending_exec_approval: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -1120,6 +1206,7 @@ impl ChatWidget {
             pending_notification: None,
             is_review_mode: false,
             needs_final_message_separator: false,
+            pending_exec_approval: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -2768,6 +2855,7 @@ enum Notification {
     AgentTurnComplete { response: String },
     ExecApprovalRequested { command: String },
     EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
+    NetworkApprovalRequested { host: String },
 }
 
 impl Notification {
@@ -2791,6 +2879,9 @@ impl Notification {
                     }
                 )
             }
+            Notification::NetworkApprovalRequested { host } => {
+                format!("Network approval requested: {}", truncate_text(host, 40))
+            }
         }
     }
 
@@ -2798,7 +2889,8 @@ impl Notification {
         match self {
             Notification::AgentTurnComplete { .. } => "agent-turn-complete",
             Notification::ExecApprovalRequested { .. }
-            | Notification::EditApprovalRequested { .. } => "approval-requested",
+            | Notification::EditApprovalRequested { .. }
+            | Notification::NetworkApprovalRequested { .. } => "approval-requested",
         }
     }
 
