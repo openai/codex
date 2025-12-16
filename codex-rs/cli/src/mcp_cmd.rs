@@ -19,8 +19,6 @@ use codex_rmcp_client::delete_oauth_tokens;
 use codex_rmcp_client::perform_oauth_login;
 use codex_rmcp_client::supports_oauth_login;
 
-/// [experimental] Launch Codex as an MCP server or manage configured MCP servers.
-///
 /// Subcommands:
 /// - `serve`  — run the MCP server on stdio
 /// - `list`   — list configured servers (with `--json`)
@@ -38,22 +36,11 @@ pub struct McpCli {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum McpSubcommand {
-    /// [experimental] List configured MCP servers.
     List(ListArgs),
-
-    /// [experimental] Show details for a configured MCP server.
     Get(GetArgs),
-
-    /// [experimental] Add a global MCP server entry.
     Add(AddArgs),
-
-    /// [experimental] Remove a global MCP server entry.
     Remove(RemoveArgs),
-
-    /// [experimental] Authenticate with a configured MCP server via OAuth.
     Login(LoginArgs),
-
-    /// [experimental] Remove stored OAuth credentials for a server.
     Logout(LogoutArgs),
 }
 

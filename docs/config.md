@@ -464,7 +464,7 @@ http_headers = { "HEADER_NAME" = "HEADER_VALUE" }
 env_http_headers = { "HEADER_NAME" = "ENV_VAR" }
 ```
 
-Streamable HTTP connections always use the experimental Rust MCP client under the hood, so expect occasional rough edges. When a server supports OAuth, run `codex mcp login <server-name>` to authenticate.
+Streamable HTTP connections always use the Rust MCP client under the hood. Run `codex mcp login <server-name>` to authenticate for servers supporting OAuth.
 
 #### Other configuration options
 
