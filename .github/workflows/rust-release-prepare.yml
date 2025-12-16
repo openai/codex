@@ -1,0 +1,41 @@
+name: rust-release-prepare
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@1.90
+
+      - name: Update models.json
+        working-directory: codex-rs
+        env:
+          OPENAI_API_KEY: ${{ secrets.CODEX_OPENAI_API_KEY }}
+        run: cargo run -p codex-core --bin update_models_json
+
+      - name: Commit models.json (if changed)
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- codex-rs/core/models.json; then
+            echo "models.json unchanged"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add codex-rs/core/models.json
+          git commit -m "Update models.json"
+          git push origin HEAD:main
