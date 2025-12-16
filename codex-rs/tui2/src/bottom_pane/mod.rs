@@ -131,8 +131,17 @@ impl BottomPane {
         }
     }
 
+    pub fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
+        self.composer.set_skill_mentions(skills);
+        self.request_redraw();
+    }
+
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
         self.status.as_ref()
+    }
+
+    pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
+        self.composer.skills()
     }
 
     #[cfg(test)]
@@ -369,6 +378,17 @@ impl BottomPane {
         self.context_window_used_tokens = used_tokens;
         self.composer
             .set_context_window(percent, self.context_window_used_tokens);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_transcript_ui_state(
+        &mut self,
+        scrolled: bool,
+        selection_active: bool,
+        scroll_position: Option<(usize, usize)>,
+    ) {
+        self.composer
+            .set_transcript_ui_state(scrolled, selection_active, scroll_position);
         self.request_redraw();
     }
 

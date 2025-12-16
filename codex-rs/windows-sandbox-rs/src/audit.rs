@@ -260,12 +260,8 @@ pub fn apply_capability_denies_for_world_writable(
             let mut roots: Vec<PathBuf> =
                 vec![dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf())];
             for root in writable_roots {
-                let candidate = if root.is_absolute() {
-                    root.clone()
-                } else {
-                    cwd.join(root)
-                };
-                roots.push(dunce::canonicalize(&candidate).unwrap_or(candidate));
+                let candidate = root.as_path();
+                roots.push(dunce::canonicalize(candidate).unwrap_or_else(|_| root.to_path_buf()));
             }
             (sid, roots)
         }

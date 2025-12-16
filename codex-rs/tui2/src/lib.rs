@@ -23,7 +23,6 @@ use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
 use codex_protocol::config_types::SandboxMode;
-use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use tracing::error;
@@ -41,6 +40,7 @@ mod ascii_animation;
 mod bottom_pane;
 mod chatwidget;
 mod cli;
+mod clipboard_copy;
 mod clipboard_paste;
 mod color;
 pub mod custom_terminal;
@@ -58,6 +58,7 @@ mod markdown;
 mod markdown_render;
 mod markdown_stream;
 mod model_migration;
+mod notifications;
 pub mod onboarding;
 mod oss_selection;
 mod pager_overlay;
@@ -269,6 +270,7 @@ pub async fn run_main(
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_target(false)
+        .with_ansi(false)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_filter(env_filter());
 
@@ -307,22 +309,16 @@ pub async fn run_main(
         }
     };
 
-    if let Some(provider) = otel.as_ref() {
-        let otel_layer = OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
-            tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
-        );
+    let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
 
-        let _ = tracing_subscriber::registry()
-            .with(file_layer)
-            .with(feedback_layer)
-            .with(otel_layer)
-            .try_init();
-    } else {
-        let _ = tracing_subscriber::registry()
-            .with(file_layer)
-            .with(feedback_layer)
-            .try_init();
-    };
+    let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
+
+    let _ = tracing_subscriber::registry()
+        .with(file_layer)
+        .with(feedback_layer)
+        .with(otel_tracing_layer)
+        .with(otel_logger_layer)
+        .try_init();
 
     run_ratatui_app(
         cli,
@@ -374,6 +370,7 @@ async fn run_ratatui_app(
                         token_usage: codex_core::protocol::TokenUsage::default(),
                         conversation_id: None,
                         update_action: Some(action),
+                        session_lines: Vec::new(),
                     });
                 }
             }
@@ -413,6 +410,7 @@ async fn run_ratatui_app(
                 token_usage: codex_core::protocol::TokenUsage::default(),
                 conversation_id: None,
                 update_action: None,
+                session_lines: Vec::new(),
             });
         }
         // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
@@ -448,6 +446,7 @@ async fn run_ratatui_app(
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     conversation_id: None,
                     update_action: None,
+                    session_lines: Vec::new(),
                 });
             }
         }
@@ -486,6 +485,7 @@ async fn run_ratatui_app(
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     conversation_id: None,
                     update_action: None,
+                    session_lines: Vec::new(),
                 });
             }
             other => other,
@@ -495,6 +495,12 @@ async fn run_ratatui_app(
     };
 
     let Cli { prompt, images, .. } = cli;
+
+    // Run the main chat + transcript UI on the terminal's alternate screen so
+    // the entire viewport can be used without polluting normal scrollback. This
+    // mirrors the behavior of the legacy TUI but keeps inline mode available
+    // for smaller prompts like onboarding and model migration.
+    let _ = tui.enter_alt_screen();
 
     let app_result = App::run(
         &mut tui,
@@ -509,7 +515,17 @@ async fn run_ratatui_app(
     )
     .await;
 
+    let _ = tui.leave_alt_screen();
     restore();
+    if let Ok(exit_info) = &app_result {
+        let mut stdout = std::io::stdout();
+        for line in exit_info.session_lines.iter() {
+            let _ = writeln!(stdout, "{line}");
+        }
+        if !exit_info.session_lines.is_empty() {
+            let _ = writeln!(stdout);
+        }
+    }
     // Mark the end of the recorded session.
     session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead

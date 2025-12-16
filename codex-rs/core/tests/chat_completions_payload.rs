@@ -13,9 +13,10 @@ use codex_core::Prompt;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::openai_models::models_manager::ModelsManager;
-use codex_otel::otel_event_manager::OtelEventManager;
+use codex_otel::otel_manager::OtelManager;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
 use futures::StreamExt;
@@ -75,7 +76,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
     let conversation_id = ConversationId::new();
     let model = ModelsManager::get_model_offline(config.model.as_deref());
     let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
-    let otel_event_manager = OtelEventManager::new(
+    let otel_manager = OtelManager::new(
         conversation_id,
         model.as_str(),
         model_family.slug.as_str(),
@@ -84,18 +85,19 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         Some(AuthMode::ApiKey),
         false,
         "test".to_string(),
+        SessionSource::Exec,
     );
 
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
         model_family,
-        otel_event_manager,
+        otel_manager,
         provider,
         effort,
         summary,
         conversation_id,
-        codex_protocol::protocol::SessionSource::Exec,
+        SessionSource::Exec,
     );
 
     let mut prompt = Prompt::default();

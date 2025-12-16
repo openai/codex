@@ -13,6 +13,7 @@ assert_cmd = { workspace = true }
 base64 = { workspace = true }
 codex-core = { workspace = true, features = ["test-support"] }
 codex-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 notify = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
@@ -21,3 +22,7 @@ tokio = { workspace = true, features = ["time"] }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
 shlex = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+reqwest = { workspace = true }

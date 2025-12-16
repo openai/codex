@@ -43,6 +43,7 @@ use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
+use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
@@ -117,6 +118,9 @@ pub(crate) struct ChatComposer {
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
+    transcript_scrolled: bool,
+    transcript_selection_active: bool,
+    transcript_scroll_position: Option<(usize, usize)>,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
 }
@@ -165,6 +169,9 @@ impl ChatComposer {
             footer_hint_override: None,
             context_window_percent: None,
             context_window_used_tokens: None,
+            transcript_scrolled: false,
+            transcript_selection_active: false,
+            transcript_scroll_position: None,
             skills: None,
             dismissed_skill_popup_token: None,
         };
@@ -799,6 +806,10 @@ impl ChatComposer {
 
     fn skills_enabled(&self) -> bool {
         self.skills.as_ref().is_some_and(|s| !s.is_empty())
+    }
+
+    pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
+        self.skills.as_ref()
     }
 
     /// Extract a token prefixed with `prefix` under the cursor, if any.
@@ -1526,6 +1537,9 @@ impl ChatComposer {
             is_task_running: self.is_task_running,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
+            transcript_scrolled: self.transcript_scrolled,
+            transcript_selection_active: self.transcript_selection_active,
+            transcript_scroll_position: self.transcript_scroll_position,
         }
     }
 
@@ -1544,6 +1558,23 @@ impl ChatComposer {
         self.footer_hint_override
             .as_ref()
             .map(|items| if items.is_empty() { 0 } else { 1 })
+    }
+
+    /// Update the footer's view of transcript scroll state for the inline viewport.
+    ///
+    /// This state is derived from the main `App`'s transcript viewport and passed
+    /// through the bottom pane so the footer can indicate when the transcript is
+    /// scrolled away from the bottom, whether a selection is active, and the
+    /// current `(visible_top, total)` position.
+    pub(crate) fn set_transcript_ui_state(
+        &mut self,
+        scrolled: bool,
+        selection_active: bool,
+        scroll_position: Option<(usize, usize)>,
+    ) {
+        self.transcript_scrolled = scrolled;
+        self.transcript_selection_active = selection_active;
+        self.transcript_scroll_position = scroll_position;
     }
 
     fn sync_popups(&mut self) {
@@ -1617,7 +1648,7 @@ impl ChatComposer {
 
         let builtin_match = built_in_slash_commands()
             .into_iter()
-            .any(|(cmd_name, _)| cmd_name.starts_with(name));
+            .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
 
         if builtin_match {
             return true;
@@ -1626,7 +1657,7 @@ impl ChatComposer {
         let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
         self.custom_prompts
             .iter()
-            .any(|p| format!("{prompt_prefix}{}", p.name).starts_with(name))
+            .any(|p| fuzzy_match(&format!("{prompt_prefix}{}", p.name), name).is_some())
     }
 
     /// Synchronize `self.command_popup` with the current text in the
@@ -3978,8 +4009,15 @@ mod tests {
             "'/re' should activate slash popup via prefix match"
         );
 
-        // Case 3: invalid prefix "/zzz" – still allowed to open popup if it
-        // matches no built-in command, our current logic will *not* open popup.
+        // Case 3: fuzzy match "/ac" (subsequence of /compact and /feedback)
+        composer.set_text_content("/ac".to_string());
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Command(_)),
+            "'/ac' should activate slash popup via fuzzy match"
+        );
+
+        // Case 4: invalid prefix "/zzz" – still allowed to open popup if it
+        // matches no built-in command; our current logic will not open popup.
         // Verify that explicitly.
         composer.set_text_content("/zzz".to_string());
         assert!(

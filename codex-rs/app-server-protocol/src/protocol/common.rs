@@ -117,9 +117,9 @@ client_request_definitions! {
         params: v2::ThreadListParams,
         response: v2::ThreadListResponse,
     },
-    ThreadCompact => "thread/compact" {
-        params: v2::ThreadCompactParams,
-        response: v2::ThreadCompactResponse,
+    SkillsList => "skills/list" {
+        params: v2::SkillsListParams,
+        response: v2::SkillsListResponse,
     },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,

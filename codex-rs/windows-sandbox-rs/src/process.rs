@@ -1,5 +1,6 @@
 use crate::logging;
 use crate::winutil::format_last_error;
+use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -51,38 +52,6 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
 }
 
 #[allow(dead_code)]
-fn quote_arg(a: &str) -> String {
-    let needs_quote = a.is_empty() || a.chars().any(|ch| ch.is_whitespace() || ch == '"');
-    if !needs_quote {
-        return a.to_string();
-    }
-    let mut out = String::from("\"");
-    let mut bs: usize = 0;
-    for ch in a.chars() {
-        if (ch as u32) == 92 {
-            bs += 1;
-            continue;
-        }
-        if ch == '"' {
-            out.push_str(&"\\".repeat(bs * 2 + 1));
-            out.push('"');
-            bs = 0;
-            continue;
-        }
-        if bs > 0 {
-            out.push_str(&"\\".repeat(bs * 2));
-            bs = 0;
-        }
-        out.push(ch);
-    }
-    if bs > 0 {
-        out.push_str(&"\\".repeat(bs * 2));
-    }
-    out.push('"');
-    out
-}
-
-#[allow(dead_code)]
 unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
     for kind in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
         let h = GetStdHandle(kind);
@@ -114,7 +83,7 @@ pub unsafe fn create_process_as_user(
 ) -> Result<(PROCESS_INFORMATION, STARTUPINFOW)> {
     let cmdline_str = argv
         .iter()
-        .map(|a| quote_arg(a))
+        .map(|a| quote_windows_arg(a))
         .collect::<Vec<_>>()
         .join(" ");
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);

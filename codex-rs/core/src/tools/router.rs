@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -17,8 +14,11 @@ use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tracing::instrument;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ToolCall {
     pub tool_name: String,
     pub call_id: String,
@@ -55,6 +55,7 @@ impl ToolRouter {
             .any(|config| config.spec.name() == tool_name)
     }
 
+    #[instrument(skip_all, err)]
     pub async fn build_tool_call(
         session: &Session,
         item: ResponseItem,
@@ -130,6 +131,7 @@ impl ToolRouter {
         }
     }
 
+    #[instrument(skip_all, err)]
     pub async fn dispatch_tool_call(
         &self,
         session: Arc<Session>,
