@@ -671,7 +671,10 @@ fn extract_session_meta_from_head(head: &[serde_json::Value]) -> (Option<PathBuf
 }
 
 fn paths_match(a: &Path, b: &Path) -> bool {
-    if let (Ok(ca), Ok(cb)) = (path_utils::canonicalize(a), path_utils::canonicalize(b)) {
+    if let (Ok(ca), Ok(cb)) = (
+        path_utils::normalize_for_path_comparison(a),
+        path_utils::normalize_for_path_comparison(b),
+    ) {
         return ca == cb;
     }
     a == b

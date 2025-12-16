@@ -472,8 +472,8 @@ fn validate_config(value: &TomlValue) -> Result<(), toml::de::Error> {
 
 fn paths_match(expected: &Path, provided: &Path) -> bool {
     if let (Ok(expanded_expected), Ok(expanded_provided)) = (
-        path_utils::canonicalize(expected),
-        path_utils::canonicalize(provided),
+        path_utils::normalize_for_path_comparison(expected),
+        path_utils::normalize_for_path_comparison(provided),
     ) {
         return expanded_expected == expanded_provided;
     }

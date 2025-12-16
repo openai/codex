@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use crate::env;
 
-pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+pub fn normalize_for_path_comparison(path: &Path) -> std::io::Result<PathBuf> {
     let canonical = path.canonicalize()?;
     Ok(normalize_for_wsl(canonical))
 }
@@ -76,4 +76,84 @@ fn lower_ascii_path(path: PathBuf) -> PathBuf {
 #[cfg(not(target_os = "linux"))]
 fn lower_ascii_path(path: PathBuf) -> PathBuf {
     path
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(target_os = "linux")]
+    mod wsl {
+        use super::normalize_for_wsl;
+        use pretty_assertions::assert_eq;
+        use std::ffi::OsStr;
+        use std::path::PathBuf;
+        use std::sync::Mutex;
+        use std::sync::OnceLock;
+
+        struct EnvVarGuard {
+            key: &'static str,
+            original: Option<std::ffi::OsString>,
+        }
+
+        impl EnvVarGuard {
+            fn set(key: &'static str, value: &OsStr) -> Self {
+                let original = std::env::var_os(key);
+                unsafe {
+                    std::env::set_var(key, value);
+                }
+                Self { key, original }
+            }
+        }
+
+        impl Drop for EnvVarGuard {
+            fn drop(&mut self) {
+                unsafe {
+                    match &self.original {
+                        Some(value) => std::env::set_var(self.key, value),
+                        None => std::env::remove_var(self.key),
+                    }
+                }
+            }
+        }
+
+        static WSL_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+        fn lock_wsl_env() -> std::sync::MutexGuard<'static, ()> {
+            WSL_ENV_LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .expect("wsl env lock poisoned")
+        }
+
+        #[test]
+        fn wsl_mnt_drive_paths_lowercase() {
+            let _lock = lock_wsl_env();
+            let _guard = EnvVarGuard::set("WSL_DISTRO_NAME", OsStr::new("Ubuntu"));
+
+            let normalized = normalize_for_wsl(PathBuf::from("/mnt/C/Users/Dev"));
+
+            assert_eq!(normalized, PathBuf::from("/mnt/c/users/dev"));
+        }
+
+        #[test]
+        fn wsl_non_drive_paths_unchanged() {
+            let _lock = lock_wsl_env();
+            let _guard = EnvVarGuard::set("WSL_DISTRO_NAME", OsStr::new("Ubuntu"));
+
+            let path = PathBuf::from("/mnt/cc/Users/Dev");
+            let normalized = normalize_for_wsl(path.clone());
+
+            assert_eq!(normalized, path);
+        }
+
+        #[test]
+        fn wsl_non_mnt_paths_unchanged() {
+            let _lock = lock_wsl_env();
+            let _guard = EnvVarGuard::set("WSL_DISTRO_NAME", OsStr::new("Ubuntu"));
+
+            let path = PathBuf::from("/home/Dev");
+            let normalized = normalize_for_wsl(path.clone());
+
+            assert_eq!(normalized, path);
+        }
+    }
 }
