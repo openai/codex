@@ -22,7 +22,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.90
 
       - name: Update models.json
-        working-directory: codex-rs
         env:
           OPENAI_API_KEY: ${{ secrets.CODEX_OPENAI_API_KEY }}
         run: |
@@ -30,16 +29,13 @@ jobs:
 
           client_version="99.99.99"
           base_url="${OPENAI_BASE_URL:-https://chatgpt.com/backend-api/codex}"
-          version_header="99.99.99"
 
           headers=(
             -H "Authorization: Bearer ${OPENAI_API_KEY}"
-            -H "Content-Type: application/json"
-            -H "version: ${version_header}"
           )
 
           url="${base_url%/}/models?client_version=${client_version}"
-          curl --fail --show-error --location "${headers[@]}" "${url}" | jq '.' > core/models.json
+          curl --fail --show-error --location "${headers[@]}" "${url}" | jq '.' > codex-rs/core/models.json
 
       - name: Open pull request (if changed)
         uses: peter-evans/create-pull-request@v7
