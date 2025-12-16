@@ -779,10 +779,6 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
             )?;
             continue;
         }
-        let cap_present = match path_mask_allows(root, &[cap_psid], write_mask, true) {
-            Ok(h) => h,
-            Err(_) => false,
-        };
         let mut need_grant = false;
         for (label, psid) in [
             ("offline", offline_psid),
