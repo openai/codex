@@ -33,10 +33,7 @@ pub(crate) struct CollaborationSupervisor {
 #[derive(Debug, Clone)]
 pub(crate) struct AgentRunResult {
     pub(crate) agent: AgentId,
-    pub(crate) delta_tokens: i32,
     pub(crate) status: AgentLifecycleState,
-    pub(crate) last_message: Option<String>,
-    pub(crate) sub_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -175,10 +172,7 @@ fn ensure_runner(
                 Err(err) => {
                     let _ = events.send(AgentRunResult {
                         agent,
-                        delta_tokens: 0,
                         status: AgentLifecycleState::Error { error: err },
-                        last_message: None,
-                        sub_id: None,
                     });
                 }
             }
@@ -211,10 +205,7 @@ async fn run_agent_turns(
         ) {
             results.push(AgentRunResult {
                 agent: target,
-                delta_tokens: 0,
                 status: agent_snapshot.status,
-                last_message: None,
-                sub_id: None,
             });
             break;
         }
@@ -238,8 +229,6 @@ async fn run_agent_turns(
         let tracker: SharedTurnDiffTracker =
             Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
         let mut agent_status = AgentLifecycleState::Running;
-        let mut last_message: Option<String> = None;
-
         let before_tokens = agent_history.get_total_token_usage();
         let run_result = run_collaboration_turn(
             Arc::clone(&session),
@@ -271,7 +260,6 @@ async fn run_agent_turns(
                         agent.history = new_history.clone();
                     }
                 }
-                last_message = last;
                 (delta_tokens, needs_follow_up)
             }
             Err(err) => {
@@ -304,10 +292,7 @@ async fn run_agent_turns(
 
         results.push(AgentRunResult {
             agent: target,
-            delta_tokens: delta_tokens.clamp(0, i32::MAX),
             status: final_status,
-            last_message,
-            sub_id: Some(sub_id),
         });
 
         keep_running |= continue_running && remaining_budget > 0;

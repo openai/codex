@@ -34,8 +34,18 @@ fn content_for_log(message: &ResponseItem) -> String {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub(crate) struct AgentId(pub i32);
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) struct AgentId(pub String);
+
+impl AgentId {
+    pub fn root() -> Self {
+        Self("root".to_string())
+    }
+
+    pub fn random() -> Self {
+        Self(uuid::Uuid::new_v4().to_string())
+    }
+}
 
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
@@ -82,7 +92,7 @@ impl AgentState {
         instructions: Option<String>,
     ) -> Self {
         Self {
-            id: AgentId(0),
+            id: AgentId::root(),
             name,
             parent: None,
             depth: 0,
@@ -181,7 +191,7 @@ impl CollaborationState {
                     .or_else(|| session_configuration.user_instructions());
             }
         }
-        AgentId(0)
+        AgentId::root()
     }
 
     pub(crate) fn agents(&self) -> &[AgentState] {
@@ -195,10 +205,6 @@ impl CollaborationState {
     pub(crate) fn agent_mut(&mut self, id: AgentId) -> Option<&mut AgentState> {
         let index = self.index_for(id)?;
         self.agents.get_mut(index)
-    }
-
-    pub(crate) fn next_agent_id(&self) -> AgentId {
-        AgentId(self.agents.len() as i32)
     }
 
     pub(crate) fn clone_agent_history(&self, id: AgentId) -> Option<ContextManager> {
@@ -267,11 +273,11 @@ impl CollaborationState {
             return Err("max collaboration depth reached".to_string());
         }
 
-        let id = self.next_agent_id();
-        agent.id = id;
+        let id = AgentId::random();
+        agent.id = id.clone();
 
-        if let Some(parent) = agent.parent {
-            self.children.entry(parent).or_default().push(id);
+        if let Some(parent) = agent.parent.as_ref() {
+            self.children.entry(parent.clone()).or_default().push(id.clone());
         }
 
         self.agents.push(agent);

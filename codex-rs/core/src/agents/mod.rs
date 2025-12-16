@@ -1,3 +1,5 @@
+mod builtins;
+
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -5,7 +7,9 @@ use codex_protocol::openai_models::ReasoningEffort;
 use serde::Deserialize;
 use tracing::warn;
 
-#[derive(Debug, Clone)]
+use builtins::builtin_agents;
+
+#[derive(Debug, Clone, Default)]
 pub(crate) struct AgentDefinition {
     pub(crate) name: String,
     pub(crate) instructions: Option<String>,
@@ -38,26 +42,52 @@ impl AgentsConfig {
     pub(crate) const FILE_NAME: &'static str = "agents.toml";
 
     pub(crate) async fn try_load(codex_home: &Path) -> Option<Self> {
+        let mut agents = builtin_agents();
         let path = codex_home.join(Self::FILE_NAME);
+
         let content = match tokio::fs::read_to_string(&path).await {
-            Ok(content) => content,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+            Ok(content) => Some(content),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
             Err(err) => {
                 warn!("failed to read {}: {err}", path.display());
-                return None;
+                None
             }
         };
 
-        match Self::from_toml_str(&content) {
-            Ok(config) => Some(config),
-            Err(err) => {
-                warn!("failed to parse {}: {err}", path.display());
-                None
+        if let Some(content) = content {
+            match Self::from_toml_str(&content) {
+                Ok(custom_agents) => {
+                    for (name, agent) in custom_agents {
+                        if agents.contains_key(&name) {
+                            warn!(
+                                "duplicate agent definition {name} in {} ignored",
+                                path.display()
+                            );
+                            continue;
+                        }
+                        agents.insert(name, agent);
+                    }
+                }
+                Err(err) => {
+                    warn!("failed to parse {}: {err}", path.display());
+                }
             }
         }
+
+        if let Err(err) = Self::validate_agents(&agents) {
+            warn!("failed to validate {}: {err}", path.display());
+            agents = builtin_agents();
+        }
+
+        if let Err(err) = Self::validate_agents(&agents) {
+            warn!("invalid built-in agents config: {err}");
+            return None;
+        }
+
+        Some(Self { agents })
     }
 
-    fn from_toml_str(contents: &str) -> Result<Self, String> {
+    fn from_toml_str(contents: &str) -> Result<HashMap<String, AgentDefinition>, String> {
         let raw: HashMap<String, RawAgentDefinition> =
             toml::from_str(contents).map_err(|err| format!("invalid toml: {err}"))?;
 
@@ -76,6 +106,7 @@ impl AgentsConfig {
                     Some(instructions)
                 }
             });
+
             agents.insert(
                 name.clone(),
                 AgentDefinition {
@@ -89,6 +120,10 @@ impl AgentsConfig {
             );
         }
 
+        Ok(agents)
+    }
+
+    fn validate_agents(agents: &HashMap<String, AgentDefinition>) -> Result<(), String> {
         if !agents.contains_key("main") {
             return Err("missing required agent: main".to_string());
         }
@@ -97,14 +132,14 @@ impl AgentsConfig {
             for sub in &agent.sub_agents {
                 if !agents.contains_key(sub) {
                     return Err(format!(
-                        "agent {}: unknown sub_agent {sub}",
-                        agent.name.as_str()
+                        "agent {name}: unknown sub_agent {sub}",
+                        name = agent.name.as_str()
                     ));
                 }
             }
         }
 
-        Ok(Self { agents })
+        Ok(())
     }
 
     pub(crate) fn agent(&self, name: &str) -> Option<&AgentDefinition> {
@@ -113,7 +148,7 @@ impl AgentsConfig {
 
     pub(crate) fn main(&self) -> &AgentDefinition {
         self.agents
-            .get("main")
-            .expect("agents config validated main agent")
+            .get("orchestrator")
+            .expect("agents config validated orchestrator agent")
     }
 }
