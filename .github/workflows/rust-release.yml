@@ -262,6 +262,7 @@ jobs:
             local binary="$1"
             local source_path="target/${{ matrix.target }}/release/${binary}"
             local archive_path="${RUNNER_TEMP}/${binary}.zip"
+            local ticket_path="target/${{ matrix.target }}/release/${binary}.notarization-ticket.json"
 
             if [[ ! -f "$source_path" ]]; then
               echo "Binary $source_path not found"
@@ -292,6 +293,22 @@ jobs:
               echo "Notarization failed for ${binary} (submission ${submission_id}, status ${status})"
               exit 1
             fi
+
+            log_json=$(xcrun notarytool log "$submission_id" \
+              --key "$notary_key_path" \
+              --key-id "$APPLE_NOTARIZATION_KEY_ID" \
+              --issuer "$APPLE_NOTARIZATION_ISSUER_ID" \
+              --output-format json)
+
+            jq -n \
+              --arg binary "$binary" \
+              --arg target "${{ matrix.target }}" \
+              --arg id "$submission_id" \
+              --arg status "$status" \
+              --argjson submission "$submission_json" \
+              --argjson log "$log_json" \
+              '{binary: $binary, target: $target, id: $id, status: $status, submission: $submission, log: $log}' \
+              > "$ticket_path"
           }
 
           notarize_binary "codex"
@@ -311,6 +328,16 @@ jobs:
           else
             cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
             cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
+          fi
+
+          if [[ "${{ matrix.runner }}" == macos* ]]; then
+            for binary in codex codex-responses-api-proxy; do
+              ticket_src="target/${{ matrix.target }}/release/${binary}.notarization-ticket.json"
+              ticket_dest="$dest/${binary}-${{ matrix.target }}.notarization-ticket.json"
+              if [[ -f "$ticket_src" ]]; then
+                cp "$ticket_src" "$ticket_dest"
+              fi
+            done
           fi
 
           if [[ "${{ matrix.target }}" == *linux* ]]; then
@@ -341,10 +368,10 @@ jobs:
 
           # For compatibility with environments that lack the `zstd` tool we
           # additionally create a `.tar.gz` for all platforms and `.zip` for
-          # Windows alongside every single binary that we publish. The end result is:
+          # Windows and macOS alongside every single binary that we publish. The end result is:
           #   codex-<target>.zst          (existing)
           #   codex-<target>.tar.gz       (new)
-          #   codex-<target>.zip          (only for Windows)
+          #   codex-<target>.zip          (Windows/macOS)
 
           # 1. Produce a .tar.gz for every file in the directory *before* we
           #    run `zstd --rm`, because that flag deletes the original files.
@@ -361,14 +388,31 @@ jobs:
               continue
             fi
 
+            # Notarization ticket sidecars are bundled into the per-binary
+            # archives; don't generate separate archives for them.
+            if [[ "$base" == *.notarization-ticket.json ]]; then
+              continue
+            fi
+
             # Create per-binary tar.gz
-            tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+            tar_inputs=("$base")
+            ticket_sidecar="${base}.notarization-ticket.json"
+            if [[ -f "$dest/$ticket_sidecar" ]]; then
+              tar_inputs+=("$ticket_sidecar")
+            fi
+            tar -C "$dest" -czf "$dest/${base}.tar.gz" "${tar_inputs[@]}"
 
             # Create zip archive for Windows binaries
             # Must run from inside the dest dir so 7z won't
             # embed the directory path inside the zip.
             if [[ "${{ matrix.runner }}" == windows* ]]; then
               (cd "$dest" && 7z a "${base}.zip" "$base")
+            elif [[ "${{ matrix.runner }}" == macos* ]]; then
+              if [[ -f "$dest/$ticket_sidecar" ]]; then
+                (cd "$dest" && zip -q "${base}.zip" "$base" "$ticket_sidecar")
+              else
+                (cd "$dest" && zip -q "${base}.zip" "$base")
+              fi
             fi
 
             # Also create .zst (existing behaviour) *and* remove the original
@@ -379,6 +423,10 @@ jobs:
             fi
             zstd "${zstd_args[@]}" "$dest/$base"
           done
+
+          if [[ "${{ matrix.runner }}" == macos* ]]; then
+            rm -f "$dest"/*.notarization-ticket.json
+          fi
 
       - name: Remove signing keychain
         if: ${{ always() && matrix.runner == 'macos-15-xlarge' }}
