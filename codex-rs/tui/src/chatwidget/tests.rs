@@ -125,7 +125,6 @@ fn resumed_initial_messages_render_history() {
                 message: "assistant reply".to_string(),
             }),
         ]),
-        skill_load_outcome: None,
         rollout_path: rollout_file.path().to_path_buf(),
     };
 

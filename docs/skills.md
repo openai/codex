@@ -4,6 +4,19 @@
 
 Codex can automatically discover reusable "skills" you keep on disk. A skill is a small bundle with a name, a short description (what it does and when to use it), and an optional body of instructions you can open when needed. Codex injects only the name, description, and file path into the runtime context; the body stays on disk.
 
+## Enable skills
+
+Skills are behind the experimental `skills` feature flag and are disabled by default.
+
+- Enable in config (preferred): add the following to `$CODEX_HOME/config.toml` (usually `~/.codex/config.toml`) and restart Codex:
+
+  ```toml
+  [features]
+  skills = true
+  ```
+
+- Enable for a single run: launch Codex with `codex --enable skills`
+
 ## Where skills live
 
 - Location (v1): `~/.codex/skills/**/SKILL.md` (recursive). Hidden entries and symlinks are skipped. Only files named exactly `SKILL.md` count.
@@ -22,6 +35,11 @@ Codex can automatically discover reusable "skills" you keep on disk. A skill is 
 - Loaded once at startup.
 - If valid skills exist, Codex appends a runtime-only `## Skills` section after `AGENTS.md`, one bullet per skill: `- <name>: <description> (file: /absolute/path/to/SKILL.md)`.
 - If no valid skills exist, the section is omitted. On-disk files are never modified.
+
+## Using skills
+
+- Mention a skill by name in a message using `$<skill-name>`.
+- In the TUI, you can also use `/skills` to browse and insert skills.
 
 ## Validation and errors
 

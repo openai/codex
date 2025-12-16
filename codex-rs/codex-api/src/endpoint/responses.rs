@@ -58,7 +58,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         self.stream(request.body, request.headers).await
     }
 
-    #[instrument(skip_all, err)]
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn stream_prompt(
         &self,
         model: &str,

@@ -33,6 +33,7 @@ use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
+use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
 use codex_core::protocol::McpStartupStatus;
@@ -44,7 +45,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::SkillLoadOutcomeInfo;
+use codex_core::protocol::SkillsListEntry;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TerminalInteractionEvent;
@@ -401,7 +402,7 @@ impl ChatWidget {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
-        self.set_skills_from_outcome(event.skill_load_outcome.as_ref());
+        self.set_skills(None);
         self.conversation_id = Some(event.session_id);
         self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
@@ -418,6 +419,7 @@ impl ChatWidget {
         }
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
+        self.submit_op(Op::ListSkills { cwds: Vec::new() });
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
@@ -426,9 +428,13 @@ impl ChatWidget {
         }
     }
 
-    fn set_skills_from_outcome(&mut self, outcome: Option<&SkillLoadOutcomeInfo>) {
-        let skills = outcome.map(skills_from_outcome);
+    fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.bottom_pane.set_skills(skills);
+    }
+
+    fn set_skills_from_response(&mut self, response: &ListSkillsResponseEvent) {
+        let skills = skills_for_cwd(&self.config.cwd, &response.skills);
+        self.set_skills(Some(skills));
     }
 
     pub(crate) fn open_feedback_note(
@@ -1923,6 +1929,7 @@ impl ChatWidget {
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
+            EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::DeprecationNotice(ev) => self.on_deprecation_notice(ev),
@@ -3110,6 +3117,30 @@ impl ChatWidget {
     pub(crate) fn clear_esc_backtrack_hint(&mut self) {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
+
+    /// Return true when the bottom pane currently has an active task.
+    ///
+    /// This is used by the viewport to decide when mouse selections should
+    /// disengage auto-follow behavior while responses are streaming.
+    pub(crate) fn is_task_running(&self) -> bool {
+        self.bottom_pane.is_task_running()
+    }
+
+    /// Inform the bottom pane about the current transcript scroll state.
+    ///
+    /// This is used by the footer to surface when the inline transcript is
+    /// scrolled away from the bottom and to display the current
+    /// `(visible_top, total)` scroll position alongside other shortcuts.
+    pub(crate) fn set_transcript_ui_state(
+        &mut self,
+        scrolled: bool,
+        selection_active: bool,
+        scroll_position: Option<(usize, usize)>,
+    ) {
+        self.bottom_pane
+            .set_transcript_ui_state(scrolled, selection_active, scroll_position);
+    }
+
     /// Forward an `Op` directly to codex.
     pub(crate) fn submit_op(&self, op: Op) {
         // Record outbound operation for session replay fidelity.
@@ -3134,6 +3165,10 @@ impl ChatWidget {
         debug!("received {len} custom prompts");
         // Forward to bottom pane so the slash popup can show them now.
         self.bottom_pane.set_custom_prompts(ev.custom_prompts);
+    }
+
+    fn on_list_skills(&mut self, ev: ListSkillsResponseEvent) {
+        self.set_skills_from_response(&ev);
     }
 
     pub(crate) fn open_review_popup(&mut self) {
@@ -3535,18 +3570,6 @@ pub(crate) fn show_review_commit_picker_with_entries(
     });
 }
 
-fn skills_from_outcome(outcome: &SkillLoadOutcomeInfo) -> Vec<SkillMetadata> {
-    outcome
-        .skills
-        .iter()
-        .map(|skill| SkillMetadata {
-            name: skill.name.clone(),
-            description: skill.description.clone(),
-            path: skill.path.clone(),
-        })
-        .collect()
-}
-
 fn find_skill_mentions(text: &str, skills: &[SkillMetadata]) -> Vec<SkillMetadata> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut matches: Vec<SkillMetadata> = Vec::new();
@@ -3561,6 +3584,25 @@ fn find_skill_mentions(text: &str, skills: &[SkillMetadata]) -> Vec<SkillMetadat
         }
     }
     matches
+}
+
+fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMetadata> {
+    skills_entries
+        .iter()
+        .find(|entry| entry.cwd.as_path() == cwd)
+        .map(|entry| {
+            entry
+                .skills
+                .iter()
+                .map(|skill| SkillMetadata {
+                    name: skill.name.clone(),
+                    description: skill.description.clone(),
+                    path: skill.path.clone(),
+                    scope: skill.scope,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
