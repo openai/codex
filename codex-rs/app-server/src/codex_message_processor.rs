@@ -508,15 +508,6 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn send_unimplemented_error(&self, request_id: RequestId, method: &str) {
-        let error = JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: format!("{method} is not implemented yet"),
-            data: None,
-        };
-        self.outgoing.send_error(request_id, error).await;
-    }
-
     async fn login_v2(&mut self, request_id: RequestId, params: LoginAccountParams) {
         match params {
             LoginAccountParams::ApiKey { api_key } => {
