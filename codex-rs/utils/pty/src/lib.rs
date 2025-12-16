@@ -133,6 +133,7 @@ pub struct SpawnedPty {
     pub exit_rx: oneshot::Receiver<i32>,
 }
 
+#[allow(unreachable_code)]
 pub fn conpty_supported() -> bool {
     // Annotation required because `win` can't be compiled on other OS.
     #[cfg(windows)]

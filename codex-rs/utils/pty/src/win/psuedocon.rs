@@ -100,7 +100,7 @@ lazy_static! {
     static ref CONPTY: ConPtyFuncs = load_conpty();
 }
 
-pub(crate) fn conpty_supported() -> bool {
+pub fn conpty_supported() -> bool {
     windows_build_number().is_some_and(|build| build >= MIN_CONPTY_BUILD)
 }
 
