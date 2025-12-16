@@ -18,6 +18,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ToolsV2;
 use codex_app_server_protocol::WriteStatus;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -42,6 +43,7 @@ model = "gpt-user"
 sandbox_mode = "workspace-write"
 "#,
     )?;
+    let user_file = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -65,12 +67,19 @@ sandbox_mode = "workspace-write"
     assert_eq!(config.model.as_deref(), Some("gpt-user"));
     assert_eq!(
         origins.get("model").expect("origin").name,
-        ConfigLayerName::User
+        ConfigLayerName::User {
+            file: user_file.clone(),
+        }
     );
     let layers = layers.expect("layers present");
     assert_eq!(layers.len(), 2);
-    assert_eq!(layers[0].name, ConfigLayerName::SessionFlags);
-    assert_eq!(layers[1].name, ConfigLayerName::User);
+    assert_eq!(
+        layers[0].name,
+        ConfigLayerName::SessionFlags {
+            override_keys: Vec::new(),
+        }
+    );
+    assert_eq!(layers[1].name, ConfigLayerName::User { file: user_file });
 
     Ok(())
 }
@@ -88,6 +97,7 @@ web_search = true
 view_image = false
 "#,
     )?;
+    let user_file = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -118,17 +128,26 @@ view_image = false
     );
     assert_eq!(
         origins.get("tools.web_search").expect("origin").name,
-        ConfigLayerName::User
+        ConfigLayerName::User {
+            file: user_file.clone(),
+        }
     );
     assert_eq!(
         origins.get("tools.view_image").expect("origin").name,
-        ConfigLayerName::User
+        ConfigLayerName::User {
+            file: user_file.clone(),
+        }
     );
 
     let layers = layers.expect("layers present");
     assert_eq!(layers.len(), 2);
-    assert_eq!(layers[0].name, ConfigLayerName::SessionFlags);
-    assert_eq!(layers[1].name, ConfigLayerName::User);
+    assert_eq!(
+        layers[0].name,
+        ConfigLayerName::SessionFlags {
+            override_keys: Vec::new(),
+        }
+    );
+    assert_eq!(layers[1].name, ConfigLayerName::User { file: user_file });
 
     Ok(())
 }
@@ -153,8 +172,10 @@ network_access = true
             serde_json::json!(user_dir)
         ),
     )?;
+    let user_file = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
 
     let managed_path = codex_home.path().join("managed_config.toml");
+    let managed_file = AbsolutePathBuf::try_from(managed_path.clone())?;
     std::fs::write(
         &managed_path,
         format!(
@@ -197,19 +218,25 @@ writable_roots = [{}]
     assert_eq!(config.model.as_deref(), Some("gpt-system"));
     assert_eq!(
         origins.get("model").expect("origin").name,
-        ConfigLayerName::System
+        ConfigLayerName::System {
+            file: managed_file.clone(),
+        }
     );
 
     assert_eq!(config.approval_policy, Some(AskForApproval::Never));
     assert_eq!(
         origins.get("approval_policy").expect("origin").name,
-        ConfigLayerName::System
+        ConfigLayerName::System {
+            file: managed_file.clone(),
+        }
     );
 
     assert_eq!(config.sandbox_mode, Some(SandboxMode::WorkspaceWrite));
     assert_eq!(
         origins.get("sandbox_mode").expect("origin").name,
-        ConfigLayerName::User
+        ConfigLayerName::User {
+            file: user_file.clone(),
+        }
     );
 
     let sandbox = config
@@ -222,7 +249,9 @@ writable_roots = [{}]
             .get("sandbox_workspace_write.writable_roots.0")
             .expect("origin")
             .name,
-        ConfigLayerName::System
+        ConfigLayerName::System {
+            file: managed_file.clone(),
+        }
     );
 
     assert!(sandbox.network_access);
@@ -231,14 +260,24 @@ writable_roots = [{}]
             .get("sandbox_workspace_write.network_access")
             .expect("origin")
             .name,
-        ConfigLayerName::User
+        ConfigLayerName::User {
+            file: user_file.clone(),
+        }
     );
 
     let layers = layers.expect("layers present");
     assert_eq!(layers.len(), 3);
-    assert_eq!(layers[0].name, ConfigLayerName::System);
-    assert_eq!(layers[1].name, ConfigLayerName::SessionFlags);
-    assert_eq!(layers[2].name, ConfigLayerName::User);
+    assert_eq!(
+        layers[0].name,
+        ConfigLayerName::System { file: managed_file }
+    );
+    assert_eq!(
+        layers[1].name,
+        ConfigLayerName::SessionFlags {
+            override_keys: Vec::new(),
+        }
+    );
+    assert_eq!(layers[2].name, ConfigLayerName::User { file: user_file });
 
     Ok(())
 }
