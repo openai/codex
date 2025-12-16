@@ -1395,7 +1395,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "which",
 ]
 
 [[package]]
@@ -1702,7 +1701,6 @@ dependencies = [
  "anyhow",
  "arboard",
  "assert_matches",
- "async-stream",
  "base64",
  "chrono",
  "clap",
@@ -2056,7 +2054,9 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "notify",
+ "pretty_assertions",
  "regex-lite",
+ "reqwest",
  "serde_json",
  "shlex",
  "tempfile",
@@ -6909,6 +6909,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

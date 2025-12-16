@@ -325,13 +325,13 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,
-        key: "enable_experimental_windows_sandbox",
+        key: "experimental_windows_sandbox",
         stage: Stage::Experimental,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandboxElevated,
-        key: "enable_elevated_windows_sandbox",
+        key: "elevated_windows_sandbox",
         stage: Stage::Experimental,
         default_enabled: false,
     },

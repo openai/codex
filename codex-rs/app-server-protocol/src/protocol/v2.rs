@@ -961,18 +961,6 @@ pub struct ThreadListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadCompactParams {
-    pub thread_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadCompactResponse {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
 pub struct SkillsListParams {
     /// When empty, defaults to the current session working directory.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

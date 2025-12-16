@@ -22,3 +22,7 @@ tokio = { workspace = true, features = ["time"] }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
 shlex = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+reqwest = { workspace = true }

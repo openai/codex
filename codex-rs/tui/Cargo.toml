@@ -23,7 +23,6 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-async-stream = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
@@ -81,7 +80,7 @@ tokio = { workspace = true, features = [
     "test-util",
     "time",
 ] }
-tokio-stream = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
 toml = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-appender = { workspace = true }

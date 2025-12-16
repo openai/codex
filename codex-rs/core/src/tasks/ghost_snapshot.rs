@@ -8,8 +8,7 @@ use async_trait::async_trait;
 use codex_git::CreateGhostCommitOptions;
 use codex_git::GhostSnapshotReport;
 use codex_git::GitToolingError;
-use codex_git::capture_ghost_snapshot_report;
-use codex_git::create_ghost_commit;
+use codex_git::create_ghost_commit_with_report;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
@@ -74,48 +73,30 @@ impl SessionTask for GhostSnapshotTask {
                 _ = async {
                     let repo_path = ctx_for_task.cwd.clone();
                     let ghost_snapshot = ctx_for_task.ghost_snapshot.clone();
-                    let ignore_large_untracked_dirs = ghost_snapshot.ignore_large_untracked_dirs;
-                    // First, compute a snapshot report so we can warn about
-                    // large untracked directories before running the heavier
-                    // snapshot logic.
-                    if let Ok(Ok(report)) = tokio::task::spawn_blocking({
-                        let repo_path = repo_path.clone();
-                        let ghost_snapshot = ghost_snapshot.clone();
-                        move || {
-                            let options =
-                                CreateGhostCommitOptions::new(&repo_path).ghost_snapshot(ghost_snapshot);
-                            capture_ghost_snapshot_report(&options)
-                        }
-                    })
-                    .await
-                    {
-                        for message in
-                            format_snapshot_warnings(
-                                ghost_snapshot.ignore_large_untracked_files,
-                                ignore_large_untracked_dirs,
-                                &report,
-                            )
-                        {
-                            session
-                                .session
-                                .send_event(
-                                    &ctx_for_task,
-                                    EventMsg::Warning(WarningEvent { message }),
-                                )
-                                .await;
-                        }
-                    }
-
+                    let ghost_snapshot_for_commit = ghost_snapshot.clone();
                     // Required to run in a dedicated blocking pool.
                     match tokio::task::spawn_blocking(move || {
                         let options =
-                            CreateGhostCommitOptions::new(&repo_path).ghost_snapshot(ghost_snapshot);
-                        create_ghost_commit(&options)
+                            CreateGhostCommitOptions::new(&repo_path).ghost_snapshot(ghost_snapshot_for_commit);
+                        create_ghost_commit_with_report(&options)
                     })
                     .await
                     {
-                        Ok(Ok(ghost_commit)) => {
+                        Ok(Ok((ghost_commit, report))) => {
                             info!("ghost snapshot blocking task finished");
+                            for message in format_snapshot_warnings(
+                                ghost_snapshot.ignore_large_untracked_files,
+                                ghost_snapshot.ignore_large_untracked_dirs,
+                                &report,
+                            ) {
+                                session
+                                    .session
+                                    .send_event(
+                                        &ctx_for_task,
+                                        EventMsg::Warning(WarningEvent { message }),
+                                    )
+                                    .await;
+                            }
                             session
                                 .session
                                 .record_conversation_items(&ctx, &[ResponseItem::GhostSnapshot {
