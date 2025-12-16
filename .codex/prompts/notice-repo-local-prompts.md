@@ -1,0 +1,1 @@
+「Now you can use repo-local prompts in your Codex environment!」 と応答して。
