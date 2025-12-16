@@ -183,8 +183,7 @@ impl Command for SetSgrColors {
 
     #[cfg(windows)]
     fn execute_winapi(&self) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        Err(std::io::Error::other(
             "SetSgrColors not supported by winapi.",
         ))
     }
