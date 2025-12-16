@@ -1955,26 +1955,12 @@ impl ChatWidget {
             EventMsg::ElicitationRequest(ev) => {
                 self.on_elicitation_request(ev);
             }
-            EventMsg::ExecCommandBegin(ev) => {
-                if !from_replay
-                    || !is_unified_exec_source(ev.source)
-                    || is_standard_tool_call(&ev.parsed_cmd)
-                {
-                    self.on_exec_command_begin(ev);
-                }
-            }
+            EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
-            EventMsg::ExecCommandEnd(ev) => {
-                if !from_replay
-                    || !is_unified_exec_source(ev.source)
-                    || is_standard_tool_call(&ev.parsed_cmd)
-                {
-                    self.on_exec_command_end(ev);
-                }
-            }
+            EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),
             EventMsg::ViewImageToolCall(ev) => self.on_view_image_tool_call(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
