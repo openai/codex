@@ -1220,7 +1220,7 @@ fn exec_end_without_begin_uses_event_command() {
 }
 
 #[test]
-fn exec_history_skips_unified_exec_startup_commands() {
+fn exec_history_skips_unified_exec_non_tool_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
 
     let begin = begin_exec_with_source(
@@ -1241,6 +1241,22 @@ fn exec_history_skips_unified_exec_startup_commands() {
         cells.is_empty(),
         "expected unified exec startup to render in footer only"
     );
+}
+
+#[test]
+fn exec_history_shows_unified_exec_tool_calls() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None);
+
+    let begin = begin_exec_with_source(
+        &mut chat,
+        "call-startup",
+        "ls",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    end_exec(&mut chat, begin, "", "", 0);
+
+    let blob = active_blob(&chat);
+    assert_eq!(blob, "• Explored\n  └ List ls\n");
 }
 
 #[test]

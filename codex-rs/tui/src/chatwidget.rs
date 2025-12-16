@@ -176,6 +176,13 @@ fn is_unified_exec_source(source: ExecCommandSource) -> bool {
     )
 }
 
+fn is_standard_tool_call(parsed_cmd: &[ParsedCommand]) -> bool {
+    !parsed_cmd.is_empty()
+        && parsed_cmd
+            .iter()
+            .all(|parsed| !matches!(parsed, ParsedCommand::Unknown { .. }))
+}
+
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
@@ -844,7 +851,9 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         if is_unified_exec_source(ev.source) {
             self.track_unified_exec_session_begin(&ev);
-            return;
+            if !is_standard_tool_call(&ev.parsed_cmd) {
+                return;
+            }
         }
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_exec_begin(ev), |s| s.handle_exec_begin_now(ev2));
@@ -898,7 +907,9 @@ impl ChatWidget {
     fn on_exec_command_end(&mut self, ev: ExecCommandEndEvent) {
         if is_unified_exec_source(ev.source) {
             self.track_unified_exec_session_end(&ev);
-            return;
+            if !is_standard_tool_call(&ev.parsed_cmd) {
+                return;
+            }
         }
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_exec_end(ev), |s| s.handle_exec_end_now(ev2));
@@ -1950,7 +1961,10 @@ impl ChatWidget {
                 self.on_elicitation_request(ev);
             }
             EventMsg::ExecCommandBegin(ev) => {
-                if !from_replay || !is_unified_exec_source(ev.source) {
+                if !from_replay
+                    || !is_unified_exec_source(ev.source)
+                    || is_standard_tool_call(&ev.parsed_cmd)
+                {
                     self.on_exec_command_begin(ev);
                 }
             }
@@ -1959,7 +1973,10 @@ impl ChatWidget {
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
             EventMsg::ExecCommandEnd(ev) => {
-                if !from_replay || !is_unified_exec_source(ev.source) {
+                if !from_replay
+                    || !is_unified_exec_source(ev.source)
+                    || is_standard_tool_call(&ev.parsed_cmd)
+                {
                     self.on_exec_command_end(ev);
                 }
             }
