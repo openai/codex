@@ -269,10 +269,6 @@ pub struct Config {
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
-    /// If set to `true`, use the experimental official Rust MCP client.
-    /// https://github.com/modelcontextprotocol/rust-sdk
-    pub use_experimental_use_rmcp_client: bool,
-
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
 
@@ -774,7 +770,6 @@ pub struct ConfigToml {
     pub experimental_instructions_file: Option<AbsolutePathBuf>,
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub experimental_use_unified_exec_tool: Option<bool>,
-    pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
@@ -1190,7 +1185,6 @@ impl Config {
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
-        let use_experimental_use_rmcp_client = features.enabled(Feature::RmcpClient);
 
         let forced_chatgpt_workspace_id =
             cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
@@ -1330,7 +1324,6 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
             use_experimental_unified_exec_tool,
-            use_experimental_use_rmcp_client,
             ghost_snapshot,
             features,
             active_profile: active_profile_name,
@@ -1908,7 +1901,6 @@ trust_level = "trusted"
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {
             experimental_use_unified_exec_tool: Some(true),
-            experimental_use_rmcp_client: Some(true),
             experimental_use_freeform_apply_patch: Some(true),
             ..Default::default()
         };
@@ -1921,12 +1913,10 @@ trust_level = "trusted"
 
         assert!(config.features.enabled(Feature::ApplyPatchFreeform));
         assert!(config.features.enabled(Feature::UnifiedExec));
-        assert!(config.features.enabled(Feature::RmcpClient));
 
         assert!(config.include_apply_patch_tool);
 
         assert!(config.use_experimental_unified_exec_tool);
-        assert!(config.use_experimental_use_rmcp_client);
 
         Ok(())
     }
@@ -3107,7 +3097,6 @@ model_verbosity = "high"
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
                 use_experimental_unified_exec_tool: false,
-                use_experimental_use_rmcp_client: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
@@ -3182,7 +3171,6 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_unified_exec_tool: false,
-            use_experimental_use_rmcp_client: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
@@ -3272,7 +3260,6 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_unified_exec_tool: false,
-            use_experimental_use_rmcp_client: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
@@ -3348,7 +3335,6 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_unified_exec_tool: false,
-            use_experimental_use_rmcp_client: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),

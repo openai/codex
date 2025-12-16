@@ -214,7 +214,6 @@ view_image = true
 [features]
 # Leave this table empty to accept defaults. Set explicit booleans to opt in/out.
 unified_exec = false
-rmcp_client = false
 apply_patch_freeform = false
 view_image_tool = true
 web_search_request = false
