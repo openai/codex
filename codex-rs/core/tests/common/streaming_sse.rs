@@ -71,13 +71,20 @@ pub async fn start_streaming_sse_server(
                     let (mut stream, _) = accept_res.expect("accept streaming SSE connection");
                     let state = Arc::clone(&state);
                     tokio::spawn(async move {
-                        let request = read_http_request(&mut stream).await;
+                        let (request, body_prefix) = read_http_request(&mut stream).await;
                         let Some((method, path)) = parse_request_line(&request) else {
                             let _ = write_http_response(&mut stream, 400, "bad request", "text/plain").await;
                             return;
                         };
 
                         if method == "GET" && path == "/v1/models" {
+                            if drain_request_body(&mut stream, &request, body_prefix)
+                                .await
+                                .is_err()
+                            {
+                                let _ = write_http_response(&mut stream, 400, "bad request", "text/plain").await;
+                                return;
+                            }
                             let body = serde_json::json!({
                                 "data": [],
                                 "object": "list"
@@ -88,6 +95,13 @@ pub async fn start_streaming_sse_server(
                         }
 
                         if method == "POST" && path == "/v1/responses" {
+                            if drain_request_body(&mut stream, &request, body_prefix)
+                                .await
+                                .is_err()
+                            {
+                                let _ = write_http_response(&mut stream, 400, "bad request", "text/plain").await;
+                                return;
+                            }
                             let Some((chunks, completion)) = take_next_stream(&state).await else {
                                 let _ = write_http_response(&mut stream, 500, "no responses queued", "text/plain").await;
                                 return;
@@ -144,7 +158,7 @@ async fn take_next_stream(
     Some((chunks, completion))
 }
 
-async fn read_http_request(stream: &mut tokio::net::TcpStream) -> String {
+async fn read_http_request(stream: &mut tokio::net::TcpStream) -> (String, Vec<u8>) {
     let mut buf = Vec::new();
     let mut scratch = [0u8; 1024];
     loop {
@@ -153,11 +167,14 @@ async fn read_http_request(stream: &mut tokio::net::TcpStream) -> String {
             break;
         }
         buf.extend_from_slice(&scratch[..read]);
-        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
-            break;
+        if let Some(end) = header_terminator_index(&buf) {
+            let header_end = end + 4;
+            let header = String::from_utf8_lossy(&buf[..header_end]).into_owned();
+            let rest = buf[header_end..].to_vec();
+            return (header, rest);
         }
     }
-    String::from_utf8_lossy(&buf).into_owned()
+    (String::from_utf8_lossy(&buf).into_owned(), Vec::new())
 }
 
 fn parse_request_line(request: &str) -> Option<(&str, &str)> {
@@ -166,6 +183,46 @@ fn parse_request_line(request: &str) -> Option<(&str, &str)> {
     let method = parts.next()?;
     let path = parts.next()?;
     Some((method, path))
+}
+
+fn header_terminator_index(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n")
+}
+
+fn content_length(headers: &str) -> Option<usize> {
+    headers.lines().skip(1).find_map(|line| {
+        let mut parts = line.splitn(2, ':');
+        let name = parts.next()?.trim();
+        let value = parts.next()?.trim();
+        if name.eq_ignore_ascii_case("content-length") {
+            value.parse::<usize>().ok()
+        } else {
+            None
+        }
+    })
+}
+
+async fn drain_request_body(
+    stream: &mut tokio::net::TcpStream,
+    headers: &str,
+    mut body_prefix: Vec<u8>,
+) -> std::io::Result<()> {
+    let Some(content_len) = content_length(headers) else {
+        return Ok(());
+    };
+
+    if body_prefix.len() > content_len {
+        body_prefix.truncate(content_len);
+    }
+
+    let remaining = content_len.saturating_sub(body_prefix.len());
+    if remaining == 0 {
+        return Ok(());
+    }
+
+    let mut rest = vec![0u8; remaining];
+    stream.read_exact(&mut rest).await?;
+    Ok(())
 }
 
 async fn write_sse_headers(stream: &mut tokio::net::TcpStream) -> std::io::Result<()> {
@@ -199,6 +256,7 @@ fn unix_ms_now() -> i64 {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use reqwest::StatusCode;
     use tokio::net::TcpStream;
     use tokio::time::Duration;
     use tokio::time::timeout;
@@ -494,6 +552,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn responses_post_drains_request_body() {
+        let response_body = r#"event: response.completed
+data: {"type":"response.completed","response":{"id":"resp-1"}}
+
+"#;
+        let (server, mut completions) = start_streaming_sse_server(vec![vec![StreamingSseChunk {
+            gate: None,
+            body: response_body.to_string(),
+        }]])
+        .await;
+
+        let url = format!("{}/v1/responses", server.uri());
+        let payload = serde_json::json!({
+            "model": "gpt-5.1",
+            "instructions": "test",
+            "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+            "stream": true
+        });
+
+        let resp = reqwest::Client::new()
+            .post(url)
+            .json(&payload)
+            .send()
+            .await
+            .expect("send request");
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let bytes = resp.bytes().await.expect("read response body");
+        assert_eq!(bytes, response_body.as_bytes());
+
+        let completion = completions.remove(0);
+        let completed_at = completion.await.expect("completion timestamp");
+        assert!(completed_at > 0);
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn read_http_request_returns_after_header_terminator() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -502,8 +598,8 @@ mod tests {
         let (tx, rx) = oneshot::channel();
         let server_task = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.expect("accept client");
-            let request = read_http_request(&mut stream).await;
-            let _ = tx.send(request);
+            let (request, body) = read_http_request(&mut stream).await;
+            let _ = tx.send((request, body));
         });
 
         let mut client = TcpStream::connect(addr)
@@ -514,11 +610,12 @@ mod tests {
             .write_all(request.as_bytes())
             .await
             .expect("write request");
-        let received = timeout(Duration::from_millis(200), rx)
+        let (received, body) = timeout(Duration::from_millis(200), rx)
             .await
             .expect("read_http_request timed out")
             .expect("receive request");
         assert_eq!(received, request);
+        assert!(body.is_empty());
         drop(client);
         let _ = server_task.await;
     }

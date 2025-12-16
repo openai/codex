@@ -2058,6 +2058,7 @@ dependencies = [
  "notify",
  "pretty_assertions",
  "regex-lite",
+ "reqwest",
  "serde_json",
  "shlex",
  "tempfile",

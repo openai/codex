@@ -94,11 +94,6 @@ impl TestCodexBuilder {
         &mut self,
         server: &StreamingSseServer,
     ) -> anyhow::Result<TestCodex> {
-        self.config_mutators.push(Box::new(|config| {
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
-            config.model_provider.stream_idle_timeout_ms = Some(5_000);
-        }));
         let base_url = server.uri();
         let home = Arc::new(TempDir::new()?);
         self.build_with_home_and_base_url(format!("{base_url}/v1"), home, None)
