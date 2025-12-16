@@ -127,7 +127,7 @@ impl ModelProviderInfo {
         Ok(headers)
     }
 
-    pub(crate) fn to_api_provider(
+    pub fn to_api_provider(
         &self,
         auth_mode: Option<AuthMode>,
     ) -> crate::error::Result<ApiProvider> {
