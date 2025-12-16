@@ -639,10 +639,13 @@ impl Session {
         let mut session_configuration = session_configuration;
         if let Some(agents_config) = agents_config.as_ref() {
             let main = agents_config.main();
-            session_configuration.developer_instructions = main.prompt.clone();
+            session_configuration.developer_instructions = main.instructions.clone();
             session_configuration.user_instructions = None;
             if let Some(model) = main.model.clone() {
                 session_configuration.model = model;
+            }
+            if let Some(effort) = main.reasoning_effort {
+                session_configuration.model_reasoning_effort = Some(effort);
             }
             if main.read_only {
                 session_configuration.sandbox_policy = SandboxPolicy::ReadOnly;

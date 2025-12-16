@@ -1,16 +1,18 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use codex_protocol::openai_models::ReasoningEffort;
 use serde::Deserialize;
 use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub(crate) struct AgentDefinition {
     pub(crate) name: String,
-    pub(crate) prompt: Option<String>,
+    pub(crate) instructions: Option<String>,
     pub(crate) sub_agents: Vec<String>,
     pub(crate) read_only: bool,
     pub(crate) model: Option<String>,
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
 }
 
 #[derive(Debug, Clone)]
@@ -20,14 +22,16 @@ pub(crate) struct AgentsConfig {
 
 #[derive(Debug, Deserialize)]
 struct RawAgentDefinition {
-    #[serde(default)]
-    prompt: Option<String>,
+    #[serde(default, alias = "prompt")]
+    instructions: Option<String>,
     #[serde(default)]
     sub_agents: Vec<String>,
     #[serde(default)]
     read_only: bool,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl AgentsConfig {
@@ -65,21 +69,22 @@ impl AgentsConfig {
                 return Err(format!("agent {name}: model must be non-empty when set"));
             }
 
-            let prompt = agent.prompt.and_then(|prompt| {
-                if prompt.trim().is_empty() {
+            let instructions = agent.instructions.and_then(|instructions| {
+                if instructions.trim().is_empty() {
                     None
                 } else {
-                    Some(prompt)
+                    Some(instructions)
                 }
             });
             agents.insert(
                 name.clone(),
                 AgentDefinition {
                     name,
-                    prompt,
+                    instructions,
                     sub_agents: agent.sub_agents,
                     read_only: agent.read_only,
                     model: agent.model,
+                    reasoning_effort: agent.reasoning_effort,
                 },
             );
         }

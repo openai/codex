@@ -53,7 +53,7 @@ pub(crate) enum AgentLifecycleState {
 pub(crate) enum ContextStrategy {
     New,
     Fork,
-    Replace { history: Vec<ResponseItem> },
+    Replace(Vec<ResponseItem>),
 }
 
 impl Default for ContextStrategy {

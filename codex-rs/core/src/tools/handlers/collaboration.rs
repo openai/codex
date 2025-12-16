@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -13,7 +13,7 @@ use crate::function_tool::FunctionCallError;
 use crate::protocol::SandboxPolicy;
 use crate::state::AgentId;
 use crate::state::AgentLifecycleState;
-use crate::state::AgentState;
+use crate::state::AgentState as InternalAgentState;
 use crate::state::ContextStrategy;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -27,152 +27,90 @@ use crate::user_instructions::UserInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
-use serde_json::json;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::info;
-use tracing::warn;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub(crate) struct ExtraMetadata(pub HashMap<String, serde_json::Value>);
+type AgenticError = String;
+type ApprovalRequest = String;
 
-fn empty_extra_metadata() -> ExtraMetadata {
-    ExtraMetadata(HashMap::new())
-}
-
-fn make_send_metadata(
-    success: bool,
-    penalize_model: bool,
-    is_success_msg: Option<bool>,
-    message: &str,
-    extra: ExtraMetadata,
-) -> CollaborationSendMetadata {
-    CollaborationSendMetadata {
-        message_tool_call_success: success,
-        message_tool_call_error_should_penalize_model: penalize_model,
-        is_send_success_msg: is_success_msg,
-        message_content_str: Some(message.to_string()),
-        extra,
-    }
-}
-
-fn make_wait_metadata(
-    success: bool,
-    penalize_model: bool,
-    is_success_msg: Option<bool>,
-    extra: ExtraMetadata,
-) -> CollaborationWaitMetadata {
-    CollaborationWaitMetadata {
-        message_tool_call_success: success,
-        message_tool_call_error_should_penalize_model: penalize_model,
-        is_wait_success_msg: is_success_msg,
-        extra,
-    }
-}
-
-fn make_close_metadata(
-    success: bool,
-    penalize_model: bool,
-    extra: ExtraMetadata,
-) -> CollaborationCloseMetadata {
-    CollaborationCloseMetadata {
-        message_tool_call_success: success,
-        message_tool_call_error_should_penalize_model: penalize_model,
-        extra,
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CollaborationInitAgentMetadata {
-    message_tool_call_success: bool,
-    message_tool_call_error_should_penalize_model: bool,
-    extra: ExtraMetadata,
+#[derive(Debug, Deserialize)]
+struct CollaborationInitAgentInput {
+    #[serde(default)]
+    agent_idx: String,
+    #[serde(default)]
+    agent: String,
+    #[serde(default)]
+    context_strategy: Option<ContextStrategy>,
+    #[serde(default)]
+    message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CollaborationInitAgentOutput {
-    content: String,
-    metadata: CollaborationInitAgentMetadata,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CollaborationSendMetadata {
-    message_tool_call_success: bool,
-    message_tool_call_error_should_penalize_model: bool,
-    is_send_success_msg: Option<bool>,
-    message_content_str: Option<String>,
-    extra: ExtraMetadata,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CollaborationSendOutput {
-    content: String,
-    metadata: CollaborationSendMetadata,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CollaborationWaitMetadata {
-    message_tool_call_success: bool,
-    message_tool_call_error_should_penalize_model: bool,
-    is_wait_success_msg: Option<bool>,
-    extra: ExtraMetadata,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CollaborationWaitOutput {
-    content: String,
-    metadata: CollaborationWaitMetadata,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CollaborationGetStateMetadata {
-    message_tool_call_success: Option<bool>,
-    message_tool_call_error_should_penalize_model: Option<bool>,
-    extra: ExtraMetadata,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CollaborationGetStateOutput {
-    content: String,
-    metadata: CollaborationGetStateMetadata,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CollaborationCloseMetadata {
-    message_tool_call_success: bool,
-    message_tool_call_error_should_penalize_model: bool,
-    extra: ExtraMetadata,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CollaborationCloseOutput {
-    content: String,
-    metadata: CollaborationCloseMetadata,
-}
-
-#[derive(Debug, Deserialize)]
-struct CollaborationInitAgentInput {
-    agent: String,
-    #[serde(default)]
-    context_strategy: Option<ContextStrategy>,
+    result: Result<(), AgenticError>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CollaborationSendInput {
-    recipients: Vec<i32>,
+    recipients: Vec<String>,
     message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CollaborationSendOutput {
+    content: Result<(), AgenticError>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CollaborationWaitInput {
-    max_duration: i32,
+    max_duration: u32,
     #[serde(default)]
-    recipients: Option<Vec<i32>>,
+    agent_idx: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CollaborationWaitOutput {
+    states: Vec<AgentState>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CollaborationGetStateInput {
+    #[serde(default)]
+    agent_idx: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CollaborationGetStateOutput {
+    states: Vec<AgentState>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CollaborationCloseInput {
-    recipients: Vec<i32>,
+    #[serde(default)]
+    return_states: bool,
+    #[serde(default)]
+    agent_idx: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CollaborationCloseOutput {
+    states: Vec<AgentState>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AgentState {
+    agent_id: String,
+    state: State,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum State {
+    Running,
+    WaitingForApproval(ApprovalRequest),
+    Done(String),
+    Error(String),
 }
 
 fn serialize_function_output<T: Serialize>(
@@ -189,38 +127,38 @@ fn serialize_function_output<T: Serialize>(
     })
 }
 
-fn status_label(status: &AgentLifecycleState) -> &'static str {
-    match status {
-        AgentLifecycleState::Idle { .. } => "idle",
-        AgentLifecycleState::Running => "running",
-        AgentLifecycleState::Exhausted => "exhausted",
-        AgentLifecycleState::Error { .. } => "error",
-        AgentLifecycleState::Closed => "closed",
-        AgentLifecycleState::WaitingForApproval { .. } => "waiting_for_approval",
+fn parse_agent_id(raw: &str) -> Result<AgentId, AgenticError> {
+    let trimmed = raw.trim();
+    let parsed: i32 = trimmed
+        .parse()
+        .map_err(|_| format!("invalid agent_idx {raw}"))?;
+    if parsed < 0 {
+        return Err(format!("invalid agent_idx {raw}"));
     }
+    Ok(AgentId(parsed))
 }
 
-fn status_detail(status: &AgentLifecycleState) -> Option<String> {
+fn state_from_lifecycle(status: &AgentLifecycleState) -> State {
     match status {
-        AgentLifecycleState::Idle {
-            last_agent_message, ..
-        } => last_agent_message
-            .as_ref()
-            .map(|msg| format!("last_message={msg}")),
-        AgentLifecycleState::Error { error } => Some(format!("error={error}")),
+        AgentLifecycleState::Running => State::Running,
         AgentLifecycleState::WaitingForApproval { request } => {
-            Some(format!("awaiting_approval={request}"))
+            State::WaitingForApproval(request.clone())
         }
-        _ => None,
+        AgentLifecycleState::Error { error } => State::Error(error.clone()),
+        AgentLifecycleState::Exhausted => State::Done("exhausted".to_string()),
+        AgentLifecycleState::Closed => State::Done("closed".to_string()),
+        AgentLifecycleState::Idle { last_agent_message } => State::Done(
+            last_agent_message
+                .clone()
+                .unwrap_or_else(|| "idle".to_string()),
+        ),
     }
 }
 
-fn last_agent_message(status: &AgentLifecycleState) -> Option<&str> {
-    match status {
-        AgentLifecycleState::Idle {
-            last_agent_message, ..
-        } => last_agent_message.as_deref(),
-        _ => None,
+fn snapshot_agent_state(agent: &InternalAgentState) -> AgentState {
+    AgentState {
+        agent_id: agent.id.0.to_string(),
+        state: state_from_lifecycle(&agent.status),
     }
 }
 
@@ -272,7 +210,7 @@ fn strip_prompt_items(items: &mut Vec<ResponseItem>) {
 fn build_history_for_child(
     session: &crate::codex::Session,
     strategy: ContextStrategy,
-    parent: &AgentState,
+    parent: &InternalAgentState,
     child_config: &crate::codex::SessionConfiguration,
     system_message: ResponseItem,
 ) -> ContextManager {
@@ -285,7 +223,7 @@ fn build_history_for_child(
                 parent.history.token_info(),
             )
         }
-        ContextStrategy::Replace { history } => (history, None),
+        ContextStrategy::Replace(history) => (history, None),
     };
 
     strip_prompt_items(&mut items);
@@ -346,7 +284,7 @@ impl ToolHandler for CollaborationHandler {
             "collaboration_init_agent" => handle_init_agent(session, &turn, &arguments).await,
             "collaboration_send" => handle_send(session, &turn, &arguments).await,
             "collaboration_wait" => handle_wait(session, &turn, &arguments).await,
-            "collaboration_get_state" => handle_get_state(session, &turn).await,
+            "collaboration_get_state" => handle_get_state(session, &turn, &arguments).await,
             "collaboration_close" => handle_close(session, &turn, &arguments).await,
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "unknown collaboration tool: {tool_name}"
@@ -365,14 +303,8 @@ async fn handle_init_agent(
     })?;
 
     let Some(agents_config) = session.agents_config() else {
-        let metadata = CollaborationInitAgentMetadata {
-            message_tool_call_success: false,
-            message_tool_call_error_should_penalize_model: true,
-            extra: empty_extra_metadata(),
-        };
         let output = CollaborationInitAgentOutput {
-            content: "collaboration agents are not configured".to_string(),
-            metadata,
+            result: Err("collaboration agents are not configured".to_string()),
         };
         return serialize_function_output(&output, false);
     };
@@ -381,16 +313,27 @@ async fn handle_init_agent(
     let session_history = session.clone_history().await;
     let mut collab = session.collaboration_state().lock().await;
     collab.ensure_root_agent(&session_configuration, &session_history);
-    let parent_id = turn.collaboration_agent();
-    let Some(parent) = collab.agent(parent_id).cloned() else {
-        let metadata = CollaborationInitAgentMetadata {
-            message_tool_call_success: false,
-            message_tool_call_error_should_penalize_model: true,
-            extra: empty_extra_metadata(),
-        };
+    let caller_id = turn.collaboration_agent();
+    let parent_id = if input.agent_idx.trim().is_empty() {
+        caller_id
+    } else {
+        match parse_agent_id(&input.agent_idx) {
+            Ok(agent_id) => agent_id,
+            Err(err) => {
+                let output = CollaborationInitAgentOutput { result: Err(err) };
+                return serialize_function_output(&output, false);
+            }
+        }
+    };
+    if parent_id != caller_id {
         let output = CollaborationInitAgentOutput {
-            content: format!("unknown caller agent {}", parent_id.0),
-            metadata,
+            result: Err("agent_idx must match the calling agent".to_string()),
+        };
+        return serialize_function_output(&output, false);
+    }
+    let Some(parent) = collab.agent(parent_id).cloned() else {
+        let output = CollaborationInitAgentOutput {
+            result: Err(format!("unknown caller agent {}", parent_id.0)),
         };
         return serialize_function_output(&output, false);
     };
@@ -399,69 +342,44 @@ async fn handle_init_agent(
     let limits = *collab.limits();
 
     if collab.agents().len() as i32 >= limits.max_agents {
-        let metadata = CollaborationInitAgentMetadata {
-            message_tool_call_success: false,
-            message_tool_call_error_should_penalize_model: false,
-            extra: empty_extra_metadata(),
-        };
         let output = CollaborationInitAgentOutput {
-            content: "max agent count reached".to_string(),
-            metadata,
+            result: Err("max agent count reached".to_string()),
         };
         return serialize_function_output(&output, false);
     }
 
     if depth > limits.max_depth {
-        let metadata = CollaborationInitAgentMetadata {
-            message_tool_call_success: false,
-            message_tool_call_error_should_penalize_model: false,
-            extra: empty_extra_metadata(),
-        };
         let output = CollaborationInitAgentOutput {
-            content: "max collaboration depth reached".to_string(),
-            metadata,
+            result: Err("max collaboration depth reached".to_string()),
         };
         return serialize_function_output(&output, false);
     }
 
     let Some(parent_definition) = agents_config.agent(parent.name.as_str()) else {
-        let metadata = CollaborationInitAgentMetadata {
-            message_tool_call_success: false,
-            message_tool_call_error_should_penalize_model: true,
-            extra: empty_extra_metadata(),
-        };
         let output = CollaborationInitAgentOutput {
-            content: format!("unknown parent agent type {}", parent.name),
-            metadata,
+            result: Err(format!("unknown parent agent type {}", parent.name)),
         };
         return serialize_function_output(&output, false);
     };
 
-    if !parent_definition.sub_agents.contains(&input.agent) {
-        let metadata = CollaborationInitAgentMetadata {
-            message_tool_call_success: false,
-            message_tool_call_error_should_penalize_model: true,
-            extra: empty_extra_metadata(),
-        };
+    let agent_name = if input.agent.trim().is_empty() {
+        parent.name.clone()
+    } else {
+        input.agent.clone()
+    };
+    if !parent_definition.sub_agents.contains(&agent_name) {
+        let parent_name = parent_definition.name.as_str();
         let output = CollaborationInitAgentOutput {
-            content: format!(
-                "agent {} cannot spawn agent {}",
-                parent_definition.name, input.agent
-            ),
-            metadata,
+            result: Err(format!(
+                "agent {parent_name} cannot spawn agent {agent_name}"
+            )),
         };
         return serialize_function_output(&output, false);
     }
 
-    let Some(agent_definition) = agents_config.agent(input.agent.as_str()) else {
-        let metadata = CollaborationInitAgentMetadata {
-            message_tool_call_success: false,
-            message_tool_call_error_should_penalize_model: true,
-            extra: empty_extra_metadata(),
-        };
+    let Some(agent_definition) = agents_config.agent(agent_name.as_str()) else {
         let output = CollaborationInitAgentOutput {
-            content: format!("unknown agent {}", input.agent),
-            metadata,
+            result: Err(format!("unknown agent {agent_name}")),
         };
         return serialize_function_output(&output, false);
     };
@@ -476,19 +394,22 @@ async fn handle_init_agent(
         session.default_sandbox_policy().clone()
     };
 
-    let update = crate::codex::SessionSettingsUpdate {
+    let mut update = crate::codex::SessionSettingsUpdate {
         sandbox_policy: Some(sandbox_policy),
         model: Some(model),
         ..Default::default()
     };
+    if let Some(effort) = agent_definition.reasoning_effort {
+        update.reasoning_effort = Some(Some(effort));
+    }
     let child_configuration = session_configuration
         .clone()
         .apply(&update)
-        .with_instructions(agent_definition.prompt.clone(), None);
+        .with_instructions(agent_definition.instructions.clone(), None);
 
     let assigned_id = collab.next_agent_id();
     let system_message =
-        build_agent_system_message(assigned_id, input.agent.as_str(), parent.id, depth);
+        build_agent_system_message(assigned_id, agent_name.as_str(), parent.id, depth);
     let history = build_history_for_child(
         session.as_ref(),
         input.context_strategy.unwrap_or_default(),
@@ -497,40 +418,55 @@ async fn handle_init_agent(
         system_message,
     );
 
-    let child = AgentState::new_child(
+    let child = InternalAgentState::new_child(
         assigned_id,
-        input.agent.clone(),
+        agent_name.clone(),
         parent.id,
         depth,
         child_configuration,
-        agent_definition.prompt.clone(),
+        agent_definition.instructions.clone(),
         history,
     );
 
     let assigned_id = collab
         .add_child(child)
         .map_err(FunctionCallError::RespondToModel)?;
+    let has_message = !input.message.trim().is_empty();
+    if has_message {
+        let text = format!("From agent {}: {}", parent_id.0, input.message);
+        collab.record_message_for_agent(
+            assigned_id,
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText { text }],
+            },
+        );
+        if let Some(agent) = collab.agent_mut(assigned_id) {
+            agent.status = AgentLifecycleState::Running;
+        }
+    }
     drop(collab);
 
-    let mut extra = HashMap::new();
-    extra.insert("agent_idx".to_string(), json!(assigned_id.0));
-    extra.insert("parent_agent_idx".to_string(), json!(parent.id.0));
-    extra.insert("depth".to_string(), json!(depth));
-    extra.insert("agent_name".to_string(), json!(input.agent.as_str()));
+    if has_message {
+        let supervisor = session.ensure_collaboration_supervisor().await;
+        if let Err(err) = supervisor.start_agents(vec![assigned_id], i32::MAX).await {
+            let mut collab = session.collaboration_state().lock().await;
+            if let Some(agent) = collab.agent_mut(assigned_id)
+                && matches!(&agent.status, AgentLifecycleState::Running)
+            {
+                agent.status = AgentLifecycleState::Idle {
+                    last_agent_message: None,
+                };
+            }
+            let output = CollaborationInitAgentOutput {
+                result: Err(format!("failed to start child agent: {err}")),
+            };
+            return serialize_function_output(&output, false);
+        }
+    }
 
-    let metadata = CollaborationInitAgentMetadata {
-        message_tool_call_success: true,
-        message_tool_call_error_should_penalize_model: false,
-        extra: ExtraMetadata(extra),
-    };
-
-    let content = format!(
-        "Initialized {} agent {} at depth {depth}",
-        input.agent.as_str(),
-        assigned_id.0
-    );
-
-    let output = CollaborationInitAgentOutput { content, metadata };
+    let output = CollaborationInitAgentOutput { result: Ok(()) };
     info!(
         "collaboration_init_agent: assigned_id={}, parent_id={}, depth={}",
         assigned_id.0, parent.id.0, depth
@@ -563,16 +499,8 @@ async fn handle_send(
         collab.ensure_root_agent(&session_configuration, &session_history);
 
         let Some(sender_name) = collab.agent(sender_id).map(|agent| agent.name.clone()) else {
-            let metadata = make_send_metadata(
-                false,
-                false,
-                Some(false),
-                &input.message,
-                empty_extra_metadata(),
-            );
             let output = CollaborationSendOutput {
-                content: format!("unknown caller agent {}", sender_id.0),
-                metadata,
+                content: Err(format!("unknown caller agent {}", sender_id.0)),
             };
             return serialize_function_output(&output, false);
         };
@@ -590,36 +518,46 @@ async fn handle_send(
         let mut previous_statuses = Vec::new();
 
         for raw in &input.recipients {
-            let candidate = AgentId(*raw);
+            let candidate = match parse_agent_id(raw) {
+                Ok(candidate) => candidate,
+                Err(_) => {
+                    invalid_recipients.push(raw.clone());
+                    continue;
+                }
+            };
             if let Some(agent) = collab.agent(candidate)
                 && collab.is_direct_child(sender_id, candidate)
             {
                 if matches!(
-                    agent.status,
+                    &agent.status,
                     AgentLifecycleState::Closed
                         | AgentLifecycleState::Exhausted
                         | AgentLifecycleState::Error { .. }
                 ) {
-                    invalid_recipients.push(*raw);
+                    invalid_recipients.push(raw.clone());
                     continue;
                 }
 
                 if matches!(
-                    agent.status,
+                    &agent.status,
                     AgentLifecycleState::Running | AgentLifecycleState::WaitingForApproval { .. }
                 ) {
+                    let status = match &agent.status {
+                        AgentLifecycleState::Running => "running",
+                        AgentLifecycleState::WaitingForApproval { .. } => "waiting_for_approval",
+                        _ => "unknown",
+                    };
                     busy_recipients.push(format!(
-                        "{} ({}) status={}",
+                        "{} ({}) status={status}",
                         candidate.0,
-                        agent.name.as_str(),
-                        status_label(&agent.status)
+                        agent.name.as_str()
                     ));
                     continue;
                 }
 
                 valid_recipients.push(candidate);
             } else {
-                invalid_recipients.push(*raw);
+                invalid_recipients.push(raw.clone());
             }
         }
 
@@ -669,23 +607,6 @@ async fn handle_send(
         || !busy_recipients.is_empty()
         || valid_recipients.is_empty()
     {
-        let mut extra = HashMap::new();
-        extra.insert("recipients".to_string(), json!(input.recipients));
-        extra.insert("direct_children".to_string(), json!(direct_children));
-        if !invalid_recipients.is_empty() {
-            extra.insert("invalid_recipients".to_string(), json!(invalid_recipients));
-        }
-        if !busy_recipients.is_empty() {
-            extra.insert("busy_recipients".to_string(), json!(busy_recipients));
-        }
-        let metadata = make_send_metadata(
-            false,
-            false,
-            Some(false),
-            &input.message,
-            ExtraMetadata(extra),
-        );
-
         let content = if input.recipients.is_empty() {
             "No recipients provided. You can only send to your direct child agents.".to_string()
         } else if !invalid_recipients.is_empty() {
@@ -710,10 +631,12 @@ async fn handle_send(
             "No eligible recipients.".to_string()
         };
 
-        let output = CollaborationSendOutput { content, metadata };
+        let output = CollaborationSendOutput {
+            content: Err(content.clone()),
+        };
         info!(
-            "collaboration_send: sender={}, recipients={:?}, status=error: {}",
-            sender_id.0, input.recipients, output.content
+            "collaboration_send: sender={}, recipients={:?}, status=error: {content}",
+            sender_id.0, input.recipients
         );
         return serialize_function_output(&output, false);
     }
@@ -727,53 +650,23 @@ async fn handle_send(
             let mut collab = session.collaboration_state().lock().await;
             for (id, prev) in previous_statuses {
                 if let Some(agent) = collab.agent_mut(id)
-                    && matches!(agent.status, AgentLifecycleState::Running)
+                    && matches!(&agent.status, AgentLifecycleState::Running)
                 {
                     agent.status = prev;
                 }
             }
         }
 
-        let mut extra = HashMap::new();
-        extra.insert(
-            "recipients".to_string(),
-            json!(valid_recipients.iter().map(|id| id.0).collect::<Vec<i32>>()),
-        );
-        let metadata = make_send_metadata(
-            false,
-            false,
-            Some(false),
-            &input.message,
-            ExtraMetadata(extra),
-        );
         let output = CollaborationSendOutput {
-            content: format!("Failed to start child agents: {err}"),
-            metadata,
+            content: Err(format!("Failed to start child agents: {err}")),
         };
         return serialize_function_output(&output, false);
     }
 
-    let mut extra = HashMap::new();
-    extra.insert(
-        "recipients".to_string(),
-        json!(valid_recipients.iter().map(|id| id.0).collect::<Vec<i32>>()),
-    );
-
-    let metadata = make_send_metadata(
-        true,
-        false,
-        Some(true),
-        &input.message,
-        ExtraMetadata(extra),
-    );
-
-    let output = CollaborationSendOutput {
-        content: "Message sent successfully.".to_string(),
-        metadata,
-    };
+    let output = CollaborationSendOutput { content: Ok(()) };
     info!(
         "collaboration_send: sender={} ({}), recipients={:?}, status={}",
-        sender_id.0, sender_name, valid_recipients, output.content
+        sender_id.0, sender_name, valid_recipients, "Message sent successfully."
     );
     serialize_function_output(&output, true)
 }
@@ -787,15 +680,6 @@ async fn handle_wait(
         FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err:?}"))
     })?;
 
-    if input.max_duration < 0 {
-        let metadata = make_wait_metadata(false, true, Some(false), empty_extra_metadata());
-        let output = CollaborationWaitOutput {
-            content: "max_duration must be non-negative".to_string(),
-            metadata,
-        };
-        return serialize_function_output(&output, false);
-    }
-
     let session_configuration = session.current_session_configuration().await;
     let session_history = session.clone_history().await;
     {
@@ -807,282 +691,189 @@ async fn handle_wait(
     {
         let collab = session.collaboration_state().lock().await;
         if collab.agent(caller_id).is_none() {
-            let metadata = make_wait_metadata(false, true, Some(false), empty_extra_metadata());
             let output = CollaborationWaitOutput {
-                content: format!("unknown caller agent {}", caller_id.0),
-                metadata,
+                states: vec![AgentState {
+                    agent_id: caller_id.0.to_string(),
+                    state: State::Error("unknown caller agent".to_string()),
+                }],
             };
             return serialize_function_output(&output, false);
         }
     }
 
-    let candidates = {
+    let mut error_states = Vec::new();
+    let targets = if input.agent_idx.is_empty() {
         let collab = session.collaboration_state().lock().await;
-        if let Some(ids) = input.recipients {
-            ids.into_iter().map(AgentId).collect::<Vec<AgentId>>()
-        } else {
-            collab
-                .agents()
-                .iter()
-                .filter(|agent| agent.parent == Some(caller_id))
-                .map(|agent| agent.id)
-                .collect::<Vec<AgentId>>()
-        }
-    };
-
-    let mut invalid = Vec::new();
-    let mut targets = Vec::new();
-    {
+        collab
+            .agents()
+            .iter()
+            .filter(|agent| agent.parent == Some(caller_id))
+            .map(|agent| agent.id)
+            .collect::<Vec<AgentId>>()
+    } else {
         let collab = session.collaboration_state().lock().await;
-        for id in candidates {
-            if collab.agent(id).is_some() && collab.is_direct_child(caller_id, id) {
-                targets.push(id);
-            } else {
-                invalid.push(id.0);
+        let mut targets = Vec::new();
+        for raw in &input.agent_idx {
+            match parse_agent_id(raw) {
+                Ok(id) if collab.agent(id).is_some() && collab.is_direct_child(caller_id, id) => {
+                    targets.push(id);
+                }
+                Ok(_) => error_states.push(AgentState {
+                    agent_id: raw.clone(),
+                    state: State::Error("invalid or non-child agent".to_string()),
+                }),
+                Err(err) => error_states.push(AgentState {
+                    agent_id: raw.clone(),
+                    state: State::Error(err),
+                }),
             }
         }
-    }
+        targets
+    };
 
-    if !invalid.is_empty() || targets.is_empty() {
-        let penalize = !invalid.is_empty();
-        let metadata = make_wait_metadata(false, penalize, Some(false), empty_extra_metadata());
-        let content = if !invalid.is_empty() {
-            format!(
-                "invalid or non-child agent indices: {}",
-                invalid
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            )
-        } else {
-            "no eligible child agents to wait for".to_string()
+    if targets.is_empty() {
+        let success = error_states.is_empty();
+        let output = CollaborationWaitOutput {
+            states: error_states,
         };
-        let output = CollaborationWaitOutput { content, metadata };
-        info!(
-            "collaboration_wait: caller={}, targets={:?}, status=error: {}",
-            caller_id.0, targets, output.content
-        );
-        return serialize_function_output(&output, false);
+        return serialize_function_output(&output, success);
     }
 
     // Passive wait: observe running children only; do not start new work.
     let supervisor = session.ensure_collaboration_supervisor().await;
     let mut rx = supervisor.subscribe();
 
-    let snapshot = |agent: &AgentState, delta_tokens: i32, sub_id: Option<String>| {
-        json!({
-            "agent_idx": agent.id.0,
-            "delta_tokens": delta_tokens,
-            "status": status_label(&agent.status),
-            "status_detail": status_detail(&agent.status),
-            "last_agent_message": last_agent_message(&agent.status),
-            "sub_id": sub_id,
-        })
-    };
-
-    let mut agents_ran = Vec::new();
-    let mut recorded: std::collections::HashSet<i32> = std::collections::HashSet::new();
-    let mut active: std::collections::HashSet<i32> = {
+    let mut active = {
         let collab = session.collaboration_state().lock().await;
         targets
             .iter()
             .filter(|id| {
                 collab
                     .agent(**id)
-                    .is_some_and(|agent| matches!(agent.status, AgentLifecycleState::Running))
+                    .is_some_and(|agent| matches!(&agent.status, AgentLifecycleState::Running))
             })
-            .map(|id| id.0)
-            .collect()
+            .copied()
+            .collect::<HashSet<AgentId>>()
     };
 
-    if active.is_empty() {
-        let collab = session.collaboration_state().lock().await;
-        let mut extra = HashMap::new();
-        extra.insert(
-            "agents_ran".to_string(),
-            json!(
-                targets
-                    .iter()
-                    .filter_map(|id| collab.agent(*id))
-                    .map(|agent| snapshot(agent, 0, None))
-                    .collect::<Vec<_>>()
-            ),
-        );
-        extra.insert("token_budget_exhausted".to_string(), json!(false));
-        let metadata = make_wait_metadata(true, false, Some(true), ExtraMetadata(extra));
-        let output = CollaborationWaitOutput {
-            content: "Finished waiting.".to_string(),
-            metadata,
-        };
-        info!(
-            "collaboration_wait: caller={}, targets={:?}, status=ready",
-            caller_id.0, targets
-        );
-        return serialize_function_output(&output, true);
-    }
-
-    let deadline = Instant::now() + Duration::from_millis(input.max_duration.max(0) as u64);
-
-    while !active.is_empty() {
-        let now = Instant::now();
-        if now >= deadline {
-            break;
-        }
-        let remaining_time = deadline.saturating_duration_since(now);
-        let event = match tokio::time::timeout(remaining_time, rx.recv()).await {
-            Ok(Ok(evt)) => evt,
-            _ => break,
-        };
-        if !active.contains(&event.agent.0) {
-            continue;
-        }
-
-        let detail = status_detail(&event.status);
-        let fallback_last = {
-            let collab = session.collaboration_state().lock().await;
-            collab
-                .agent(event.agent)
-                .and_then(|agent| last_agent_message(&agent.status).map(str::to_string))
-        };
-        agents_ran.push(json!({
-            "agent_idx": event.agent.0,
-            "delta_tokens": event.delta_tokens,
-            "status": status_label(&event.status),
-            "status_detail": detail,
-            "last_agent_message": event.last_message.or(fallback_last),
-            "sub_id": event.sub_id,
-        }));
-        recorded.insert(event.agent.0);
-        if !matches!(event.status, AgentLifecycleState::Running) {
-            active.remove(&event.agent.0);
+    if !active.is_empty() {
+        let deadline = Instant::now() + Duration::from_millis(u64::from(input.max_duration));
+        while !active.is_empty() {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let remaining_time = deadline.saturating_duration_since(now);
+            let event = match tokio::time::timeout(remaining_time, rx.recv()).await {
+                Ok(Ok(evt)) => evt,
+                _ => break,
+            };
+            if !active.contains(&event.agent) {
+                continue;
+            }
+            if !matches!(event.status, AgentLifecycleState::Running) {
+                active.remove(&event.agent);
+            }
         }
     }
 
+    let success = error_states.is_empty();
+    let mut states = Vec::new();
     {
         let collab = session.collaboration_state().lock().await;
         for id in &targets {
-            if recorded.contains(&id.0) {
-                continue;
-            }
             if let Some(agent) = collab.agent(*id) {
-                agents_ran.push(snapshot(agent, 0, None));
+                states.push(snapshot_agent_state(agent));
             }
         }
     }
+    states.extend(error_states);
 
-    let mut extra = HashMap::new();
-    extra.insert("agents_ran".to_string(), json!(agents_ran));
-
-    let metadata = make_wait_metadata(true, false, Some(active.is_empty()), ExtraMetadata(extra));
-
-    let content = "Finished waiting.".to_string();
-    let output = CollaborationWaitOutput { content, metadata };
+    let output = CollaborationWaitOutput { states };
     info!(
-        "collaboration_wait: caller={}, targets={:?}, ran={:?}",
-        caller_id.0, targets, agents_ran
+        "collaboration_wait: caller={}, targets={:?}, status=complete",
+        caller_id.0, targets
     );
-    serialize_function_output(&output, true)
+    serialize_function_output(&output, success)
 }
 
 async fn handle_get_state(
     session: Arc<crate::codex::Session>,
     turn: &crate::codex::TurnContext,
+    arguments: &str,
 ) -> Result<ToolOutput, FunctionCallError> {
+    let input: CollaborationGetStateInput = serde_json::from_str(arguments).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err:?}"))
+    })?;
+
     let session_configuration = session.current_session_configuration().await;
     let session_history = session.clone_history().await;
-    let mut collab = session.collaboration_state().lock().await;
-    collab.ensure_root_agent(&session_configuration, &session_history);
-
-    let caller_id = turn.collaboration_agent();
-    let Some(caller) = collab.agent(caller_id) else {
-        let mut extra = HashMap::new();
-        extra.insert("caller_agent_idx".to_string(), json!(caller_id.0));
-        let metadata = CollaborationGetStateMetadata {
-            message_tool_call_success: Some(false),
-            message_tool_call_error_should_penalize_model: Some(false),
-            extra: ExtraMetadata(extra),
-        };
-        let output = CollaborationGetStateOutput {
-            content: format!("unknown caller agent {}", caller_id.0),
-            metadata,
-        };
-        return serialize_function_output(&output, false);
-    };
-    let caller_name = caller.name.as_str();
-
-    let agents = collab.agents();
-    let mut lines = Vec::new();
-    let mut structured = Vec::new();
-
-    for agent in agents
-        .iter()
-        .filter(|agent| agent.parent == Some(caller_id))
     {
-        let status = status_label(&agent.status);
-        let detail = status_detail(&agent.status);
-        let detail_suffix = detail
-            .as_ref()
-            .map_or_else(String::new, |d| format!(" ({d})"));
-        let last_message = last_agent_message(&agent.status).map(str::to_string);
-        let parent_idx = agent.parent.map(|id| id.0);
-        let line = format!(
-            "agent {} ({}) (parent {:?}, depth {}): {}{}",
-            agent.id.0,
-            agent.name.as_str(),
-            parent_idx,
-            agent.depth,
-            status,
-            detail_suffix
-        );
-        warn!(
-            caller_agent_idx = caller_id.0,
-            caller_agent_name = caller_name,
-            agent_idx = agent.id.0,
-            agent_name = agent.name.as_str(),
-            content = line.as_str(),
-            "collaboration: agent read state"
-        );
-        lines.push(line);
-        structured.push(json!({
-            "agent_idx": agent.id.0,
-            "agent_name": agent.name.as_str(),
-            "parent_agent_idx": parent_idx,
-            "depth": agent.depth,
-            "status": status,
-            "status_detail": detail,
-            "last_agent_message": last_message,
-        }));
+        let mut collab = session.collaboration_state().lock().await;
+        collab.ensure_root_agent(&session_configuration, &session_history);
     }
 
-    let description = if lines.is_empty() {
-        "no child collaboration agents initialized yet".to_string()
+    let caller_id = turn.collaboration_agent();
+    {
+        let collab = session.collaboration_state().lock().await;
+        if collab.agent(caller_id).is_none() {
+            let output = CollaborationGetStateOutput {
+                states: vec![AgentState {
+                    agent_id: caller_id.0.to_string(),
+                    state: State::Error("unknown caller agent".to_string()),
+                }],
+            };
+            return serialize_function_output(&output, false);
+        }
+    }
+
+    let mut error_states = Vec::new();
+    let targets = if input.agent_idx.is_empty() {
+        let collab = session.collaboration_state().lock().await;
+        collab
+            .agents()
+            .iter()
+            .filter(|agent| agent.parent == Some(caller_id))
+            .map(|agent| agent.id)
+            .collect::<Vec<AgentId>>()
     } else {
-        lines.join("\n")
+        let collab = session.collaboration_state().lock().await;
+        let mut targets = Vec::new();
+        for raw in &input.agent_idx {
+            match parse_agent_id(raw) {
+                Ok(id) if collab.agent(id).is_some() && collab.is_direct_child(caller_id, id) => {
+                    targets.push(id);
+                }
+                Ok(_) => error_states.push(AgentState {
+                    agent_id: raw.clone(),
+                    state: State::Error("invalid or non-child agent".to_string()),
+                }),
+                Err(err) => error_states.push(AgentState {
+                    agent_id: raw.clone(),
+                    state: State::Error(err),
+                }),
+            }
+        }
+        targets
     };
 
-    let agent_count = structured.len();
+    let mut states = Vec::new();
+    {
+        let collab = session.collaboration_state().lock().await;
+        for id in &targets {
+            if let Some(agent) = collab.agent(*id) {
+                states.push(snapshot_agent_state(agent));
+            }
+        }
+    }
+    states.extend(error_states);
 
-    let mut extra = HashMap::new();
-    extra.insert("agents".to_string(), json!(structured));
-
-    let metadata = CollaborationGetStateMetadata {
-        message_tool_call_success: Some(true),
-        message_tool_call_error_should_penalize_model: Some(false),
-        extra: ExtraMetadata(extra),
-    };
-
-    let output = CollaborationGetStateOutput {
-        content: description,
-        metadata,
-    };
-    warn!(
-        caller_agent_idx = caller_id.0,
-        caller_agent_name = caller_name,
-        agents = agent_count,
-        "collaboration_get_state"
+    let output = CollaborationGetStateOutput { states };
+    info!(
+        "collaboration_get_state: caller={}, targets={:?}",
+        caller_id.0, targets
     );
-    serialize_function_output(&output, true)
+    serialize_function_output(&output, success)
 }
 
 async fn handle_close(
@@ -1101,78 +892,83 @@ async fn handle_close(
     let caller_id = turn.collaboration_agent();
 
     if collab.agent(caller_id).is_none() {
-        let metadata = make_close_metadata(false, true, empty_extra_metadata());
         let output = CollaborationCloseOutput {
-            content: format!("unknown caller agent {}", caller_id.0),
-            metadata,
+            states: vec![AgentState {
+                agent_id: caller_id.0.to_string(),
+                state: State::Error("unknown caller agent".to_string()),
+            }],
         };
         return serialize_function_output(&output, false);
     }
 
-    let mut invalid = Vec::new();
+    let mut error_states = Vec::new();
     let mut targets = Vec::new();
 
-    for raw in &input.recipients {
-        let id = AgentId(*raw);
-        if collab.agent(id).is_some() && collab.is_direct_child(caller_id, id) {
-            targets.push(id);
-        } else {
-            invalid.push(*raw);
+    for raw in &input.agent_idx {
+        match parse_agent_id(raw) {
+            Ok(id) if collab.agent(id).is_some() && collab.is_direct_child(caller_id, id) => {
+                targets.push(id);
+            }
+            Ok(_) => error_states.push(AgentState {
+                agent_id: raw.clone(),
+                state: State::Error("invalid or non-child agent".to_string()),
+            }),
+            Err(err) => error_states.push(AgentState {
+                agent_id: raw.clone(),
+                state: State::Error(err),
+            }),
         }
     }
 
-    if !invalid.is_empty() || targets.is_empty() {
-        let metadata = make_close_metadata(false, true, empty_extra_metadata());
-        let content = if invalid.is_empty() {
-            "no valid agent indices provided to close".to_string()
-        } else {
-            format!(
-                "invalid or non-child agent indices: {}",
-                invalid
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            )
+    if targets.is_empty() {
+        let success = error_states.is_empty();
+        let output = CollaborationCloseOutput {
+            states: error_states,
         };
-        let output = CollaborationCloseOutput { content, metadata };
-        return serialize_function_output(&output, false);
+        return serialize_function_output(&output, success);
     }
 
     let all = collab.descendants(&targets);
     let mut closed_ids = Vec::new();
-    let mut closed_indices = Vec::new();
+    let mut states = Vec::new();
     for id in all {
         if let Some(agent) = collab.agent_mut(id) {
+            if input.return_states {
+                states.push(snapshot_agent_state(agent));
+            }
             agent.status = AgentLifecycleState::Closed;
             closed_ids.push(id);
-            closed_indices.push(id.0);
         }
     }
 
-    let mut extra = HashMap::new();
-    extra.insert("closed_agent_indices".to_string(), json!(closed_indices));
+    let success = error_states.is_empty();
+    if input.return_states {
+        states.extend(error_states);
+    } else {
+        states = error_states;
+    }
 
-    let metadata = make_close_metadata(true, false, ExtraMetadata(extra));
-
-    let content = format!(
-        "Closed {} agents (and their descendants).",
-        closed_indices.len()
-    );
-    let output = CollaborationCloseOutput { content, metadata };
     {
         let supervisor = session.ensure_collaboration_supervisor().await;
         supervisor.close_agents(closed_ids).await;
     }
+    let output = CollaborationCloseOutput { states };
     info!(
         "collaboration_close: caller={}, closed={:?}",
-        caller_id.0, closed_indices
+        caller_id.0, targets
     );
-    serialize_function_output(&output, true)
+    serialize_function_output(&output, success)
 }
 
 pub(crate) fn create_collaboration_init_agent_tool(allowed_agents: &[String]) -> ToolSpec {
     let mut properties = std::collections::BTreeMap::new();
+    properties.insert(
+        "agent_idx".to_string(),
+        JsonSchema::String {
+            description: Some("Agent index for the calling agent (string).".to_string()),
+            enum_values: None,
+        },
+    );
     properties.insert(
         "agent".to_string(),
         JsonSchema::String {
@@ -1189,6 +985,13 @@ pub(crate) fn create_collaboration_init_agent_tool(allowed_agents: &[String]) ->
             enum_values: None,
         },
     );
+    properties.insert(
+        "message".to_string(),
+        JsonSchema::String {
+            description: Some("Optional initial message to send to the new agent.".to_string()),
+            enum_values: None,
+        },
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "collaboration_init_agent".to_string(),
@@ -1196,7 +999,7 @@ pub(crate) fn create_collaboration_init_agent_tool(allowed_agents: &[String]) ->
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["agent".to_string()]),
+            required: None,
             additional_properties: Some(false.into()),
         },
     })
@@ -1207,7 +1010,10 @@ pub(crate) fn create_collaboration_send_tool() -> ToolSpec {
     properties.insert(
         "recipients".to_string(),
         JsonSchema::Array {
-            items: Box::new(JsonSchema::Number { description: None }),
+            items: Box::new(JsonSchema::String {
+                description: Some("Agent index (string).".to_string()),
+                enum_values: None,
+            }),
             description: Some("Indices of the agents to send the message to.".to_string()),
         },
     );
@@ -1245,9 +1051,12 @@ pub(crate) fn create_collaboration_wait_tool() -> ToolSpec {
         },
     );
     properties.insert(
-        "recipients".to_string(),
+        "agent_idx".to_string(),
         JsonSchema::Array {
-            items: Box::new(JsonSchema::Number { description: None }),
+            items: Box::new(JsonSchema::String {
+                description: Some("Agent index (string).".to_string()),
+                enum_values: None,
+            }),
             description: Some(
                 "Optional list of child agents to wait for; defaults to all direct children."
                     .to_string(),
@@ -1270,13 +1079,27 @@ pub(crate) fn create_collaboration_wait_tool() -> ToolSpec {
 }
 
 pub(crate) fn create_collaboration_get_state_tool() -> ToolSpec {
+    let mut properties = std::collections::BTreeMap::new();
+    properties.insert(
+        "agent_idx".to_string(),
+        JsonSchema::Array {
+            items: Box::new(JsonSchema::String {
+                description: Some("Agent index (string).".to_string()),
+                enum_values: None,
+            }),
+            description: Some(
+                "Optional list of child agents to query; defaults to all direct children."
+                    .to_string(),
+            ),
+        },
+    );
     ToolSpec::Function(ResponsesApiTool {
         name: "collaboration_get_state".to_string(),
         description: "Return a high-level view of the calling agent's direct child agents."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
-            properties: std::collections::BTreeMap::new(),
+            properties,
             required: None,
             additional_properties: Some(false.into()),
         },
@@ -1286,9 +1109,18 @@ pub(crate) fn create_collaboration_get_state_tool() -> ToolSpec {
 pub(crate) fn create_collaboration_close_tool() -> ToolSpec {
     let mut properties = std::collections::BTreeMap::new();
     properties.insert(
-        "recipients".to_string(),
+        "return_states".to_string(),
+        JsonSchema::Boolean {
+            description: Some("Whether to include agent states before closing them.".to_string()),
+        },
+    );
+    properties.insert(
+        "agent_idx".to_string(),
         JsonSchema::Array {
-            items: Box::new(JsonSchema::Number { description: None }),
+            items: Box::new(JsonSchema::String {
+                description: Some("Agent index (string).".to_string()),
+                enum_values: None,
+            }),
             description: Some(
                 "Indices of the child agents to close. Each must be a direct child of the caller."
                     .to_string(),
@@ -1304,7 +1136,7 @@ pub(crate) fn create_collaboration_close_tool() -> ToolSpec {
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["recipients".to_string()]),
+            required: Some(vec!["agent_idx".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1315,10 +1147,9 @@ mod tests {
     use super::*;
     use crate::codex::make_session_and_context_with_rx;
     use crate::state::AgentLifecycleState;
+    use crate::state::AgentState as InternalAgentState;
     use crate::state::CollaborationLimits;
     use pretty_assertions::assert_eq;
-    use serde_json::json;
-    use std::path::PathBuf;
     use std::sync::Arc;
 
     #[tokio::test]
@@ -1346,13 +1177,7 @@ mod tests {
         };
         let parsed: CollaborationInitAgentOutput =
             serde_json::from_str(&content).expect("parse init_agent output");
-        assert!(parsed.metadata.message_tool_call_success);
-        assert_eq!(
-            parsed
-                .metadata
-                .message_tool_call_error_should_penalize_model,
-            false
-        );
+        assert!(parsed.result.is_ok());
 
         let collab = session.collaboration_state().lock().await;
         let child = collab.agent(AgentId(1)).expect("child agent should exist");
@@ -1388,13 +1213,13 @@ mod tests {
         };
         let parsed: CollaborationInitAgentOutput =
             serde_json::from_str(&init_content).expect("parse init_agent output");
-        assert!(parsed.metadata.message_tool_call_success);
+        assert!(parsed.result.is_ok());
 
         let session_configuration = session.current_session_configuration().await;
         let session_history = session.clone_history().await;
         let mut collab = session.collaboration_state().lock().await;
         collab.ensure_root_agent(&session_configuration, &session_history);
-        let grandchild = AgentState::new_child(
+        let grandchild = InternalAgentState::new_child(
             AgentId(2),
             AgentId(1),
             2,
@@ -1406,7 +1231,7 @@ mod tests {
         drop(collab);
 
         let args = serde_json::json!({
-            "recipients": [2],
+            "recipients": ["2"],
             "message": "hello",
         })
         .to_string();
@@ -1420,33 +1245,13 @@ mod tests {
         };
         let parsed: CollaborationSendOutput =
             serde_json::from_str(&content).expect("parse send output");
-
-        assert_eq!(parsed.metadata.message_tool_call_success, false);
-        assert_eq!(parsed.metadata.is_send_success_msg, Some(false));
-        assert!(
-            parsed
-                .content
-                .contains("invalid or non-child agent indices")
-        );
+        assert!(parsed.content.is_err());
     }
 
     #[tokio::test]
-    async fn init_agent_rejects_more_permissive_sandbox() {
+    async fn init_agent_rejects_mismatched_agent_idx() {
         let (session, turn, _rx) = make_session_and_context_with_rx();
-        session
-            .update_settings(crate::codex::SessionSettingsUpdate {
-                sandbox_policy: Some(SandboxPolicy::WorkspaceWrite {
-                    writable_roots: vec![PathBuf::from("/tmp")],
-                    network_access: false,
-                    exclude_tmpdir_env_var: false,
-                    exclude_slash_tmp: false,
-                }),
-                ..Default::default()
-            })
-            .await;
-
-        let args =
-            serde_json::json!({ "sandbox_policy": { "type": "danger-full-access" } }).to_string();
+        let args = serde_json::json!({ "agent_idx": "1" }).to_string();
         let output = handle_init_agent(Arc::clone(&session), turn.as_ref(), &args)
             .await
             .expect("init agent should return output");
@@ -1457,12 +1262,7 @@ mod tests {
         };
         let parsed: CollaborationInitAgentOutput =
             serde_json::from_str(&content).expect("parse init_agent output");
-        assert_eq!(parsed.metadata.message_tool_call_success, false);
-        assert!(
-            parsed
-                .content
-                .contains("sandbox_policy cannot be more permissive than the parent")
-        );
+        assert!(parsed.result.is_err());
     }
 
     #[tokio::test]
@@ -1484,7 +1284,7 @@ mod tests {
             }
         }
 
-        let state_output = handle_get_state(Arc::clone(&session), turn.as_ref())
+        let state_output = handle_get_state(Arc::clone(&session), turn.as_ref(), "{}")
             .await
             .expect("get_state should succeed");
         let content = match state_output {
@@ -1493,24 +1293,15 @@ mod tests {
         };
         let parsed: CollaborationGetStateOutput =
             serde_json::from_str(&content).expect("parse get_state output");
-        let agents = parsed
-            .metadata
-            .extra
-            .0
-            .get("agents")
-            .and_then(|value| value.as_array())
-            .cloned()
-            .expect("agents array");
-        let child = agents
+        let child = parsed
+            .states
             .iter()
-            .find(|value| value.get("agent_idx") == Some(&json!(1)))
+            .find(|agent| agent.agent_id == "1")
             .expect("child agent present");
-
-        assert_eq!(child.get("last_agent_message"), Some(&json!("wrapped up")));
-        assert_eq!(
-            child.get("status_detail"),
-            Some(&json!("last_message=wrapped up"))
-        );
+        match &child.state {
+            State::Done(message) => assert_eq!(message, "wrapped up"),
+            other => panic!("expected done state, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1518,13 +1309,5 @@ mod tests {
         let limits = CollaborationLimits::default();
         assert!(limits.max_agents > 0);
         assert!(limits.max_depth > 0);
-    }
-
-    #[test]
-    fn extra_metadata_wraps_map() {
-        let mut inner = HashMap::new();
-        inner.insert("k".to_string(), serde_json::Value::from("v"));
-        let meta = ExtraMetadata(inner.clone());
-        assert_eq!(meta.0.len(), 1);
     }
 }
