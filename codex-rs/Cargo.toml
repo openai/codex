@@ -162,7 +162,6 @@ opentelemetry-appender-tracing = "0.30.0"
 opentelemetry-otlp = "0.30.0"
 opentelemetry-semantic-conventions = "0.30.0"
 opentelemetry_sdk = "0.30.0"
-tracing-opentelemetry = "0.31.0"
 os_info = "3.12.0"
 owo-colors = "4.2.0"
 path-absolutize = "3.1.1"
@@ -177,7 +176,7 @@ ratatui-macros = "0.6.0"
 regex = "1.12.2"
 regex-lite = "0.1.7"
 reqwest = "0.12"
-rmcp = { version = "0.10.0", default-features = false }
+rmcp = { version = "0.11.0", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 sentry = "0.46.0"
@@ -211,6 +210,7 @@ toml_edit = "0.23.5"
 tonic = "0.13.1"
 tracing = "0.1.43"
 tracing-appender = "0.2.3"
+tracing-opentelemetry = "0.31.0"
 tracing-subscriber = "0.3.20"
 tracing-test = "0.2.5"
 tree-sitter = "0.25.10"
@@ -296,4 +296,4 @@ crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
 
 # Uncomment to debug local changes.
-# rmcp = { path = "../../rust-sdk/crates/rmcp" }
+rmcp = { path = "../../rust-sdk/crates/rmcp" }
