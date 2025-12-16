@@ -16,6 +16,7 @@
   - `~/.local/bin/codex-mine` はラッパーで、起動時に `--config check_for_update_on_startup=false` を付けて「Update available!」の通知を無効化する
 
 ## Upstreamとの差分（主なもの）
+
 `upstream/main`（openai/codex）に対する `codex-mine` の差分のうち、運用上影響が大きいもの。
 
 ### repo-local `.codex/` 運用（#1, #6, #8, #9）
@@ -26,5 +27,6 @@
 - **MCP 設定**: repo 内の `codex mcp add/remove` は `repo/.codex/config.toml` を更新（`-g/--global` で `$CODEX_HOME`）。repo 側に `mcp_servers` があれば global 側は「置換」。
 
 ### subagents（#6, #9）
+
 - `@name <prompt>` 形式の指示を解釈してサブエージェント実行を補助（`.codex/agents` / `$CODEX_HOME/agents` から定義を探索）
 - `run_subagent` 実行時に **親ターンのキャンセルが伝搬**（Ctrl+C / TurnAborted 等でサブエージェントも止まる）
