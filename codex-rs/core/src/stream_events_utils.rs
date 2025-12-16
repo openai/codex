@@ -39,7 +39,7 @@ pub(crate) struct HandleOutputCtx {
     pub cancellation_token: CancellationToken,
 }
 
-#[instrument(skip_all)]
+#[instrument(level = "trace", skip_all)]
 pub(crate) async fn handle_output_item_done(
     ctx: &mut HandleOutputCtx,
     item: ResponseItem,

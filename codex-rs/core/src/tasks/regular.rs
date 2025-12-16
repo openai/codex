@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
-use tracing::info_span;
+use tracing::trace_span;
 
 use crate::codex::TurnContext;
 use crate::codex::run_task;
@@ -31,7 +31,7 @@ impl SessionTask for RegularTask {
     ) -> Option<String> {
         let sess = session.clone_session();
         let run_task_span =
-            info_span!(parent: sess.services.otel_manager.current_span(), "run_task");
+            trace_span!(parent: sess.services.otel_manager.current_span(), "run_task");
         run_task(sess, ctx, input, cancellation_token)
             .instrument(run_task_span)
             .await
