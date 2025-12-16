@@ -36,7 +36,7 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use super::TuiEvent;
 
 /// Result type produced by an event source.
-pub type EventResult = Result<Event, ()>;
+pub type EventResult = std::io::Result<Event>;
 
 /// Abstraction over a source of terminal events. Allows swapping in a fake for tests.
 /// Value in production is [`CrosstermEventSource`].
@@ -50,7 +50,7 @@ pub trait EventSource: Send + 'static {
 /// This intermediate layer enables dropping/recreating the underlying EventStream (pause/resume) without rebuilding consumers.
 pub struct EventBroker<S: EventSource = CrosstermEventSource> {
     state: Mutex<EventBrokerState<S>>,
-    resume_tx: watch::Sender<()>,
+    resume_events_tx: watch::Sender<()>,
 }
 
 /// Tracks state of underlying [`EventSource`].
@@ -69,7 +69,7 @@ impl<S: EventSource + Default> EventBrokerState<S> {
                 *self = EventBrokerState::Running(S::default());
                 match self {
                     EventBrokerState::Running(events) => Some(events),
-                    EventBrokerState::Paused | EventBrokerState::Start => None,
+                    EventBrokerState::Paused | EventBrokerState::Start => unreachable!(),
                 }
             }
             EventBrokerState::Running(events) => Some(events),
@@ -79,10 +79,10 @@ impl<S: EventSource + Default> EventBrokerState<S> {
 
 impl<S: EventSource + Default> EventBroker<S> {
     pub fn new() -> Self {
-        let (resume_tx, _resume_rx) = watch::channel(());
+        let (resume_events_tx, _resume_events_rx) = watch::channel(());
         Self {
             state: Mutex::new(EventBrokerState::Start),
-            resume_tx,
+            resume_events_tx,
         }
     }
 
@@ -102,11 +102,15 @@ impl<S: EventSource + Default> EventBroker<S> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *state = EventBrokerState::Start;
-        let _ = self.resume_tx.send(());
+        let _ = self.resume_events_tx.send(());
     }
 
-    pub fn subscribe_resume(&self) -> watch::Receiver<()> {
-        self.resume_tx.subscribe()
+    /// Subscribe to a notification that fires whenever [`Self::resume_events`] is called.
+    ///
+    /// This is used to wake `poll_crossterm_event` when it is paused and waiting for the
+    /// underlying crossterm stream to be recreated.
+    pub fn resume_events_rx(&self) -> watch::Receiver<()> {
+        self.resume_events_tx.subscribe()
     }
 }
 
@@ -121,13 +125,7 @@ impl Default for CrosstermEventSource {
 
 impl EventSource for CrosstermEventSource {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<EventResult>> {
-        let inner = Pin::new(&mut self.get_mut().0);
-        match inner.poll_next(cx) {
-            Poll::Ready(Some(Ok(event))) => Poll::Ready(Some(Ok(event))),
-            Poll::Ready(Some(Err(_))) => Poll::Ready(Some(Err(()))),
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
-        }
+        Pin::new(&mut self.get_mut().0).poll_next(cx)
     }
 }
 
@@ -158,7 +156,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         #[cfg(unix)] suspend_context: crate::tui::job_control::SuspendContext,
         #[cfg(unix)] alt_screen_active: Arc<AtomicBool>,
     ) -> Self {
-        let resume_stream = WatchStream::from_changes(broker.subscribe_resume());
+        let resume_stream = WatchStream::from_changes(broker.resume_events_rx());
         Self {
             broker,
             draw_stream: BroadcastStream::new(draw_rx),
@@ -351,12 +349,7 @@ mod tests {
 
     impl EventSource for FakeEventSource {
         fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<EventResult>> {
-            let mut inner = Pin::new(&mut self.get_mut().rx);
-            match inner.poll_recv(cx) {
-                Poll::Ready(Some(event)) => Poll::Ready(Some(event)),
-                Poll::Ready(None) => Poll::Ready(None),
-                Poll::Pending => Poll::Pending,
-            }
+            Pin::new(&mut self.get_mut().rx).poll_recv(cx)
         }
     }
 
@@ -463,7 +456,7 @@ mod tests {
         let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
         let mut stream = make_stream(broker, draw_rx, terminal_focused);
 
-        handle.send(Err(()));
+        handle.send(Err(std::io::Error::other("boom")));
 
         let next = stream.next().await;
         assert!(next.is_none());
