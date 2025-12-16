@@ -348,11 +348,6 @@ impl ChatComposer {
         PasteBurst::recommended_flush_delay()
     }
 
-    /// Integrate results from an asynchronous file search.
-    pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
-        self.on_at_search_result(query, Vec::new(), matches);
-    }
-
     /// Integrate results from an asynchronous `@` search (subagents + files).
     pub(crate) fn on_at_search_result(
         &mut self,

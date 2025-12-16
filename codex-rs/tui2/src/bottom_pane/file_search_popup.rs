@@ -76,21 +76,6 @@ impl FileSearchPopup {
         self.state.reset();
     }
 
-    /// Replace matches when a `FileSearchResult` arrives.
-    /// Replace matches. Only applied when `query` matches `pending_query`.
-    pub(crate) fn set_matches(&mut self, query: &str, matches: Vec<FileMatch>) {
-        if query != self.pending_query {
-            return; // stale
-        }
-
-        self.display_query = query.to_string();
-        self.matches = matches.into_iter().map(AtCompletionItem::File).collect();
-        self.waiting = false;
-        let len = self.matches.len();
-        self.state.clamp_selection(len);
-        self.state.ensure_visible(len, len.min(MAX_POPUP_ROWS));
-    }
-
     pub(crate) fn set_at_matches(
         &mut self,
         query: &str,
@@ -125,16 +110,6 @@ impl FileSearchPopup {
         let len = self.matches.len();
         self.state.move_down_wrap(len);
         self.state.ensure_visible(len, len.min(MAX_POPUP_ROWS));
-    }
-
-    pub(crate) fn selected_match(&self) -> Option<&str> {
-        self.state
-            .selected_idx
-            .and_then(|idx| self.matches.get(idx))
-            .and_then(|item| match item {
-                AtCompletionItem::File(file_match) => Some(file_match.path.as_str()),
-                AtCompletionItem::SubAgent(_) => None,
-            })
     }
 
     pub(crate) fn selected_item(&self) -> Option<&AtCompletionItem> {

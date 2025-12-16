@@ -1,8 +1,9 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
-use app_test_support::create_mock_chat_completions_server;
+use app_test_support::create_mock_chat_completions_server_unchecked;
 use app_test_support::create_shell_command_sse_response;
+use app_test_support::create_shell_command_sse_response_raw;
 use app_test_support::format_with_current_shell;
 use app_test_support::to_response;
 use codex_app_server_protocol::AddConversationListenerParams;
@@ -58,14 +59,14 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
     // Two turns are expected: initial session configure + one user message.
     let responses = vec![
         create_shell_command_sse_response(
-            vec!["ls".to_string()],
+            vec!["echo".to_string(), "hi".to_string()],
             Some(&working_directory),
             Some(5000),
             "call1234",
         )?,
         create_final_assistant_message_sse_response("Enjoy your new git repo!")?,
     ];
-    let server = create_mock_chat_completions_server(responses).await;
+    let server = create_mock_chat_completions_server_unchecked(responses).await;
     create_config_toml(&codex_home, &server.uri())?;
 
     // Start MCP server and initialize.
@@ -176,30 +177,22 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
 
     // Mock server will request a python shell call for the first and second turn, then finish.
     let responses = vec![
-        create_shell_command_sse_response(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
+        create_shell_command_sse_response_raw(
+            "echo 42 > out.txt".to_string(),
             Some(&working_directory),
             Some(5000),
             "call1",
         )?,
         create_final_assistant_message_sse_response("done 1")?,
-        create_shell_command_sse_response(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
+        create_shell_command_sse_response_raw(
+            "echo 42 > out.txt".to_string(),
             Some(&working_directory),
             Some(5000),
             "call2",
         )?,
         create_final_assistant_message_sse_response("done 2")?,
     ];
-    let server = create_mock_chat_completions_server(responses).await;
+    let server = create_mock_chat_completions_server_unchecked(responses).await;
     create_config_toml(&codex_home, &server.uri())?;
 
     // Start MCP server and initialize.
@@ -268,11 +261,11 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         ExecCommandApprovalParams {
             conversation_id,
             call_id: "call1".to_string(),
-            command: format_with_current_shell("python3 -c 'print(42)'"),
+            command: format_with_current_shell("echo 42 > out.txt"),
             cwd: working_directory.clone(),
             reason: None,
             parsed_cmd: vec![ParsedCommand::Unknown {
-                cmd: "python3 -c 'print(42)'".to_string()
+                cmd: "echo 42 > out.txt".to_string()
             }],
         },
         params
@@ -364,7 +357,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() -> Result<(
         )?,
         create_final_assistant_message_sse_response("done second")?,
     ];
-    let server = create_mock_chat_completions_server(responses).await;
+    let server = create_mock_chat_completions_server_unchecked(responses).await;
     create_config_toml(&codex_home, &server.uri())?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
