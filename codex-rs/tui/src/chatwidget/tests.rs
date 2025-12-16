@@ -1220,8 +1220,9 @@ fn exec_end_without_begin_uses_event_command() {
 }
 
 #[test]
-fn exec_history_skips_unified_exec_non_tool_commands() {
+fn exec_history_shows_unified_exec_startup_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
+    chat.on_task_started();
 
     let begin = begin_exec_with_source(
         &mut chat,
@@ -1237,15 +1238,18 @@ fn exec_history_skips_unified_exec_non_tool_commands() {
     end_exec(&mut chat, begin, "echo unified exec startup\n", "", 0);
 
     let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
+    let blob = lines_to_single_string(&cells[0]);
     assert!(
-        cells.is_empty(),
-        "expected unified exec startup to render in footer only"
+        blob.contains("• Ran echo unified exec startup"),
+        "expected startup command to render: {blob:?}"
     );
 }
 
 #[test]
 fn exec_history_shows_unified_exec_tool_calls() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None);
+    chat.on_task_started();
 
     let begin = begin_exec_with_source(
         &mut chat,
@@ -1262,6 +1266,7 @@ fn exec_history_shows_unified_exec_tool_calls() {
 #[test]
 fn unified_exec_end_after_task_complete_is_suppressed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
+    chat.on_task_started();
 
     let begin = begin_exec_with_source(
         &mut chat,

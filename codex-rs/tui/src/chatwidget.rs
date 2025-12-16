@@ -907,7 +907,7 @@ impl ChatWidget {
     fn on_exec_command_end(&mut self, ev: ExecCommandEndEvent) {
         if is_unified_exec_source(ev.source) {
             self.track_unified_exec_session_end(&ev);
-            if !is_standard_tool_call(&ev.parsed_cmd) {
+            if !self.bottom_pane.is_task_running() {
                 return;
             }
         }
