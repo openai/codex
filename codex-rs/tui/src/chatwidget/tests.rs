@@ -4,6 +4,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
+use chrono::Utc;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
@@ -18,6 +19,7 @@ use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::CreditsSnapshot;
+use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
@@ -49,6 +51,8 @@ use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
+use codex_core::version::VERSION_FILENAME;
+use codex_core::version::VersionInfo;
 use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
 use codex_protocol::openai_models::ModelPreset;
@@ -64,6 +68,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
+use serde_json;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -490,6 +495,24 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+fn set_update_available(config: &mut Config) -> tempfile::TempDir {
+    let codex_home = tempdir().expect("tempdir");
+    config.codex_home = codex_home.path().to_path_buf();
+    config.check_for_update_on_startup = true;
+    let info = VersionInfo {
+        latest_version: "9999.0.0".to_string(),
+        last_checked_at: Utc::now(),
+        dismissed_version: None,
+    };
+    let json_line = format!(
+        "{}\n",
+        serde_json::to_string(&info).expect("serialize version info")
+    );
+    std::fs::write(codex_home.path().join(VERSION_FILENAME), json_line)
+        .expect("write version info");
+    codex_home
 }
 
 fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
@@ -2924,6 +2947,7 @@ fn plan_update_renders_history_cell() {
 #[test]
 fn stream_error_updates_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
+    let _tempdir = set_update_available(&mut chat.config);
     chat.bottom_pane.set_task_running(true);
     let msg = "Reconnecting... 2/5";
     chat.handle_codex_event(Event {
@@ -2943,7 +2967,10 @@ fn stream_error_updates_status_indicator() {
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), msg);
+    let nudge = crate::update_action::update_available_nudge();
+    let expected = format!("{msg}\n{nudge}");
+    assert_eq!(status.header(), expected);
+    assert_snapshot!("stream_error_status_header", status.header());
 }
 
 #[test]
@@ -2963,6 +2990,23 @@ fn warning_event_adds_warning_history_cell() {
         rendered.contains("test warning message"),
         "warning cell missing content: {rendered}"
     );
+}
+
+#[test]
+fn error_event_renders_history_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
+    let _tempdir = set_update_available(&mut chat.config);
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "Something failed.".to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let last = lines_to_single_string(cells.last().expect("error history cell"));
+    assert_snapshot!("error_event_history", last);
 }
 
 #[test]

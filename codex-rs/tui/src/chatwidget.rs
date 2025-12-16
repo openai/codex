@@ -118,6 +118,15 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod interrupts;
 use self::interrupts::InterruptManager;
+
+#[cfg(test)]
+use crate::version::CODEX_CLI_VERSION;
+#[cfg(test)]
+use codex_core::version::VERSION_FILENAME;
+#[cfg(test)]
+use codex_core::version::is_newer;
+#[cfg(test)]
+use codex_core::version::read_version_info;
 mod agent;
 use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
@@ -696,7 +705,19 @@ impl ChatWidget {
         crate::updates::get_upgrade_version(&self.config).is_some()
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(test)]
+    fn should_show_update_nudge(&self) -> bool {
+        if !self.config.check_for_update_on_startup {
+            return false;
+        }
+        let version_file = self.config.codex_home.join(VERSION_FILENAME);
+        read_version_info(&version_file)
+            .ok()
+            .and_then(|info| is_newer(&info.latest_version, CODEX_CLI_VERSION))
+            .unwrap_or(false)
+    }
+
+    #[cfg(all(debug_assertions, not(test)))]
     fn should_show_update_nudge(&self) -> bool {
         false
     }

@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: last
+---
+■ Something failed.
+Update available. See https://github.com/openai/codex for installation options.

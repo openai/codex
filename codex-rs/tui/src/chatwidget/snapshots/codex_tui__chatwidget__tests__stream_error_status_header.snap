@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: status.header()
+---
+Reconnecting... 2/5
+Update available. See https://github.com/openai/codex for installation options.
