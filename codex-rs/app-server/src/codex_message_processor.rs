@@ -368,13 +368,6 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadList { request_id, params } => {
                 self.thread_list(request_id, params).await;
             }
-            ClientRequest::ThreadCompact {
-                request_id,
-                params: _,
-            } => {
-                self.send_unimplemented_error(request_id, "thread/compact")
-                    .await;
-            }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
             }
