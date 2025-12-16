@@ -301,7 +301,7 @@ mod tests {
         String::from_utf8_lossy(&buf).into_owned()
     }
 
-    async fn read_until(stream: &mut TcpStream, needle: &str) -> String {
+    async fn read_until(stream: &mut TcpStream, needle: &str) -> (String, String) {
         let mut buf = Vec::new();
         let mut scratch = [0u8; 256];
         let needle_bytes = needle.as_bytes();
@@ -311,14 +311,17 @@ mod tests {
                 break;
             }
             buf.extend_from_slice(&scratch[..read]);
-            if buf
+            if let Some(pos) = buf
                 .windows(needle_bytes.len())
-                .any(|window| window == needle_bytes)
+                .position(|window| window == needle_bytes)
             {
-                break;
+                let end = pos + needle_bytes.len();
+                let headers = String::from_utf8_lossy(&buf[..end]).into_owned();
+                let remainder = String::from_utf8_lossy(&buf[end..]).into_owned();
+                return (headers, remainder);
             }
         }
-        String::from_utf8_lossy(&buf).into_owned()
+        (String::from_utf8_lossy(&buf).into_owned(), String::new())
     }
 
     async fn send_request(stream: &mut TcpStream, request: &str) {
@@ -404,10 +407,10 @@ mod tests {
             "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n",
         )
         .await;
-        let headers = read_until(&mut stream, "\r\n\r\n").await;
+        let (headers, remainder) = read_until(&mut stream, "\r\n\r\n").await;
         let (headers, _) = split_response(&headers);
         assert_eq!(status_code(headers), 200);
-        let immediate = read_to_end(&mut stream).await;
+        let immediate = format!("{remainder}{}", read_to_end(&mut stream).await);
         assert_eq!(immediate, "event: immediate\n\n");
         server.shutdown().await;
     }
@@ -450,12 +453,16 @@ mod tests {
             "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n",
         )
         .await;
-        let headers = read_until(&mut stream, "\r\n\r\n").await;
+        let (headers, remainder) = read_until(&mut stream, "\r\n\r\n").await;
         let (headers, _) = split_response(&headers);
         assert_eq!(status_code(headers), 200);
         assert_eq!(
             header_value(headers, "content-type"),
             Some("text/event-stream")
+        );
+        assert!(
+            remainder.is_empty(),
+            "unexpected body before gate: {remainder:?}"
         );
         let mut scratch = [0u8; 32];
         let pending = timeout(Duration::from_millis(200), stream.read(&mut scratch)).await;
