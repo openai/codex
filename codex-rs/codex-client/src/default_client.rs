@@ -1,4 +1,6 @@
 use http::Error as HttpError;
+use opentelemetry::global;
+use opentelemetry::propagation::Injector;
 use reqwest::IntoUrl;
 use reqwest::Method;
 use reqwest::Response;
@@ -9,6 +11,8 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::time::Duration;
+use tracing::Span;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[derive(Clone, Debug)]
 pub struct CodexHttpClient {
@@ -101,7 +105,9 @@ impl CodexRequestBuilder {
     }
 
     pub async fn send(self) -> Result<Response, reqwest::Error> {
-        match self.builder.send().await {
+        let headers = trace_headers();
+
+        match self.builder.headers(headers).send().await {
             Ok(response) => {
                 let request_ids = Self::extract_request_ids(&response);
                 tracing::debug!(
@@ -139,5 +145,81 @@ impl CodexRequestBuilder {
                 Some((name.to_owned(), value))
             })
             .collect()
+    }
+}
+
+struct HeaderMapInjector<'a>(&'a mut HeaderMap);
+
+impl<'a> Injector for HeaderMapInjector<'a> {
+    fn set(&mut self, key: &str, value: String) {
+        if let (Ok(name), Ok(val)) = (
+            HeaderName::from_bytes(key.as_bytes()),
+            HeaderValue::from_str(&value),
+        ) {
+            self.0.insert(name, val);
+        }
+    }
+}
+
+fn trace_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    global::get_text_map_propagator(|prop| {
+        prop.inject_context(
+            &Span::current().context(),
+            &mut HeaderMapInjector(&mut headers),
+        );
+    });
+    headers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use opentelemetry::propagation::Extractor;
+    use opentelemetry::propagation::TextMapPropagator;
+    use opentelemetry::trace::TraceContextExt;
+    use opentelemetry::trace::TracerProvider;
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
+    use tracing::info_span;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    #[test]
+    fn inject_trace_headers_uses_current_span_context() {
+        global::set_text_map_propagator(TraceContextPropagator::new());
+
+        let provider = SdkTracerProvider::builder().build();
+        let tracer = provider.tracer("test-tracer");
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+        let _guard = subscriber.set_default();
+
+        let span = info_span!("client_request");
+        let _entered = span.enter();
+        let span_context = span.context().span().span_context().clone();
+
+        let headers = trace_headers();
+
+        let extractor = HeaderMapExtractor(&headers);
+        let extracted = TraceContextPropagator::new().extract(&extractor);
+        let extracted_span = extracted.span();
+        let extracted_context = extracted_span.span_context();
+
+        assert!(extracted_context.is_valid());
+        assert_eq!(extracted_context.trace_id(), span_context.trace_id());
+        assert_eq!(extracted_context.span_id(), span_context.span_id());
+    }
+
+    struct HeaderMapExtractor<'a>(&'a HeaderMap);
+
+    impl<'a> Extractor for HeaderMapExtractor<'a> {
+        fn get(&self, key: &str) -> Option<&str> {
+            self.0.get(key).and_then(|value| value.to_str().ok())
+        }
+
+        fn keys(&self) -> Vec<&str> {
+            self.0.keys().map(HeaderName::as_str).collect()
+        }
     }
 }

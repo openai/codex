@@ -10,6 +10,7 @@ pub struct OtelSettings {
     pub service_version: String,
     pub codex_home: PathBuf,
     pub exporter: OtelExporter,
+    pub trace_exporter: OtelExporter,
 }
 
 #[derive(Clone, Debug)]

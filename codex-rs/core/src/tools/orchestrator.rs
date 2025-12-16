@@ -42,11 +42,11 @@ impl ToolOrchestrator {
     where
         T: ToolRuntime<Rq, Out>,
     {
-        let otel = turn_ctx.client.get_otel_event_manager();
+        let otel = turn_ctx.client.get_otel_manager();
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
-        let otel_user = codex_otel::otel_event_manager::ToolDecisionSource::User;
-        let otel_cfg = codex_otel::otel_event_manager::ToolDecisionSource::Config;
+        let otel_user = codex_otel::otel_manager::ToolDecisionSource::User;
+        let otel_cfg = codex_otel::otel_manager::ToolDecisionSource::Config;
 
         // 1) Approval
         let mut already_approved = false;

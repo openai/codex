@@ -323,8 +323,11 @@ pub struct OtelConfigToml {
     /// Mark traces with environment (dev, staging, prod, test). Defaults to dev.
     pub environment: Option<String>,
 
-    /// Exporter to use. Defaults to `otlp-file`.
+    /// Optional log exporter
     pub exporter: Option<OtelExporterKind>,
+
+    /// Optional trace exporter
+    pub trace_exporter: Option<OtelExporterKind>,
 }
 
 /// Effective OTEL settings after defaults are applied.
@@ -333,6 +336,7 @@ pub struct OtelConfig {
     pub log_user_prompt: bool,
     pub environment: String,
     pub exporter: OtelExporterKind,
+    pub trace_exporter: OtelExporterKind,
 }
 
 impl Default for OtelConfig {
@@ -341,6 +345,7 @@ impl Default for OtelConfig {
             log_user_prompt: false,
             environment: DEFAULT_OTEL_ENVIRONMENT.to_owned(),
             exporter: OtelExporterKind::None,
+            trace_exporter: OtelExporterKind::None,
         }
     }
 }

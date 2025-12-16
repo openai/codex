@@ -20,7 +20,7 @@ use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
-use codex_otel::otel_event_manager::OtelEventManager;
+use codex_otel::otel_manager::OtelManager;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
@@ -259,9 +259,10 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     // Also configure user instructions to ensure they are NOT delivered on resume.
     config.user_instructions = Some("be nice".to_string());
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
+        config.codex_home.clone(),
     );
     let auth_manager =
         codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
@@ -345,9 +346,10 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
+        config.codex_home.clone(),
     );
     let NewConversation {
         conversation: codex,
@@ -406,9 +408,10 @@ async fn includes_base_instructions_override_in_request() {
     config.base_instructions = Some("test instructions".to_string());
     config.model_provider = model_provider;
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
+        config.codex_home.clone(),
     );
     let codex = conversation_manager
         .new_conversation(config)
@@ -466,9 +469,10 @@ async fn chatgpt_auth_sends_correct_request() {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
-    let conversation_manager = ConversationManager::with_models_provider(
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
         create_dummy_codex_auth(),
         config.model_provider.clone(),
+        config.codex_home.clone(),
     );
     let NewConversation {
         conversation: codex,
@@ -602,9 +606,10 @@ async fn includes_user_instructions_message_in_request() {
     config.model_provider = model_provider;
     config.user_instructions = Some("be nice".to_string());
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
+        config.codex_home.clone(),
     );
     let codex = conversation_manager
         .new_conversation(config)
@@ -671,9 +676,10 @@ async fn skills_append_to_instructions_when_feature_enabled() {
     config.features.enable(Feature::Skills);
     config.cwd = codex_home.path().to_path_buf();
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
+        config.codex_home.clone(),
     );
     let codex = conversation_manager
         .new_conversation(config)
@@ -713,6 +719,7 @@ async fn skills_append_to_instructions_when_feature_enabled() {
         instructions_text.contains(&expected_path_str),
         "expected path {expected_path_str} in instructions"
     );
+    let _codex_home_guard = codex_home;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1027,9 +1034,10 @@ async fn includes_developer_instructions_message_in_request() {
     config.user_instructions = Some("be nice".to_string());
     config.developer_instructions = Some("be useful".to_string());
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
+        config.codex_home.clone(),
     );
     let codex = conversation_manager
         .new_conversation(config)
@@ -1122,7 +1130,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
     let conversation_id = ConversationId::new();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let otel_event_manager = OtelEventManager::new(
+    let otel_manager = OtelManager::new(
         conversation_id,
         model.as_str(),
         model_family.slug.as_str(),
@@ -1131,18 +1139,19 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         auth_manager.get_auth_mode(),
         false,
         "test".to_string(),
+        SessionSource::Exec,
     );
 
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
         model_family,
-        otel_event_manager,
+        otel_manager,
         provider,
         effort,
         summary,
         conversation_id,
-        codex_protocol::protocol::SessionSource::Exec,
+        SessionSource::Exec,
     );
 
     let mut prompt = Prompt::default();
@@ -1255,9 +1264,10 @@ async fn token_count_includes_rate_limits_snapshot() {
     let mut config = load_default_config_for_test(&home);
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
         CodexAuth::from_api_key("test"),
         config.model_provider.clone(),
+        config.codex_home.clone(),
     );
     let codex = conversation_manager
         .new_conversation(config)
@@ -1609,9 +1619,10 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
         create_dummy_codex_auth(),
         config.model_provider.clone(),
+        config.codex_home.clone(),
     );
     let codex = conversation_manager
         .new_conversation(config)
@@ -1690,9 +1701,10 @@ async fn env_var_overrides_loaded_auth() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
         create_dummy_codex_auth(),
         config.model_provider.clone(),
+        config.codex_home.clone(),
     );
     let codex = conversation_manager
         .new_conversation(config)
@@ -1771,9 +1783,10 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
 
-    let conversation_manager = ConversationManager::with_models_provider(
+    let conversation_manager = ConversationManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
         config.model_provider.clone(),
+        config.codex_home.clone(),
     );
     let NewConversation {
         conversation: codex,
