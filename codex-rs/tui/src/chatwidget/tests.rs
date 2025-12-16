@@ -426,7 +426,6 @@ fn make_chatwidget_manual(
         suppressed_exec_calls: HashSet::new(),
         last_unified_wait: None,
         task_complete_pending: false,
-        unified_exec_sessions: Vec::new(),
         mcp_startup_status: None,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
@@ -1220,7 +1219,7 @@ fn exec_end_without_begin_uses_event_command() {
 }
 
 #[test]
-fn exec_history_skips_unified_exec_startup_commands() {
+fn exec_history_shows_unified_exec_startup_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
 
     let begin = begin_exec_with_source(
@@ -1237,31 +1236,11 @@ fn exec_history_skips_unified_exec_startup_commands() {
     end_exec(&mut chat, begin, "echo unified exec startup\n", "", 0);
 
     let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected finalized exec cell to flush");
+    let blob = lines_to_single_string(&cells[0]);
     assert!(
-        cells.is_empty(),
-        "expected unified exec startup to render in footer only"
-    );
-}
-
-#[test]
-fn unified_exec_end_after_task_complete_is_suppressed() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
-
-    let begin = begin_exec_with_source(
-        &mut chat,
-        "call-startup",
-        "echo unified exec startup",
-        ExecCommandSource::UnifiedExecStartup,
-    );
-    drain_insert_history(&mut rx);
-
-    chat.on_task_complete(None);
-    end_exec(&mut chat, begin, "", "", 0);
-
-    let cells = drain_insert_history(&mut rx);
-    assert!(
-        cells.is_empty(),
-        "expected unified exec end after task complete to be suppressed"
+        blob.contains("• Ran echo unified exec startup"),
+        "expected startup command to render: {blob:?}"
     );
 }
 
