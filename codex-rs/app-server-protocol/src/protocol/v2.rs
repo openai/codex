@@ -751,12 +751,7 @@ pub struct ReasoningEffortOption {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ModelListResponse {
-    pub data: Vec<Model>,
-    /// Opaque cursor to pass to the next call to continue after the last item.
-    /// If None, there are no more items to return.
-    pub next_cursor: Option<String>,
-}
+pub struct ModelListResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

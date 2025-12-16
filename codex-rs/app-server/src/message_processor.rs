@@ -129,8 +129,7 @@ impl MessageProcessor {
 
                     self.initialized = true;
                     self.codex_message_processor
-                        .send_model_presets_notification()
-                        .await;
+                        .spawn_model_presets_notification();
 
                     return;
                 }

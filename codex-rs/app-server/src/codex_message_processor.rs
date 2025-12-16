@@ -232,15 +232,17 @@ pub(crate) enum ApiVersion {
     V2,
 }
 
-async fn emit_model_presets_notification(
+fn spawn_model_presets_notification(
     outgoing: Arc<OutgoingMessageSender>,
     conversation_manager: Arc<ConversationManager>,
     config: Arc<Config>,
 ) {
-    let models = supported_models(conversation_manager, &config).await;
-    let notification =
-        ServerNotification::ModelPresetsUpdated(ModelPresetsUpdatedNotification { models });
-    outgoing.send_server_notification(notification).await;
+    tokio::spawn(async move {
+        let models = supported_models(conversation_manager, &config).await;
+        let notification =
+            ServerNotification::ModelPresetsUpdated(ModelPresetsUpdatedNotification { models });
+        outgoing.send_server_notification(notification).await;
+    });
 }
 
 impl CodexMessageProcessor {
@@ -293,13 +295,12 @@ impl CodexMessageProcessor {
         }
     }
 
-    pub(crate) async fn send_model_presets_notification(&self) {
-        emit_model_presets_notification(
+    pub(crate) fn spawn_model_presets_notification(&self) {
+        spawn_model_presets_notification(
             self.outgoing.clone(),
             self.conversation_manager.clone(),
             self.config.clone(),
-        )
-        .await;
+        );
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
@@ -594,7 +595,7 @@ impl CodexMessageProcessor {
                 self.outgoing
                     .send_server_notification(ServerNotification::AuthStatusChange(payload))
                     .await;
-                self.send_model_presets_notification().await;
+                self.spawn_model_presets_notification();
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -625,7 +626,7 @@ impl CodexMessageProcessor {
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
                     .await;
-                self.send_model_presets_notification().await;
+                self.spawn_model_presets_notification();
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -724,12 +725,11 @@ impl CodexMessageProcessor {
                                     payload,
                                 ))
                                 .await;
-                            emit_model_presets_notification(
+                            spawn_model_presets_notification(
                                 outgoing_clone,
                                 conversation_manager,
                                 config,
-                            )
-                            .await;
+                            );
                         }
 
                         // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
@@ -822,12 +822,11 @@ impl CodexMessageProcessor {
                                     payload_v2,
                                 ))
                                 .await;
-                            emit_model_presets_notification(
+                            spawn_model_presets_notification(
                                 outgoing_clone,
                                 conversation_manager,
                                 config,
-                            )
-                            .await;
+                            );
                         }
 
                         // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
@@ -947,7 +946,7 @@ impl CodexMessageProcessor {
                 self.outgoing
                     .send_server_notification(ServerNotification::AuthStatusChange(payload))
                     .await;
-                self.send_model_presets_notification().await;
+                self.spawn_model_presets_notification();
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -968,7 +967,7 @@ impl CodexMessageProcessor {
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
                     .await;
-                self.send_model_presets_notification().await;
+                self.spawn_model_presets_notification();
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -1934,59 +1933,11 @@ impl CodexMessageProcessor {
     }
 
     async fn list_models(&self, request_id: RequestId, params: ModelListParams) {
-        let ModelListParams { limit, cursor } = params;
-        let models = supported_models(self.conversation_manager.clone(), &self.config).await;
-        let total = models.len();
-
-        if total == 0 {
-            let response = ModelListResponse {
-                data: Vec::new(),
-                next_cursor: None,
-            };
-            self.outgoing.send_response(request_id, response).await;
-            return;
-        }
-
-        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
-        let effective_limit = effective_limit.min(total);
-        let start = match cursor {
-            Some(cursor) => match cursor.parse::<usize>() {
-                Ok(idx) => idx,
-                Err(_) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid cursor: {cursor}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            },
-            None => 0,
-        };
-
-        if start > total {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("cursor {start} exceeds total models {total}"),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
-        }
-
-        let end = start.saturating_add(effective_limit).min(total);
-        let items = models[start..end].to_vec();
-        let next_cursor = if end < total {
-            Some(end.to_string())
-        } else {
-            None
-        };
-        let response = ModelListResponse {
-            data: items,
-            next_cursor,
-        };
+        let _ = params;
+        let response = ModelListResponse {};
         self.outgoing.send_response(request_id, response).await;
+
+        self.spawn_model_presets_notification();
     }
 
     async fn mcp_server_oauth_login(

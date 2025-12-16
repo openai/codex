@@ -79,25 +79,21 @@ List/resume/archive: `listConversations`, `resumeConversation`, `archiveConversa
 
 ## Models
 
-Fetch the catalog of models available in the current Codex build with `model/list`. The request accepts optional pagination inputs:
+Request the catalog of models available in the current Codex build with `model/list`. The request accepts optional pagination inputs (currently ignored by the server):
 
-- `pageSize` – number of models to return (defaults to a server-selected value)
+- `pageSize` – number of models to return
 - `cursor` – opaque string from the previous response’s `nextCursor`
 
-Each response yields:
+The response is an empty JSON object `{}`. The server asynchronously emits a
+`model/presets/updated` notification containing the full model catalog. The payload is:
 
-- `items` – ordered list of models. A model includes:
+- `models` – the full list of available models. Each model includes:
   - `id`, `model`, `displayName`, `description`
   - `supportedReasoningEfforts` – array of objects with:
     - `reasoningEffort` – one of `minimal|low|medium|high`
     - `description` – human-friendly label for the effort
   - `defaultReasoningEffort` – suggested effort for the UI
   - `isDefault` – whether the model is recommended for most users
-- `nextCursor` – pass into the next request to continue paging (optional)
-
-The server also emits `model/presets/updated` notifications after initialization and after auth state changes (login/logout). The payload is:
-
-- `models` – the full list of available models, with the same shape as `model/list` items.
 
 ## Event stream
 
