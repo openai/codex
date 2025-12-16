@@ -77,7 +77,6 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
-use crate::config::GhostSnapshotConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
@@ -107,7 +106,8 @@ use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::SkillErrorInfo;
-use crate::protocol::SkillMetadata as ProtocolSkillMetadata;
+use crate::protocol::SkillInfo;
+use crate::protocol::SkillLoadOutcomeInfo;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
@@ -120,11 +120,10 @@ use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
-use crate::skills::SkillError;
 use crate::skills::SkillInjections;
-use crate::skills::SkillMetadata;
-use crate::skills::SkillsManager;
+use crate::skills::SkillLoadOutcome;
 use crate::skills::build_skill_injections;
+use crate::skills::load_skills;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -208,7 +207,6 @@ impl Codex {
         config: Config,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
-        skills_manager: Arc<SkillsManager>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
     ) -> CodexResult<CodexSpawnOk> {
@@ -216,7 +214,7 @@ impl Codex {
         let (tx_event, rx_event) = async_channel::unbounded();
 
         let loaded_skills = if config.features.enabled(Feature::Skills) {
-            Some(skills_manager.skills_for_cwd(&config.cwd))
+            Some(load_skills(&config))
         } else {
             None
         };
@@ -231,9 +229,11 @@ impl Codex {
             }
         }
 
+        let skills_outcome = loaded_skills.clone();
+
         let user_instructions = get_user_instructions(
             &config,
-            loaded_skills
+            skills_outcome
                 .as_ref()
                 .map(|outcome| outcome.skills.as_slice()),
         )
@@ -245,7 +245,6 @@ impl Codex {
         let exec_policy = Arc::new(RwLock::new(exec_policy));
 
         let config = Arc::new(config);
-
         if config.features.enabled(Feature::RemoteModels)
             && let Err(err) = models_manager.refresh_available_models(&config).await
         {
@@ -280,7 +279,7 @@ impl Codex {
             tx_event.clone(),
             conversation_history,
             session_source_clone,
-            skills_manager,
+            skills_outcome.clone(),
         )
         .await
         .map_err(|e| {
@@ -290,7 +289,7 @@ impl Codex {
         let conversation_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(session.clone(), config, rx_sub));
+        tokio::spawn(submission_loop(session, config, rx_sub));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -366,7 +365,6 @@ pub(crate) struct TurnContext {
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
-    pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
@@ -528,7 +526,6 @@ impl Session {
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             shell_environment_policy: per_turn_config.shell_environment_policy.clone(),
             tools_config,
-            ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
@@ -549,7 +546,7 @@ impl Session {
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
         session_source: SessionSource,
-        skills_manager: Arc<SkillsManager>,
+        skills: Option<SkillLoadOutcome>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -669,7 +666,7 @@ impl Session {
             otel_manager,
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
-            skills_manager,
+            skills: skills.clone(),
         };
 
         let sess = Arc::new(Session {
@@ -685,6 +682,8 @@ impl Session {
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
+        let skill_load_outcome = skill_load_outcome_for_client(skills.as_ref());
+
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -698,6 +697,7 @@ impl Session {
                 history_log_id,
                 history_entry_count,
                 initial_messages,
+                skill_load_outcome,
                 rollout_path,
             }),
         })
@@ -797,9 +797,9 @@ impl Session {
                                 message: format!(
                                     "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
                          Consider switching back to `{prev}` as it may affect Codex performance."
-                        ),
-                    }),
-                )
+                                ),
+                            }),
+                        )
                             .await;
                     }
                 }
@@ -1585,9 +1585,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ListCustomPrompts => {
                 handlers::list_custom_prompts(&sess, sub.id.clone()).await;
             }
-            Op::ListSkills { cwds } => {
-                handlers::list_skills(&sess, sub.id.clone(), cwds).await;
-            }
             Op::Undo => {
                 handlers::undo(&sess, sub.id.clone()).await;
             }
@@ -1632,7 +1629,6 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
-    use crate::features::Feature;
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::review_prompts::resolve_review_request;
@@ -1646,11 +1642,9 @@ mod handlers {
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
-    use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
-    use codex_protocol::protocol::SkillsListEntry;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
 
@@ -1658,7 +1652,6 @@ mod handlers {
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
     use mcp_types::RequestId;
-    use std::path::PathBuf;
     use std::sync::Arc;
     use tracing::info;
     use tracing::warn;
@@ -1886,43 +1879,6 @@ mod handlers {
         sess.send_event_raw(event).await;
     }
 
-    pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>) {
-        let cwds = if cwds.is_empty() {
-            let state = sess.state.lock().await;
-            vec![state.session_configuration.cwd.clone()]
-        } else {
-            cwds
-        };
-        let skills = if sess.enabled(Feature::Skills) {
-            let skills_manager = &sess.services.skills_manager;
-            cwds.into_iter()
-                .map(|cwd| {
-                    let outcome = skills_manager.skills_for_cwd(&cwd);
-                    let errors = super::errors_to_info(&outcome.errors);
-                    let skills = super::skills_to_info(&outcome.skills);
-                    SkillsListEntry {
-                        cwd,
-                        skills,
-                        errors,
-                    }
-                })
-                .collect()
-        } else {
-            cwds.into_iter()
-                .map(|cwd| SkillsListEntry {
-                    cwd,
-                    skills: Vec::new(),
-                    errors: Vec::new(),
-                })
-                .collect()
-        };
-        let event = Event {
-            id: sub_id,
-            msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
-        };
-        sess.send_event_raw(event).await;
-    }
-
     pub async fn undo(sess: &Arc<Session>, sub_id: String) {
         let turn_context = sess
             .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
@@ -2074,7 +2030,6 @@ async fn spawn_review_thread(
         sub_id: sub_id.to_string(),
         client,
         tools_config,
-        ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         developer_instructions: None,
         user_instructions: None,
         base_instructions: Some(base_instructions.clone()),
@@ -2106,26 +2061,28 @@ async fn spawn_review_thread(
         .await;
 }
 
-fn skills_to_info(skills: &[SkillMetadata]) -> Vec<ProtocolSkillMetadata> {
-    skills
-        .iter()
-        .map(|skill| ProtocolSkillMetadata {
-            name: skill.name.clone(),
-            description: skill.description.clone(),
-            path: skill.path.clone(),
-            scope: skill.scope,
-        })
-        .collect()
-}
-
-fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
-    errors
-        .iter()
-        .map(|err| SkillErrorInfo {
-            path: err.path.clone(),
-            message: err.message.clone(),
-        })
-        .collect()
+fn skill_load_outcome_for_client(
+    outcome: Option<&SkillLoadOutcome>,
+) -> Option<SkillLoadOutcomeInfo> {
+    outcome.map(|outcome| SkillLoadOutcomeInfo {
+        skills: outcome
+            .skills
+            .iter()
+            .map(|skill| SkillInfo {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                path: skill.path.clone(),
+            })
+            .collect(),
+        errors: outcome
+            .errors
+            .iter()
+            .map(|err| SkillErrorInfo {
+                path: err.path.clone(),
+                message: err.message.clone(),
+            })
+            .collect(),
+    })
 }
 
 /// Takes a user message as input and runs a loop where, at each turn, the model
@@ -2156,20 +2113,10 @@ pub(crate) async fn run_task(
     });
     sess.send_event(&turn_context, event).await;
 
-    let skills_outcome = if sess.enabled(Feature::Skills) {
-        Some(
-            sess.services
-                .skills_manager
-                .skills_for_cwd(&turn_context.cwd),
-        )
-    } else {
-        None
-    };
-
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
-    } = build_skill_injections(&input, skills_outcome.as_ref()).await;
+    } = build_skill_injections(&input, sess.services.skills.as_ref()).await;
 
     for message in skill_warnings {
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
@@ -2658,17 +2605,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
     })
 }
 
-fn compute_is_up_to_date(config: &Config) -> bool {
-    if !config.check_for_update_on_startup {
-        return true;
-    }
-    let codex_home = config.codex_home.clone();
-    let version_file = codex_home.join(crate::version::VERSION_FILENAME);
-    crate::version::read_latest_version(&version_file)
-        .and_then(|latest| crate::version::is_up_to_date(&latest, env!("CARGO_PKG_VERSION")))
-        .unwrap_or(true)
-}
-
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
@@ -3077,7 +3013,6 @@ mod tests {
         );
 
         let state = SessionState::new(session_configuration.clone());
-        let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -3091,7 +3026,7 @@ mod tests {
             otel_manager: otel_manager.clone(),
             models_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
-            skills_manager,
+            skills: None,
         };
 
         let turn_context = Session::make_turn_context(
@@ -3168,7 +3103,6 @@ mod tests {
         );
 
         let state = SessionState::new(session_configuration.clone());
-        let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -3182,7 +3116,7 @@ mod tests {
             otel_manager: otel_manager.clone(),
             models_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
-            skills_manager,
+            skills: None,
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
