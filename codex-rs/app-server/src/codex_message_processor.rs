@@ -46,8 +46,8 @@ use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
-use codex_app_server_protocol::ListMcpServerStatusesParams;
-use codex_app_server_protocol::ListMcpServerStatusesResponse;
+use codex_app_server_protocol::ListMcpServerStatusParams;
+use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LoginApiKeyResponse;
@@ -398,8 +398,8 @@ impl CodexMessageProcessor {
             ClientRequest::McpServerOauthLogin { request_id, params } => {
                 self.mcp_server_oauth_login(request_id, params).await;
             }
-            ClientRequest::McpServerStatusesList { request_id, params } => {
-                self.list_mcp_server_statuses(request_id, params).await;
+            ClientRequest::McpServerStatusList { request_id, params } => {
+                self.list_mcp_server_status(request_id, params).await;
             }
             ClientRequest::LoginAccount { request_id, params } => {
                 self.login_v2(request_id, params).await;
@@ -2052,10 +2052,10 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn list_mcp_server_statuses(
+    async fn list_mcp_server_status(
         &self,
         request_id: RequestId,
-        params: ListMcpServerStatusesParams,
+        params: ListMcpServerStatusParams,
     ) {
         let config = match self.load_latest_config().await {
             Ok(config) => config,
@@ -2137,7 +2137,7 @@ impl CodexMessageProcessor {
             None
         };
 
-        let response = ListMcpServerStatusesResponse { data, next_cursor };
+        let response = ListMcpServerStatusResponse { data, next_cursor };
 
         self.outgoing.send_response(request_id, response).await;
     }

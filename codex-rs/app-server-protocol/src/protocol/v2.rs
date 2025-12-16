@@ -761,7 +761,7 @@ pub struct ModelListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ListMcpServerStatusesParams {
+pub struct ListMcpServerStatusParams {
     /// Opaque pagination cursor returned by a previous call.
     pub cursor: Option<String>,
     /// Optional page size; defaults to a server-defined value.
@@ -782,7 +782,7 @@ pub struct McpServerStatus {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ListMcpServerStatusesResponse {
+pub struct ListMcpServerStatusResponse {
     pub data: Vec<McpServerStatus>,
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// If None, there are no more items to return.
