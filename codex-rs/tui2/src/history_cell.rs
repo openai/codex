@@ -61,6 +61,12 @@ use unicode_width::UnicodeWidthStr;
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
 /// scrollable list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TranscriptAnimation {
+    pub(crate) interval: Duration,
+    pub(crate) epoch: Instant,
+}
+
 pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 
@@ -93,6 +99,10 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
             .line_count(width)
             .try_into()
             .unwrap_or(0)
+    }
+
+    fn transcript_animation(&self) -> Option<TranscriptAnimation> {
+        None
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -1010,6 +1020,22 @@ impl HistoryCell for McpToolCallCell {
         }
 
         lines
+    }
+
+    fn transcript_animation(&self) -> Option<TranscriptAnimation> {
+        if !self.animations_enabled || self.result.is_some() {
+            return None;
+        }
+
+        let has_true_color = supports_color::on_cached(supports_color::Stream::Stdout)
+            .map(|level| level.has_16m)
+            .unwrap_or(false);
+        let (interval, epoch) = if has_true_color {
+            (Duration::from_millis(32), crate::shimmer::shimmer_epoch())
+        } else {
+            (Duration::from_millis(600), self.start_time)
+        };
+        Some(TranscriptAnimation { interval, epoch })
     }
 }
 

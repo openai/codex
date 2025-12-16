@@ -13,9 +13,12 @@ use crate::terminal_palette::default_fg;
 
 static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 
+pub(crate) fn shimmer_epoch() -> Instant {
+    *PROCESS_START.get_or_init(Instant::now)
+}
+
 fn elapsed_since_start() -> Duration {
-    let start = PROCESS_START.get_or_init(Instant::now);
-    start.elapsed()
+    shimmer_epoch().elapsed()
 }
 
 pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {

@@ -104,6 +104,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::TranscriptAnimation;
 use crate::markdown::append_markdown;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
@@ -281,6 +282,7 @@ pub(crate) struct ChatWidget {
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
+    active_cell_revision: u64,
     config: Config,
     model_family: ModelFamily,
     auth_manager: Arc<AuthManager>,
@@ -333,6 +335,13 @@ pub(crate) struct ChatWidget {
     feedback: codex_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ActiveCellTranscriptKey {
+    pub(crate) revision: u64,
+    pub(crate) is_stream_continuation: bool,
+    pub(crate) animation: Option<TranscriptAnimation>,
 }
 
 struct UserMessage {
@@ -1044,9 +1053,10 @@ impl ChatWidget {
             .as_ref()
             .map(|cell| cell.as_any().downcast_ref::<ExecCell>().is_none())
             .unwrap_or(true);
+        let mut set_new_active_cell = false;
         if needs_new {
             self.flush_active_cell();
-            self.active_cell = Some(Box::new(new_active_exec_command(
+            self.set_active_cell(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
                 command,
                 parsed,
@@ -1054,8 +1064,11 @@ impl ChatWidget {
                 ev.interaction_input.clone(),
                 self.config.animations,
             )));
+            set_new_active_cell = true;
         }
 
+        let mut updated_active_cell = false;
+        let mut flushed_active_cell = false;
         if let Some(cell) = self
             .active_cell
             .as_mut()
@@ -1075,9 +1088,14 @@ impl ChatWidget {
                 }
             };
             cell.complete_call(&ev.call_id, output, ev.duration);
+            updated_active_cell = true;
             if cell.should_flush() {
                 self.flush_active_cell();
+                flushed_active_cell = true;
             }
+        }
+        if updated_active_cell && !set_new_active_cell && !flushed_active_cell {
+            self.bump_active_cell_revision();
         }
     }
 
@@ -1180,6 +1198,7 @@ impl ChatWidget {
             return;
         }
         let interaction_input = ev.interaction_input.clone();
+        let mut updated_active_cell = false;
         if let Some(cell) = self
             .active_cell
             .as_mut()
@@ -1193,10 +1212,11 @@ impl ChatWidget {
             )
         {
             *cell = new_exec;
+            updated_active_cell = true;
         } else {
             self.flush_active_cell();
 
-            self.active_cell = Some(Box::new(new_active_exec_command(
+            self.set_active_cell(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd,
@@ -1205,6 +1225,9 @@ impl ChatWidget {
                 self.config.animations,
             )));
         }
+        if updated_active_cell {
+            self.bump_active_cell_revision();
+        }
 
         self.request_redraw();
     }
@@ -1212,7 +1235,7 @@ impl ChatWidget {
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
         self.flush_answer_stream_with_separator();
         self.flush_active_cell();
-        self.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
+        self.set_active_cell(Box::new(history_cell::new_active_mcp_tool_call(
             ev.call_id,
             ev.invocation,
             self.config.animations,
@@ -1229,12 +1252,18 @@ impl ChatWidget {
             result,
         } = ev;
 
-        let extra_cell = match self
+        match self
             .active_cell
             .as_mut()
             .and_then(|cell| cell.as_any_mut().downcast_mut::<McpToolCallCell>())
         {
-            Some(cell) if cell.call_id() == call_id => cell.complete(duration, result),
+            Some(cell) if cell.call_id() == call_id => {
+                let extra_cell = cell.complete(duration, result);
+                self.flush_active_cell();
+                if let Some(extra) = extra_cell {
+                    self.add_boxed_history(extra);
+                }
+            }
             _ => {
                 self.flush_active_cell();
                 let mut cell = history_cell::new_active_mcp_tool_call(
@@ -1243,15 +1272,12 @@ impl ChatWidget {
                     self.config.animations,
                 );
                 let extra_cell = cell.complete(duration, result);
-                self.active_cell = Some(Box::new(cell));
-                extra_cell
+                self.add_boxed_history(Box::new(cell));
+                if let Some(extra) = extra_cell {
+                    self.add_boxed_history(extra);
+                }
             }
         };
-
-        self.flush_active_cell();
-        if let Some(extra) = extra_cell {
-            self.add_boxed_history(extra);
-        }
     }
 
     pub(crate) fn new(
@@ -1293,6 +1319,7 @@ impl ChatWidget {
                 skills: None,
             }),
             active_cell: None,
+            active_cell_revision: 0,
             config,
             model_family,
             auth_manager,
@@ -1378,6 +1405,7 @@ impl ChatWidget {
                 skills: None,
             }),
             active_cell: None,
+            active_cell_revision: 0,
             config,
             model_family,
             auth_manager,
@@ -1679,8 +1707,21 @@ impl ChatWidget {
         }
     }
 
+    fn bump_active_cell_revision(&mut self) {
+        self.active_cell_revision = self.active_cell_revision.wrapping_add(1);
+    }
+
+    fn set_active_cell(&mut self, cell: Box<dyn HistoryCell>) {
+        self.active_cell = Some(cell);
+        self.bump_active_cell_revision();
+    }
+
+    fn take_active_cell(&mut self) -> Option<Box<dyn HistoryCell>> {
+        self.active_cell.take()
+    }
+
     fn flush_active_cell(&mut self) {
-        if let Some(active) = self.active_cell.take() {
+        if let Some(active) = self.take_active_cell() {
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
@@ -1996,7 +2037,7 @@ impl ChatWidget {
 
     /// Mark the active cell as failed (✗) and flush it into history.
     fn finalize_active_cell_as_failed(&mut self) {
-        if let Some(mut cell) = self.active_cell.take() {
+        if let Some(mut cell) = self.take_active_cell() {
             // Insert finalized cell into history and keep grouping consistent.
             if let Some(exec) = cell.as_any_mut().downcast_mut::<ExecCell>() {
                 exec.mark_failed();
@@ -3266,13 +3307,19 @@ impl ChatWidget {
         self.current_rollout_path.clone()
     }
 
-    pub(crate) fn active_cell_transcript_lines(
-        &self,
-        width: u16,
-    ) -> Option<(Vec<Line<'static>>, bool)> {
+    pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
         let cell = self.active_cell.as_ref()?;
-        let lines = cell.transcript_lines(width);
-        (!lines.is_empty()).then(|| (lines, cell.is_stream_continuation()))
+        Some(ActiveCellTranscriptKey {
+            revision: self.active_cell_revision,
+            is_stream_continuation: cell.is_stream_continuation(),
+            animation: cell.transcript_animation(),
+        })
+    }
+
+    pub(crate) fn active_cell_transcript_lines(&self, width: u16) -> Option<Vec<Line<'static>>> {
+        self.active_cell
+            .as_ref()
+            .map(|cell| cell.transcript_lines(width))
     }
 
     /// Return a reference to the widget's current config (includes any

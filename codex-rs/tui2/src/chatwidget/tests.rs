@@ -410,6 +410,7 @@ fn make_chatwidget_manual(
         codex_op_tx: op_tx,
         bottom_pane: bottom,
         active_cell: None,
+        active_cell_revision: 0,
         config: cfg.clone(),
         model_family: ModelsManager::construct_model_family_offline(&resolved_model, &cfg),
         auth_manager: auth_manager.clone(),

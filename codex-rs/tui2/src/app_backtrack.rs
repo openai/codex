@@ -221,14 +221,11 @@ impl App {
         if matches!(&event, TuiEvent::Draw)
             && let Some(Overlay::Transcript(t)) = &mut self.overlay
         {
-            let width = tui.terminal.viewport_area.width.max(1);
-            if let Some((lines, is_stream_continuation)) =
-                self.chat_widget.active_cell_transcript_lines(width)
-            {
-                t.set_live_tail(lines, is_stream_continuation);
-            } else {
-                t.clear_live_tail();
-            }
+            let width = tui.screen_width_hint().max(1);
+            let active_key = self.chat_widget.active_cell_transcript_key();
+            t.sync_live_tail(width, active_key, |w| {
+                self.chat_widget.active_cell_transcript_lines(w)
+            });
         }
 
         if let Some(overlay) = &mut self.overlay {

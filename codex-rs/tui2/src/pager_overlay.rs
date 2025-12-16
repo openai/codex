@@ -1,7 +1,9 @@
 use std::io::Result;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
+use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
@@ -400,11 +402,86 @@ impl Renderable for CellRenderable {
     }
 }
 
+struct LiveTailRenderable {
+    lines: Arc<[Line<'static>]>,
+    top_padding: u16,
+}
+
+impl Renderable for LiveTailRenderable {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        if area.is_empty() {
+            return;
+        }
+        let y = area.y.saturating_add(self.top_padding.min(area.height));
+        let height = area.height.saturating_sub(self.top_padding) as usize;
+        for (idx, line) in self.lines.iter().take(height).enumerate() {
+            let row = y.saturating_add(idx as u16);
+            line.render_ref(Rect::new(area.x, row, area.width, 1), buf);
+        }
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        u16::try_from(self.lines.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(self.top_padding)
+    }
+}
+
 pub(crate) struct TranscriptOverlay {
     view: PagerView,
     cells: Vec<Arc<dyn HistoryCell>>,
     highlight_cell: Option<usize>,
+    live_tail: Option<LiveTailState>,
+    last_live_tail_key: Option<LiveTailKey>,
     is_done: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LiveTailAnimationKey {
+    interval: Duration,
+    epoch: Instant,
+    tick: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LiveTailKey {
+    width: u16,
+    revision: u64,
+    is_stream_continuation: bool,
+    animation: Option<LiveTailAnimationKey>,
+}
+
+struct LiveTailState {
+    key: LiveTailKey,
+    lines: Arc<[Line<'static>]>,
+}
+
+impl LiveTailState {
+    fn new(key: LiveTailKey, lines: Vec<Line<'static>>) -> Self {
+        Self {
+            key,
+            lines: Arc::from(lines),
+        }
+    }
+
+    fn animation(&self) -> Option<LiveTailAnimationKey> {
+        self.key.animation
+    }
+
+    fn top_padding(&self, has_prior_cells: bool) -> u16 {
+        if has_prior_cells && !self.key.is_stream_continuation {
+            1
+        } else {
+            0
+        }
+    }
+
+    fn renderable(&self, has_prior_cells: bool) -> Box<dyn Renderable> {
+        Box::new(LiveTailRenderable {
+            lines: self.lines.clone(),
+            top_padding: self.top_padding(has_prior_cells),
+        })
+    }
 }
 
 impl TranscriptOverlay {
@@ -417,6 +494,8 @@ impl TranscriptOverlay {
             ),
             cells: transcript_cells,
             highlight_cell: None,
+            live_tail: None,
+            last_live_tail_key: None,
             is_done: false,
         }
     }
@@ -460,59 +539,173 @@ impl TranscriptOverlay {
     pub(crate) fn insert_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         let follow_bottom = self.view.is_scrolled_to_bottom();
         self.cells.push(cell);
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        self.rebuild_renderables();
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
     }
 
-    pub(crate) fn set_live_tail(
+    pub(crate) fn sync_live_tail(
         &mut self,
-        lines: Vec<Line<'static>>,
-        is_stream_continuation: bool,
+        width: u16,
+        active_key: Option<ActiveCellTranscriptKey>,
+        compute_lines: impl FnOnce(u16) -> Option<Vec<Line<'static>>>,
     ) {
-        if lines.is_empty() {
-            self.clear_live_tail();
+        self.sync_live_tail_at(Instant::now(), width, active_key, compute_lines);
+    }
+
+    fn sync_live_tail_at(
+        &mut self,
+        now: Instant,
+        width: u16,
+        active_key: Option<ActiveCellTranscriptKey>,
+        compute_lines: impl FnOnce(u16) -> Option<Vec<Line<'static>>>,
+    ) {
+        let freeze_animation_tick = matches!(self.live_tail_visibility(), Some(false));
+        let prev_animation = self.last_live_tail_key.and_then(|key| key.animation);
+        let next_key = active_key.map(|key| {
+            let animation = key.animation.and_then(|animation| {
+                let interval = animation.interval;
+                if interval.is_zero() {
+                    return None;
+                }
+                let epoch = animation.epoch;
+                let tick = if freeze_animation_tick
+                    && let Some(prev) = prev_animation
+                    && prev.interval == interval
+                    && prev.epoch == epoch
+                {
+                    prev.tick
+                } else {
+                    Self::live_tail_animation_tick(now, epoch, interval)
+                };
+                Some(LiveTailAnimationKey {
+                    interval,
+                    epoch,
+                    tick,
+                })
+            });
+            LiveTailKey {
+                width,
+                revision: key.revision,
+                is_stream_continuation: key.is_stream_continuation,
+                animation,
+            }
+        });
+
+        if self.last_live_tail_key == next_key {
             return;
         }
-
         let follow_bottom = self.view.is_scrolled_to_bottom();
-        self.clear_live_tail();
-        self.view.renderables.push(Self::live_tail_renderable(
-            lines,
-            !self.cells.is_empty(),
-            is_stream_continuation,
-        ));
+        self.remove_live_tail_renderable();
+
+        self.live_tail = if let Some(key) = next_key {
+            let lines = compute_lines(width).unwrap_or_default();
+            (!lines.is_empty()).then(|| LiveTailState::new(key, lines))
+        } else {
+            None
+        };
+        self.last_live_tail_key = next_key;
+
+        self.append_live_tail_renderable();
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
     }
 
-    pub(crate) fn clear_live_tail(&mut self) {
-        if self.view.renderables.len() > self.cells.len() {
-            self.view.renderables.pop();
+    fn live_tail_animation_tick(now: Instant, epoch: Instant, interval: Duration) -> u64 {
+        if interval.is_zero() {
+            return 0;
         }
+
+        let interval_nanos = interval.as_nanos();
+        if interval_nanos == 0 {
+            return 0;
+        }
+        let elapsed_nanos = now.saturating_duration_since(epoch).as_nanos();
+        u64::try_from((elapsed_nanos / interval_nanos).min(u128::from(u64::MAX)))
+            .unwrap_or(u64::MAX)
+    }
+
+    fn live_tail_animation_next_in(now: Instant, animation: LiveTailAnimationKey) -> Duration {
+        let interval = animation.interval;
+        if interval.is_zero() {
+            return Duration::ZERO;
+        }
+
+        let interval_nanos = interval.as_nanos();
+        if interval_nanos == 0 {
+            return Duration::ZERO;
+        }
+        if animation.tick == u64::MAX {
+            return interval;
+        }
+
+        let target_tick = animation.tick.saturating_add(1);
+        let target_nanos = interval_nanos.saturating_mul(u128::from(target_tick));
+        let elapsed_nanos = now.saturating_duration_since(animation.epoch).as_nanos();
+        if target_nanos <= elapsed_nanos {
+            return Duration::ZERO;
+        }
+        let remaining = (target_nanos - elapsed_nanos).min(u128::from(u64::MAX));
+        let remaining = u64::try_from(remaining).unwrap_or(u64::MAX);
+        Duration::from_nanos(remaining)
+    }
+
+    fn is_live_tail_visible(&self) -> bool {
+        self.live_tail_visibility().unwrap_or(false)
+    }
+
+    fn live_tail_visibility(&self) -> Option<bool> {
+        let tail = self.live_tail.as_ref()?;
+        let total_height = self.view.last_rendered_height?;
+        let visible_height = self.view.last_content_height?;
+
+        let line_count = tail.lines.len();
+        if line_count == 0 {
+            return Some(false);
+        }
+
+        if visible_height == 0 {
+            return Some(false);
+        }
+
+        let top_padding = tail.top_padding(!self.cells.is_empty()) as usize;
+        let tail_height = line_count.saturating_add(top_padding);
+        let tail_start = total_height.saturating_sub(tail_height);
+        let tail_content_start = tail_start.saturating_add(top_padding);
+        let tail_content_end = tail_content_start.saturating_add(line_count);
+
+        let visible_start = self.view.scroll_offset;
+        let visible_end = visible_start.saturating_add(visible_height);
+        Some(tail_content_start < visible_end && tail_content_end > visible_start)
     }
 
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
         self.highlight_cell = cell;
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        self.rebuild_renderables();
         if let Some(idx) = self.highlight_cell {
             self.view.scroll_chunk_into_view(idx);
         }
     }
 
-    fn live_tail_renderable(
-        lines: Vec<Line<'static>>,
-        has_prior_cells: bool,
-        is_stream_continuation: bool,
-    ) -> Box<dyn Renderable> {
-        let paragraph = Paragraph::new(Text::from(lines));
-        let mut renderable: Box<dyn Renderable> = Box::new(CachedRenderable::new(paragraph));
-        if has_prior_cells && !is_stream_continuation {
-            renderable = Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));
+    fn rebuild_renderables(&mut self) {
+        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        self.append_live_tail_renderable();
+    }
+
+    fn append_live_tail_renderable(&mut self) {
+        if let Some(tail) = self.live_tail.as_ref() {
+            self.view
+                .renderables
+                .push(tail.renderable(!self.cells.is_empty()));
         }
-        renderable
+    }
+
+    fn remove_live_tail_renderable(&mut self) {
+        if self.live_tail.is_some() {
+            self.view.renderables.pop();
+        }
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
@@ -551,6 +744,15 @@ impl TranscriptOverlay {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
                 })?;
+                if let Some(animation) = self.live_tail.as_ref().and_then(LiveTailState::animation)
+                    && self.is_live_tail_visible()
+                {
+                    tui.frame_requester()
+                        .schedule_frame_in(Self::live_tail_animation_next_in(
+                            Instant::now(),
+                            animation,
+                        ));
+                }
                 Ok(())
             }
             _ => Ok(()),
@@ -653,6 +855,7 @@ mod tests {
     use codex_core::protocol::ExecCommandSource;
     use codex_core::protocol::ReviewDecision;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -742,12 +945,233 @@ mod tests {
         let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
             lines: vec![Line::from("alpha")],
         })]);
-        overlay.set_live_tail(vec![Line::from("tail")], false);
+        overlay.sync_live_tail(
+            40,
+            Some(ActiveCellTranscriptKey {
+                revision: 1,
+                is_stream_continuation: false,
+                animation: None,
+            }),
+            |_| Some(vec![Line::from("tail")]),
+        );
 
         let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
+    }
+
+    #[test]
+    fn transcript_overlay_live_tail_gains_separator_after_first_cell() {
+        let mut overlay = TranscriptOverlay::new(vec![]);
+        overlay.sync_live_tail(
+            40,
+            Some(ActiveCellTranscriptKey {
+                revision: 1,
+                is_stream_continuation: false,
+                animation: None,
+            }),
+            |_| Some(vec![Line::from("tail")]),
+        );
+
+        let area = Rect::new(0, 0, 40, 10);
+        let top_h = area.height.saturating_sub(3);
+        let content = Rect::new(
+            area.x,
+            area.y.saturating_add(1),
+            area.width,
+            top_h.saturating_sub(2),
+        );
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        let rendered = buffer_to_text(&buf, content);
+        assert!(rendered.contains("tail"), "expected live tail to render");
+        assert!(
+            rendered.starts_with("tail"),
+            "expected live tail to render without leading separator"
+        );
+
+        overlay.insert_cell(Arc::new(TestCell {
+            lines: vec![Line::from("alpha")],
+        }));
+        overlay.render(area, &mut buf);
+
+        let rendered = buffer_to_text(&buf, content);
+        assert!(
+            rendered.contains("alpha\n\ntail"),
+            "expected separator before tail after first committed cell, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn transcript_overlay_live_tail_no_separator_when_stream_continuation() {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: vec![Line::from("alpha")],
+        })]);
+        overlay.sync_live_tail(
+            40,
+            Some(ActiveCellTranscriptKey {
+                revision: 1,
+                is_stream_continuation: true,
+                animation: None,
+            }),
+            |_| Some(vec![Line::from("tail")]),
+        );
+
+        let area = Rect::new(0, 0, 40, 10);
+        let top_h = area.height.saturating_sub(3);
+        let content = Rect::new(
+            area.x,
+            area.y.saturating_add(1),
+            area.width,
+            top_h.saturating_sub(2),
+        );
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        let rendered = buffer_to_text(&buf, content);
+        assert!(
+            rendered.contains("alpha\ntail"),
+            "expected tail to be contiguous, got: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("alpha\n\ntail"),
+            "expected no blank line separator, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn transcript_overlay_sync_live_tail_is_noop_for_identical_key() {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: vec![Line::from("alpha")],
+        })]);
+        let key = ActiveCellTranscriptKey {
+            revision: 1,
+            is_stream_continuation: false,
+            animation: None,
+        };
+        overlay.sync_live_tail(40, Some(key), |_| Some(vec![Line::from("tail")]));
+        overlay.sync_live_tail(40, Some(key), |_| {
+            panic!("expected sync to skip recomputation")
+        });
+    }
+
+    #[test]
+    fn transcript_overlay_is_live_tail_visible_tracks_scroll() {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: (0..50)
+                .map(|i| Line::from(format!("line{i}")))
+                .collect::<Vec<_>>(),
+        })]);
+
+        overlay.sync_live_tail(
+            40,
+            Some(ActiveCellTranscriptKey {
+                revision: 1,
+                is_stream_continuation: false,
+                animation: None,
+            }),
+            |_| Some(vec![Line::from("tail")]),
+        );
+
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+
+        overlay.view.scroll_offset = 0;
+        overlay.render(area, &mut buf);
+        assert!(!overlay.is_live_tail_visible());
+
+        overlay.view.scroll_offset = usize::MAX;
+        overlay.render(area, &mut buf);
+        assert!(overlay.is_live_tail_visible());
+    }
+
+    #[test]
+    fn transcript_overlay_sync_live_tail_recomputes_for_animation_tick_change() {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: vec![Line::from("alpha")],
+        })]);
+        let calls = std::cell::Cell::new(0usize);
+        let interval = Duration::from_secs(60);
+        let epoch = Instant::now();
+        let key = ActiveCellTranscriptKey {
+            revision: 1,
+            is_stream_continuation: false,
+            animation: Some(crate::history_cell::TranscriptAnimation { interval, epoch }),
+        };
+
+        overlay.sync_live_tail_at(epoch, 40, Some(key), |_| {
+            calls.set(calls.get() + 1);
+            Some(vec![Line::from("tail1")])
+        });
+        overlay.sync_live_tail_at(epoch, 40, Some(key), |_| {
+            panic!("expected sync to skip recomputation within the same animation tick")
+        });
+
+        assert_eq!(calls.get(), 1);
+
+        let next_tick_now = epoch.checked_add(interval).expect("epoch overflow");
+
+        overlay.sync_live_tail_at(next_tick_now, 40, Some(key), |_| {
+            calls.set(calls.get() + 1);
+            Some(vec![Line::from("tail2")])
+        });
+
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn transcript_overlay_sync_live_tail_skips_animation_ticks_when_tail_offscreen() {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: (0..50)
+                .map(|i| Line::from(format!("line{i}")))
+                .collect::<Vec<_>>(),
+        })]);
+
+        let interval = Duration::from_secs(60);
+        let epoch = Instant::now();
+        let key = ActiveCellTranscriptKey {
+            revision: 1,
+            is_stream_continuation: false,
+            animation: Some(crate::history_cell::TranscriptAnimation { interval, epoch }),
+        };
+
+        overlay.sync_live_tail_at(epoch, 40, Some(key), |_| Some(vec![Line::from("tail")]));
+
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        overlay.view.scroll_offset = 0;
+        overlay.render(area, &mut buf);
+        assert!(
+            !overlay.is_live_tail_visible(),
+            "expected tail to be offscreen"
+        );
+
+        let next_tick_now = epoch.checked_add(interval).expect("epoch overflow");
+        overlay.sync_live_tail_at(next_tick_now, 40, Some(key), |_| {
+            panic!("expected sync to skip recomputation while tail is offscreen")
+        });
+    }
+
+    #[test]
+    fn transcript_overlay_sync_live_tail_normalizes_zero_animation_interval() {
+        let mut overlay = TranscriptOverlay::new(vec![]);
+        overlay.sync_live_tail(
+            40,
+            Some(ActiveCellTranscriptKey {
+                revision: 1,
+                is_stream_continuation: false,
+                animation: Some(crate::history_cell::TranscriptAnimation {
+                    interval: Duration::ZERO,
+                    epoch: Instant::now(),
+                }),
+            }),
+            |_| Some(vec![Line::from("tail")]),
+        );
+
+        let tail = overlay.live_tail.as_ref().expect("expected live tail");
+        assert_eq!(tail.key.animation, None);
     }
 
     fn buffer_to_text(buf: &Buffer, area: Rect) -> String {

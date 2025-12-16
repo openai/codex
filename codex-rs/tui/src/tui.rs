@@ -8,6 +8,7 @@ use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 
 use crossterm::Command;
@@ -163,6 +164,14 @@ pub enum TuiEvent {
     Draw,
 }
 
+fn pack_screen_size(width: u16, height: u16) -> u32 {
+    u32::from(width) | (u32::from(height) << 16)
+}
+
+fn unpack_screen_width(packed: u32) -> u16 {
+    (packed & 0xFFFF) as u16
+}
+
 pub struct Tui {
     frame_requester: FrameRequester,
     draw_tx: broadcast::Sender<()>,
@@ -175,6 +184,7 @@ pub struct Tui {
     alt_screen_active: Arc<AtomicBool>,
     // True when terminal/tab is focused; updated internally from crossterm events
     terminal_focused: Arc<AtomicBool>,
+    screen_size_hint: Arc<AtomicU32>,
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
 }
@@ -183,6 +193,10 @@ impl Tui {
     pub fn new(terminal: Terminal) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
+        let screen_size_hint = pack_screen_size(
+            terminal.last_known_screen_size.width,
+            terminal.last_known_screen_size.height,
+        );
 
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.
@@ -201,6 +215,7 @@ impl Tui {
             suspend_context: SuspendContext::new(),
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
+            screen_size_hint: Arc::new(AtomicU32::new(screen_size_hint)),
             enhanced_keys_supported,
             notification_backend: Some(detect_backend()),
         }
@@ -212,6 +227,15 @@ impl Tui {
 
     pub fn enhanced_keys_supported(&self) -> bool {
         self.enhanced_keys_supported
+    }
+
+    pub(crate) fn screen_width_hint(&self) -> u16 {
+        let width = unpack_screen_width(self.screen_size_hint.load(Ordering::Relaxed));
+        if width == 0 {
+            self.terminal.viewport_area.width
+        } else {
+            width
+        }
     }
 
     /// Emit a desktop notification now if the terminal is unfocused.
@@ -274,6 +298,7 @@ impl Tui {
         let alt_screen_active = self.alt_screen_active.clone();
 
         let terminal_focused = self.terminal_focused.clone();
+        let screen_size_hint = self.screen_size_hint.clone();
         let event_stream = async_stream::stream! {
             loop {
                 select! {
@@ -291,7 +316,8 @@ impl Tui {
                                         }
                                         yield TuiEvent::Key(key_event);
                                     }
-                                    Event::Resize(_, _) => {
+                                    Event::Resize(width, height) => {
+                                        screen_size_hint.store(pack_screen_size(width, height), Ordering::Relaxed);
                                         yield TuiEvent::Draw;
                                     }
                                     Event::Paste(pasted) => {
@@ -389,6 +415,7 @@ impl Tui {
         // Precompute any viewport updates that need a cursor-position query before entering
         // the synchronized update, to avoid racing with the event reader.
         let mut pending_viewport_area = self.pending_viewport_area()?;
+        let screen_size_hint = self.screen_size_hint.as_ref();
 
         stdout().sync_update(|_| {
             #[cfg(unix)]
@@ -403,6 +430,7 @@ impl Tui {
             }
 
             let size = terminal.size()?;
+            screen_size_hint.store(pack_screen_size(size.width, size.height), Ordering::Relaxed);
 
             let mut area = terminal.viewport_area;
             area.height = height.min(size.height);
