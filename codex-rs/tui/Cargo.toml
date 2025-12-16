@@ -23,7 +23,6 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-async-stream = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
@@ -41,6 +40,7 @@ codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
 derive_more = { workspace = true, features = ["is_variant"] }
@@ -51,7 +51,6 @@ image = { workspace = true, features = ["jpeg", "png"] }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
 mcp-types = { workspace = true }
-opentelemetry-appender-tracing = { workspace = true }
 pathdiff = { workspace = true }
 pulldown-cmark = { workspace = true }
 rand = { workspace = true }
@@ -81,7 +80,7 @@ tokio = { workspace = true, features = [
     "test-util",
     "time",
 ] }
-tokio-stream = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
 toml = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-appender = { workspace = true }

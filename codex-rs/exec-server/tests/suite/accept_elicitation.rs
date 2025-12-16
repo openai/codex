@@ -24,6 +24,7 @@ use serde_json::json;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::fs::symlink;
 use tempfile::TempDir;
+use tokio::process::Command;
 
 /// Verify that when using a read-only sandbox and an execpolicy that prompts,
 /// the proper elicitation is sent. Upon auto-approving the elicitation, the
@@ -53,11 +54,11 @@ prefix_rule(
 
     // Create an MCP client that approves expected elicitation messages.
     let project_root = TempDir::new()?;
-    let git = which::which("git")?;
     let project_root_path = project_root.path().canonicalize().unwrap();
+    let git_path = resolve_git_path().await?;
     let expected_elicitation_message = format!(
         "Allow agent to run `{} init .` in `{}`?",
-        git.display(),
+        git_path,
         project_root_path.display()
     );
     let elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParam>>> = Default::default();
@@ -104,6 +105,7 @@ prefix_rule(
             name: Cow::Borrowed("shell"),
             arguments: Some(object(json!(
                 {
+                    "login": false,
                     "command": "git init .",
                     "workdir": project_root_path.to_string_lossy(),
                 }
@@ -173,4 +175,24 @@ fn ensure_codex_cli() -> Result<PathBuf> {
     );
 
     Ok(codex_cli)
+}
+
+async fn resolve_git_path() -> Result<String> {
+    let git = Command::new("bash")
+        .arg("-lc")
+        .arg("command -v git")
+        .output()
+        .await
+        .context("failed to resolve git via login shell")?;
+    ensure!(
+        git.status.success(),
+        "failed to resolve git via login shell: {}",
+        String::from_utf8_lossy(&git.stderr)
+    );
+    let git_path = String::from_utf8(git.stdout)
+        .context("git path was not valid utf8")?
+        .trim()
+        .to_string();
+    ensure!(!git_path.is_empty(), "git path should not be empty");
+    Ok(git_path)
 }

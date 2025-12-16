@@ -4,7 +4,6 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::Instant;
 
 use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
@@ -34,6 +33,7 @@ use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
+use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
 use codex_core::protocol::McpStartupStatus;
@@ -45,7 +45,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::SkillLoadOutcomeInfo;
+use codex_core::protocol::SkillsListEntry;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TerminalInteractionEvent;
@@ -334,8 +334,6 @@ pub(crate) struct ChatWidget {
     feedback: codex_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
-    // Current task start time
-    task_started_at: Option<Instant>,
 }
 
 struct UserMessage {
@@ -395,7 +393,7 @@ impl ChatWidget {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
-        self.set_skills_from_outcome(event.skill_load_outcome.as_ref());
+        self.set_skills(None);
         self.conversation_id = Some(event.session_id);
         self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
@@ -412,6 +410,7 @@ impl ChatWidget {
         }
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
+        self.submit_op(Op::ListSkills { cwds: Vec::new() });
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
@@ -420,9 +419,13 @@ impl ChatWidget {
         }
     }
 
-    fn set_skills_from_outcome(&mut self, outcome: Option<&SkillLoadOutcomeInfo>) {
-        let skills = outcome.map(skills_from_outcome);
+    fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.bottom_pane.set_skills(skills);
+    }
+
+    fn set_skills_from_response(&mut self, response: &ListSkillsResponseEvent) {
+        let skills = skills_for_cwd(&self.config.cwd, &response.skills);
+        self.set_skills(Some(skills));
     }
 
     pub(crate) fn open_feedback_note(
@@ -521,20 +524,17 @@ impl ChatWidget {
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
-        self.task_started_at = Some(Instant::now());
         self.request_redraw();
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
-        self.add_final_message_separator();
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
-        self.task_started_at = None;
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -670,7 +670,6 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.stream_controller = None;
-        self.task_started_at = None;
         self.maybe_show_pending_rate_limit_prompt();
     }
     pub(crate) fn get_model_family(&self) -> ModelFamily {
@@ -1014,6 +1013,14 @@ impl ChatWidget {
         self.flush_active_cell();
 
         if self.stream_controller.is_none() {
+            if self.needs_final_message_separator {
+                let elapsed_seconds = self
+                    .bottom_pane
+                    .status_widget()
+                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
+                self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
+                self.needs_final_message_separator = false;
+            }
             self.stream_controller = Some(StreamController::new(
                 self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
             ));
@@ -1024,16 +1031,6 @@ impl ChatWidget {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
         self.request_redraw();
-    }
-
-    fn add_final_message_separator(&mut self) {
-        if self.needs_final_message_separator {
-            let elapsed_seconds = self
-                .task_started_at
-                .map(|start_time| start_time.elapsed().as_secs());
-            self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
-            self.needs_final_message_separator = false;
-        }
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
@@ -1339,7 +1336,6 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
-            task_started_at: None,
         };
 
         widget.prefetch_rate_limits();
@@ -1425,7 +1421,6 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
-            task_started_at: None,
         };
 
         widget.prefetch_rate_limits();
@@ -1895,6 +1890,7 @@ impl ChatWidget {
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
+            EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::DeprecationNotice(ev) => self.on_deprecation_notice(ev),
@@ -2411,7 +2407,8 @@ impl ChatWidget {
             format!("⚠ {effort_label} reasoning effort can quickly consume Plus plan rate limits.")
         });
         let warn_for_model = preset.model.starts_with("gpt-5.1-codex")
-            || preset.model.starts_with("gpt-5.1-codex-max");
+            || preset.model.starts_with("gpt-5.1-codex-max")
+            || preset.model.starts_with("gpt-5.2");
 
         struct EffortChoice {
             stored: Option<ReasoningEffortConfig>,
@@ -3107,6 +3104,10 @@ impl ChatWidget {
         self.bottom_pane.set_custom_prompts(ev.custom_prompts);
     }
 
+    fn on_list_skills(&mut self, ev: ListSkillsResponseEvent) {
+        self.set_skills_from_response(&ev);
+    }
+
     pub(crate) fn open_review_popup(&mut self) {
         let mut items: Vec<SelectionItem> = Vec::new();
 
@@ -3491,16 +3492,23 @@ pub(crate) fn show_review_commit_picker_with_entries(
     });
 }
 
-fn skills_from_outcome(outcome: &SkillLoadOutcomeInfo) -> Vec<SkillMetadata> {
-    outcome
-        .skills
+fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMetadata> {
+    skills_entries
         .iter()
-        .map(|skill| SkillMetadata {
-            name: skill.name.clone(),
-            description: skill.description.clone(),
-            path: skill.path.clone(),
+        .find(|entry| entry.cwd.as_path() == cwd)
+        .map(|entry| {
+            entry
+                .skills
+                .iter()
+                .map(|skill| SkillMetadata {
+                    name: skill.name.clone(),
+                    description: skill.description.clone(),
+                    path: skill.path.clone(),
+                    scope: skill.scope,
+                })
+                .collect()
         })
-        .collect()
+        .unwrap_or_default()
 }
 
 fn find_skill_mentions(text: &str, skills: &[SkillMetadata]) -> Vec<SkillMetadata> {

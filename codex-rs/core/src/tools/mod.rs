@@ -70,9 +70,11 @@ pub fn format_exec_output_for_model_freeform(
     // round to 1 decimal place
     let duration_seconds = ((exec_output.duration.as_secs_f32()) * 10.0).round() / 10.0;
 
-    let total_lines = exec_output.aggregated_output.text.lines().count();
+    let content = build_content_with_timeout(exec_output);
 
-    let formatted_output = truncate_text(&exec_output.aggregated_output.text, truncation_policy);
+    let total_lines = content.lines().count();
+
+    let formatted_output = truncate_text(&content, truncation_policy);
 
     let mut sections = Vec::new();
 
@@ -92,21 +94,21 @@ pub fn format_exec_output_str(
     exec_output: &ExecToolCallOutput,
     truncation_policy: TruncationPolicy,
 ) -> String {
-    let ExecToolCallOutput {
-        aggregated_output, ..
-    } = exec_output;
-
-    let content = aggregated_output.text.as_str();
-
-    let body = if exec_output.timed_out {
-        format!(
-            "command timed out after {} milliseconds\n{content}",
-            exec_output.duration.as_millis()
-        )
-    } else {
-        content.to_string()
-    };
+    let content = build_content_with_timeout(exec_output);
 
     // Truncate for model consumption before serialization.
-    formatted_truncate_text(&body, truncation_policy)
+    formatted_truncate_text(&content, truncation_policy)
+}
+
+/// Extracts exec output content and prepends a timeout message if the command timed out.
+fn build_content_with_timeout(exec_output: &ExecToolCallOutput) -> String {
+    if exec_output.timed_out {
+        format!(
+            "command timed out after {} milliseconds\n{}",
+            exec_output.duration.as_millis(),
+            exec_output.aggregated_output.text
+        )
+    } else {
+        exec_output.aggregated_output.text.clone()
+    }
 }

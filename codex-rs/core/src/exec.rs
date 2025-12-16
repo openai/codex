@@ -220,7 +220,9 @@ async fn exec_windows_sandbox(
     sandbox_policy: &SandboxPolicy,
 ) -> Result<RawExecToolCallOutput> {
     use crate::config::find_codex_home;
+    use crate::safety::is_windows_elevated_sandbox_enabled;
     use codex_windows_sandbox::run_windows_sandbox_capture;
+    use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
 
     let ExecParams {
         command,
@@ -244,16 +246,29 @@ async fn exec_windows_sandbox(
             "windows sandbox: failed to resolve codex_home: {err}"
         )))
     })?;
+    let use_elevated = is_windows_elevated_sandbox_enabled();
     let spawn_res = tokio::task::spawn_blocking(move || {
-        run_windows_sandbox_capture(
-            policy_str.as_str(),
-            &sandbox_cwd,
-            codex_home.as_ref(),
-            command,
-            &cwd,
-            env,
-            timeout_ms,
-        )
+        if use_elevated {
+            run_windows_sandbox_capture_elevated(
+                policy_str.as_str(),
+                &sandbox_cwd,
+                codex_home.as_ref(),
+                command,
+                &cwd,
+                env,
+                timeout_ms,
+            )
+        } else {
+            run_windows_sandbox_capture(
+                policy_str.as_str(),
+                &sandbox_cwd,
+                codex_home.as_ref(),
+                command,
+                &cwd,
+                env,
+                timeout_ms,
+            )
+        }
     })
     .await;
 

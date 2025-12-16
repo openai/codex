@@ -26,7 +26,7 @@ pub struct ToolInvocation {
     pub payload: ToolPayload,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ToolPayload {
     Function {
         arguments: String,

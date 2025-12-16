@@ -28,7 +28,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::High,
-                    description: "Maximizes reasoning depth for complex problems".to_string(),
+                    description: "Greater reasoning depth for complex problems".to_string(),
                 },
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::XHigh,
@@ -94,10 +94,10 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             show_in_picker: true,
         },
         ModelPreset {
-            id: "robin".to_string(),
-            model: "robin".to_string(),
-            display_name: "robin".to_string(),
-            description: "Robin".to_string(),
+            id: "gpt-5.2".to_string(),
+            model: "gpt-5.2".to_string(),
+            display_name: "gpt-5.2".to_string(),
+            description: "Latest frontier model with improvements across knowledge, reasoning and coding".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
@@ -110,7 +110,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::High,
-                    description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
+                    description: "Greater reasoning depth for complex or ambiguous problems".to_string(),
                 },
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::XHigh,
@@ -237,7 +237,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     ]
 });
 
-pub(crate) fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
+pub(super) fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
     PRESETS
         .iter()
         .filter(|preset| preset.show_in_picker)
@@ -245,7 +245,7 @@ pub(crate) fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPr
         .collect()
 }
 
-// todo(aibrahim): remove this once we migrate tests
+#[cfg(any(test, feature = "test-support"))]
 pub fn all_model_presets() -> &'static Vec<ModelPreset> {
     &PRESETS
 }

@@ -1,5 +1,8 @@
 use std::path::PathBuf;
 
+#[cfg(any(windows, test))]
+use codex_utils_absolute_path::AbsolutePathBuf;
+
 use crate::shell::ShellType;
 use crate::shell::detect_shell_type;
 
@@ -38,6 +41,93 @@ pub fn extract_powershell_command(command: &[String]) -> Option<(&str, &str)> {
         i += 1;
     }
     None
+}
+
+/// This function attempts to find a valid PowerShell executable on the system.
+/// It first tries to find pwsh.exe, and if that fails, it tries to find
+/// powershell.exe.
+#[cfg(windows)]
+#[allow(dead_code)]
+pub(crate) fn try_find_powershellish_executable_blocking() -> Option<AbsolutePathBuf> {
+    if let Some(pwsh_path) = try_find_pwsh_executable_blocking() {
+        Some(pwsh_path)
+    } else {
+        try_find_powershell_executable_blocking()
+    }
+}
+
+/// This function attempts to find a powershell.exe executable on the system.
+#[cfg(any(windows, test))]
+pub(crate) fn try_find_powershell_executable_blocking() -> Option<AbsolutePathBuf> {
+    try_find_powershellish_executable_in_path(&["powershell.exe"])
+}
+
+/// This function attempts to find a pwsh.exe executable on the system.
+/// Note that pwsh.exe and powershell.exe are different executables:
+///
+/// - pwsh.exe is the cross-platform PowerShell Core (v6+) executable
+/// - powershell.exe is the Windows PowerShell (v5.1 and earlier) executable
+///
+/// Further, while powershell.exe is included by default on Windows systems,
+/// pwsh.exe must be installed separately by the user. And even when the user
+/// has installed pwsh.exe, it may not be available in the system PATH, in which
+/// case we attempt to locate it via other means.
+#[cfg(any(windows, test))]
+pub(crate) fn try_find_pwsh_executable_blocking() -> Option<AbsolutePathBuf> {
+    if let Some(ps_home) = std::process::Command::new("cmd")
+        .args(["/C", "pwsh", "-NoProfile", "-Command", "$PSHOME"])
+        .output()
+        .ok()
+        .and_then(|out| {
+            if !out.status.success() {
+                return None;
+            }
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let trimmed = stdout.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+    {
+        let candidate = AbsolutePathBuf::resolve_path_against_base("pwsh.exe", &ps_home);
+
+        if let Ok(candidate_abs_path) = candidate
+            && is_powershellish_executable_available(candidate_abs_path.as_path())
+        {
+            return Some(candidate_abs_path);
+        }
+    }
+
+    try_find_powershellish_executable_in_path(&["pwsh.exe"])
+}
+
+#[cfg(any(windows, test))]
+fn try_find_powershellish_executable_in_path(candidates: &[&str]) -> Option<AbsolutePathBuf> {
+    for candidate in candidates {
+        let Ok(resolved_path) = which::which(candidate) else {
+            continue;
+        };
+
+        if !is_powershellish_executable_available(&resolved_path) {
+            continue;
+        }
+
+        let Ok(abs_path) = AbsolutePathBuf::from_absolute_path(resolved_path) else {
+            continue;
+        };
+
+        return Some(abs_path);
+    }
+
+    None
+}
+
+#[cfg(any(windows, test))]
+fn is_powershellish_executable_available(powershell_or_pwsh_exe: &std::path::Path) -> bool {
+    // This test works for both powershell.exe and pwsh.exe.
+    std::process::Command::new(powershell_or_pwsh_exe)
+        .args(["-NoLogo", "-NoProfile", "-Command", "Write-Output ok"])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

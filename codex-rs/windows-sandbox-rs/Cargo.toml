@@ -1,9 +1,9 @@
 [package]
+build = "build.rs"
 edition = "2021"
 license.workspace = true
 name = "codex-windows-sandbox"
 version.workspace = true
-build = "build.rs"
 
 [lib]
 name = "codex_windows_sandbox"
@@ -13,28 +13,40 @@ path = "src/lib.rs"
 name = "codex-windows-sandbox-setup"
 path = "src/bin/setup_main.rs"
 
+[[bin]]
+name = "codex-command-runner"
+path = "src/bin/command_runner.rs"
+
 [dependencies]
 anyhow = "1.0"
 base64 = { workspace = true }
+chrono = { version = "0.4.42", default-features = false, features = [
+    "clock",
+    "std",
+] }
+codex-utils-absolute-path = { workspace = true }
 dunce = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_WindowsFirewall",
     "Win32_System_Com",
     "Win32_System_Variant",
 ] }
+
 [dependencies.codex-protocol]
 package = "codex-protocol"
 path = "../protocol"
+
 [dependencies.rand]
 default-features = false
 features = ["std", "small_rng"]
 version = "0.8"
+
 [dependencies.dirs-next]
 version = "2.0"
+
 [dependencies.windows-sys]
 features = [
     "Win32_Foundation",
@@ -63,6 +75,7 @@ features = [
     "Win32_System_Registry",
 ]
 version = "0.52"
+
 [dev-dependencies]
 tempfile = "3"
 

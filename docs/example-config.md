@@ -37,7 +37,7 @@ model_provider = "openai"
 # Reasoning & Verbosity (Responses API capable models)
 ################################################################################
 
-# Reasoning effort: minimal | low | medium | high | xhigh (default: medium; xhigh only on gpt-5.1-codex-max)
+# Reasoning effort: minimal | low | medium | high | xhigh (default: medium; xhigh on gpt-5.1-codex-max and gpt-5.2)
 model_reasoning_effort = "medium"
 
 # Reasoning summary: auto | concise | detailed | none (default: auto)
@@ -220,6 +220,7 @@ view_image_tool = true
 web_search_request = false
 ghost_commit = false
 enable_experimental_windows_sandbox = false
+skills = false
 
 ################################################################################
 # Experimental toggles (legacy; prefer [features])

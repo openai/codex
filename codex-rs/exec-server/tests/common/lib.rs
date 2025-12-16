@@ -72,9 +72,9 @@ pub async fn write_default_execpolicy<P>(policy: &str, codex_home: P) -> anyhow:
 where
     P: AsRef<Path>,
 {
-    let policy_dir = codex_home.as_ref().join("policy");
+    let policy_dir = codex_home.as_ref().join("rules");
     tokio::fs::create_dir_all(&policy_dir).await?;
-    tokio::fs::write(policy_dir.join("default.codexpolicy"), policy).await?;
+    tokio::fs::write(policy_dir.join("default.rules"), policy).await?;
     Ok(())
 }
 

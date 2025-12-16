@@ -136,7 +136,6 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    #[cfg(test)]
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
         self.status.as_ref()
     }

@@ -26,12 +26,12 @@ use base64::Engine;
 use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::config::types::ReasoningSummaryFormat;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::openai_models::ReasoningSummaryFormat;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -1664,8 +1664,8 @@ mod tests {
         assert_eq!(
             rendered,
             vec![
-                "✔ You approved codex".to_string(),
-                "  to run echo something".to_string(),
+                "✔ You approved codex to".to_string(),
+                "  run echo something".to_string(),
                 "  really long to ensure".to_string(),
                 "  wrapping happens this".to_string(),
                 "  time".to_string(),

@@ -595,8 +595,8 @@ mod tests {
             lines,
             vec![
                 "- outer item with".to_string(),
-                "  several words".to_string(),
-                "  to wrap".to_string(),
+                "  several words to".to_string(),
+                "  wrap".to_string(),
                 "    - inner item".to_string(),
                 "      that also".to_string(),
                 "      needs wrapping".to_string(),

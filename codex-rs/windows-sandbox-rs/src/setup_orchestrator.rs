@@ -59,7 +59,7 @@ pub fn run_setup_refresh(
         offline_username: OFFLINE_USERNAME.to_string(),
         online_username: ONLINE_USERNAME.to_string(),
         codex_home: codex_home.to_path_buf(),
-        read_roots: gather_read_roots(command_cwd, policy, policy_cwd),
+        read_roots: gather_read_roots(command_cwd, policy),
         write_roots: gather_write_roots(policy, policy_cwd, command_cwd, env_map),
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         refresh_only: true,
@@ -183,11 +183,7 @@ fn canonical_existing(paths: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-pub(crate) fn gather_read_roots(
-    command_cwd: &Path,
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
-) -> Vec<PathBuf> {
+pub(crate) fn gather_read_roots(command_cwd: &Path, policy: &SandboxPolicy) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
     for p in [
         PathBuf::from(r"C:\Windows"),
@@ -203,12 +199,7 @@ pub(crate) fn gather_read_roots(
     roots.push(command_cwd.to_path_buf());
     if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
         for root in writable_roots {
-            let candidate = if root.is_absolute() {
-                root.clone()
-            } else {
-                policy_cwd.join(root)
-            };
-            roots.push(candidate);
+            roots.push(root.to_path_buf());
         }
     }
     canonical_existing(&roots)
@@ -375,7 +366,7 @@ pub fn run_elevated_setup(
     let read_roots = if let Some(roots) = read_roots_override {
         roots
     } else {
-        gather_read_roots(command_cwd, policy, policy_cwd)
+        gather_read_roots(command_cwd, policy)
     };
     let payload = ElevationPayload {
         version: SETUP_VERSION,

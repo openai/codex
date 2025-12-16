@@ -64,7 +64,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                 },
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::High,
-                    description: "Maximizes reasoning depth for complex problems".to_string(),
+                    description: "Greater reasoning depth for complex problems".to_string(),
                 },
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::XHigh,
@@ -117,10 +117,12 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             is_default: false,
         },
         Model {
-            id: "robin".to_string(),
-            model: "robin".to_string(),
-            display_name: "robin".to_string(),
-            description: "Robin".to_string(),
+            id: "gpt-5.2".to_string(),
+            model: "gpt-5.2".to_string(),
+            display_name: "gpt-5.2".to_string(),
+            description:
+                "Latest frontier model with improvements across knowledge, reasoning and coding"
+                    .to_string(),
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Low,
@@ -136,7 +138,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                 },
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::High,
-                    description: "Maximizes reasoning depth for complex or ambiguous problems"
+                    description: "Greater reasoning depth for complex or ambiguous problems"
                         .to_string(),
                 },
                 ReasoningEffortOption {
@@ -274,7 +276,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(fourth_response)?;
 
     assert_eq!(fourth_items.len(), 1);
-    assert_eq!(fourth_items[0].id, "robin");
+    assert_eq!(fourth_items[0].id, "gpt-5.2");
     let fifth_cursor = fourth_cursor.ok_or_else(|| anyhow!("cursor for fifth page"))?;
 
     let fifth_request = mcp

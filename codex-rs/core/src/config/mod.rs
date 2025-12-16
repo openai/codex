@@ -7,16 +7,12 @@ use crate::config::types::Notifications;
 use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
-use crate::config::types::ReasoningSummaryFormat;
 use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
-use crate::config_loader::LoadedConfigLayers;
-use crate::config_loader::load_config_as_toml;
-use crate::config_loader::load_config_layers_with_overrides;
-use crate::config_loader::merge_toml_values;
+use crate::config_loader::load_config_layers_state;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
@@ -39,10 +35,11 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningSummaryFormat;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dirs::home_dir;
-use dunce::canonicalize;
 use serde::Deserialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
@@ -50,6 +47,8 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(test)]
+use tempfile::tempdir;
 
 use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
@@ -57,9 +56,15 @@ use toml_edit::DocumentMut;
 
 pub mod edit;
 pub mod profile;
+pub mod service;
 pub mod types;
 
+pub use service::ConfigService;
+pub use service::ConfigServiceError;
+
 const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex-max";
+
+pub use codex_git::GhostSnapshotConfig;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -67,6 +72,17 @@ const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex-max";
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+
+#[cfg(test)]
+pub(crate) fn test_config() -> Config {
+    let codex_home = tempdir().expect("create temp dir");
+    Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )
+    .expect("load default test config")
+}
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -252,6 +268,9 @@ pub struct Config {
     /// https://github.com/modelcontextprotocol/rust-sdk
     pub use_experimental_use_rmcp_client: bool,
 
+    /// Settings for ghost snapshots (used for undo).
+    pub ghost_snapshot: GhostSnapshotConfig,
+
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
 
@@ -329,29 +348,8 @@ async fn load_resolved_config(
     cli_overrides: Vec<(String, TomlValue)>,
     overrides: crate::config_loader::LoaderOverrides,
 ) -> std::io::Result<TomlValue> {
-    let layers = load_config_layers_with_overrides(codex_home, overrides).await?;
-    Ok(apply_overlays(layers, cli_overrides))
-}
-
-fn apply_overlays(
-    layers: LoadedConfigLayers,
-    cli_overrides: Vec<(String, TomlValue)>,
-) -> TomlValue {
-    let LoadedConfigLayers {
-        mut base,
-        managed_config,
-        managed_preferences,
-    } = layers;
-
-    for (path, value) in cli_overrides.into_iter() {
-        apply_toml_override(&mut base, &path, value);
-    }
-
-    for overlay in [managed_config, managed_preferences].into_iter().flatten() {
-        merge_toml_values(&mut base, &overlay);
-    }
-
-    base
+    let layers = load_config_layers_state(codex_home, &cli_overrides, overrides).await?;
+    Ok(layers.effective_config())
 }
 
 fn deserialize_config_toml_with_base(
@@ -369,7 +367,12 @@ fn deserialize_config_toml_with_base(
 pub async fn load_global_mcp_servers(
     codex_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
-    let root_value = load_config_as_toml(codex_home).await?;
+    let root_value = load_resolved_config(
+        codex_home,
+        Vec::new(),
+        crate::config_loader::LoaderOverrides::default(),
+    )
+    .await?;
     let Some(servers_value) = root_value.get("mcp_servers") else {
         return Ok(BTreeMap::new());
     };
@@ -528,49 +531,6 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
     Ok(())
 }
 
-/// Apply a single dotted-path override onto a TOML value.
-fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
-    use toml::value::Table;
-
-    let segments: Vec<&str> = path.split('.').collect();
-    let mut current = root;
-
-    for (idx, segment) in segments.iter().enumerate() {
-        let is_last = idx == segments.len() - 1;
-
-        if is_last {
-            match current {
-                TomlValue::Table(table) => {
-                    table.insert(segment.to_string(), value);
-                }
-                _ => {
-                    let mut table = Table::new();
-                    table.insert(segment.to_string(), value);
-                    *current = TomlValue::Table(table);
-                }
-            }
-            return;
-        }
-
-        // Traverse or create intermediate object.
-        match current {
-            TomlValue::Table(table) => {
-                current = table
-                    .entry(segment.to_string())
-                    .or_insert_with(|| TomlValue::Table(Table::new()));
-            }
-            _ => {
-                *current = TomlValue::Table(Table::new());
-                if let TomlValue::Table(tbl) = current {
-                    current = tbl
-                        .entry(segment.to_string())
-                        .or_insert_with(|| TomlValue::Table(Table::new()));
-                }
-            }
-        }
-    }
-}
-
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigToml {
@@ -703,6 +663,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub features: Option<FeaturesToml>,
 
+    /// Settings for ghost snapshots (used for undo).
+    #[serde(default)]
+    pub ghost_snapshot: Option<GhostSnapshotToml>,
+
     /// When `true`, checks for Codex updates on startup and surfaces update prompts.
     /// Set to `false` only if your Codex updates are centrally managed.
     /// Defaults to `true`.
@@ -790,6 +754,17 @@ impl From<ToolsToml> for Tools {
             view_image: tools_toml.view_image,
         }
     }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct GhostSnapshotToml {
+    /// Exclude untracked files larger than this many bytes from ghost snapshots.
+    #[serde(alias = "ignore_untracked_files_over_bytes")]
+    pub ignore_large_untracked_files: Option<i64>,
+    /// Ignore untracked directories that contain this many files or more.
+    /// (Still emits a warning.)
+    #[serde(alias = "large_untracked_dir_warning_threshold")]
+    pub ignore_large_untracked_dirs: Option<i64>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1001,7 +976,12 @@ impl Config {
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
         #[cfg(target_os = "windows")]
         {
-            crate::safety::set_windows_sandbox_enabled(features.enabled(Feature::WindowsSandbox));
+            // Base flag controls sandbox on/off; elevated only applies when base is enabled.
+            let sandbox_enabled = features.enabled(Feature::WindowsSandbox);
+            crate::safety::set_windows_sandbox_enabled(sandbox_enabled);
+            let elevated_enabled =
+                sandbox_enabled && features.enabled(Feature::WindowsSandboxElevated);
+            crate::safety::set_windows_elevated_sandbox_enabled(elevated_enabled);
         }
 
         let resolved_cwd = {
@@ -1022,13 +1002,10 @@ impl Config {
                 }
             }
         };
-        let additional_writable_roots: Vec<PathBuf> = additional_writable_roots
+        let additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
-            .map(|path| {
-                let absolute = resolve_path(&resolved_cwd, &path);
-                canonicalize(&absolute).unwrap_or(absolute)
-            })
-            .collect();
+            .map(|path| AbsolutePathBuf::resolve_path_against_base(path, &resolved_cwd))
+            .collect::<Result<Vec<_>, _>>()?;
         let active_project = cfg
             .get_active_project(&resolved_cwd)
             .unwrap_or(ProjectConfig { trust_level: None });
@@ -1089,6 +1066,26 @@ impl Config {
         let shell_environment_policy = cfg.shell_environment_policy.into();
 
         let history = cfg.history.unwrap_or_default();
+
+        let ghost_snapshot = {
+            let mut config = GhostSnapshotConfig::default();
+            if let Some(ghost_snapshot) = cfg.ghost_snapshot.as_ref()
+                && let Some(ignore_over_bytes) = ghost_snapshot.ignore_large_untracked_files
+            {
+                config.ignore_large_untracked_files = if ignore_over_bytes > 0 {
+                    Some(ignore_over_bytes)
+                } else {
+                    None
+                };
+            }
+            if let Some(ghost_snapshot) = cfg.ghost_snapshot.as_ref()
+                && let Some(threshold) = ghost_snapshot.ignore_large_untracked_dirs
+            {
+                config.ignore_large_untracked_dirs =
+                    if threshold > 0 { Some(threshold) } else { None };
+            }
+            config
+        };
 
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
@@ -1222,6 +1219,7 @@ impl Config {
             tools_web_search_request,
             use_experimental_unified_exec_tool,
             use_experimental_use_rmcp_client,
+            ghost_snapshot,
             features,
             active_profile: active_profile_name,
             active_project,
@@ -1243,10 +1241,12 @@ impl Config {
                     .environment
                     .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
                 let exporter = t.exporter.unwrap_or(OtelExporterKind::None);
+                let trace_exporter = t.trace_exporter.unwrap_or_else(|| exporter.clone());
                 OtelConfig {
                     log_user_prompt,
                     environment,
                     exporter,
+                    trace_exporter,
                 }
             },
         };
@@ -1358,6 +1358,7 @@ mod tests {
     use crate::features::Feature;
 
     use super::*;
+    use core_test_support::test_absolute_path;
     use pretty_assertions::assert_eq;
 
     use std::time::Duration;
@@ -1456,18 +1457,22 @@ network_access = true  # This should be ignored.
             }
         );
 
-        let sandbox_workspace_write = r#"
+        let writable_root = test_absolute_path("/my/workspace");
+        let sandbox_workspace_write = format!(
+            r#"
 sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
 writable_roots = [
-    "/my/workspace",
+    {},
 ]
 exclude_tmpdir_env_var = true
 exclude_slash_tmp = true
-"#;
+"#,
+            serde_json::json!(writable_root)
+        );
 
-        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
+        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(&sandbox_workspace_write)
             .expect("TOML deserialization should succeed");
         let sandbox_mode_override = None;
         let resolution = sandbox_workspace_write_cfg.derive_sandbox_policy(
@@ -1488,7 +1493,7 @@ exclude_slash_tmp = true
                 resolution,
                 SandboxPolicyResolution {
                     policy: SandboxPolicy::WorkspaceWrite {
-                        writable_roots: vec![PathBuf::from("/my/workspace")],
+                        writable_roots: vec![writable_root.clone()],
                         network_access: false,
                         exclude_tmpdir_env_var: true,
                         exclude_slash_tmp: true,
@@ -1498,21 +1503,24 @@ exclude_slash_tmp = true
             );
         }
 
-        let sandbox_workspace_write = r#"
+        let sandbox_workspace_write = format!(
+            r#"
 sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
 writable_roots = [
-    "/my/workspace",
+    {},
 ]
 exclude_tmpdir_env_var = true
 exclude_slash_tmp = true
 
 [projects."/tmp/test"]
 trust_level = "trusted"
-"#;
+"#,
+            serde_json::json!(writable_root)
+        );
 
-        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
+        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(&sandbox_workspace_write)
             .expect("TOML deserialization should succeed");
         let sandbox_mode_override = None;
         let resolution = sandbox_workspace_write_cfg.derive_sandbox_policy(
@@ -1533,7 +1541,7 @@ trust_level = "trusted"
                 resolution,
                 SandboxPolicyResolution {
                     policy: SandboxPolicy::WorkspaceWrite {
-                        writable_roots: vec![PathBuf::from("/my/workspace")],
+                        writable_roots: vec![writable_root],
                         network_access: false,
                         exclude_tmpdir_env_var: true,
                         exclude_slash_tmp: true,
@@ -1565,7 +1573,7 @@ trust_level = "trusted"
             temp_dir.path().to_path_buf(),
         )?;
 
-        let expected_backend = canonicalize(&backend).expect("canonicalize backend directory");
+        let expected_backend = AbsolutePathBuf::try_from(backend).unwrap();
         if cfg!(target_os = "windows") {
             assert!(
                 config.forced_auto_mode_downgraded_on_windows,
@@ -2973,6 +2981,7 @@ model_verbosity = "high"
                 tools_web_search_request: false,
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
+                ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
@@ -3047,6 +3056,7 @@ model_verbosity = "high"
             tools_web_search_request: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
+            ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -3136,6 +3146,7 @@ model_verbosity = "high"
             tools_web_search_request: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
+            ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -3211,6 +3222,7 @@ model_verbosity = "high"
             tools_web_search_request: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
+            ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },

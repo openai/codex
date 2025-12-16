@@ -27,6 +27,8 @@ use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::McpStartupStatus;
+use codex_core::protocol::McpStartupUpdateEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
@@ -56,6 +58,7 @@ use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -125,7 +128,6 @@ fn resumed_initial_messages_render_history() {
                 message: "assistant reply".to_string(),
             }),
         ]),
-        skill_load_outcome: None,
         rollout_path: rollout_file.path().to_path_buf(),
     };
 
@@ -464,7 +466,6 @@ fn make_chatwidget_manual(
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
-        task_started_at: None,
     };
     (widget, rx, op_rx)
 }
@@ -1860,7 +1861,7 @@ fn preset_matching_ignores_extra_writable_roots() {
         .find(|p| p.id == "auto")
         .expect("auto preset exists");
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![PathBuf::from("C:\\extra")],
+        writable_roots: vec![AbsolutePathBuf::try_from("C:\\extra").unwrap()],
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -1985,7 +1986,7 @@ fn single_reasoning_option_skips_selection() {
 
     let single_effort = vec![ReasoningEffortPreset {
         effort: ReasoningEffortConfig::High,
-        description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
+        description: "Greater reasoning depth for complex or ambiguous problems".to_string(),
     }];
     let preset = ModelPreset {
         id: "model-with-single-reasoning".to_string(),
@@ -2494,6 +2495,28 @@ fn status_widget_active_snapshot() {
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status widget");
     assert_snapshot!("status_widget_active", terminal.backend());
+}
+
+#[test]
+fn mcp_startup_header_booting_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None);
+    chat.show_welcome_banner = false;
+
+    chat.handle_codex_event(Event {
+        id: "mcp-1".into(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "alpha".into(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+
+    let height = chat.desired_height(80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw chat widget");
+    assert_snapshot!("mcp_startup_header_booting", terminal.backend());
 }
 
 #[test]
