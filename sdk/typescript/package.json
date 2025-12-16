@@ -41,8 +41,7 @@
     "test:watch": "jest --watch",
     "coverage": "jest --coverage",
     "format": "prettier --check .",
-    "format:fix": "prettier --write .",
-    "prepare": "pnpm run build"
+    "format:fix": "prettier --write ."
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.24.0",
