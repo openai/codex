@@ -1187,6 +1187,9 @@ impl App {
             }
         };
 
+        // Pause crossterm events to avoid stdin conflicts with editor.
+        tui.pause_events();
+
         // Leave alt screen if active to avoid conflicts with editor.
         // This is defensive as we gate the external editor launch on there being no overlay.
         let was_alt_screen = tui.is_alt_screen_active();
@@ -1267,7 +1270,6 @@ impl App {
     fn request_external_editor_launch(&mut self, tui: &mut tui::Tui) {
         self.chat_widget
             .set_external_editor_state(ExternalEditorState::Requested);
-        tui.pause_events();
         self.chat_widget.set_footer_hint_override(Some(vec![(
             EXTERNAL_EDITOR_HINT.to_string(),
             String::new(),

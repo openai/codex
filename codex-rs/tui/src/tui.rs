@@ -215,7 +215,6 @@ impl Tui {
             suspend_context: SuspendContext::new(),
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
-            events_paused: Arc::new(AtomicBool::new(false)),
             enhanced_keys_supported,
             notification_backend: Some(detect_backend()),
         }
@@ -233,14 +232,13 @@ impl Tui {
         self.alt_screen_active.load(Ordering::Relaxed)
     }
 
-    // todo(sayan) unused for now; intend to use to enable opening external editors
-    #[allow(unused)]
+    // Drop crossterm EventStream to avoid stdin conflicts with other processes.
     pub fn pause_events(&mut self) {
         self.event_broker.pause_events();
     }
 
-    // todo(sayan) unused for now; intend to use to enable opening external editors
-    #[allow(unused)]
+    // Resume crossterm EventStream to resume stdin polling.
+    // Inverse of `pause_events`.
     pub fn resume_events(&mut self) {
         self.event_broker.resume_events();
     }
