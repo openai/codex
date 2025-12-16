@@ -729,6 +729,12 @@ impl Session {
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
 
+        if sess.enabled(Feature::Skills) {
+            sess.services
+                .skills_manager
+                .register_skills_update_listener(tx_event.clone());
+        }
+
         Ok(sess)
     }
 
@@ -1584,8 +1590,8 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ListCustomPrompts => {
                 handlers::list_custom_prompts(&sess, sub.id.clone()).await;
             }
-            Op::ListSkills { cwds } => {
-                handlers::list_skills(&sess, sub.id.clone(), cwds).await;
+            Op::ListSkills { cwds, force_reload } => {
+                handlers::list_skills(&sess, sub.id.clone(), cwds, force_reload).await;
             }
             Op::Undo => {
                 handlers::undo(&sess, sub.id.clone()).await;
@@ -1885,7 +1891,12 @@ mod handlers {
         sess.send_event_raw(event).await;
     }
 
-    pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>) {
+    pub async fn list_skills(
+        sess: &Session,
+        sub_id: String,
+        cwds: Vec<PathBuf>,
+        force_reload: bool,
+    ) {
         let cwds = if cwds.is_empty() {
             let state = sess.state.lock().await;
             vec![state.session_configuration.cwd.clone()]
@@ -1896,7 +1907,7 @@ mod handlers {
             let skills_manager = &sess.services.skills_manager;
             cwds.into_iter()
                 .map(|cwd| {
-                    let outcome = skills_manager.skills_for_cwd(&cwd);
+                    let outcome = skills_manager.skills_for_cwd_with_options(&cwd, force_reload);
                     let errors = super::errors_to_info(&outcome.errors);
                     let skills = super::skills_to_info(&outcome.skills);
                     SkillsListEntry {

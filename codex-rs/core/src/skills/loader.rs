@@ -3,7 +3,7 @@ use crate::git_info::resolve_root_git_project_for_trust;
 use crate::skills::model::SkillError;
 use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
-use crate::skills::public::public_skills_dir;
+use crate::skills::public::public_cache_root_dir;
 use codex_protocol::protocol::SkillScope;
 use dunce::canonicalize as normalize_path;
 use serde::Deserialize;
@@ -94,7 +94,7 @@ pub(crate) fn user_skills_root(codex_home: &Path) -> SkillRoot {
 
 pub(crate) fn public_skills_root(codex_home: &Path) -> SkillRoot {
     SkillRoot {
-        path: public_skills_dir(codex_home),
+        path: public_cache_root_dir(codex_home),
         scope: SkillScope::Public,
     }
 }
@@ -300,11 +300,11 @@ mod tests {
     }
 
     fn write_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) -> PathBuf {
-        write_skill_at(codex_home.path(), dir, name, description)
+        write_skill_at(&codex_home.path().join("skills"), dir, name, description)
     }
 
     fn write_skill_at(root: &Path, dir: &str, name: &str, description: &str) -> PathBuf {
-        let skill_dir = root.join(format!("skills/{dir}"));
+        let skill_dir = root.join(dir);
         fs::create_dir_all(&skill_dir).unwrap();
         let indented_description = description.replace('\n', "\n  ");
         let content = format!(
@@ -404,13 +404,14 @@ mod tests {
             .expect("git init");
         assert!(status.success(), "git init failed");
 
-        let skills_root = repo_dir.path().join(REPO_ROOT_CONFIG_DIR_NAME);
+        let skills_root = repo_dir
+            .path()
+            .join(REPO_ROOT_CONFIG_DIR_NAME)
+            .join(SKILLS_DIR_NAME);
         write_skill_at(&skills_root, "repo", "repo-skill", "from repo");
         let mut cfg = make_config(&codex_home);
         cfg.cwd = repo_dir.path().to_path_buf();
-        let repo_root = normalize_path(&skills_root)
-            .unwrap_or_else(|_| skills_root.clone())
-            .join(SKILLS_DIR_NAME);
+        let repo_root = normalize_path(&skills_root).unwrap_or_else(|_| skills_root.clone());
 
         let outcome = load_skills(&cfg);
         assert!(
@@ -440,7 +441,10 @@ mod tests {
         fs::create_dir_all(&nested_dir).unwrap();
 
         write_skill_at(
-            &repo_dir.path().join(REPO_ROOT_CONFIG_DIR_NAME),
+            &repo_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
             "root",
             "root-skill",
             "from root",
@@ -449,7 +453,8 @@ mod tests {
             &repo_dir
                 .path()
                 .join("nested")
-                .join(REPO_ROOT_CONFIG_DIR_NAME),
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
             "nested",
             "nested-skill",
             "from nested",
@@ -474,7 +479,10 @@ mod tests {
         let work_dir = tempfile::tempdir().expect("tempdir");
 
         write_skill_at(
-            &work_dir.path().join(REPO_ROOT_CONFIG_DIR_NAME),
+            &work_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
             "local",
             "local-skill",
             "from cwd",
@@ -508,7 +516,10 @@ mod tests {
 
         write_skill(&codex_home, "user", "dupe-skill", "from user");
         write_skill_at(
-            &repo_dir.path().join(REPO_ROOT_CONFIG_DIR_NAME),
+            &repo_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
             "repo",
             "dupe-skill",
             "from repo",
@@ -536,7 +547,10 @@ mod tests {
         fs::create_dir_all(&repo_dir).unwrap();
 
         write_skill_at(
-            &outer_dir.path().join(REPO_ROOT_CONFIG_DIR_NAME),
+            &outer_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
             "outer",
             "outer-skill",
             "from outer",
@@ -574,7 +588,10 @@ mod tests {
         assert!(status.success(), "git init failed");
 
         write_skill_at(
-            &repo_dir.path().join(REPO_ROOT_CONFIG_DIR_NAME),
+            &repo_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
             "repo",
             "repo-skill",
             "from repo",
@@ -604,7 +621,10 @@ mod tests {
         fs::create_dir_all(&nested_dir).unwrap();
 
         write_skill_at(
-            &outer_dir.path().join(REPO_ROOT_CONFIG_DIR_NAME),
+            &outer_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
             "outer",
             "outer-skill",
             "from outer",
@@ -688,7 +708,10 @@ mod tests {
         assert!(status.success(), "git init failed");
 
         write_skill_at(
-            &repo_dir.path().join(REPO_ROOT_CONFIG_DIR_NAME),
+            &repo_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
             "repo",
             "dupe-skill",
             "from repo",
