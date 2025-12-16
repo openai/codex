@@ -1097,6 +1097,9 @@ impl ChatWidget {
         if updated_active_cell && !set_new_active_cell && !flushed_active_cell {
             self.bump_active_cell_revision();
         }
+        if (set_new_active_cell || updated_active_cell) && !flushed_active_cell {
+            self.request_redraw();
+        }
     }
 
     pub(crate) fn handle_patch_apply_end_now(
