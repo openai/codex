@@ -41,6 +41,8 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::AgentMessage(_)
         | EventMsg::AgentReasoning(_)
         | EventMsg::AgentReasoningRawContent(_)
+        | EventMsg::SubAgentRunBegin(_)
+        | EventMsg::SubAgentRunEnd(_)
         | EventMsg::TokenCount(_)
         | EventMsg::ContextCompacted(_)
         | EventMsg::EnteredReviewMode(_)
@@ -59,8 +61,6 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::SessionConfigured(_)
         | EventMsg::McpToolCallBegin(_)
         | EventMsg::McpToolCallEnd(_)
-        | EventMsg::SubAgentRunBegin(_)
-        | EventMsg::SubAgentRunEnd(_)
         | EventMsg::WebSearchBegin(_)
         | EventMsg::WebSearchEnd(_)
         | EventMsg::ExecCommandBegin(_)
@@ -91,5 +91,32 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::AgentMessageContentDelta(_)
         | EventMsg::ReasoningContentDelta(_)
         | EventMsg::ReasoningRawContentDelta(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::SubAgentRunBeginEvent;
+    use crate::protocol::SubAgentRunEndEvent;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn subagent_run_events_are_persisted() {
+        let begin = EventMsg::SubAgentRunBegin(SubAgentRunBeginEvent {
+            call_id: "call-1".to_string(),
+            name: "helper".to_string(),
+            description: "desc".to_string(),
+            color: None,
+            prompt: "do the thing".to_string(),
+        });
+        assert_eq!(should_persist_event_msg(&begin), true);
+
+        let end = EventMsg::SubAgentRunEnd(SubAgentRunEndEvent {
+            call_id: "call-1".to_string(),
+            duration_ms: 123,
+            success: true,
+        });
+        assert_eq!(should_persist_event_msg(&end), true);
     }
 }
