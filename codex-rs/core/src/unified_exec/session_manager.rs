@@ -643,11 +643,6 @@ impl UnifiedExecSessionManager {
             entry.session.terminate();
         }
     }
-
-    pub(crate) async fn close_open_sessions(&self) {
-        // Terminating sessions ensures the exit watcher emits ExecCommandEnd events.
-        self.terminate_all_sessions().await;
-    }
 }
 
 enum SessionStatus {
