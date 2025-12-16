@@ -63,6 +63,10 @@ pub(crate) struct EventProcessorWithHumanOutput {
     last_message_path: Option<PathBuf>,
     last_total_token_usage: Option<codex_core::protocol::TokenUsageInfo>,
     final_message: Option<String>,
+
+    // Last unified diff that was printed, to avoid duplicate
+    // "file update:" blocks in non-interactive mode.
+    last_unified_diff: Option<String>,
 }
 
 impl EventProcessorWithHumanOutput {
@@ -89,6 +93,7 @@ impl EventProcessorWithHumanOutput {
                 last_message_path,
                 last_total_token_usage: None,
                 final_message: None,
+                last_unified_diff: None,
             }
         } else {
             Self {
@@ -106,6 +111,7 @@ impl EventProcessorWithHumanOutput {
                 last_message_path,
                 last_total_token_usage: None,
                 final_message: None,
+                last_unified_diff: None,
             }
         }
     }
@@ -474,12 +480,23 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
             }
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => {
-                ts_msg!(
-                    self,
-                    "{}",
-                    "file update:".style(self.magenta).style(self.italic)
-                );
-                eprintln!("{unified_diff}");
+                // Suppress duplicate TurnDiff events that carry the exact same
+                // unified diff content (these can occur at patch end and again
+                // at turn completion). If content changed, show it again.
+                let is_duplicate = self
+                    .last_unified_diff
+                    .as_deref()
+                    .map_or(false, |prev| prev == unified_diff);
+
+                if !is_duplicate {
+                    ts_msg!(
+                        self,
+                        "{}",
+                        "file update:".style(self.magenta).style(self.italic)
+                    );
+                    eprintln!("{unified_diff}");
+                    self.last_unified_diff = Some(unified_diff.clone());
+                }
             }
             EventMsg::AgentReasoning(agent_reasoning_event) => {
                 if self.show_agent_reasoning {
