@@ -55,7 +55,7 @@ impl ToolRouter {
             .any(|config| config.spec.name() == tool_name)
     }
 
-    #[instrument(skip_all, err)]
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn build_tool_call(
         session: &Session,
         item: ResponseItem,
@@ -131,7 +131,7 @@ impl ToolRouter {
         }
     }
 
-    #[instrument(skip_all, err)]
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn dispatch_tool_call(
         &self,
         session: Arc<Session>,

@@ -13,6 +13,7 @@ use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use assert_cmd::cargo::cargo_bin;
 
+pub mod process;
 pub mod responses;
 pub mod streaming_sse;
 pub mod test_codex;
