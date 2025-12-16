@@ -48,7 +48,8 @@ pub fn get_update_action() -> Option<UpdateAction> {
     None
 }
 
-pub(crate) fn update_available_nudge() -> String {
+/// Returns the standard update-available message for clients to display.
+pub fn update_available_nudge() -> String {
     match get_update_action() {
         Some(action) => {
             let command = action.command_str();

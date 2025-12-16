@@ -676,7 +676,33 @@ impl ChatWidget {
         self.model_family.clone()
     }
 
+    fn maybe_append_update_nudge(&self, message: String) -> String {
+        if !self.should_show_update_nudge() {
+            return message;
+        }
+        let nudge = crate::update_action::update_available_nudge();
+        if message.is_empty() {
+            nudge
+        } else {
+            format!("{message}\n{nudge}")
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn should_show_update_nudge(&self) -> bool {
+        if env!("CARGO_PKG_VERSION") == "0.0.0" {
+            return false;
+        }
+        crate::updates::get_upgrade_version(&self.config).is_some()
+    }
+
+    #[cfg(debug_assertions)]
+    fn should_show_update_nudge(&self) -> bool {
+        false
+    }
+
     fn on_error(&mut self, message: String) {
+        let message = self.maybe_append_update_nudge(message);
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
@@ -955,6 +981,7 @@ impl ChatWidget {
     }
 
     fn on_stream_error(&mut self, message: String) {
+        let message = self.maybe_append_update_nudge(message);
         if self.retry_status_header.is_none() {
             self.retry_status_header = Some(self.current_status_header.clone());
         }

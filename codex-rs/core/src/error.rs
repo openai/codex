@@ -3,7 +3,6 @@ use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
-use crate::update_action::update_available_nudge;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
@@ -13,7 +12,6 @@ use codex_protocol::ConversationId;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::StreamErrorEvent;
 use reqwest::StatusCode;
 use serde_json;
 use std::io;
@@ -25,43 +23,6 @@ pub type Result<T> = std::result::Result<T, CodexErr>;
 
 /// Limit UI error messages to a reasonable size while keeping useful context.
 const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024; // 4 KiB
-
-pub(crate) fn error_event_with_update_nudge(
-    message: String,
-    codex_error_info: Option<CodexErrorInfo>,
-    is_up_to_date: bool,
-) -> ErrorEvent {
-    let message = maybe_append_update_nudge(message, is_up_to_date);
-    ErrorEvent {
-        message,
-        codex_error_info,
-    }
-}
-
-pub(crate) fn stream_error_event_with_update_nudge(
-    message: String,
-    codex_error_info: Option<CodexErrorInfo>,
-    is_up_to_date: bool,
-) -> StreamErrorEvent {
-    StreamErrorEvent {
-        message: maybe_append_update_nudge(message, is_up_to_date),
-        codex_error_info,
-    }
-}
-
-fn maybe_append_update_nudge(message: String, is_up_to_date: bool) -> String {
-    // skip if version is 0.0.0
-    let is_dev = env!("CARGO_PKG_VERSION") == "0.0.0";
-    if is_up_to_date || is_dev {
-        return message;
-    }
-    let nudge = update_available_nudge();
-    if message.is_empty() {
-        nudge
-    } else {
-        format!("{message}\n{nudge}")
-    }
-}
 
 #[derive(Error, Debug)]
 pub enum SandboxErr {

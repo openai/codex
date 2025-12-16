@@ -83,8 +83,6 @@ use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::error::error_event_with_update_nudge;
-use crate::error::stream_error_event_with_update_nudge;
 #[cfg(test)]
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
@@ -98,7 +96,6 @@ use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::DeprecationNoticeEvent;
-use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
@@ -248,19 +245,11 @@ impl Codex {
         let exec_policy = Arc::new(RwLock::new(exec_policy));
 
         let config = Arc::new(config);
-        let mut remote_models_error: Option<EventMsg> = None;
-        let is_up_to_date = compute_is_up_to_date(&config);
 
         if config.features.enabled(Feature::RemoteModels)
             && let Err(err) = models_manager.refresh_available_models(&config).await
         {
             error!("failed to refresh available models: {err:?}");
-            if !is_up_to_date {
-                remote_models_error = Some(EventMsg::Error(ErrorEvent {
-                    message: "failed to refresh available models.".to_string(),
-                    codex_error_info: None,
-                }));
-            }
         }
         let model = models_manager.get_model(&config.model, &config).await;
         let session_configuration = SessionConfiguration {
@@ -278,7 +267,6 @@ impl Codex {
             original_config_do_not_use: Arc::clone(&config),
             exec_policy,
             session_source,
-            is_up_to_date,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -308,14 +296,6 @@ impl Codex {
             tx_sub,
             rx_event,
         };
-
-        if let Some(remote_models_error) = remote_models_error {
-            let event = Event {
-                id: INITIAL_SUBMIT_ID.to_string(),
-                msg: remote_models_error,
-            };
-            session.send_event_raw(event).await;
-        }
 
         Ok(CodexSpawnOk {
             codex,
@@ -452,8 +432,6 @@ pub(crate) struct SessionConfiguration {
     original_config_do_not_use: Arc<Config>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
-    /// Whether the CLI is up to date with the latest known version at session start.
-    is_up_to_date: bool,
 }
 
 impl SessionConfiguration {
@@ -784,11 +762,6 @@ impl Session {
         state.get_total_token_usage()
     }
 
-    pub(crate) async fn is_up_to_date(&self) -> bool {
-        let state = self.state.lock().await;
-        state.session_configuration.is_up_to_date
-    }
-
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
         let turn_context = self.new_turn(SessionSettingsUpdate::default()).await;
         match conversation_history {
@@ -953,25 +926,7 @@ impl Session {
         }
     }
 
-    pub(crate) async fn send_event_raw(&self, mut event: Event) {
-        if matches!(&event.msg, EventMsg::Error(_) | EventMsg::StreamError(_)) {
-            let is_up_to_date = self.is_up_to_date().await;
-            event.msg = match event.msg {
-                EventMsg::Error(error_event) => EventMsg::Error(error_event_with_update_nudge(
-                    error_event.message,
-                    error_event.codex_error_info,
-                    is_up_to_date,
-                )),
-                EventMsg::StreamError(error_event) => {
-                    EventMsg::StreamError(stream_error_event_with_update_nudge(
-                        error_event.message,
-                        error_event.codex_error_info,
-                        is_up_to_date,
-                    ))
-                }
-                other => other,
-            };
-        }
+    pub(crate) async fn send_event_raw(&self, event: Event) {
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
@@ -2832,7 +2787,6 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
-            is_up_to_date: true,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -2905,7 +2859,6 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
-            is_up_to_date: true,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -3110,7 +3063,6 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
-            is_up_to_date: true,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_family = ModelsManager::construct_model_family_offline(
@@ -3202,7 +3154,6 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
-            is_up_to_date: true,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_family = ModelsManager::construct_model_family_offline(
