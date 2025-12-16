@@ -21,6 +21,7 @@ use crate::skill_error_prompt::SkillErrorPromptOutcome;
 use crate::skill_error_prompt::run_skill_error_prompt;
 use crate::tui;
 use crate::tui::TuiEvent;
+use crate::tui::scrolling::TranscriptLineMeta;
 use crate::tui::scrolling::TranscriptScroll;
 use crate::update_action::UpdateAction;
 use crate::wrapping::RtOptions;
@@ -548,13 +549,13 @@ impl App {
         let session_lines = if width == 0 {
             Vec::new()
         } else {
-            let (lines, meta) = Self::build_transcript_lines(&app.transcript_cells, width);
+            let (lines, line_meta) = Self::build_transcript_lines(&app.transcript_cells, width);
             let is_user_cell: Vec<bool> = app
                 .transcript_cells
                 .iter()
                 .map(|cell| cell.as_any().is::<UserHistoryCell>())
                 .collect();
-            Self::render_lines_to_ansi(&lines, &meta, &is_user_cell, width)
+            Self::render_lines_to_ansi(&lines, &line_meta, &is_user_cell, width)
         };
 
         tui.terminal.clear()?;
@@ -684,7 +685,7 @@ impl App {
             height: max_transcript_height,
         };
 
-        let (lines, meta) = Self::build_transcript_lines(cells, transcript_area.width);
+        let (lines, line_meta) = Self::build_transcript_lines(cells, transcript_area.width);
         if lines.is_empty() {
             Clear.render_ref(transcript_area, frame.buffer);
             self.transcript_scroll = TranscriptScroll::default();
@@ -717,10 +718,10 @@ impl App {
                     .initial_indent(base_opts.subsequent_indent.clone())
             };
             let seg_count = word_wrap_line(line, opts).len();
-            let is_user_row = meta
+            let is_user_row = line_meta
                 .get(idx)
-                .and_then(Option::as_ref)
-                .map(|(cell_index, _)| is_user_cell.get(*cell_index).copied().unwrap_or(false))
+                .and_then(TranscriptLineMeta::cell_index)
+                .map(|cell_index| is_user_cell.get(cell_index).copied().unwrap_or(false))
                 .unwrap_or(false);
             wrapped_is_user_row.extend(std::iter::repeat_n(is_user_row, seg_count));
             first = false;
@@ -731,7 +732,7 @@ impl App {
         let max_visible = std::cmp::min(max_transcript_height as usize, total_lines);
         let max_start = total_lines.saturating_sub(max_visible);
 
-        let (scroll_state, top_offset) = self.transcript_scroll.resolve_top(&meta, max_start);
+        let (scroll_state, top_offset) = self.transcript_scroll.resolve_top(&line_meta, max_start);
         self.transcript_scroll = scroll_state;
         self.transcript_view_top = top_offset;
 
@@ -938,10 +939,10 @@ impl App {
             return;
         }
 
-        let (_, meta) = Self::build_transcript_lines(&self.transcript_cells, width);
+        let (_, line_meta) = Self::build_transcript_lines(&self.transcript_cells, width);
         self.transcript_scroll =
             self.transcript_scroll
-                .scrolled_by(delta_lines, &meta, visible_lines);
+                .scrolled_by(delta_lines, &line_meta, visible_lines);
 
         tui.frame_requester().schedule_frame();
     }
@@ -958,8 +959,8 @@ impl App {
             return;
         }
 
-        let (lines, meta) = Self::build_transcript_lines(&self.transcript_cells, width);
-        if lines.is_empty() || meta.is_empty() {
+        let (lines, line_meta) = Self::build_transcript_lines(&self.transcript_cells, width);
+        if lines.is_empty() || line_meta.is_empty() {
             return;
         }
 
@@ -978,7 +979,7 @@ impl App {
             }
         };
 
-        if let Some(scroll_state) = TranscriptScroll::anchor_for(&meta, top_offset) {
+        if let Some(scroll_state) = TranscriptScroll::anchor_for(&line_meta, top_offset) {
             self.transcript_scroll = scroll_state;
         }
     }
@@ -987,16 +988,17 @@ impl App {
     ///
     /// Returns both the visible `Line` buffer and a parallel metadata vector
     /// that maps each line back to its originating `(cell_index, line_in_cell)`
-    /// pair, or `None` for spacer lines. This allows the scroll state to anchor
-    /// to a specific history cell even as new content arrives or the viewport
-    /// size changes, and gives exit transcript renderers enough structure to
-    /// style user rows differently from agent rows.
+    /// pair (see `TranscriptLineMeta::CellLine`), or `TranscriptLineMeta::Spacer` for
+    /// synthetic spacer rows inserted between cells. This allows the scroll state
+    /// to anchor to a specific history cell even as new content arrives or the
+    /// viewport size changes, and gives exit transcript renderers enough structure
+    /// to style user rows differently from agent rows.
     fn build_transcript_lines(
         cells: &[Arc<dyn HistoryCell>],
         width: u16,
-    ) -> (Vec<Line<'static>>, Vec<Option<(usize, usize)>>) {
+    ) -> (Vec<Line<'static>>, Vec<TranscriptLineMeta>) {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        let mut meta: Vec<Option<(usize, usize)>> = Vec::new();
+        let mut line_meta: Vec<TranscriptLineMeta> = Vec::new();
         let mut has_emitted_lines = false;
 
         for (cell_index, cell) in cells.iter().enumerate() {
@@ -1008,19 +1010,22 @@ impl App {
             if !cell.is_stream_continuation() {
                 if has_emitted_lines {
                     lines.push(Line::from(""));
-                    meta.push(None);
+                    line_meta.push(TranscriptLineMeta::Spacer);
                 } else {
                     has_emitted_lines = true;
                 }
             }
 
             for (line_in_cell, line) in cell_lines.into_iter().enumerate() {
-                meta.push(Some((cell_index, line_in_cell)));
+                line_meta.push(TranscriptLineMeta::CellLine {
+                    cell_index,
+                    line_in_cell,
+                });
                 lines.push(line);
             }
         }
 
-        (lines, meta)
+        (lines, line_meta)
     }
 
     /// Render flattened transcript lines into ANSI strings suitable for
@@ -1035,7 +1040,7 @@ impl App {
     ///    and tools see consistent escape sequences.
     fn render_lines_to_ansi(
         lines: &[Line<'static>],
-        meta: &[Option<(usize, usize)>],
+        line_meta: &[TranscriptLineMeta],
         is_user_cell: &[bool],
         width: u16,
     ) -> Vec<String> {
@@ -1043,10 +1048,10 @@ impl App {
             .iter()
             .enumerate()
             .map(|(idx, line)| {
-                let is_user_row = meta
+                let is_user_row = line_meta
                     .get(idx)
-                    .and_then(|entry| entry.as_ref())
-                    .map(|(cell_index, _)| is_user_cell.get(*cell_index).copied().unwrap_or(false))
+                    .and_then(|entry| entry.cell_index())
+                    .map(|cell_index| is_user_cell.get(cell_index).copied().unwrap_or(false))
                     .unwrap_or(false);
 
                 let mut merged_spans: Vec<ratatui::text::Span<'static>> = line
@@ -2467,11 +2472,14 @@ mod tests {
     fn render_lines_to_ansi_pads_user_rows_to_full_width() {
         let line: Line<'static> = Line::from("hi");
         let lines = vec![line];
-        let meta = vec![Some((0usize, 0usize))];
+        let line_meta = vec![TranscriptLineMeta::CellLine {
+            cell_index: 0,
+            line_in_cell: 0,
+        }];
         let is_user_cell = vec![true];
         let width: u16 = 10;
 
-        let rendered = App::render_lines_to_ansi(&lines, &meta, &is_user_cell, width);
+        let rendered = App::render_lines_to_ansi(&lines, &line_meta, &is_user_cell, width);
         assert_eq!(rendered.len(), 1);
         assert!(rendered[0].contains("hi"));
     }
