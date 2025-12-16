@@ -398,7 +398,7 @@ impl TurnContext {
     }
 
     pub(crate) fn collaboration_agent(&self) -> AgentId {
-        self.collaboration_agent
+        self.collaboration_agent.clone()
     }
 }
 
@@ -610,7 +610,7 @@ impl Session {
             model_family,
             self.conversation_id,
             sub_id,
-            agent.id,
+            agent.id.clone(),
         );
         if let Some(agents_config) = self.agents_config()
             && let Some(agent_config) = agents_config.agent(agent.name.as_str())
@@ -1004,6 +1004,7 @@ impl Session {
             .models_manager
             .construct_model_family(session_configuration.model.as_str(), &per_turn_config)
             .await;
+        let root_id = AgentId::root();
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.otel_manager,
@@ -1013,7 +1014,7 @@ impl Session {
             model_family,
             self.conversation_id,
             sub_id,
-            AgentId(0),
+            root_id.clone(),
         );
         if let Some(final_schema) = updates.final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
@@ -1029,12 +1030,12 @@ impl Session {
         let mut collab = self.collaboration.lock().await;
         collab.ensure_root_agent(&session_configuration, &session_history);
         drop(collab);
-        self.register_sub_id(AgentId(0), turn_context.sub_id.clone())
+        self.register_sub_id(&root_id, turn_context.sub_id.clone())
             .await;
         Arc::new(turn_context)
     }
 
-    pub(crate) async fn register_sub_id(&self, agent: AgentId, sub_id: String) {
+    pub(crate) async fn register_sub_id(&self, agent: &AgentId, sub_id: String) {
         let mut collab = self.collaboration.lock().await;
         collab.register_sub_id(agent, sub_id);
     }
@@ -1067,11 +1068,17 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let agent = turn_context.collaboration_agent();
-        if !Self::should_emit_event_for_agent(agent, &msg) {
+        let is_root = agent.is_root();
+        if !Self::should_emit_event_for_agent(is_root, &msg) {
             return;
         }
         let legacy_source = msg.clone();
-        let agent_idx = Some(turn_context.collaboration_agent().0);
+        let agent_idx = if is_root {
+            Some(0)
+        } else {
+            let collab = self.collaboration.lock().await;
+            collab.agent_index(&agent)
+        };
         let event = Event {
             id: turn_context.sub_id.clone(),
             agent_idx,
@@ -1090,8 +1097,8 @@ impl Session {
         }
     }
 
-    fn should_emit_event_for_agent(agent: AgentId, msg: &EventMsg) -> bool {
-        if agent == AgentId(0) {
+    fn should_emit_event_for_agent(is_root: bool, msg: &EventMsg) -> bool {
+        if is_root {
             return true;
         }
         !matches!(
@@ -1115,7 +1122,7 @@ impl Session {
     pub(crate) async fn send_event_raw(&self, event: Event) {
         if let Some(agent_idx) = event.agent_idx
             && agent_idx != 0
-            && !Self::should_emit_event_for_agent(AgentId(agent_idx), &event.msg)
+            && !Self::should_emit_event_for_agent(false, &event.msg)
         {
             return;
         }
@@ -1362,7 +1369,7 @@ impl Session {
         turn_context: &TurnContext,
     ) {
         let agent = turn_context.collaboration_agent();
-        if agent == AgentId(0) {
+        if agent.is_root() {
             let (history, token_info, config) = {
                 let mut state = self.state.lock().await;
                 state.record_items(items.iter(), turn_context.truncation_policy);
@@ -1375,13 +1382,14 @@ impl Session {
 
             let mut collab = self.collaboration.lock().await;
             collab.ensure_root_agent(&config, &history);
-            if let Some(root) = collab.agent_mut(AgentId(0)) {
+            let root_id = AgentId::root();
+            if let Some(root) = collab.agent_mut(&root_id) {
                 root.history = history;
                 root.history.set_token_info(token_info);
             }
         } else {
             let mut collab = self.collaboration.lock().await;
-            if let Some(agent_state) = collab.agent_mut(agent) {
+            if let Some(agent_state) = collab.agent_mut(&agent) {
                 agent_state
                     .history
                     .record_items(items.iter(), turn_context.truncation_policy);
@@ -1406,7 +1414,8 @@ impl Session {
     }
 
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
-        self.set_history_for_agent(AgentId(0), items, None).await;
+        let root_id = AgentId::root();
+        self.set_history_for_agent(&root_id, items, None).await;
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -1473,11 +1482,12 @@ impl Session {
     }
 
     pub(crate) async fn clone_history(&self) -> ContextManager {
-        self.clone_history_for_agent(AgentId(0)).await
+        let root_id = AgentId::root();
+        self.clone_history_for_agent(&root_id).await
     }
 
-    pub(crate) async fn clone_history_for_agent(&self, agent: AgentId) -> ContextManager {
-        if agent == AgentId(0) {
+    pub(crate) async fn clone_history_for_agent(&self, agent: &AgentId) -> ContextManager {
+        if agent.is_root() {
             let state = self.state.lock().await;
             return state.clone_history();
         }
@@ -1489,11 +1499,11 @@ impl Session {
 
     pub(crate) async fn set_history_for_agent(
         &self,
-        agent: AgentId,
+        agent: &AgentId,
         items: Vec<ResponseItem>,
         token_info: Option<TokenUsageInfo>,
     ) {
-        if agent == AgentId(0) {
+        if agent.is_root() {
             let mut state = self.state.lock().await;
             state.replace_history(items.clone());
             state.set_token_info(token_info.clone());
@@ -1509,7 +1519,7 @@ impl Session {
         token_usage: Option<&TokenUsage>,
     ) {
         let agent = turn_context.collaboration_agent();
-        if agent == AgentId(0) {
+        if agent == AgentId::root() {
             let token_info = {
                 let mut state = self.state.lock().await;
                 if let Some(token_usage) = token_usage {
@@ -1522,7 +1532,7 @@ impl Session {
             };
             {
                 let mut collab = self.collaboration.lock().await;
-                if let Some(root) = collab.agent_mut(AgentId(0)) {
+                if let Some(root) = collab.agent_mut(AgentId::root()) {
                     root.history.set_token_info(token_info);
                 }
             }
@@ -1539,12 +1549,12 @@ impl Session {
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
         let agent = turn_context.collaboration_agent();
-        let history = self.clone_history_for_agent(agent).await;
+        let history = self.clone_history_for_agent(&agent).await;
         let Some(estimated_total_tokens) = history.estimate_token_count(turn_context) else {
             return;
         };
 
-        if agent == AgentId(0) {
+        if agent == AgentId::root() {
             let token_info = {
                 let mut state = self.state.lock().await;
                 let mut info = state.token_info().unwrap_or(TokenUsageInfo {
@@ -1570,7 +1580,7 @@ impl Session {
             };
             {
                 let mut collab = self.collaboration.lock().await;
-                if let Some(root) = collab.agent_mut(AgentId(0)) {
+                if let Some(root) = collab.agent_mut(AgentId::root()) {
                     root.history.set_token_info(Some(token_info));
                 }
             }
@@ -1623,7 +1633,7 @@ impl Session {
         let agent = turn_context.collaboration_agent();
         let context_window = turn_context.client.get_model_context_window();
         if let Some(context_window) = context_window {
-            if agent == AgentId(0) {
+            if agent == AgentId::root() {
                 let token_info = {
                     let mut state = self.state.lock().await;
                     state.set_token_usage_full(context_window);
@@ -1631,7 +1641,7 @@ impl Session {
                 };
                 {
                     let mut collab = self.collaboration.lock().await;
-                    if let Some(root) = collab.agent_mut(AgentId(0)) {
+                    if let Some(root) = collab.agent_mut(AgentId::root()) {
                         root.history.set_token_info(token_info);
                     }
                 }
@@ -2403,7 +2413,7 @@ async fn spawn_review_thread(
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         exec_policy: parent_turn_context.exec_policy.clone(),
         truncation_policy: TruncationPolicy::new(&per_turn_config, model_family.truncation_policy),
-        collaboration_agent: AgentId(0),
+        collaboration_agent: AgentId::root(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -3439,7 +3449,7 @@ mod tests {
             model_family,
             conversation_id,
             "turn_id".to_string(),
-            AgentId(0),
+            AgentId::root(),
         );
 
         let session = Session {
@@ -3536,7 +3546,7 @@ mod tests {
             model_family,
             conversation_id,
             "turn_id".to_string(),
-            AgentId(0),
+            AgentId::root(),
         ));
 
         let session = Arc::new(Session {

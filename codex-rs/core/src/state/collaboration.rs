@@ -1,6 +1,7 @@
 //! Session-scoped collaboration state for multi-agent flows.
 
 use std::collections::HashMap;
+use std::fmt;
 
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -44,6 +45,16 @@ impl AgentId {
 
     pub fn random() -> Self {
         Self(uuid::Uuid::new_v4().to_string())
+    }
+
+    pub fn is_root(&self) -> bool {
+        self.0 == "root"
+    }
+}
+
+impl fmt::Display for AgentId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -150,6 +161,7 @@ pub(crate) struct CollaborationState {
     limits: CollaborationLimits,
     next_sub_id: i64,
     sub_ids: HashMap<String, AgentId>,
+    agent_indices: HashMap<AgentId, usize>,
 }
 
 impl CollaborationState {
@@ -160,6 +172,7 @@ impl CollaborationState {
             limits,
             next_sub_id: 0,
             sub_ids: HashMap::new(),
+            agent_indices: HashMap::new(),
         }
     }
 
@@ -174,7 +187,7 @@ impl CollaborationState {
     ) -> AgentId {
         if self.agents.is_empty() {
             let root = AgentState::new_root(
-                "main".to_string(),
+                "orchestrator".to_string(),
                 session_configuration.clone(),
                 session_history.clone(),
                 session_configuration
@@ -182,6 +195,8 @@ impl CollaborationState {
                     .or_else(|| session_configuration.user_instructions()),
             );
             self.agents.push(root);
+            self.agent_indices
+                .insert(self.agents[0].id.clone(), 0);
         } else if let Some(root) = self.agents.get_mut(0) {
             root.config = session_configuration.clone();
             root.history = session_history.clone();
@@ -190,6 +205,7 @@ impl CollaborationState {
                     .developer_instructions()
                     .or_else(|| session_configuration.user_instructions());
             }
+            self.agent_indices.insert(root.id.clone(), 0);
         }
         AgentId::root()
     }
@@ -198,34 +214,34 @@ impl CollaborationState {
         &self.agents
     }
 
-    pub(crate) fn agent(&self, id: AgentId) -> Option<&AgentState> {
+    pub(crate) fn agent(&self, id: &AgentId) -> Option<&AgentState> {
         self.index_for(id).and_then(|idx| self.agents.get(idx))
     }
 
-    pub(crate) fn agent_mut(&mut self, id: AgentId) -> Option<&mut AgentState> {
+    pub(crate) fn agent_mut(&mut self, id: &AgentId) -> Option<&mut AgentState> {
         let index = self.index_for(id)?;
         self.agents.get_mut(index)
     }
 
-    pub(crate) fn clone_agent_history(&self, id: AgentId) -> Option<ContextManager> {
+    pub(crate) fn clone_agent_history(&self, id: &AgentId) -> Option<ContextManager> {
         self.agent(id).map(|agent| agent.history.clone())
     }
 
     pub(crate) fn set_agent_history(
         &mut self,
-        id: AgentId,
+        id: &AgentId,
         items: Vec<ResponseItem>,
         token_info: Option<TokenUsageInfo>,
     ) -> Result<(), String> {
         let agent = self
             .agent_mut(id)
-            .ok_or_else(|| format!("unknown agent {}", id.0))?;
+            .ok_or_else(|| format!("unknown agent {id}"))?;
         agent.history.replace(items);
         agent.history.set_token_info(token_info);
         Ok(())
     }
 
-    pub(crate) fn record_message_for_agent(&mut self, id: AgentId, message: ResponseItem) {
+    pub(crate) fn record_message_for_agent(&mut self, id: &AgentId, message: ResponseItem) {
         let role = match &message {
             ResponseItem::Message { role, .. } => role.as_str(),
             _ => "other",
@@ -233,7 +249,7 @@ impl CollaborationState {
         let content = content_for_log(&message);
         if let Some(agent) = self.agent_mut(id) {
             warn!(
-                agent_idx = id.0,
+                agent_idx = %id,
                 agent_name = agent.name.as_str(),
                 role,
                 content,
@@ -244,7 +260,7 @@ impl CollaborationState {
                 .record_items([message].iter(), TruncationPolicy::Bytes(10_000));
         } else {
             warn!(
-                agent_idx = id.0,
+                agent_idx = %id,
                 agent_name = "<unknown>",
                 role,
                 content,
@@ -256,7 +272,7 @@ impl CollaborationState {
     #[allow(dead_code)]
     pub(crate) fn record_items_for_agent(
         &mut self,
-        id: AgentId,
+        id: &AgentId,
         items: &[ResponseItem],
         policy: TruncationPolicy,
     ) {
@@ -273,20 +289,24 @@ impl CollaborationState {
             return Err("max collaboration depth reached".to_string());
         }
 
-        let id = AgentId::random();
-        agent.id = id.clone();
+        let id = agent.id.clone();
+        if self.agent_indices.contains_key(&id) {
+            return Err(format!("duplicate agent id {id}"));
+        }
 
         if let Some(parent) = agent.parent.as_ref() {
             self.children.entry(parent.clone()).or_default().push(id.clone());
         }
 
+        let index = self.agents.len();
         self.agents.push(agent);
+        self.agent_indices.insert(id.clone(), index);
         Ok(id)
     }
 
-    pub(crate) fn is_direct_child(&self, parent: AgentId, child: AgentId) -> bool {
+    pub(crate) fn is_direct_child(&self, parent: &AgentId, child: &AgentId) -> bool {
         self.children
-            .get(&parent)
+            .get(parent)
             .map(|kids| kids.contains(&child))
             .unwrap_or(false)
     }
@@ -295,39 +315,40 @@ impl CollaborationState {
         let mut result = Vec::new();
         let mut stack: Vec<AgentId> = roots.to_vec();
         while let Some(id) = stack.pop() {
-            result.push(id);
             if let Some(children) = self.children.get(&id) {
                 for child in children {
-                    stack.push(*child);
+                    stack.push(child.clone());
                 }
             }
+            result.push(id);
         }
         result
     }
 
-    pub(crate) fn next_sub_id(&mut self, agent: AgentId) -> String {
-        let sub_id = format!("collab-agent-{}-{}", agent.0, self.next_sub_id);
+    pub(crate) fn next_agent_id(&self) -> AgentId {
+        AgentId::random()
+    }
+
+    pub(crate) fn next_sub_id(&mut self, agent: &AgentId) -> String {
+        let next_sub_id = self.next_sub_id;
+        let sub_id = format!("collab-agent-{agent}-{next_sub_id}");
         self.next_sub_id += 1;
         sub_id
     }
 
-    fn index_for(&self, id: AgentId) -> Option<usize> {
-        if id.0 < 0 {
-            return None;
-        }
-        let index = id.0 as usize;
-        if index < self.agents.len() {
-            Some(index)
-        } else {
-            None
-        }
+    pub(crate) fn agent_index(&self, id: &AgentId) -> Option<i32> {
+        self.index_for(id).and_then(|idx| i32::try_from(idx).ok())
     }
 
-    pub(crate) fn register_sub_id(&mut self, agent: AgentId, sub_id: String) {
-        self.sub_ids.insert(sub_id, agent);
+    fn index_for(&self, id: &AgentId) -> Option<usize> {
+        self.agent_indices.get(id).copied()
+    }
+
+    pub(crate) fn register_sub_id(&mut self, agent: &AgentId, sub_id: String) {
+        self.sub_ids.insert(sub_id, agent.clone());
     }
 
     pub(crate) fn agent_for_sub_id(&self, sub_id: &str) -> Option<AgentId> {
-        self.sub_ids.get(sub_id).copied()
+        self.sub_ids.get(sub_id).cloned()
     }
 }

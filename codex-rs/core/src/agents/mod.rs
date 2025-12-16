@@ -124,8 +124,8 @@ impl AgentsConfig {
     }
 
     fn validate_agents(agents: &HashMap<String, AgentDefinition>) -> Result<(), String> {
-        if !agents.contains_key("main") {
-            return Err("missing required agent: main".to_string());
+        if !agents.contains_key("orchestrator") {
+            return Err("missing required agent: orchestrator".to_string());
         }
 
         for agent in agents.values() {
