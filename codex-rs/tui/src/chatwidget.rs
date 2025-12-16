@@ -868,11 +868,10 @@ impl ChatWidget {
 
     fn on_terminal_interaction(&mut self, ev: TerminalInteractionEvent) {
         self.flush_answer_stream_with_separator();
-        let key = Self::unified_exec_session_key(Some(&ev.process_id), &ev.call_id);
         let command_display = self
             .unified_exec_sessions
             .iter()
-            .find(|session| session.key == key)
+            .find(|session| session.key == ev.process_id)
             .map(|session| session.command_display.clone());
         self.add_to_history(history_cell::new_unified_exec_interaction(
             command_display,
@@ -915,15 +914,11 @@ impl ChatWidget {
         self.defer_or_handle(|q| q.push_exec_end(ev), |s| s.handle_exec_end_now(ev2));
     }
 
-    fn unified_exec_session_key(process_id: Option<&str>, call_id: &str) -> String {
-        process_id.unwrap_or(call_id).to_string()
-    }
-
     fn track_unified_exec_session_begin(&mut self, ev: &ExecCommandBeginEvent) {
         if ev.source != ExecCommandSource::UnifiedExecStartup {
             return;
         }
-        let key = Self::unified_exec_session_key(ev.process_id.as_deref(), &ev.call_id);
+        let key = ev.process_id.clone().unwrap_or(ev.call_id.to_string());
         let command_display = strip_bash_lc_and_escape(&ev.command);
         if let Some(existing) = self
             .unified_exec_sessions
@@ -941,7 +936,7 @@ impl ChatWidget {
     }
 
     fn track_unified_exec_session_end(&mut self, ev: &ExecCommandEndEvent) {
-        let key = Self::unified_exec_session_key(ev.process_id.as_deref(), &ev.call_id);
+        let key = ev.process_id.clone().unwrap_or(ev.call_id.to_string());
         let before = self.unified_exec_sessions.len();
         self.unified_exec_sessions
             .retain(|session| session.key != key);
