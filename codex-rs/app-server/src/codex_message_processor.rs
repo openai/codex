@@ -393,7 +393,14 @@ impl CodexMessageProcessor {
                 self.handle_list_conversations(request_id, params).await;
             }
             ClientRequest::ModelList { request_id, params } => {
-                self.list_models(request_id, params).await;
+                let outgoing = self.outgoing.clone();
+                let conversation_manager = self.conversation_manager.clone();
+                let config = self.config.clone();
+
+                tokio::spawn(async move {
+                    Self::list_models(outgoing, conversation_manager, config, request_id, params)
+                        .await;
+                });
             }
             ClientRequest::McpServerOauthLogin { request_id, params } => {
                 self.mcp_server_oauth_login(request_id, params).await;
@@ -1896,9 +1903,17 @@ impl CodexMessageProcessor {
         Ok((items, next_cursor))
     }
 
-    async fn list_models(&self, request_id: RequestId, params: ModelListParams) {
+    async fn list_models(
+        outgoing: Arc<OutgoingMessageSender>,
+        conversation_manager: Arc<ConversationManager>,
+        config: Arc<Config>,
+        request_id: RequestId,
+        params: ModelListParams,
+    ) {
         let ModelListParams { limit, cursor } = params;
-        let models = supported_models(self.conversation_manager.clone(), &self.config).await;
+        let mut config = (*config).clone();
+        config.features.enable(Feature::RemoteModels);
+        let models = supported_models(conversation_manager, &config).await;
         let total = models.len();
 
         if total == 0 {
@@ -1906,7 +1921,7 @@ impl CodexMessageProcessor {
                 data: Vec::new(),
                 next_cursor: None,
             };
-            self.outgoing.send_response(request_id, response).await;
+            outgoing.send_response(request_id, response).await;
             return;
         }
 
@@ -1921,7 +1936,7 @@ impl CodexMessageProcessor {
                         message: format!("invalid cursor: {cursor}"),
                         data: None,
                     };
-                    self.outgoing.send_error(request_id, error).await;
+                    outgoing.send_error(request_id, error).await;
                     return;
                 }
             },
@@ -1934,7 +1949,7 @@ impl CodexMessageProcessor {
                 message: format!("cursor {start} exceeds total models {total}"),
                 data: None,
             };
-            self.outgoing.send_error(request_id, error).await;
+            outgoing.send_error(request_id, error).await;
             return;
         }
 
@@ -1949,7 +1964,7 @@ impl CodexMessageProcessor {
             data: items,
             next_cursor,
         };
-        self.outgoing.send_response(request_id, response).await;
+        outgoing.send_response(request_id, response).await;
     }
 
     async fn mcp_server_oauth_login(
