@@ -388,6 +388,7 @@ struct PlanVariantsProgress {
     steps: Vec<ProgressStatus>,
     durations: Vec<Option<String>>,
     last_activity: Vec<Option<String>>,
+    tokens: Vec<Option<String>>,
 }
 
 impl PlanVariantsProgress {
@@ -397,6 +398,7 @@ impl PlanVariantsProgress {
             steps: vec![ProgressStatus::Pending; total],
             durations: vec![None; total],
             last_activity: vec![None; total],
+            tokens: vec![None; total],
         }
     }
 
@@ -424,6 +426,12 @@ impl PlanVariantsProgress {
         }
     }
 
+    fn set_tokens(&mut self, idx: usize, tokens: Option<String>) {
+        if idx < self.tokens.len() {
+            self.tokens[idx] = tokens;
+        }
+    }
+
     fn render_detail_lines(&self) -> Vec<ratatui::text::Line<'static>> {
         use ratatui::style::Stylize;
         let mut lines = Vec::with_capacity(self.total);
@@ -436,9 +444,24 @@ impl PlanVariantsProgress {
             };
 
             let mut spans = vec!["  ".into(), status_span, " ".into(), label.into()];
-            if let Some(duration) = self.durations.get(idx).and_then(|d| d.as_deref()) {
+            let duration = self.durations.get(idx).and_then(|d| d.as_deref());
+            let tokens = self.tokens.get(idx).and_then(|t| t.as_deref());
+            if duration.is_some() || tokens.is_some() {
+                let mut meta = String::new();
+                meta.push('(');
+                if let Some(duration) = duration {
+                    meta.push_str(duration);
+                }
+                if let Some(tokens) = tokens {
+                    if duration.is_some() {
+                        meta.push_str(", ");
+                    }
+                    meta.push_str(tokens);
+                    meta.push_str(" tok");
+                }
+                meta.push(')');
                 spans.push(" ".into());
-                spans.push(format!("({duration})").dim());
+                spans.push(meta.dim());
             }
             if let Some(activity) = self.last_activity.get(idx).and_then(|a| a.as_deref()) {
                 spans.push(" ".into());
@@ -1247,7 +1270,13 @@ impl ChatWidget {
             if idx < progress.steps.len() && progress.steps[idx] == ProgressStatus::Pending {
                 progress.set_in_progress(idx);
             }
-            progress.set_activity(idx, Some(activity.trim().to_string()));
+
+            let activity = activity.trim();
+            if let Some(tokens) = activity.strip_prefix("tokens ") {
+                progress.set_tokens(idx, Some(tokens.trim().to_string()));
+            } else {
+                progress.set_activity(idx, Some(activity.to_string()));
+            }
             return Some(progress);
         }
 

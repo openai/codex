@@ -207,6 +207,28 @@ fn activity_for_event(msg: &EventMsg) -> Option<String> {
     }
 }
 
+fn fmt_variant_tokens(tokens: i64) -> Option<String> {
+    if tokens <= 0 {
+        return None;
+    }
+
+    let tokens_f = tokens as f64;
+    if tokens < 1_000 {
+        return Some(format!("{tokens}"));
+    }
+    if tokens < 100_000 {
+        return Some(format!("{:.1}k", tokens_f / 1_000.0));
+    }
+    if tokens < 1_000_000 {
+        return Some(format!("{}k", tokens / 1_000));
+    }
+    if tokens < 100_000_000 {
+        return Some(format!("{:.1}M", tokens_f / 1_000_000.0));
+    }
+
+    Some(format!("{}M", tokens / 1_000_000))
+}
+
 async fn run_one_variant(
     base_config: Config,
     goal: String,
@@ -271,7 +293,35 @@ async fn run_one_variant(
 
     let mut last_agent_message: Option<String> = None;
     let mut last_activity: Option<String> = None;
+    let mut last_reported_tokens: Option<i64> = None;
+    let mut last_token_update_at: Option<Instant> = None;
     while let Ok(Event { msg, .. }) = io.rx_event.recv().await {
+        if let EventMsg::TokenCount(ev) = &msg
+            && let Some(info) = &ev.info
+        {
+            let tokens = info.total_token_usage.blended_total();
+            let now = Instant::now();
+            let should_report = match (last_reported_tokens, last_token_update_at) {
+                (Some(prev), Some(prev_at)) => {
+                    tokens > prev
+                        && (tokens - prev >= 250 || now.duration_since(prev_at).as_secs() >= 2)
+                }
+                (Some(prev), None) => tokens > prev,
+                (None, _) => tokens > 0,
+            };
+
+            if should_report && let Some(formatted) = fmt_variant_tokens(tokens) {
+                session_for_events
+                    .notify_background_event(
+                        parent_ctx.as_ref(),
+                        format!("Plan variant {idx}/{total}: tokens {formatted}"),
+                    )
+                    .await;
+                last_reported_tokens = Some(tokens);
+                last_token_update_at = Some(now);
+            }
+        }
+
         if let Some(activity) = activity_for_event(&msg)
             && last_activity.as_deref() != Some(activity.as_str())
         {
