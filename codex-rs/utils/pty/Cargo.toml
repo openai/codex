@@ -15,9 +15,6 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "ti
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 
-[target.'cfg(unix)'.dependencies]
-libc = { workspace = true }
-
 [target.'cfg(windows)'.dependencies]
 filedescriptor = "0.8.3"
 lazy_static = { workspace = true }
