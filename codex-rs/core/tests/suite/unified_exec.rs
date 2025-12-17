@@ -690,7 +690,7 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
 
     let call_id = "uexec-full-lifecycle";
     let args = json!({
-        "cmd": "sleep 0.3; printf 'HELLO-FULL-LIFECYCLE'",
+        "cmd": "sleep 0.5; printf 'HELLO-FULL-LIFECYCLE'",
         "yield_time_ms": 250,
     });
 
