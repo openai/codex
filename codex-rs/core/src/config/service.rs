@@ -7,6 +7,7 @@ use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
 use crate::config_loader::merge_toml_values;
+use crate::path_utils;
 use codex_app_server_protocol::Config as ApiConfig;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigLayerMetadata;
@@ -470,9 +471,10 @@ fn validate_config(value: &TomlValue) -> Result<(), toml::de::Error> {
 }
 
 fn paths_match(expected: &Path, provided: &Path) -> bool {
-    if let (Ok(expanded_expected), Ok(expanded_provided)) =
-        (expected.canonicalize(), provided.canonicalize())
-    {
+    if let (Ok(expanded_expected), Ok(expanded_provided)) = (
+        path_utils::normalize_for_path_comparison(expected),
+        path_utils::normalize_for_path_comparison(provided),
+    ) {
         return expanded_expected == expanded_provided;
     }
 
