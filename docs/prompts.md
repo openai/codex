@@ -7,7 +7,7 @@ Custom prompts turn your repeatable instructions into reusable slash commands, s
 - Location: store prompts in `$CODEX_HOME/prompts/` (defaults to `~/.codex/prompts/`). Set `CODEX_HOME` if you want to use a different folder.
 - File type: Codex only loads `.md` files. Non-Markdown files are ignored. Both regular files and symlinks to Markdown files are supported.
 - Naming: The filename (without `.md`) becomes the prompt name. A file called `review.md` registers the prompt `review`.
-- Refresh: Prompts are loaded when a session starts. Restart Codex (or start a new session) after adding or editing files.
+- Refresh: Prompt discovery (the list shown in the slash popup) happens when a session starts. If you edit an existing prompt file, Codex reloads its contents when you run the prompt. Restart Codex (or start a new session) to pick up newly added, removed, or renamed prompts.
 - Conflicts: Files whose names collide with built-in commands (like `init`) stay hidden in the slash popup, but you can still invoke them with `/prompts:<name>`.
 
 ### File format
