@@ -708,38 +708,6 @@ fn login_ca_certificate_path(env_source: &dyn EnvSource) -> Option<PathBuf> {
 fn strip_pem_block(input: &str, label: &str) -> String {
     let begin = format!("-----BEGIN {label}-----");
     let end = format!("-----END {label}-----");
-<<<<<<< HEAD
-=======
-
-    let mut output = String::new();
-    let mut rest = input;
-
-    loop {
-        if let Some(begin_idx) = rest.find(&begin) {
-            output.push_str(&rest[..begin_idx]);
-            if let Some(end_idx) = rest[begin_idx..].find(&end) {
-                let after_end = begin_idx + end_idx + end.len();
-                rest = &rest[after_end..];
-                continue;
-            } else {
-                output.push_str(&rest[begin_idx..]);
-                break;
-            }
-        } else {
-            output.push_str(rest);
-            break;
-        }
-    }
-
-    output
-}
-
-fn pem_parse_error(path: &Path, error: &pem::Error) -> io::Error {
-    let detail = match error {
-        pem::Error::NoItemsFound => "no certificates found in PEM file".to_string(),
-        _ => format!("failed to parse PEM file: {error}"),
-    };
->>>>>>> 16c91a1e5 (login: tolerate CRL blocks in CA bundles and test)
 
     let mut output = String::new();
     let mut rest = input;
@@ -787,13 +755,7 @@ fn read_ca_certificates(path: &Path) -> io::Result<Vec<reqwest::Certificate>> {
         )
     })?;
 
-<<<<<<< HEAD
     let mut normalized_pem = String::from_utf8(pem_data)
-=======
-    // Support both standard CERTIFICATE and TRUSTED CERTIFICATE labels by
-    // normalizing the latter to the former before parsing.
-    let mut normalized_pem = String::from_utf8(pem_data.clone())
->>>>>>> 16c91a1e5 (login: tolerate CRL blocks in CA bundles and test)
         .map(|s| {
             s.replace("BEGIN TRUSTED CERTIFICATE", "BEGIN CERTIFICATE")
                 .replace("END TRUSTED CERTIFICATE", "END CERTIFICATE")
@@ -801,21 +763,8 @@ fn read_ca_certificates(path: &Path) -> io::Result<Vec<reqwest::Certificate>> {
         .unwrap_or_else(|error| String::from_utf8_lossy(&error.into_bytes()).into_owned());
     normalized_pem = strip_pem_block(&normalized_pem, "X509 CRL");
 
-<<<<<<< HEAD
     let certificates = reqwest::Certificate::from_pem_bundle(normalized_pem.as_bytes())
         .map_err(|error| pem_parse_error(path, format!("failed to parse PEM file: {error}")))?;
-=======
-    // Strip CRL blocks so mixed bundles (certs + CRLs) do not fail parsing.
-    normalized_pem = strip_pem_block(&normalized_pem, "X509 CRL");
-
-    let mut certificates = Vec::new();
-    for cert_result in
-        <CertificateDer<'static> as PemObject>::pem_slice_iter(normalized_pem.as_bytes())
-    {
-        let cert = cert_result.map_err(|error| pem_parse_error(path, &error))?;
-        certificates.push(cert);
-    }
->>>>>>> 16c91a1e5 (login: tolerate CRL blocks in CA bundles and test)
 
     if certificates.is_empty() {
         return Err(pem_parse_error(path, "no certificates found in PEM file"));
