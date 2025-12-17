@@ -385,7 +385,7 @@ mod tests {
         .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
         let manager = ModelsManager::with_provider(auth_manager, provider);
 
@@ -575,7 +575,7 @@ mod tests {
         .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
         let mut manager = ModelsManager::with_provider(auth_manager, provider);
         manager.cache_ttl = Duration::ZERO;
@@ -645,11 +645,21 @@ mod tests {
 
     #[test]
     fn bundled_models_json_roundtrips() {
-        let models = ModelsManager::load_remote_models_from_file()
-            .expect("bundled models.json should deserialize");
+        let file_contents = include_str!("../../models.json");
+        let response: ModelsResponse =
+            serde_json::from_str(file_contents).expect("bundled models.json should deserialize");
 
+        let serialized =
+            serde_json::to_string(&response).expect("bundled models.json should serialize");
+        let roundtripped: ModelsResponse =
+            serde_json::from_str(&serialized).expect("serialized models.json should deserialize");
+
+        assert_eq!(
+            response, roundtripped,
+            "bundled models.json should round trip through serde"
+        );
         assert!(
-            !models.is_empty(),
+            !response.models.is_empty(),
             "bundled models.json should contain at least one model"
         );
     }
