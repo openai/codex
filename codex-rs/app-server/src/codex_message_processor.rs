@@ -23,6 +23,7 @@ use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecParams;
+use codex_app_server_protocol::CompactStartParams;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
@@ -379,6 +380,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ReviewStart { request_id, params } => {
                 self.review_start(request_id, params).await;
+            }
+            ClientRequest::CompactStart { request_id, params } => {
+                self.compact_start(request_id, params).await;
             }
             ClientRequest::NewConversation { request_id, params } => {
                 // Do not tokio::spawn() to process new_conversation()
@@ -2752,6 +2756,52 @@ impl CodexMessageProcessor {
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn compact_start(&self, request_id: RequestId, params: CompactStartParams) {
+        let (_, conversation) = match self.conversation_from_thread_id(&params.thread_id).await {
+            Ok(v) => v,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let thread_id = params.thread_id;
+        let turn_id = conversation.submit(Op::Compact).await;
+
+        match turn_id {
+            Ok(turn_id) => {
+                let turn = Turn {
+                    id: turn_id,
+                    items: vec![],
+                    error: None,
+                    status: TurnStatus::InProgress,
+                };
+
+                self.outgoing
+                    .send_response(request_id, TurnStartResponse { turn: turn.clone() })
+                    .await;
+
+                self.outgoing
+                    .send_server_notification(ServerNotification::TurnStarted(
+                        TurnStartedNotification { thread_id, turn },
+                    ))
+                    .await;
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("failed to start compact: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
             }
         }
     }
