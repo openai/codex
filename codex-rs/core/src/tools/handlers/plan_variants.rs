@@ -3,6 +3,7 @@ use codex_protocol::plan_mode::PlanOutputEvent;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
@@ -65,6 +66,15 @@ impl ToolHandler for PlanVariantsHandler {
             tool_name,
             ..
         } = invocation;
+
+        let source = turn.client.get_session_source();
+        if let SessionSource::SubAgent(SubAgentSource::Other(label)) = &source
+            && label.starts_with("plan_variant")
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "propose_plan_variants is not supported in plan-variant subagents".to_string(),
+            ));
+        }
 
         let ToolPayload::Function { arguments } = payload else {
             return Err(FunctionCallError::RespondToModel(format!(
@@ -242,8 +252,11 @@ async fn run_one_variant(
 
     // Do not override the base/system prompt; some environments restrict it to whitelisted prompts.
     // Put plan-variant guidance in developer instructions instead.
-    let existing = cfg.developer_instructions.clone().unwrap_or_default();
-    cfg.developer_instructions = Some(build_plan_variant_developer_instructions(existing.as_str()));
+    //
+    // Also avoid inheriting large caller developer instructions (e.g. plan mode's own instructions)
+    // into each variant, which can significantly increase token usage. Plan variants use a focused
+    // prompt and return JSON only.
+    cfg.developer_instructions = Some(build_plan_variant_developer_instructions(""));
 
     // Keep plan variants on the same model + reasoning settings as the parent turn.
     cfg.model = Some(parent_ctx.client.get_model());
