@@ -256,7 +256,9 @@ async fn finish_interactive(session: InteractiveSession) -> anyhow::Result<RunRe
 }
 
 fn normalize_output(output: &[u8]) -> String {
-    String::from_utf8_lossy(output).replace("\r\n", "\n")
+    String::from_utf8_lossy(output)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
 }
 
 fn normalize_lines(output: &[u8]) -> Vec<String> {

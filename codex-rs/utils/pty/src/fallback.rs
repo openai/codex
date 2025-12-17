@@ -12,7 +12,6 @@ use anyhow::Result;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::sync::Mutex as TokioMutex;
 use tokio::task::JoinHandle;
 
 use super::ExecCommandSession;
@@ -69,7 +68,7 @@ pub async fn spawn_piped_process(
         }
     });
 
-    let child = Arc::new(TokioMutex::new(child));
+    let child = Arc::new(StdMutex::new(child));
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
     let exit_status = Arc::new(AtomicBool::new(false));
     let wait_exit_status = Arc::clone(&exit_status);
@@ -78,9 +77,9 @@ pub async fn spawn_piped_process(
     let wait_child = Arc::clone(&child);
     let wait_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
         let code = loop {
-            let status = {
-                let mut guard = wait_child.blocking_lock();
-                guard.try_wait()
+            let status = match wait_child.lock() {
+                Ok(mut guard) => guard.try_wait(),
+                Err(_) => break -1,
             };
             match status {
                 Ok(Some(status)) => {
@@ -140,11 +139,11 @@ fn spawn_pipe_reader<R: std::io::Read + Send + 'static>(
 
 #[derive(Debug)]
 struct PipedChildKiller {
-    child: Arc<TokioMutex<std::process::Child>>,
+    child: Arc<StdMutex<std::process::Child>>,
 }
 
 impl PipedChildKiller {
-    fn new(child: Arc<TokioMutex<std::process::Child>>) -> Self {
+    fn new(child: Arc<StdMutex<std::process::Child>>) -> Self {
         Self { child }
     }
 }
@@ -157,8 +156,9 @@ impl portable_pty::ChildKiller for PipedChildKiller {
 
         let child = Arc::clone(&self.child);
         std::thread::spawn(move || {
-            let mut guard = child.blocking_lock();
-            let _ = guard.kill();
+            if let Ok(mut guard) = child.lock() {
+                let _ = guard.kill();
+            }
         });
         Ok(())
     }
