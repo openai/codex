@@ -114,7 +114,14 @@ fn gpt_5_1_codex() -> ModelPreset {
             ),
         ],
         is_default: false,
-        upgrade: Some(gpt_5_1_codex_max_upgrade()),
+        upgrade: Some(gpt_5_1_codex_max_upgrade(
+            "gpt-5.1-codex",
+            vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+            ],
+        )),
         show_in_picker: true,
     }
 }
@@ -137,7 +144,10 @@ fn gpt_5_1_codex_mini() -> ModelPreset {
             ),
         ],
         is_default: false,
-        upgrade: Some(gpt_5_1_codex_max_upgrade()),
+        upgrade: Some(gpt_5_1_codex_max_upgrade(
+            "gpt-5.1-codex-mini",
+            vec![ReasoningEffort::Medium, ReasoningEffort::High],
+        )),
         show_in_picker: true,
     }
 }
@@ -162,7 +172,7 @@ fn gpt_5_2() -> ModelPreset {
             ),
             effort(
                 ReasoningEffort::High,
-                "Greater reasoning depth for complex or ambiguous problems",
+                "Maximizes reasoning depth for complex or ambiguous problems",
             ),
             effort(
                 ReasoningEffort::XHigh,
@@ -197,16 +207,59 @@ fn gpt_5_1() -> ModelPreset {
             ),
         ],
         is_default: false,
-        upgrade: Some(gpt_5_1_codex_max_upgrade()),
+        upgrade: Some(gpt_5_1_codex_max_upgrade(
+            "gpt-5.1",
+            vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+            ],
+        )),
         show_in_picker: true,
     }
 }
 
-fn gpt_5_1_codex_max_upgrade() -> codex_protocol::openai_models::ModelUpgrade {
+fn gpt_5_1_codex_max_upgrade(
+    migration_config_key: &str,
+    supported_efforts: Vec<ReasoningEffort>,
+) -> codex_protocol::openai_models::ModelUpgrade {
+    use std::collections::HashMap;
+
+    fn nearest_effort(effort: ReasoningEffort, supported: &[ReasoningEffort]) -> ReasoningEffort {
+        supported
+            .iter()
+            .min_by_key(|candidate| (effort_rank(effort) - effort_rank(**candidate)).abs())
+            .copied()
+            .unwrap_or(ReasoningEffort::Low)
+    }
+
+    fn effort_rank(effort: ReasoningEffort) -> i32 {
+        match effort {
+            ReasoningEffort::None => 0,
+            ReasoningEffort::Minimal => 1,
+            ReasoningEffort::Low => 2,
+            ReasoningEffort::Medium => 3,
+            ReasoningEffort::High => 4,
+            ReasoningEffort::XHigh => 5,
+        }
+    }
+
+    let mut mapping = HashMap::new();
+    for effort in [
+        ReasoningEffort::None,
+        ReasoningEffort::Minimal,
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::XHigh,
+    ] {
+        mapping.insert(effort, nearest_effort(effort, &supported_efforts));
+    }
+
     codex_protocol::openai_models::ModelUpgrade {
         id: "gpt-5.1-codex-max".to_string(),
-        reasoning_effort_mapping: None,
-        migration_config_key: "hide_gpt-5.1-codex-max_migration_prompt".to_string(),
+        reasoning_effort_mapping: Some(mapping),
+        migration_config_key: migration_config_key.to_string(),
     }
 }
 
