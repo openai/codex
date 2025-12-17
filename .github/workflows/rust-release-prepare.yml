@@ -30,14 +30,18 @@ jobs:
           set -euo pipefail
 
           client_version="99.99.99"
+          terminal_info="github-actions"
+          user_agent="codex_cli_rs/99.99.99 (Linux $(uname -r); $(uname -m)) ${terminal_info}"
           base_url="${OPENAI_BASE_URL:-https://chatgpt.com/backend-api/codex}"
 
           headers=(
             -H "Authorization: Bearer ${OPENAI_API_KEY}"
+            -H "version: ${version_header}"
+            -H "User-Agent: ${user_agent}"
           )
 
           url="${base_url%/}/models?client_version=${client_version}"
-          curl --fail --show-error --location "${headers[@]}" "${url}" | jq '.' > codex-rs/core/models.json
+          curl --http1.1 --fail --show-error --location "${headers[@]}" "${url}" | jq '.' > codex-rs/core/models.json
 
       - name: Open pull request (if changed)
         uses: peter-evans/create-pull-request@v7
