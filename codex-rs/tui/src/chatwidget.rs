@@ -493,25 +493,28 @@ impl ChatWidget {
 
     fn on_agent_reasoning_final(&mut self) {
         let reasoning_summary_format = self.get_model_family().reasoning_summary_format;
-        // At the end of a reasoning block, record transcript-only content.
-        self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        if !self.full_reasoning_buffer.is_empty() {
+        if !self.reasoning_buffer.trim().is_empty() {
             let cell = history_cell::new_reasoning_summary_block(
-                self.full_reasoning_buffer.clone(),
+                std::mem::take(&mut self.reasoning_buffer),
                 reasoning_summary_format,
             );
             self.add_boxed_history(cell);
         }
-        self.reasoning_buffer.clear();
-        self.full_reasoning_buffer.clear();
         self.request_redraw();
     }
 
     fn on_reasoning_section_break(&mut self) {
-        // Start a new reasoning block for header extraction and accumulate transcript.
-        self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        self.full_reasoning_buffer.push_str("\n\n");
-        self.reasoning_buffer.clear();
+        let reasoning_summary_format = self.get_model_family().reasoning_summary_format;
+        if !self.reasoning_buffer.trim().is_empty() {
+            let cell = history_cell::new_reasoning_summary_block(
+                std::mem::take(&mut self.reasoning_buffer),
+                reasoning_summary_format,
+            );
+            self.add_boxed_history(cell);
+            self.request_redraw();
+        } else {
+            self.reasoning_buffer.clear();
+        }
     }
 
     // Raw reasoning uses the same flow as summarized reasoning
