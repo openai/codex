@@ -63,7 +63,7 @@ Rules:
 - Use `propose_plan_variants` to generate 3 alternative plans as input (at most once per plan draft). If it fails, proceed without it.
 - When you have a final plan, call `approve_plan` with:
   - Title: short and specific.
-- Summary: 2-4 sentences with key approach + scope boundaries.
+  - Summary: 2-4 sentences with key approach + scope boundaries.
   - Steps: concise, ordered, and checkable.
   - Explanation: include assumptions, file/component touchpoints, edge cases, risks, and a validation plan (tests/commands).
 - If the user requests revisions, incorporate feedback and propose a revised plan (you may call `propose_plan_variants` again only if the plan materially changes or the user asks for alternatives).
