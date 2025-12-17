@@ -860,6 +860,12 @@ pub struct ThreadStartParams {
     pub config: Option<HashMap<String, JsonValue>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
+    /// If true, opt into emitting raw response items on the event stream.
+    ///
+    /// This is for internal use only (e.g. Codex Cloud).
+    /// (TODO): Figure out a better way to categorize internal / experimental events & protocols.
+    #[serde(default)]
+    pub experimental_raw_events: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1579,6 +1585,15 @@ pub struct ItemCompletedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RawResponseItemCompletedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item: ResponseItem,
 }
 
 // Item-specific progress notifications
