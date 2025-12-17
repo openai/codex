@@ -19,19 +19,19 @@
       "supported_reasoning_levels": [
         {
           "effort": "low",
-          "description": "Fastest responses with limited reasoning"
+          "description": "Fast responses with lighter reasoning"
         },
         {
           "effort": "medium",
-          "description": "Dynamically adjusts reasoning based on the task"
+          "description": "Balances speed and reasoning depth for everyday tasks"
         },
         {
           "effort": "high",
-          "description": "Maximizes reasoning depth for complex or ambiguous problems"
+          "description": "Greater reasoning depth for complex problems"
         },
         {
           "effort": "xhigh",
-          "description": "Pushes for exhaustive reasoning depth even at higher latency"
+          "description": "Extra high reasoning depth for complex problems"
         }
       ],
       "shell_type": "shell_command",
