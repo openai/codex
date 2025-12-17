@@ -239,6 +239,10 @@ sequenceDiagram
 
 Starting a planning session that runs in a dedicated planning context, optionally uses planning subagents for variants, then exits back to the main session.
 
+Notes:
+- When a plan is approved, the daemon emits `Event::ExitedPlanMode` with a `PlanOutputEvent` that includes the approved `title`, `summary`, and `plan` (including `explanation` + step list). UIs may render this directly.
+- The daemon also records an assistant message summarizing the approved plan (title/summary/explanation/steps) so it appears in normal chat history.
+
 ```mermaid
 sequenceDiagram
     box UI

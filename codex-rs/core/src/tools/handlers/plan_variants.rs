@@ -36,21 +36,43 @@ struct ProposePlanVariantsArgs {
 
 const PLAN_VARIANT_PROMPT: &str = r#"You are a planning subagent producing a single plan variant for the user's goal.
 
-Requirements:
+Hard rules:
 - Do not ask the user questions.
 - Do not propose or perform edits. Do not call apply_patch.
 - Do not call propose_plan_variants.
-- Prefer exploring the codebase using read-only commands (ripgrep, cat, ls).
+- You may explore the repo with read-only commands, but keep it minimal (2–6 targeted commands) and avoid dumping large files.
 - Output ONLY valid JSON matching this shape:
   { "title": string, "summary": string, "plan": { "explanation": string|null, "plan": [ { "step": string, "status": "pending"|"in_progress"|"completed" } ] } }
+
+Quality bar:
+- Prefer 8–16 steps that are checkable and ordered.
+- Use `plan.explanation` to add: rationale, key files/components, edge cases, risks, and a validation plan (tests/commands).
+- Make this variant meaningfully different from other plausible variants (trade-offs, sequencing, scope, risk posture).
 "#;
 
-fn build_plan_variant_developer_instructions(existing: &str) -> String {
+fn plan_variant_focus(idx: usize) -> &'static str {
+    match idx {
+        1 => "Variant 1: minimal-risk, minimal-diff path (pragmatic, incremental).",
+        2 => "Variant 2: correctness-first path (tests, invariants, edge cases, clear rollback).",
+        3 => {
+            "Variant 3: architecture/DX-first path (refactors that pay down tech debt, better abstractions)."
+        }
+        _ => "Use a distinct angle and trade-offs.",
+    }
+}
+
+fn build_plan_variant_developer_instructions(idx: usize, total: usize, existing: &str) -> String {
     let existing = existing.trim();
     if existing.is_empty() {
-        return PLAN_VARIANT_PROMPT.to_string();
+        return format!(
+            "{PLAN_VARIANT_PROMPT}\n\n{focus}\n(Return plan variant {idx}/{total}.)",
+            focus = plan_variant_focus(idx)
+        );
     }
-    format!("{PLAN_VARIANT_PROMPT}\n\n{existing}")
+    format!(
+        "{PLAN_VARIANT_PROMPT}\n\n{focus}\n(Return plan variant {idx}/{total}.)\n\n{existing}",
+        focus = plan_variant_focus(idx)
+    )
 }
 
 #[async_trait]
@@ -257,7 +279,7 @@ async fn run_one_variant(
     // Also avoid inheriting large caller developer instructions (e.g. plan mode's own instructions)
     // into each variant, which can significantly increase token usage. Plan variants use a focused
     // prompt and return JSON only.
-    cfg.developer_instructions = Some(build_plan_variant_developer_instructions(""));
+    cfg.developer_instructions = Some(build_plan_variant_developer_instructions(idx, total, ""));
 
     // Keep plan variants on the same model + reasoning settings as the parent turn.
     cfg.model = Some(parent_ctx.client.get_model());
@@ -415,8 +437,11 @@ mod tests {
 
         let existing_base = cfg.base_instructions.clone();
         let existing = cfg.developer_instructions.clone().unwrap_or_default();
-        cfg.developer_instructions =
-            Some(build_plan_variant_developer_instructions(existing.as_str()));
+        cfg.developer_instructions = Some(build_plan_variant_developer_instructions(
+            1,
+            3,
+            existing.as_str(),
+        ));
 
         assert_eq!(cfg.base_instructions, existing_base);
         assert!(

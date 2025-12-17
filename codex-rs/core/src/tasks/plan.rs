@@ -38,24 +38,35 @@ impl PlanTask {
 const PLAN_MODE_DEVELOPER_INSTRUCTIONS: &str = r#"## Plan Mode
 You are planning only. Do not call `apply_patch` or execute mutating commands.
 
-- To generate diverse approaches, call `propose_plan_variants` once you understand the goal.
+Output quality bar:
+- The plan must be actionable by another engineer without extra back-and-forth.
+- Prefer 8–16 steps. Each step should describe a concrete deliverable and, when helpful, name key files/components to touch.
+- Put detailed substeps, rationale, trade-offs, risks, and validation commands in `plan.explanation` (multi-paragraph is fine).
+
+Process:
+- Once you understand the goal, call `propose_plan_variants` to generate 3 alternative plans (at most once per draft).
+- Synthesize the final plan (do not just pick a variant verbatim).
 - Present the final plan via `approve_plan`.
 - After an `approve_plan` result:
   - Approved: output the final plan JSON as your only assistant message.
-  - Revised: update the plan and call `approve_plan` again.
+  - Revised: incorporate feedback and call `approve_plan` again.
   - Rejected: stop; do not proceed.
 "#;
 
 const PLAN_MODE_DEVELOPER_PREFIX: &str = r#"## Plan Mode (Slash Command)
-Goal: produce a clear, actionable plan for the user's request without making code changes.
+Goal: produce a clear, actionable implementation plan for the user's request without making code changes.
 
 Rules:
-- You may explore the repo with read-only commands, but keep it minimal and avoid dumping large files.
-- Do not attempt to edit files or run mutating commands.
-- You may ask clarifying questions via AskUserQuestion.
-- Use `propose_plan_variants` to generate 3 alternative plans as input if helpful (at most once per plan draft).
-- When you have a final plan, call `approve_plan` with a concise title, summary, and step list.
-- If the user requests revisions, incorporate feedback and propose a revised plan (you may call `propose_plan_variants` again, but only if the plan materially changes or the user asks for alternatives).
+- You may explore the repo with read-only commands, but keep it minimal (2–6 targeted commands) and avoid dumping large files.
+- Do not attempt to edit files or run mutating commands (no installs, no git writes, no redirects/heredocs that write files).
+- You may ask clarifying questions via AskUserQuestion when requirements are ambiguous or missing.
+- Use `propose_plan_variants` to generate 3 alternative plans as input (at most once per plan draft). If it fails, proceed without it.
+- When you have a final plan, call `approve_plan` with:
+  - Title: short and specific.
+  - Summary: 2–4 sentences with key approach + scope boundaries.
+  - Steps: concise, ordered, and checkable.
+  - Explanation: include assumptions, file/component touchpoints, edge cases, risks, and a validation plan (tests/commands).
+- If the user requests revisions, incorporate feedback and propose a revised plan (you may call `propose_plan_variants` again only if the plan materially changes or the user asks for alternatives).
 - If the user rejects, stop.
 
 When the plan is approved, your final assistant message MUST be ONLY valid JSON matching:
@@ -244,6 +255,12 @@ pub(crate) async fn exit_plan_mode(
         let summary = out.summary.trim();
         if !summary.is_empty() {
             body.push_str(&format!("Summary: {summary}\n"));
+        }
+        let explanation = out.plan.explanation.as_deref().unwrap_or_default().trim();
+        if !explanation.is_empty() {
+            body.push_str("Explanation:\n");
+            body.push_str(explanation);
+            body.push('\n');
         }
         body.push_str("Steps:\n");
         if out.plan.plan.is_empty() {
