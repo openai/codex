@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use codex_core::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use core_test_support::responses;
 use core_test_support::test_codex_exec::test_codex_exec;
 use wiremock::matchers::header;
@@ -20,6 +21,7 @@ async fn send_codex_exec_originator() -> anyhow::Result<()> {
     responses::mount_sse_once_match(&server, header("Originator", "codex_exec"), body).await;
 
     test.cmd_with_server(&server)
+        .env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
         .arg("--skip-git-repo-check")
         .arg("tell me something")
         .assert()

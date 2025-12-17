@@ -16,7 +16,7 @@ Exported from `codex_core::config_loader`:
   - `origins() -> HashMap<String, ConfigLayerMetadata>`
   - `layers_high_to_low() -> Vec<ConfigLayer>`
   - `with_user_config(user_config) -> ConfigLayerStack`
-- `ConfigLayerEntry` (one layer’s `{name, source, config, version}`)
+- `ConfigLayerEntry` (one layer’s `{name, config, version}`; `name` carries source metadata)
 - `LoaderOverrides` (test/override hooks for managed config sources)
 - `merge_toml_values(base, overlay)` (public helper used elsewhere)
 
@@ -61,4 +61,3 @@ Implementation is split by concern:
 - `merge.rs`: recursive TOML merge.
 - `fingerprint.rs`: stable per-layer hashing and per-key origins traversal.
 - `macos.rs`: managed preferences integration (macOS only).
-
