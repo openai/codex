@@ -30,7 +30,7 @@ use crate::openai_models::model_presets::builtin_model_presets;
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const OPENAI_DEFAULT_API_MODEL: &str = "gpt-5.1-codex-max";
-const OPENAI_DEFAULT_SIWC_MODEL: &str = "caribou";
+const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "caribou";
 const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
 
 /// Coordinates remote model discovery plus cached metadata on disk.
@@ -149,14 +149,14 @@ impl ModelsManager {
         {
             return CODEX_AUTO_BALANCED_MODEL.to_string();
         } else if auth_mode == Some(AuthMode::ChatGPT) {
-            return OPENAI_DEFAULT_SIWC_MODEL.to_string();
+            return OPENAI_DEFAULT_CHATGPT_MODEL.to_string();
         }
         OPENAI_DEFAULT_API_MODEL.to_string()
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn get_model_offline(model: Option<&str>) -> String {
-        model.unwrap_or(OPENAI_DEFAULT_SIWC_MODEL).to_string()
+        model.unwrap_or(OPENAI_DEFAULT_CHATGPT_MODEL).to_string()
     }
 
     #[cfg(any(test, feature = "test-support"))]
