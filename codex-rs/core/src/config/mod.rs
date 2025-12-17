@@ -26,7 +26,6 @@ use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
-use crate::util::resolve_path;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -692,8 +691,8 @@ pub struct ConfigToml {
     pub notice: Option<Notice>,
 
     /// Legacy, now use features
-    pub experimental_instructions_file: Option<PathBuf>,
-    pub experimental_compact_prompt_file: Option<PathBuf>,
+    pub experimental_instructions_file: Option<AbsolutePathBuf>,
+    pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
@@ -1132,9 +1131,8 @@ impl Config {
             .experimental_instructions_file
             .as_ref()
             .or(cfg.experimental_instructions_file.as_ref());
-        let file_base_instructions = Self::load_override_from_file(
+        let file_base_instructions = Self::try_read_non_empty_file(
             experimental_instructions_path,
-            &resolved_cwd,
             "experimental instructions file",
         )?;
         let base_instructions = base_instructions.or(file_base_instructions);
@@ -1144,9 +1142,8 @@ impl Config {
             .experimental_compact_prompt_file
             .as_ref()
             .or(cfg.experimental_compact_prompt_file.as_ref());
-        let file_compact_prompt = Self::load_override_from_file(
+        let file_compact_prompt = Self::try_read_non_empty_file(
             experimental_compact_prompt_path,
-            &resolved_cwd,
             "experimental compact prompt file",
         )?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
@@ -1278,21 +1275,21 @@ impl Config {
         None
     }
 
-    fn load_override_from_file(
-        path: Option<&PathBuf>,
-        cwd: &Path,
-        description: &str,
+    /// If `path` is `Some`, attempts to read the file at the given path and
+    /// returns its contents as a trimmed `String`. If the file is empty, or
+    /// is `Some` but cannot be read, returns an `Err`.
+    fn try_read_non_empty_file(
+        path: Option<&AbsolutePathBuf>,
+        context: &str,
     ) -> std::io::Result<Option<String>> {
-        let Some(p) = path else {
+        let Some(path) = path else {
             return Ok(None);
         };
 
-        let full_path = resolve_path(cwd, p);
-
-        let contents = std::fs::read_to_string(&full_path).map_err(|e| {
+        let contents = std::fs::read_to_string(path).map_err(|e| {
             std::io::Error::new(
                 e.kind(),
-                format!("failed to read {description} {}: {e}", full_path.display()),
+                format!("failed to read {context} {}: {e}", path.display()),
             )
         })?;
 
@@ -1300,7 +1297,7 @@ impl Config {
         if s.is_empty() {
             Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("{description} is empty: {}", full_path.display()),
+                format!("{context} is empty: {}", path.display()),
             ))
         } else {
             Ok(Some(s))
@@ -2804,7 +2801,9 @@ model = "gpt-5.1-codex"
         std::fs::write(&prompt_path, "  summarize differently  ")?;
 
         let cfg = ConfigToml {
-            experimental_compact_prompt_file: Some(PathBuf::from("compact_prompt.txt")),
+            experimental_compact_prompt_file: Some(AbsolutePathBuf::from_absolute_path(
+                prompt_path,
+            )?),
             ..Default::default()
         };
 
