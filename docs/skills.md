@@ -38,7 +38,7 @@ Skills are behind the experimental `skills` feature flag and are disabled by def
 
 ## Using skills
 
-- Mention a skill by name in a message using `$<skill-name>`.
+- Mention a skill by name in a message using `%<skill-name>`.
 - In the TUI, you can also use `/skills` to browse and insert skills.
 
 ## Validation and errors

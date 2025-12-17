@@ -1604,7 +1604,7 @@ impl ChatWidget {
                 self.insert_str("@");
             }
             SlashCommand::Skills => {
-                self.insert_str("$");
+                self.insert_str("%");
             }
             SlashCommand::Status => {
                 self.add_status_output();
@@ -3513,7 +3513,8 @@ fn find_skill_mentions(text: &str, skills: &[SkillMetadata]) -> Vec<SkillMetadat
         if seen.contains(&skill.name) {
             continue;
         }
-        let needle = format!("${}", skill.name);
+        let name = &skill.name;
+        let needle = format!("%{name}");
         if text.contains(&needle) {
             seen.insert(skill.name.clone());
             matches.push(skill.clone());

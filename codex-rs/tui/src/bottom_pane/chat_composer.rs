@@ -923,7 +923,7 @@ impl ChatComposer {
         if !self.skills_enabled() {
             return None;
         }
-        Self::current_prefixed_token(&self.textarea, '$', true)
+        Self::current_prefixed_token(&self.textarea, '%', true)
     }
 
     /// Replace the active `@token` (the one under the cursor) with `path`.
@@ -998,7 +998,7 @@ impl ChatComposer {
             .unwrap_or(after_cursor.len());
         let end_idx = safe_cursor + end_rel_idx;
 
-        let inserted = format!("${skill_name}");
+        let inserted = format!("%{skill_name}");
 
         let mut new_text =
             String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);

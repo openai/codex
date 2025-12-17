@@ -58,6 +58,7 @@ use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -3349,4 +3350,27 @@ fn chatwidget_tall() {
     })
     .unwrap();
     assert_snapshot!(term.backend().vt100().screen().contents());
+}
+
+#[test]
+fn skill_mentions_use_percent_prefix() {
+    let deploy = SkillMetadata {
+        name: "deploy".to_string(),
+        description: "deploy skill".to_string(),
+        path: PathBuf::from("/tmp/deploy"),
+        scope: SkillScope::User,
+    };
+    let lint = SkillMetadata {
+        name: "lint".to_string(),
+        description: "lint skill".to_string(),
+        path: PathBuf::from("/tmp/lint"),
+        scope: SkillScope::User,
+    };
+    let skills = vec![deploy.clone(), lint.clone()];
+
+    let matches = find_skill_mentions("Use %deploy and %lint", &skills);
+    assert_eq!(matches, vec![deploy.clone(), lint.clone()]);
+
+    let matches = find_skill_mentions("Use $deploy only", &skills);
+    assert_eq!(matches, Vec::new());
 }
