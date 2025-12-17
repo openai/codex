@@ -345,6 +345,13 @@ fn extract_marker_lines(output: &[u8]) -> Vec<String> {
         .collect()
 }
 
+fn output_has_marker_line(output: &[u8], marker: &str) -> bool {
+    normalize_output(output).lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with(marker)
+    })
+}
+
 #[tokio::test]
 // Verifies basic stdout and exit code parity for a simple command.
 async fn standard_output_parity() -> anyhow::Result<()> {
@@ -367,6 +374,76 @@ async fn standard_output_parity() -> anyhow::Result<()> {
     assert_eq!(piped.exit, ExitOutcome::Exited(7));
     assert_lines_match(&pty.output, &["hello", "world"]);
     assert_parity(&pty, &piped);
+    Ok(())
+}
+
+#[tokio::test]
+// Verifies commands with no output stay empty and match parity.
+async fn no_output_parity() -> anyhow::Result<()> {
+    if cfg!(windows) && !conpty_supported() {
+        return Ok(());
+    }
+    let command = shell_command(
+        #[cfg(unix)]
+        "true",
+        #[cfg(windows)]
+        "exit /b 0",
+    );
+    let env = base_env();
+    let cwd = temp_dir();
+
+    let pty = run_pty(&command, &cwd, &env, None).await?;
+    let piped = run_piped(&command, &cwd, &env, None).await?;
+
+    assert_eq!(normalize_output(&pty.output), "");
+    assert_eq!(normalize_output(&piped.output), "");
+    assert_parity(&pty, &piped);
+    Ok(())
+}
+
+#[tokio::test]
+// Verifies exit state and stored exit code match PTY and are consistent with exit_rx.
+async fn exit_state_parity() -> anyhow::Result<()> {
+    if cfg!(windows) && !conpty_supported() {
+        return Ok(());
+    }
+    let command = shell_command(
+        #[cfg(unix)]
+        r#"printf "done\n"; exit 3"#,
+        #[cfg(windows)]
+        r#"echo done & exit /b 3"#,
+    );
+    let env = base_env();
+    let cwd = temp_dir();
+
+    let pty_spawned = spawn_pty_process(&command.program, &command.args, &cwd, &env, &None).await?;
+    let pty_result = tokio::time::timeout(
+        OUTPUT_TIMEOUT,
+        collect_output(pty_spawned.output_rx, pty_spawned.exit_rx),
+    )
+    .await??;
+    let pty_code = match pty_result.exit {
+        ExitOutcome::Exited(code) => code,
+        ExitOutcome::Dropped => anyhow::bail!("pty exit dropped"),
+    };
+    assert!(pty_spawned.session.has_exited());
+    assert_eq!(pty_spawned.session.exit_code(), Some(pty_code));
+
+    let piped_spawned =
+        fallback::spawn_piped_process(&command.program, &command.args, &cwd, &env, &None).await?;
+    let piped_result = tokio::time::timeout(
+        OUTPUT_TIMEOUT,
+        collect_output(piped_spawned.output_rx, piped_spawned.exit_rx),
+    )
+    .await??;
+    let piped_code = match piped_result.exit {
+        ExitOutcome::Exited(code) => code,
+        ExitOutcome::Dropped => anyhow::bail!("piped exit dropped"),
+    };
+    assert!(piped_spawned.session.has_exited());
+    assert_eq!(piped_spawned.session.exit_code(), Some(piped_code));
+
+    assert_eq!(pty_code, piped_code);
     Ok(())
 }
 
@@ -490,6 +567,46 @@ async fn terminate_parity() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+// Verifies terminate can be called twice and piped matches PTY.
+async fn terminate_idempotency_parity() -> anyhow::Result<()> {
+    if cfg!(windows) && !conpty_supported() {
+        return Ok(());
+    }
+    let command = shell_command(
+        #[cfg(unix)]
+        "sleep 60",
+        #[cfg(windows)]
+        r#"ping -n 60 127.0.0.1 >nul"#,
+    );
+    let env = base_env();
+    let cwd = temp_dir();
+
+    let pty = spawn_pty_process(&command.program, &command.args, &cwd, &env, &None).await?;
+    let piped =
+        fallback::spawn_piped_process(&command.program, &command.args, &cwd, &env, &None).await?;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    pty.session.terminate();
+    pty.session.terminate();
+    piped.session.terminate();
+    piped.session.terminate();
+
+    let pty_exit = tokio::time::timeout(TERMINATE_TIMEOUT, pty.exit_rx).await?;
+    let piped_exit = tokio::time::timeout(TERMINATE_TIMEOUT, piped.exit_rx).await?;
+    match pty_exit {
+        Ok(code) => {
+            let piped_code = piped_exit?;
+            assert_eq!(code, piped_code);
+        }
+        Err(pty_err) => {
+            let piped_err = piped_exit.unwrap_err();
+            assert_eq!(pty_err.to_string(), piped_err.to_string());
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 // Verifies empty program errors are consistent across implementations.
 async fn empty_program_errors() {
     if cfg!(windows) && !conpty_supported() {
@@ -603,6 +720,82 @@ async fn multi_command_parity() -> anyhow::Result<()> {
     assert_eq!(
         pty_markers,
         vec![marker_one.to_string(), marker_two.to_string()]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+// Verifies late output subscribers receive subsequent output.
+async fn output_subscriber_parity() -> anyhow::Result<()> {
+    if cfg!(windows) && !conpty_supported() {
+        return Ok(());
+    }
+    let command = shell_repl_command();
+    let env = base_env();
+    let cwd = temp_dir();
+
+    let mut pty = spawn_interactive_pty(&command, &cwd, &env).await?;
+    let mut piped = spawn_interactive_piped(&command, &cwd, &env).await?;
+
+    let mut pty_late_rx = pty.session.output_receiver();
+    let mut piped_late_rx = piped.session.output_receiver();
+    let mut pty_late_buffer = Vec::new();
+    let mut piped_late_buffer = Vec::new();
+
+    let marker = "CMD_MARKER_SUB";
+    send_line(&mut pty.writer, &format!("echo {marker}")).await?;
+    send_line(&mut piped.writer, &format!("echo {marker}")).await?;
+    tokio::time::timeout(OUTPUT_TIMEOUT, async {
+        loop {
+            if output_has_marker_line(&pty_late_buffer, marker) {
+                break;
+            }
+            match pty_late_rx.recv().await {
+                Ok(bytes) => pty_late_buffer.extend_from_slice(&bytes),
+                Err(broadcast::error::RecvError::Closed) => {
+                    anyhow::bail!("output channel closed before receiving {marker}");
+                }
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    anyhow::bail!("output lagged by {skipped} messages");
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
+    tokio::time::timeout(OUTPUT_TIMEOUT, async {
+        loop {
+            if output_has_marker_line(&piped_late_buffer, marker) {
+                break;
+            }
+            match piped_late_rx.recv().await {
+                Ok(bytes) => piped_late_buffer.extend_from_slice(&bytes),
+                Err(broadcast::error::RecvError::Closed) => {
+                    anyhow::bail!("output channel closed before receiving {marker}");
+                }
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    anyhow::bail!("output lagged by {skipped} messages");
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
+
+    send_line(&mut pty.writer, "exit").await?;
+    send_line(&mut piped.writer, "exit").await?;
+
+    let pty = finish_interactive(pty).await?;
+    let piped = finish_interactive(piped).await?;
+    assert_eq!(pty.exit, ExitOutcome::Exited(0));
+    assert_eq!(piped.exit, ExitOutcome::Exited(0));
+    assert_eq!(
+        extract_marker_lines(&pty_late_buffer),
+        vec![marker.to_string()]
+    );
+    assert_eq!(
+        extract_marker_lines(&piped_late_buffer),
+        vec![marker.to_string()]
     );
     Ok(())
 }
