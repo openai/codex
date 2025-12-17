@@ -342,21 +342,25 @@ const WRITE_ALLOW_MASK: u32 = FILE_GENERIC_READ
     | DELETE
     | FILE_DELETE_CHILD;
 
-/// Ensure all provided SIDs have a write-capable allow ACE on the path.
+/// Ensure all provided SIDs have an allow ACE with the requested mask on the path.
 /// Returns true if any ACE was added.
 ///
 /// # Safety
 /// Caller must pass valid SID pointers and an existing path; free the returned security descriptor with `LocalFree`.
 #[allow(dead_code)]
-pub unsafe fn ensure_allow_write_aces(path: &Path, sids: &[*mut c_void]) -> Result<bool> {
+pub unsafe fn ensure_allow_mask_aces(
+    path: &Path,
+    sids: &[*mut c_void],
+    allow_mask: u32,
+) -> Result<bool> {
     let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
     let mut entries: Vec<EXPLICIT_ACCESS_W> = Vec::new();
     for sid in sids {
-        if dacl_mask_allows(p_dacl, &[*sid], WRITE_ALLOW_MASK, true) {
+        if dacl_mask_allows(p_dacl, &[*sid], allow_mask, true) {
             continue;
         }
         entries.push(EXPLICIT_ACCESS_W {
-            grfAccessPermissions: WRITE_ALLOW_MASK,
+            grfAccessPermissions: allow_mask,
             grfAccessMode: 2, // SET_ACCESS
             grfInheritance: CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
             Trustee: TRUSTEE_W {
@@ -412,6 +416,16 @@ pub unsafe fn ensure_allow_write_aces(path: &Path, sids: &[*mut c_void]) -> Resu
         LocalFree(p_sd as HLOCAL);
     }
     Ok(added)
+}
+
+/// Ensure all provided SIDs have a write-capable allow ACE on the path.
+/// Returns true if any ACE was added.
+///
+/// # Safety
+/// Caller must pass valid SID pointers and an existing path; free the returned security descriptor with `LocalFree`.
+#[allow(dead_code)]
+pub unsafe fn ensure_allow_write_aces(path: &Path, sids: &[*mut c_void]) -> Result<bool> {
+    ensure_allow_mask_aces(path, sids, WRITE_ALLOW_MASK)
 }
 
 /// Adds an allow ACE granting read/write/execute to the given SID on the target path.
