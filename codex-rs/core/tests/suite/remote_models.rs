@@ -388,7 +388,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     );
 
     let selected = manager.get_model(&None, &config).await;
-    assert_eq!(selected, "gpt-5.1-codex-max");
+    assert_eq!(selected, "caribou");
 
     let available = manager.list_models(&config).await;
     assert!(
