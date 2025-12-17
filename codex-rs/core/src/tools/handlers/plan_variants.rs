@@ -188,7 +188,14 @@ fn fmt_variant_duration(elapsed: Duration) -> String {
 
 fn activity_for_event(msg: &EventMsg) -> Option<String> {
     match msg {
-        EventMsg::TaskStarted(_) => Some("waiting for model".to_string()),
+        EventMsg::TaskStarted(_) => Some("starting".to_string()),
+        EventMsg::UserMessage(_) => Some("sending prompt".to_string()),
+        EventMsg::AgentReasoning(_)
+        | EventMsg::AgentReasoningDelta(_)
+        | EventMsg::AgentReasoningRawContent(_)
+        | EventMsg::AgentReasoningRawContentDelta(_)
+        | EventMsg::AgentReasoningSectionBreak(_) => Some("thinking".to_string()),
+        EventMsg::AgentMessage(_) | EventMsg::AgentMessageDelta(_) => Some("writing".to_string()),
         EventMsg::ExecCommandBegin(ev) => Some(format!("shell {}", ev.command.join(" "))),
         EventMsg::McpToolCallBegin(ev) => Some(format!(
             "mcp {}/{}",
