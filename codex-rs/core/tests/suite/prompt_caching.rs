@@ -157,7 +157,9 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
     let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
     let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
-    eprintln!("requests constructed");
+    let start_time = Instant::now();
+
+    eprintln!("requests constructed in {:?}", start_time.elapsed());
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
@@ -168,7 +170,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
         .build(&server)
         .await?;
 
-    eprintln!("codex constructed");
+    eprintln!("codex constructed in {:?}", start_time.elapsed());
 
     codex
         .submit(Op::UserInput {
@@ -177,7 +179,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
             }],
         })
         .await?;
-    eprintln!("codex submitted");
+    eprintln!("codex submitted in {:?}", start_time.elapsed());
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
     eprintln!("wait for event complete first finished");
     codex
@@ -187,9 +189,12 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
             }],
         })
         .await?;
-    eprintln!("codex submitted second");
+    eprintln!("codex submitted second in {:?}", start_time.elapsed());
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-    eprintln!("wait for event complete second finished");
+    eprintln!(
+        "wait for event complete second finished in {:?}",
+        start_time.elapsed()
+    );
 
     let expected_instructions = [
         include_str!("../../prompt.md"),
@@ -197,21 +202,21 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
     ]
     .join("\n");
 
-    eprintln!("body0 constructed");
+    eprintln!("body0 constructed in {:?}", start_time.elapsed());
     let body0 = req1.single_request().body_json();
-    eprintln!("body0 parsed");
+    eprintln!("body0 parsed in {:?}", start_time.elapsed());
     assert_eq!(
         body0["instructions"],
         serde_json::json!(expected_instructions),
     );
-    eprintln!("body0 assert eq");
+    eprintln!("body0 assert eq in {:?}", start_time.elapsed());
     let body1 = req2.single_request().body_json();
-    eprintln!("body1 parsed");
+    eprintln!("body1 parsed in {:?}", start_time.elapsed());
     assert_eq!(
         body1["instructions"],
         serde_json::json!(expected_instructions),
     );
-    eprintln!("body1 assert eq");
+    eprintln!("body1 assert eq in {:?}", start_time.elapsed());
     Ok(())
 }
 
