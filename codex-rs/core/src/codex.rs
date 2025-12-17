@@ -730,9 +730,25 @@ impl Session {
         sess.record_initial_history(initial_history).await;
 
         if sess.enabled(Feature::Skills) {
-            sess.services
+            let mut rx = sess
+                .services
                 .skills_manager
-                .register_skills_update_listener(tx_event.clone());
+                .subscribe_skills_update_notifications();
+            let sess = Arc::clone(&sess);
+            tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(()) => {
+                            let turn_context =
+                                sess.new_turn(SessionSettingsUpdate::default()).await;
+                            sess.send_event(turn_context.as_ref(), EventMsg::SkillsUpdateAvailable)
+                                .await;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
         }
 
         Ok(sess)
