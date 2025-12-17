@@ -391,13 +391,13 @@ impl McpProcess {
         self.send_request("review/start", params).await
     }
 
-    /// Send a `compact/start` JSON-RPC request (v2).
+    /// Send a `thread/compact` JSON-RPC request (v2).
     pub async fn send_compact_start_request(
         &mut self,
         params: CompactStartParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
-        self.send_request("compact/start", params).await
+        self.send_request("thread/compact", params).await
     }
 
     /// Send a `cancelLoginChatGpt` JSON-RPC request.

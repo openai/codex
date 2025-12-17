@@ -133,7 +133,7 @@ client_request_definitions! {
         params: v2::ReviewStartParams,
         response: v2::ReviewStartResponse,
     },
-    CompactStart => "compact/start" {
+    CompactStart => "thread/compact" {
         params: v2::CompactStartParams,
         response: v2::TurnStartResponse,
     },
