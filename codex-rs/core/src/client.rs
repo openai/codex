@@ -411,7 +411,9 @@ fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
         .collect::<Vec<_>>();
     let value = enabled.join(",");
     let mut headers = ApiHeaderMap::new();
-    if let Ok(header_value) = HeaderValue::from_str(value.as_str()) {
+    if !value.is_empty()
+        && let Ok(header_value) = HeaderValue::from_str(value.as_str())
+    {
         headers.insert("x-codex-beta-features", header_value);
     }
     headers

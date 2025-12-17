@@ -10,6 +10,7 @@ use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::features::FEATURES;
 use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -1773,6 +1774,52 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     }
 
     lines.join("\n")
+}
+
+#[test]
+fn experimental_features_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None);
+
+    for spec in FEATURES
+        .iter()
+        .filter(|spec| spec.stage.beta_menu_description().is_some())
+    {
+        chat.config.features.disable(spec.id);
+    }
+
+    chat.open_experimental_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("experimental_features_popup", popup);
+}
+
+#[test]
+fn experimental_features_toggle_sends_update() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
+
+    let expected_feature = FEATURES
+        .iter()
+        .find(|spec| spec.stage.beta_menu_description().is_some())
+        .map(|spec| spec.id)
+        .expect("expected at least one beta feature");
+    chat.config.features.disable(expected_feature);
+
+    chat.open_experimental_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut updates = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::UpdateFeatureFlags {
+            updates: event_updates,
+        } = event
+        {
+            updates = Some(event_updates);
+            break;
+        }
+    }
+
+    let updates = updates.expect("expected UpdateFeatureFlags event");
+    assert_eq!(updates, vec![(expected_feature, true)]);
 }
 
 #[test]

@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Experimental features
+  Toggle beta features. Changes are saved to config.toml.
+
+› [ ] Skills        Define new `skills` the model
+  [ ] Unified Exec  Run long-running terminal commands in the background.
+
+  Press enter to toggle or esc to go back
