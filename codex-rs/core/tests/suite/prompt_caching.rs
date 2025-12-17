@@ -148,7 +148,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_mini_latest_tools() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     use pretty_assertions::assert_eq;
