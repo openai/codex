@@ -40,6 +40,14 @@ Requirements:
   { "title": string, "summary": string, "plan": { "explanation": string|null, "plan": [ { "step": string, "status": "pending"|"in_progress"|"completed" } ] } }
 "#;
 
+fn build_plan_variant_developer_instructions(existing: &str) -> String {
+    let existing = existing.trim();
+    if existing.is_empty() {
+        return PLAN_VARIANT_PROMPT.to_string();
+    }
+    format!("{PLAN_VARIANT_PROMPT}\n\n{existing}")
+}
+
 #[async_trait]
 impl ToolHandler for PlanVariantsHandler {
     fn kind(&self) -> ToolKind {
@@ -104,8 +112,17 @@ async fn run_one_variant(
     parent_ctx: Arc<crate::codex::TurnContext>,
 ) -> PlanOutputEvent {
     let mut cfg = base_config.clone();
-    cfg.base_instructions = Some(PLAN_VARIANT_PROMPT.to_string());
-    cfg.developer_instructions = None;
+
+    // Do not override the base/system prompt; some environments restrict it to whitelisted prompts.
+    // Put plan-variant guidance in developer instructions instead.
+    let existing = cfg.developer_instructions.clone().unwrap_or_default();
+    cfg.developer_instructions = Some(build_plan_variant_developer_instructions(existing.as_str()));
+
+    // Keep plan variants on the same model + reasoning settings as the parent turn.
+    cfg.model = Some(parent_ctx.client.get_model());
+    cfg.model_reasoning_effort = parent_ctx.client.get_reasoning_effort();
+    cfg.model_reasoning_summary = parent_ctx.client.get_reasoning_summary();
+
     let mut features = cfg.features.clone();
     features
         .disable(Feature::ApplyPatchFreeform)
@@ -180,5 +197,56 @@ fn parse_plan_output_event(idx: usize, text: &str) -> PlanOutputEvent {
             explanation: Some(text.to_string()),
             plan: Vec::new(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_variants_do_not_override_base_instructions() {
+        let codex_home = tempfile::TempDir::new().expect("tmp dir");
+        let overrides = {
+            #[cfg(target_os = "linux")]
+            {
+                use assert_cmd::cargo::cargo_bin;
+                let mut overrides = crate::config::ConfigOverrides::default();
+                overrides.codex_linux_sandbox_exe = Some(cargo_bin("codex-linux-sandbox"));
+                overrides
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                crate::config::ConfigOverrides::default()
+            }
+        };
+        let mut cfg = crate::config::Config::load_from_base_config_with_overrides(
+            crate::config::ConfigToml::default(),
+            overrides,
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load test config");
+
+        cfg.base_instructions = None;
+        cfg.developer_instructions = Some("existing developer instructions".to_string());
+
+        let existing_base = cfg.base_instructions.clone();
+        let existing = cfg.developer_instructions.clone().unwrap_or_default();
+        cfg.developer_instructions =
+            Some(build_plan_variant_developer_instructions(existing.as_str()));
+
+        assert_eq!(cfg.base_instructions, existing_base);
+        assert!(
+            cfg.developer_instructions
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("You are a planning subagent")
+        );
+        assert!(
+            cfg.developer_instructions
+                .as_deref()
+                .unwrap_or_default()
+                .contains("existing developer instructions")
+        );
     }
 }

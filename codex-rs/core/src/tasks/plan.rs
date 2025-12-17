@@ -35,23 +35,6 @@ impl PlanTask {
     }
 }
 
-const PLAN_MODE_PROMPT: &str = r#"You are Codex in Plan Mode.
-
-Goal: produce a clear, actionable plan for the user's request without making code changes.
-
-Rules:
-- You may explore the repo with read-only commands.
-- Do not attempt to edit files or run mutating commands.
-- You may ask the user clarifying questions via AskUserQuestion.
-- Use `propose_plan_variants` to generate 3 alternative plans as input if helpful.
-- When you have a final plan, call `approve_plan` with a concise title, summary, and step list.
-- If the user requests revisions, incorporate feedback and propose a revised plan (you may call `propose_plan_variants` again).
-- If the user rejects, stop.
-
-When the plan is approved, your final assistant message MUST be ONLY valid JSON matching:
-{ "title": string, "summary": string, "plan": { "explanation": string|null, "plan": [ { "step": string, "status": "pending"|"in_progress"|"completed" } ] } }
-"#;
-
 const PLAN_MODE_DEVELOPER_INSTRUCTIONS: &str = r#"## Plan Mode
 You are planning only. Do not call `apply_patch` or execute mutating commands.
 
@@ -62,6 +45,43 @@ You are planning only. Do not call `apply_patch` or execute mutating commands.
   - Revised: update the plan and call `approve_plan` again.
   - Rejected: stop; do not proceed.
 "#;
+
+const PLAN_MODE_DEVELOPER_PREFIX: &str = r#"## Plan Mode (Slash Command)
+Goal: produce a clear, actionable plan for the user's request without making code changes.
+
+Rules:
+- You may explore the repo with read-only commands.
+- Do not attempt to edit files or run mutating commands.
+- You may ask clarifying questions via AskUserQuestion.
+- Use `propose_plan_variants` to generate 3 alternative plans as input if helpful.
+- When you have a final plan, call `approve_plan` with a concise title, summary, and step list.
+- If the user requests revisions, incorporate feedback and propose a revised plan (you may call `propose_plan_variants` again).
+- If the user rejects, stop.
+
+When the plan is approved, your final assistant message MUST be ONLY valid JSON matching:
+{ "title": string, "summary": string, "plan": { "explanation": string|null, "plan": [ { "step": string, "status": "pending"|"in_progress"|"completed" } ] } }
+"#;
+
+fn build_plan_mode_developer_instructions(existing: &str, ask: &str) -> String {
+    let mut developer_instructions = String::new();
+    developer_instructions.push_str(PLAN_MODE_DEVELOPER_PREFIX);
+    developer_instructions.push_str("\n\n");
+    developer_instructions.push_str(PLAN_MODE_DEVELOPER_INSTRUCTIONS);
+
+    let ask = ask.trim();
+    if !ask.is_empty() {
+        developer_instructions.push('\n');
+        developer_instructions.push_str(ask);
+    }
+
+    let existing = existing.trim();
+    if !existing.is_empty() {
+        developer_instructions.push_str("\n\n");
+        developer_instructions.push_str(existing);
+    }
+
+    developer_instructions
+}
 
 #[async_trait]
 impl SessionTask for PlanTask {
@@ -108,12 +128,25 @@ async fn start_plan_conversation(
     let config = ctx.client.config();
     let mut sub_agent_config = config.as_ref().clone();
 
-    sub_agent_config.base_instructions = Some(PLAN_MODE_PROMPT.to_string());
+    // Ensure plan mode uses the same model + reasoning settings as the parent turn (e.g. after a
+    // `/model` change). The base config can lag behind session model overrides.
+    sub_agent_config.model = Some(ctx.client.get_model());
+    sub_agent_config.model_reasoning_effort = ctx.client.get_reasoning_effort();
+    sub_agent_config.model_reasoning_summary = ctx.client.get_reasoning_summary();
 
     let ask = crate::tools::spec::prepend_ask_user_question_developer_instructions(None)
         .unwrap_or_default();
-    sub_agent_config.developer_instructions =
-        Some(format!("{PLAN_MODE_DEVELOPER_INSTRUCTIONS}\n{ask}"));
+
+    // Plan mode must not override the base/system prompt because some environments restrict it to
+    // whitelisted prompts. Instead, prepend plan mode guidance to developer instructions.
+    let existing = sub_agent_config
+        .developer_instructions
+        .clone()
+        .unwrap_or_default();
+    sub_agent_config.developer_instructions = Some(build_plan_mode_developer_instructions(
+        existing.as_str(),
+        ask.as_str(),
+    ));
 
     sub_agent_config
         .features
@@ -268,5 +301,63 @@ fn step_status_label(status: &StepStatus) -> &'static str {
         StepStatus::Pending => "pending",
         StepStatus::InProgress => "in_progress",
         StepStatus::Completed => "completed",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_mode_does_not_override_base_instructions() {
+        // This test guards against regressions where plan mode sets custom base/system prompts,
+        // which can break in environments that restrict system prompts.
+        let codex_home = tempfile::TempDir::new().expect("tmp dir");
+        let overrides = {
+            #[cfg(target_os = "linux")]
+            {
+                use assert_cmd::cargo::cargo_bin;
+                let mut overrides = crate::config::ConfigOverrides::default();
+                overrides.codex_linux_sandbox_exe = Some(cargo_bin("codex-linux-sandbox"));
+                overrides
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                crate::config::ConfigOverrides::default()
+            }
+        };
+        let mut cfg = crate::config::Config::load_from_base_config_with_overrides(
+            crate::config::ConfigToml::default(),
+            overrides,
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load test config");
+
+        cfg.base_instructions = None;
+        cfg.developer_instructions = Some("existing developer instructions".to_string());
+
+        let ask = crate::tools::spec::prepend_ask_user_question_developer_instructions(None)
+            .unwrap_or_default();
+        let existing_base = cfg.base_instructions.clone();
+
+        let existing = cfg.developer_instructions.clone().unwrap_or_default();
+        cfg.developer_instructions = Some(build_plan_mode_developer_instructions(
+            existing.as_str(),
+            ask.as_str(),
+        ));
+
+        assert_eq!(cfg.base_instructions, existing_base);
+        assert!(
+            cfg.developer_instructions
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("## Plan Mode")
+        );
+        assert!(
+            cfg.developer_instructions
+                .as_deref()
+                .unwrap_or_default()
+                .contains("existing developer instructions")
+        );
     }
 }
