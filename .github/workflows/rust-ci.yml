@@ -41,7 +41,6 @@ jobs:
           codex=false
           workflows=false
           for f in "${files[@]}"; do
-            echo "changed: $f"
             [[ $f == codex-rs/* ]] && codex=true
             [[ $f == .github/* ]] && workflows=true
           done
