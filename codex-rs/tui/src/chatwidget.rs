@@ -386,6 +386,8 @@ enum ProgressStatus {
 struct PlanVariantsProgress {
     total: usize,
     steps: Vec<ProgressStatus>,
+    durations: Vec<Option<String>>,
+    last_activity: Vec<Option<String>>,
 }
 
 impl PlanVariantsProgress {
@@ -393,6 +395,8 @@ impl PlanVariantsProgress {
         Self {
             total,
             steps: vec![ProgressStatus::Pending; total],
+            durations: vec![None; total],
+            last_activity: vec![None; total],
         }
     }
 
@@ -408,6 +412,18 @@ impl PlanVariantsProgress {
         }
     }
 
+    fn set_duration(&mut self, idx: usize, duration: Option<String>) {
+        if idx < self.durations.len() {
+            self.durations[idx] = duration;
+        }
+    }
+
+    fn set_activity(&mut self, idx: usize, activity: Option<String>) {
+        if idx < self.last_activity.len() {
+            self.last_activity[idx] = activity;
+        }
+    }
+
     fn render_detail_lines(&self) -> Vec<ratatui::text::Line<'static>> {
         use ratatui::style::Stylize;
         let mut lines = Vec::with_capacity(self.total);
@@ -418,7 +434,19 @@ impl PlanVariantsProgress {
                 ProgressStatus::InProgress => "●".cyan(),
                 ProgressStatus::Completed => "✓".green(),
             };
-            lines.push(vec!["  ".into(), status_span, " ".into(), label.into()].into());
+
+            let mut spans = vec!["  ".into(), status_span, " ".into(), label.into()];
+            if let Some(duration) = self.durations.get(idx).and_then(|d| d.as_deref()) {
+                spans.push(" ".into());
+                spans.push(format!("({duration})").dim());
+            }
+            if let Some(activity) = self.last_activity.get(idx).and_then(|a| a.as_deref()) {
+                spans.push(" ".into());
+                spans.push("—".dim());
+                spans.push(" ".into());
+                spans.push(activity.to_string().dim());
+            }
+            lines.push(spans.into());
         }
         lines
     }
@@ -479,11 +507,12 @@ impl ChatWidget {
     }
 
     fn set_status_header(&mut self, header: String) {
-        self.current_status_header = header.clone();
-        self.bottom_pane.update_status_header(header);
-        if self.plan_variants_progress.is_none() {
+        if self.plan_variants_progress.is_some() && header != "Planning plan variants" {
+            self.plan_variants_progress = None;
             self.clear_status_detail_lines();
         }
+        self.current_status_header = header.clone();
+        self.bottom_pane.update_status_header(header);
     }
 
     fn set_status_detail_lines(&mut self, lines: Vec<ratatui::text::Line<'static>>) {
@@ -1146,41 +1175,83 @@ impl ChatWidget {
         message: &str,
     ) -> Option<PlanVariantsProgress> {
         let message = message.trim();
-        if !message.starts_with("Plan variants:") {
-            return None;
+        if message.starts_with("Plan variants:") {
+            // Expected shapes:
+            // - "Plan variants: generating 1/3…"
+            // - "Plan variants: finished 1/3 (12.3s)"
+            let tokens: Vec<&str> = message.split_whitespace().collect();
+            if tokens.len() < 4 {
+                return None;
+            }
+
+            let action = tokens.get(2).copied()?;
+            let fraction = tokens.get(3).copied()?;
+            let fraction = fraction.trim_end_matches('…');
+            let (idx_str, total_str) = fraction.split_once('/')?;
+            let idx = usize::from_str(idx_str).ok()?.saturating_sub(1);
+            let total = usize::from_str(total_str).ok()?;
+            if total == 0 {
+                return None;
+            }
+
+            let duration = message
+                .find('(')
+                .and_then(|start| message.rfind(')').map(|end| (start, end)))
+                .and_then(|(start, end)| {
+                    if end > start + 1 {
+                        Some(message[start + 1..end].to_string())
+                    } else {
+                        None
+                    }
+                });
+
+            let mut progress = self
+                .plan_variants_progress
+                .clone()
+                .filter(|p| p.total == total)
+                .unwrap_or_else(|| PlanVariantsProgress::new(total));
+
+            match action {
+                "generating" => {
+                    progress.set_in_progress(idx);
+                    progress.set_duration(idx, None);
+                }
+                "finished" => {
+                    progress.set_completed(idx);
+                    progress.set_duration(idx, duration);
+                }
+                _ => return None,
+            }
+
+            return Some(progress);
         }
 
-        // Expected shapes:
-        // - "Plan variants: generating 1/3…"
-        // - "Plan variants: finished 1/3"
-        let tokens: Vec<&str> = message.split_whitespace().collect();
-        if tokens.len() < 4 {
-            return None;
+        if let Some(rest) = message.strip_prefix("Plan variant ") {
+            // Expected shape:
+            // - "Plan variant 2/3: shell rg -n ..."
+            let (fraction, activity) = rest.split_once(':')?;
+            let fraction = fraction.trim();
+            let (idx_str, total_str) = fraction.split_once('/')?;
+            let idx = usize::from_str(idx_str).ok()?.saturating_sub(1);
+            let total = usize::from_str(total_str).ok()?;
+            if total == 0 {
+                return None;
+            }
+
+            let mut progress = self
+                .plan_variants_progress
+                .clone()
+                .filter(|p| p.total == total)
+                .unwrap_or_else(|| PlanVariantsProgress::new(total));
+
+            if idx < progress.steps.len() && progress.steps[idx] == ProgressStatus::Pending {
+                progress.set_in_progress(idx);
+            }
+            progress.set_activity(idx, Some(activity.trim().to_string()));
+            return Some(progress);
         }
 
-        let action = tokens.get(2).copied()?;
-        let fraction = tokens.get(3).copied()?;
-        let fraction = fraction.trim_end_matches('…');
-        let (idx_str, total_str) = fraction.split_once('/')?;
-        let idx = usize::from_str(idx_str).ok()?.saturating_sub(1);
-        let total = usize::from_str(total_str).ok()?;
-        if total == 0 {
-            return None;
-        }
-
-        let mut progress = self
-            .plan_variants_progress
-            .clone()
-            .filter(|p| p.total == total)
-            .unwrap_or_else(|| PlanVariantsProgress::new(total));
-
-        match action {
-            "generating" => progress.set_in_progress(idx),
-            "finished" => progress.set_completed(idx),
-            _ => return None,
-        }
-
-        Some(progress)
+        None
     }
 
     fn on_undo_started(&mut self, event: UndoStartedEvent) {

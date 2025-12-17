@@ -8,6 +8,9 @@ use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex_delegate::run_codex_conversation_one_shot;
@@ -80,29 +83,88 @@ impl ToolHandler for PlanVariantsHandler {
             ));
         }
 
-        let mut variants = Vec::with_capacity(3);
-        for idx in 1..=3 {
+        const TOTAL: usize = 3;
+
+        let mut join_set = JoinSet::new();
+        for idx in 1..=TOTAL {
             let label = format!("plan_variant_{idx}");
-            session
-                .notify_background_event(
-                    turn.as_ref(),
-                    format!("Plan variants: generating {idx}/3…"),
+            let base_config = turn.client.config().as_ref().clone();
+            let goal = goal.to_string();
+            let session = Arc::clone(&session);
+            let turn = Arc::clone(&turn);
+            join_set.spawn(async move {
+                let started_at = Instant::now();
+
+                session
+                    .notify_background_event(
+                        turn.as_ref(),
+                        format!("Plan variants: generating {idx}/{TOTAL}…"),
+                    )
+                    .await;
+
+                session
+                    .notify_background_event(
+                        turn.as_ref(),
+                        format!("Plan variant {idx}/{TOTAL}: starting"),
+                    )
+                    .await;
+
+                let out = run_one_variant(
+                    base_config,
+                    goal,
+                    idx,
+                    TOTAL,
+                    label,
+                    Arc::clone(&session),
+                    Arc::clone(&turn),
                 )
                 .await;
-            let out = run_one_variant(
-                turn.client.config().as_ref(),
-                goal,
-                idx,
-                &label,
-                Arc::clone(&session),
-                Arc::clone(&turn),
-            )
-            .await;
-            variants.push(out);
-            session
-                .notify_background_event(turn.as_ref(), format!("Plan variants: finished {idx}/3"))
-                .await;
+
+                let elapsed = started_at.elapsed();
+                session
+                    .notify_background_event(
+                        turn.as_ref(),
+                        format!(
+                            "Plan variants: finished {idx}/{TOTAL} ({})",
+                            fmt_variant_duration(elapsed)
+                        ),
+                    )
+                    .await;
+
+                (idx, out)
+            });
         }
+
+        let mut variants_by_idx = vec![None; TOTAL];
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok((idx, out)) => {
+                    if idx > 0 && idx <= TOTAL {
+                        variants_by_idx[idx - 1] = Some(out);
+                    }
+                }
+                Err(err) => {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "failed to join planning subagent task: {err:?}"
+                    )));
+                }
+            }
+        }
+
+        let variants = variants_by_idx
+            .into_iter()
+            .enumerate()
+            .map(|(idx, out)| {
+                out.unwrap_or_else(|| PlanOutputEvent {
+                    title: format!("Variant {}", idx + 1),
+                    summary: "Variant task did not return output.".to_string(),
+                    plan: UpdatePlanArgs {
+                        explanation: None,
+                        plan: Vec::new(),
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
 
         Ok(ToolOutput::Function {
             content: json!({ "variants": variants }).to_string(),
@@ -112,11 +174,38 @@ impl ToolHandler for PlanVariantsHandler {
     }
 }
 
+fn fmt_variant_duration(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs_f64();
+    if secs < 60.0 {
+        return format!("{secs:.1}s");
+    }
+
+    let whole_secs = elapsed.as_secs();
+    let minutes = whole_secs / 60;
+    let seconds = whole_secs % 60;
+    format!("{minutes}m {seconds:02}s")
+}
+
+fn activity_for_event(msg: &EventMsg) -> Option<String> {
+    match msg {
+        EventMsg::TaskStarted(_) => Some("waiting for model".to_string()),
+        EventMsg::ExecCommandBegin(ev) => Some(format!("shell {}", ev.command.join(" "))),
+        EventMsg::McpToolCallBegin(ev) => Some(format!(
+            "mcp {}/{}",
+            ev.invocation.server.trim(),
+            ev.invocation.tool.trim()
+        )),
+        EventMsg::WebSearchBegin(_) => Some("web_search".to_string()),
+        _ => None,
+    }
+}
+
 async fn run_one_variant(
-    base_config: &Config,
-    goal: &str,
+    base_config: Config,
+    goal: String,
     idx: usize,
-    label: &str,
+    total: usize,
+    label: String,
     parent_session: Arc<crate::codex::Session>,
     parent_ctx: Arc<crate::codex::TurnContext>,
 ) -> PlanOutputEvent {
@@ -146,16 +235,17 @@ async fn run_one_variant(
     }];
 
     let cancel = CancellationToken::new();
+    let session_for_events = Arc::clone(&parent_session);
     let io = match run_codex_conversation_one_shot(
         cfg,
         Arc::clone(&parent_session.services.auth_manager),
         Arc::clone(&parent_session.services.models_manager),
         input,
         parent_session,
-        parent_ctx,
+        Arc::clone(&parent_ctx),
         cancel,
         None,
-        SubAgentSource::Other(label.to_string()),
+        SubAgentSource::Other(label),
     )
     .await
     {
@@ -173,7 +263,20 @@ async fn run_one_variant(
     };
 
     let mut last_agent_message: Option<String> = None;
+    let mut last_activity: Option<String> = None;
     while let Ok(Event { msg, .. }) = io.rx_event.recv().await {
+        if let Some(activity) = activity_for_event(&msg)
+            && last_activity.as_deref() != Some(activity.as_str())
+        {
+            session_for_events
+                .notify_background_event(
+                    parent_ctx.as_ref(),
+                    format!("Plan variant {idx}/{total}: {activity}"),
+                )
+                .await;
+            last_activity = Some(activity);
+        }
+
         match msg {
             EventMsg::TaskComplete(ev) => {
                 last_agent_message = ev.last_agent_message;
