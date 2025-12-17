@@ -47,10 +47,9 @@ pub fn acquire_read_acl_mutex() -> Result<Option<ReadAclMutexGuard>> {
     let name = to_wide(OsStr::new(READ_ACL_MUTEX_NAME));
     let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 1, name.as_ptr()) };
     if handle == 0 {
-        return Err(anyhow::anyhow!(
-            "CreateMutexW failed: {}",
-            unsafe { GetLastError() }
-        ));
+        return Err(anyhow::anyhow!("CreateMutexW failed: {}", unsafe {
+            GetLastError()
+        }));
     }
     let err = unsafe { GetLastError() };
     if err == ERROR_ALREADY_EXISTS {
