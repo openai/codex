@@ -34,7 +34,6 @@ jobs:
 
           headers=(
             -H "Authorization: Bearer ${OPENAI_API_KEY}"
-            -H "version: ${version_header}"
             -H "User-Agent: ${user_agent}"
           )
 
