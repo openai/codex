@@ -196,9 +196,7 @@ async fn handle_model_migration_prompt_if_needed(
         let target_preset = available_models
             .iter()
             .find(|preset| preset.model == target_model);
-        let Some(target_preset) = target_preset else {
-            return None;
-        };
+        let target_preset = target_preset?;
         let target_display_name = target_preset.display_name.clone();
         let heading_label = if target_display_name == model {
             target_model.clone()
