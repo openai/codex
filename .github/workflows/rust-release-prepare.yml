@@ -21,8 +21,6 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@1.90
-
       - name: Update models.json
         env:
           OPENAI_API_KEY: ${{ secrets.CODEX_OPENAI_API_KEY }}
