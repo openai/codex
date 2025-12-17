@@ -157,10 +157,7 @@ fn create_exec_command_tool() -> ToolSpec {
     properties.insert(
         "login".to_string(),
         JsonSchema::Boolean {
-            description: Some(
-                "Whether to run the shell with -l/-i semantics. Defaults to true."
-                    .to_string(),
-            ),
+            description: Some("Whether to run the shell with -l/-i semantics. Defaults to true.".to_string()),
         },
     );
     properties.insert(
@@ -340,10 +337,7 @@ fn create_shell_command_tool() -> ToolSpec {
     properties.insert(
         "login".to_string(),
         JsonSchema::Boolean {
-            description: Some(
-                "Whether to run the shell with login shell semantics. Defaults to true."
-                    .to_string(),
-            ),
+            description: Some("Whether to run the shell with login shell semantics. Defaults to true.".to_string()),
         },
     );
     properties.insert(
