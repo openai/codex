@@ -72,11 +72,44 @@ fn load_prompt_content(
     prompt: &CustomPrompt,
     command: &str,
 ) -> Result<String, PromptExpansionError> {
-    fs::read_to_string(&prompt.path).map_err(|error| PromptExpansionError::ReadFailed {
-        command: command.to_string(),
-        path: prompt.path.clone(),
-        error: error.to_string(),
-    })
+    let raw =
+        fs::read_to_string(&prompt.path).map_err(|error| PromptExpansionError::ReadFailed {
+            command: command.to_string(),
+            path: prompt.path.clone(),
+            error: error.to_string(),
+        })?;
+    Ok(strip_frontmatter(&raw).to_string())
+}
+
+fn strip_frontmatter(content: &str) -> &str {
+    let mut segments = content.split_inclusive('\n');
+    let Some(first_segment) = segments.next() else {
+        return "";
+    };
+    let first_line = first_segment.trim_end_matches(['\r', '\n']);
+    if first_line.trim() != "---" {
+        return content;
+    }
+
+    let mut frontmatter_closed = false;
+    let mut consumed = first_segment.len();
+    for segment in segments {
+        let line = segment.trim_end_matches(['\r', '\n']);
+        if line.trim() == "---" {
+            frontmatter_closed = true;
+            consumed += segment.len();
+            break;
+        }
+        consumed += segment.len();
+    }
+
+    if !frontmatter_closed {
+        return content;
+    }
+    if consumed >= content.len() {
+        return "";
+    }
+    &content[consumed..]
 }
 
 /// Parse a first-line slash command of the form `/name <rest>`.
@@ -436,5 +469,17 @@ mod tests {
 
         let out = expand_custom_prompt("/prompts:my-prompt USER=Alice", &prompts).unwrap();
         assert_eq!(out, Some("Goodbye Alice".to_string()));
+    }
+
+    #[test]
+    fn frontmatter_is_ignored_when_reloading() {
+        let (prompt, _dir) = prompt_with_content(
+            "my-prompt",
+            "---\ndescription: example\n---\n\nSay Hello.\n",
+        );
+        let prompts = vec![prompt];
+
+        let out = expand_custom_prompt("/prompts:my-prompt", &prompts).unwrap();
+        assert_eq!(out, Some("\nSay Hello.\n".to_string()));
     }
 }

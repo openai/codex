@@ -1932,6 +1932,7 @@ mod tests {
     use image::ImageBuffer;
     use image::Rgba;
     use pretty_assertions::assert_eq;
+    use std::fs;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -1944,6 +1945,22 @@ mod tests {
     use crate::bottom_pane::prompt_args::extract_positional_args_for_prompt_line;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
+
+    fn prompt_from_tempfile(name: &str, content: &str) -> (CustomPrompt, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(format!("{name}.md"));
+        fs::write(&path, content).unwrap();
+        (
+            CustomPrompt {
+                name: name.to_string(),
+                path,
+                content: content.to_string(),
+                description: None,
+                argument_hint: None,
+            },
+            dir,
+        )
+    }
 
     #[test]
     fn footer_hint_row_is_separated_from_composer() {
@@ -3349,13 +3366,8 @@ mod tests {
         );
 
         // Inject prompts as if received via event.
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: prompt_text.to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
+        let (prompt, _dir) = prompt_from_tempfile("my-prompt", prompt_text);
+        composer.set_custom_prompts(vec![prompt]);
 
         type_chars_humanlike(
             &mut composer,
@@ -3384,13 +3396,8 @@ mod tests {
             false,
         );
 
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: "Review $USER changes on $BRANCH".to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
+        let (prompt, _dir) = prompt_from_tempfile("my-prompt", "Review $USER changes on $BRANCH");
+        composer.set_custom_prompts(vec![prompt]);
 
         composer
             .textarea
@@ -3418,13 +3425,8 @@ mod tests {
             false,
         );
 
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: "Pair $USER with $BRANCH".to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
+        let (prompt, _dir) = prompt_from_tempfile("my-prompt", "Pair $USER with $BRANCH");
+        composer.set_custom_prompts(vec![prompt]);
 
         composer
             .textarea
@@ -3457,13 +3459,9 @@ mod tests {
         );
 
         // Create a custom prompt with positional args (no named args like $USER)
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "code-review".to_string(),
-            path: "/tmp/code-review.md".to_string().into(),
-            content: "Please review the following code:\n\n$1".to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
+        let (prompt, _dir) =
+            prompt_from_tempfile("code-review", "Please review the following code:\n\n$1");
+        composer.set_custom_prompts(vec![prompt]);
 
         // Type the slash command
         let command_text = "/prompts:code-review ";
@@ -3586,13 +3584,8 @@ mod tests {
             false,
         );
 
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: "Review $USER changes".to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
+        let (prompt, _dir) = prompt_from_tempfile("my-prompt", "Review $USER changes");
+        composer.set_custom_prompts(vec![prompt]);
 
         composer
             .textarea
@@ -3636,13 +3629,8 @@ mod tests {
             false,
         );
 
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: "Review $USER changes on $BRANCH".to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
+        let (prompt, _dir) = prompt_from_tempfile("my-prompt", "Review $USER changes on $BRANCH");
+        composer.set_custom_prompts(vec![prompt]);
 
         // Provide only one of the required args
         composer.textarea.set_text("/prompts:my-prompt USER=Alice");
@@ -3689,13 +3677,8 @@ mod tests {
             false,
         );
 
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: prompt_text.to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
+        let (prompt, _dir) = prompt_from_tempfile("my-prompt", prompt_text);
+        composer.set_custom_prompts(vec![prompt]);
 
         // Type the slash command with two args and hit Enter to submit.
         type_chars_humanlike(
@@ -3726,13 +3709,8 @@ mod tests {
             false,
         );
 
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "elegant".to_string(),
-            path: "/tmp/elegant.md".to_string().into(),
-            content: "Echo: $ARGUMENTS".to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
+        let (prompt, _dir) = prompt_from_tempfile("elegant", "Echo: $ARGUMENTS");
+        composer.set_custom_prompts(vec![prompt]);
 
         // Type positional args; should submit with numeric expansion, no errors.
         composer.textarea.set_text("/prompts:elegant hi");
@@ -3757,13 +3735,8 @@ mod tests {
             false,
         );
 
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "p".to_string(),
-            path: "/tmp/p.md".to_string().into(),
-            content: prompt_text.to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
+        let (prompt, _dir) = prompt_from_tempfile("p", prompt_text);
+        composer.set_custom_prompts(vec![prompt]);
 
         type_chars_humanlike(
             &mut composer,
@@ -3793,13 +3766,8 @@ mod tests {
             false,
         );
 
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "price".to_string(),
-            path: "/tmp/price.md".to_string().into(),
-            content: prompt_text.to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
+        let (prompt, _dir) = prompt_from_tempfile("price", prompt_text);
+        composer.set_custom_prompts(vec![prompt]);
 
         type_chars_humanlike(
             &mut composer,
@@ -3830,13 +3798,8 @@ mod tests {
             false,
         );
 
-        composer.set_custom_prompts(vec![CustomPrompt {
-            name: "repeat".to_string(),
-            path: "/tmp/repeat.md".to_string().into(),
-            content: prompt_text.to_string(),
-            description: None,
-            argument_hint: None,
-        }]);
+        let (prompt, _dir) = prompt_from_tempfile("repeat", prompt_text);
+        composer.set_custom_prompts(vec![prompt]);
 
         type_chars_humanlike(
             &mut composer,
