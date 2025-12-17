@@ -83,6 +83,12 @@ impl ToolHandler for PlanVariantsHandler {
         let mut variants = Vec::with_capacity(3);
         for idx in 1..=3 {
             let label = format!("plan_variant_{idx}");
+            session
+                .notify_background_event(
+                    turn.as_ref(),
+                    format!("Plan variants: generating {idx}/3…"),
+                )
+                .await;
             let out = run_one_variant(
                 turn.client.config().as_ref(),
                 goal,
@@ -93,6 +99,9 @@ impl ToolHandler for PlanVariantsHandler {
             )
             .await;
             variants.push(out);
+            session
+                .notify_background_event(turn.as_ref(), format!("Plan variants: finished {idx}/3"))
+                .await;
         }
 
         Ok(ToolOutput::Function {
