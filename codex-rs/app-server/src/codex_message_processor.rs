@@ -2057,10 +2057,34 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: ListMcpServerStatusParams,
     ) {
-        let config = match self.load_latest_config().await {
+        let outgoing = Arc::clone(&self.outgoing);
+        let cli_overrides = self.cli_overrides.clone();
+
+        tokio::spawn(async move {
+            Self::list_mcp_server_status_task(outgoing, cli_overrides, request_id, params).await;
+        });
+    }
+
+    async fn list_mcp_server_status_task(
+        outgoing: Arc<OutgoingMessageSender>,
+        cli_overrides: Vec<(String, TomlValue)>,
+        request_id: RequestId,
+        params: ListMcpServerStatusParams,
+    ) {
+        let config = match Config::load_with_cli_overrides(
+            cli_overrides,
+            ConfigOverrides::default(),
+        )
+        .await
+        {
             Ok(config) => config,
             Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to reload config: {error}"),
+                    data: None,
+                };
+                outgoing.send_error(request_id, error).await;
                 return;
             }
         };
@@ -2092,7 +2116,7 @@ impl CodexMessageProcessor {
                         message: format!("invalid cursor: {cursor}"),
                         data: None,
                     };
-                    self.outgoing.send_error(request_id, error).await;
+                    outgoing.send_error(request_id, error).await;
                     return;
                 }
             },
@@ -2105,7 +2129,7 @@ impl CodexMessageProcessor {
                 message: format!("cursor {start} exceeds total MCP servers {total}"),
                 data: None,
             };
-            self.outgoing.send_error(request_id, error).await;
+            outgoing.send_error(request_id, error).await;
             return;
         }
 
@@ -2139,7 +2163,7 @@ impl CodexMessageProcessor {
 
         let response = ListMcpServerStatusResponse { data, next_cursor };
 
-        self.outgoing.send_response(request_id, response).await;
+        outgoing.send_response(request_id, response).await;
     }
 
     async fn handle_resume_conversation(
