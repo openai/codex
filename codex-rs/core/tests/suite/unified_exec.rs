@@ -690,7 +690,7 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
 
     let call_id = "uexec-full-lifecycle";
     let args = json!({
-        "cmd": "printf 'HELLO-FULL-LIFECYCLE'",
+        "cmd": "sleep 0.3; printf 'HELLO-FULL-LIFECYCLE'",
         "yield_time_ms": 250,
     });
 
@@ -758,9 +758,9 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
         "begin event should include a process_id for a long-lived session"
     );
 
-    assert_eq!(
-        saw_delta_with_marker, 0,
-        "no ExecCommandOutputDelta should be sent for early exit commands"
+    assert!(
+        saw_delta_with_marker > 0,
+        "expected at least one ExecCommandOutputDelta for the delayed output"
     );
 
     let end_event = end_event.expect("expected ExecCommandEnd event");
