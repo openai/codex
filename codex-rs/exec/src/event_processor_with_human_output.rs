@@ -483,10 +483,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 // Suppress duplicate TurnDiff events that carry the exact same
                 // unified diff content (these can occur at patch end and again
                 // at turn completion). If content changed, show it again.
-                let is_duplicate = self
-                    .last_unified_diff
-                    .as_deref()
-                    .map_or(false, |prev| prev == unified_diff);
+                let is_duplicate = self.last_unified_diff.as_deref() == Some(unified_diff.as_str());
 
                 if !is_duplicate {
                     ts_msg!(
@@ -495,7 +492,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                         "file update:".style(self.magenta).style(self.italic)
                     );
                     eprintln!("{unified_diff}");
-                    self.last_unified_diff = Some(unified_diff.clone());
+                    self.last_unified_diff = Some(unified_diff);
                 }
             }
             EventMsg::AgentReasoning(agent_reasoning_event) => {
@@ -706,7 +703,7 @@ mod tests {
         // We use a different ID just to show it's a new event object, strictly speaking
         let event2 = Event {
             id: "2".to_string(),
-            msg: event.msg.clone(),
+            msg: event.msg,
         };
         processor.process_event(event2);
 
