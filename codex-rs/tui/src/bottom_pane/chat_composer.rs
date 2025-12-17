@@ -13,9 +13,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
-use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
-use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
 use super::chat_composer_history::ChatComposerHistory;
@@ -26,7 +24,7 @@ use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
-use super::footer::prefixed_footer_lines;
+use super::footer::render_footer;
 use super::footer::reset_mode_after_activity;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
@@ -1877,47 +1875,6 @@ impl ChatComposer {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
     }
-
-    fn footer_hint_rect(popup_rect: Rect, footer_hint_height: u16, footer_spacing: u16) -> Rect {
-        if footer_spacing > 0 && footer_hint_height > 0 {
-            let [_, hint_rect] = Layout::vertical([
-                Constraint::Length(footer_spacing),
-                Constraint::Length(footer_hint_height),
-            ])
-            .areas(popup_rect);
-            hint_rect
-        } else {
-            popup_rect
-        }
-    }
-
-    fn footer_render_data(
-        &self,
-        hint_rect: Rect,
-        footer_props: FooterProps,
-    ) -> Option<(Rect, Vec<Line<'static>>)> {
-        if let Some(items) = self.footer_hint_override.as_ref() {
-            if items.is_empty() {
-                return None;
-            }
-            let mut spans = Vec::with_capacity(items.len() * 4);
-            for (idx, (key, label)) in items.iter().enumerate() {
-                spans.push(" ".into());
-                spans.push(Span::styled(key.clone(), Style::default().bold()));
-                spans.push(format!(" {label}").into());
-                if idx + 1 != items.len() {
-                    spans.push("   ".into());
-                }
-            }
-            let mut custom_rect = hint_rect;
-            if custom_rect.width > 2 {
-                custom_rect.x += 2;
-                custom_rect.width = custom_rect.width.saturating_sub(2);
-            }
-            return Some((custom_rect, vec![Line::from(spans)]));
-        }
-        Some((hint_rect, prefixed_footer_lines(footer_props)))
-    }
 }
 
 impl Renderable for ChatComposer {
@@ -1964,10 +1921,36 @@ impl Renderable for ChatComposer {
                 let footer_hint_height =
                     custom_height.unwrap_or_else(|| footer_height(footer_props));
                 let footer_spacing = Self::footer_spacing(footer_hint_height);
-                let hint_rect =
-                    Self::footer_hint_rect(popup_rect, footer_hint_height, footer_spacing);
-                if let Some((rect, lines)) = self.footer_render_data(hint_rect, footer_props) {
-                    Paragraph::new(lines).render(rect, buf);
+                let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
+                    let [_, hint_rect] = Layout::vertical([
+                        Constraint::Length(footer_spacing),
+                        Constraint::Length(footer_hint_height),
+                    ])
+                    .areas(popup_rect);
+                    hint_rect
+                } else {
+                    popup_rect
+                };
+                if let Some(items) = self.footer_hint_override.as_ref() {
+                    if !items.is_empty() {
+                        let mut spans = Vec::with_capacity(items.len() * 4);
+                        for (idx, (key, label)) in items.iter().enumerate() {
+                            spans.push(" ".into());
+                            spans.push(Span::styled(key.clone(), Style::default().bold()));
+                            spans.push(format!(" {label}").into());
+                            if idx + 1 != items.len() {
+                                spans.push("   ".into());
+                            }
+                        }
+                        let mut custom_rect = hint_rect;
+                        if custom_rect.width > 2 {
+                            custom_rect.x += 2;
+                            custom_rect.width = custom_rect.width.saturating_sub(2);
+                        }
+                        Line::from(spans).render_ref(custom_rect, buf);
+                    }
+                } else {
+                    render_footer(hint_rect, buf, footer_props);
                 }
             }
         }
