@@ -49,4 +49,3 @@ jobs:
           branch: "bot/update-models-json"
           reviewers: "pakrym-oai,aibrahim-oai"
           delete-branch: true
-          path: codex-rs

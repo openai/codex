@@ -193,6 +193,10 @@ pub enum Op {
         /// When empty, the session default working directory is used.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         cwds: Vec<PathBuf>,
+
+        /// When true, recompute skills even if a cached result exists.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        force_reload: bool,
     },
 
     /// Request the agent to summarize the current conversation context.
@@ -608,6 +612,9 @@ pub enum EventMsg {
 
     /// List of skills available to the agent.
     ListSkillsResponse(ListSkillsResponseEvent),
+
+    /// Notification that skill data may have been updated and clients may want to reload.
+    SkillsUpdateAvailable,
 
     PlanUpdate(UpdatePlanArgs),
 
@@ -1683,6 +1690,7 @@ pub struct ListSkillsResponseEvent {
 pub enum SkillScope {
     User,
     Repo,
+    Public,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

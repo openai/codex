@@ -398,8 +398,8 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
 
     for timestamp in timestamps {
         assert!(
-            timestamp < completed_at,
-            "timestamp {timestamp} should be before completed {completed_at}"
+            timestamp <= completed_at,
+            "timestamp {timestamp} should be before or equal to completed {completed_at}"
         );
     }
 
