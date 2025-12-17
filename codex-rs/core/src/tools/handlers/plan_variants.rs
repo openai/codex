@@ -40,12 +40,12 @@ Hard rules:
 - Do not ask the user questions.
 - Do not propose or perform edits. Do not call apply_patch.
 - Do not call propose_plan_variants.
-- You may explore the repo with read-only commands, but keep it minimal (2–6 targeted commands) and avoid dumping large files.
+- You may explore the repo with read-only commands, but keep it minimal (2-6 targeted commands) and avoid dumping large files.
 - Output ONLY valid JSON matching this shape:
   { "title": string, "summary": string, "plan": { "explanation": string|null, "plan": [ { "step": string, "status": "pending"|"in_progress"|"completed" } ] } }
 
 Quality bar:
-- Prefer 8–16 steps that are checkable and ordered.
+- Prefer 8-16 steps that are checkable and ordered.
 - Use `plan.explanation` to add: rationale, key files/components, edge cases, risks, and a validation plan (tests/commands).
 - Make this variant meaningfully different from other plausible variants (trade-offs, sequencing, scope, risk posture).
 "#;

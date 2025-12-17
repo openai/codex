@@ -40,7 +40,7 @@ You are planning only. Do not call `apply_patch` or execute mutating commands.
 
 Output quality bar:
 - The plan must be actionable by another engineer without extra back-and-forth.
-- Prefer 8–16 steps. Each step should describe a concrete deliverable and, when helpful, name key files/components to touch.
+- Prefer 8-16 steps. Each step should describe a concrete deliverable and, when helpful, name key files/components to touch.
 - Put detailed substeps, rationale, trade-offs, risks, and validation commands in `plan.explanation` (multi-paragraph is fine).
 
 Process:
@@ -57,13 +57,13 @@ const PLAN_MODE_DEVELOPER_PREFIX: &str = r#"## Plan Mode (Slash Command)
 Goal: produce a clear, actionable implementation plan for the user's request without making code changes.
 
 Rules:
-- You may explore the repo with read-only commands, but keep it minimal (2–6 targeted commands) and avoid dumping large files.
+- You may explore the repo with read-only commands, but keep it minimal (2-6 targeted commands) and avoid dumping large files.
 - Do not attempt to edit files or run mutating commands (no installs, no git writes, no redirects/heredocs that write files).
 - You may ask clarifying questions via AskUserQuestion when requirements are ambiguous or missing.
 - Use `propose_plan_variants` to generate 3 alternative plans as input (at most once per plan draft). If it fails, proceed without it.
 - When you have a final plan, call `approve_plan` with:
   - Title: short and specific.
-  - Summary: 2–4 sentences with key approach + scope boundaries.
+- Summary: 2-4 sentences with key approach + scope boundaries.
   - Steps: concise, ordered, and checkable.
   - Explanation: include assumptions, file/component touchpoints, edge cases, risks, and a validation plan (tests/commands).
 - If the user requests revisions, incorporate feedback and propose a revised plan (you may call `propose_plan_variants` again only if the plan materially changes or the user asks for alternatives).
