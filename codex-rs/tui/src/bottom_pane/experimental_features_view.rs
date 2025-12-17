@@ -252,7 +252,7 @@ impl Renderable for ExperimentalFeaturesView {
                 &rows,
                 &self.state,
                 MAX_POPUP_ROWS,
-                "No experimental features available for now",
+                "  No experimental features available for now",
             );
         }
 

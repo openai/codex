@@ -738,11 +738,14 @@ impl Session {
                 .services
                 .skills_manager
                 .subscribe_skills_update_notifications();
-            let sess = Arc::clone(&sess);
+            let sess = Arc::downgrade(&sess);
             tokio::spawn(async move {
                 loop {
                     match rx.recv().await {
                         Ok(()) => {
+                            let Some(sess) = sess.upgrade() else {
+                                break;
+                            };
                             let turn_context = sess.new_default_turn().await;
                             sess.send_event(turn_context.as_ref(), EventMsg::SkillsUpdateAvailable)
                                 .await;

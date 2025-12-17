@@ -11,6 +11,35 @@ const PUBLIC_SKILLS_REPO_URL: &str = "https://github.com/openai/skills.git";
 const PUBLIC_SKILLS_DIR_NAME: &str = ".public";
 const SKILLS_DIR_NAME: &str = "skills";
 
+struct TempDirCleanup {
+    path: PathBuf,
+    // Disable Drop cleanup after explicit cleanup to avoid double-delete.
+    active: bool,
+}
+
+impl TempDirCleanup {
+    fn new(path: PathBuf) -> Self {
+        Self { path, active: true }
+    }
+
+    fn cleanup(&mut self) -> Result<(), PublicSkillsError> {
+        if self.active && self.path.exists() {
+            fs::remove_dir_all(&self.path)
+                .map_err(|source| PublicSkillsError::io("remove public skills tmp dir", source))?;
+        }
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for TempDirCleanup {
+    fn drop(&mut self) {
+        if self.active && self.path.exists() {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 pub(crate) fn public_cache_root_dir(codex_home: &Path) -> PathBuf {
     codex_home
         .join(SKILLS_DIR_NAME)
@@ -68,6 +97,7 @@ fn refresh_public_skills_inner(
     }
     fs::create_dir_all(&tmp_dir)
         .map_err(|source| PublicSkillsError::io("create public skills tmp dir", source))?;
+    let mut tmp_dir_cleanup = TempDirCleanup::new(tmp_dir.clone());
 
     let checkout_dir = tmp_dir.join("checkout");
     clone_repo(repo_url, &checkout_dir)?;
@@ -87,8 +117,7 @@ fn refresh_public_skills_inner(
 
     atomic_swap_dir(&staged_public, &dest_public, &skills_root_dir)?;
 
-    fs::remove_dir_all(&tmp_dir)
-        .map_err(|source| PublicSkillsError::io("remove public skills tmp dir", source))?;
+    tmp_dir_cleanup.cleanup()?;
     Ok(PublicSkillsRefreshOutcome::Updated)
 }
 
