@@ -111,8 +111,8 @@ impl ApprovalOverlay {
                 patch_options(),
                 "Would you like to make the following edits?".to_string(),
             ),
-            ApprovalVariant::Network { .. } => (
-                network_options(),
+            ApprovalVariant::Network { preflight_only, .. } => (
+                network_options(*preflight_only),
                 "Allow network access to this domain?".to_string(),
             ),
         };
@@ -166,8 +166,11 @@ impl ApprovalOverlay {
                 (ApprovalVariant::ApplyPatch { id, .. }, ApprovalDecision::Review(decision)) => {
                     self.handle_patch_decision(id, *decision);
                 }
-                (ApprovalVariant::Network { host }, ApprovalDecision::Network(decision)) => {
-                    self.handle_network_decision(host, *decision);
+                (
+                    ApprovalVariant::Network { host, call_id, .. },
+                    ApprovalDecision::Network(decision),
+                ) => {
+                    self.handle_network_decision(host, call_id.as_deref(), *decision);
                 }
                 _ => {}
             }
@@ -193,12 +196,18 @@ impl ApprovalOverlay {
         }));
     }
 
-    fn handle_network_decision(&self, host: &str, decision: NetworkProxyDecision) {
+    fn handle_network_decision(
+        &self,
+        host: &str,
+        call_id: Option<&str>,
+        decision: NetworkProxyDecision,
+    ) {
         let cell = history_cell::new_network_approval_decision_cell(host.to_string(), decision);
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         self.app_event_tx.send(AppEvent::NetworkProxyDecision {
             host: host.to_string(),
             decision,
+            call_id: call_id.map(ToString::to_string),
         });
     }
 
@@ -267,8 +276,12 @@ impl BottomPaneView for ApprovalOverlay {
                 ApprovalVariant::ApplyPatch { id, .. } => {
                     self.handle_patch_decision(id, ReviewDecision::Abort);
                 }
-                ApprovalVariant::Network { host } => {
-                    self.handle_network_decision(host, NetworkProxyDecision::Deny);
+                ApprovalVariant::Network { host, call_id, .. } => {
+                    self.handle_network_decision(
+                        host,
+                        call_id.as_deref(),
+                        NetworkProxyDecision::Deny,
+                    );
                 }
             }
         }
@@ -366,7 +379,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 let mut header: Vec<Line<'static>> = Vec::new();
                 let host = request.host.trim().to_string();
                 if !host.is_empty() {
-                    header.push(Line::from(vec!["Host: ".into(), host.bold()]));
+                    header.push(Line::from(vec!["Host: ".into(), host.clone().bold()]));
                 }
                 let reason = request.reason.trim().to_string();
                 if !reason.is_empty() {
@@ -403,8 +416,14 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 {
                     header.push(Line::from(vec!["Client: ".into(), client.dim()]));
                 }
+                let preflight_only = request.protocol.trim().eq_ignore_ascii_case("preflight");
+                let call_id = request.call_id;
                 Self {
-                    variant: ApprovalVariant::Network { host: request.host },
+                    variant: ApprovalVariant::Network {
+                        host,
+                        call_id,
+                        preflight_only,
+                    },
                     header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
                 }
             }
@@ -456,9 +475,18 @@ fn network_reason_hint(reason: &str) -> Option<&'static str> {
 
 #[derive(Clone)]
 enum ApprovalVariant {
-    Exec { id: String, command: Vec<String> },
-    ApplyPatch { id: String },
-    Network { host: String },
+    Exec {
+        id: String,
+        command: Vec<String>,
+    },
+    ApplyPatch {
+        id: String,
+    },
+    Network {
+        host: String,
+        call_id: Option<String>,
+        preflight_only: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -523,27 +551,41 @@ fn patch_options() -> Vec<ApprovalOption> {
     ]
 }
 
-fn network_options() -> Vec<ApprovalOption> {
-    vec![
-        ApprovalOption {
+fn network_options(preflight_only: bool) -> Vec<ApprovalOption> {
+    let mut options = Vec::new();
+    if preflight_only {
+        options.push(ApprovalOption {
             label: "Allow once".to_string(),
             decision: ApprovalDecision::Network(NetworkProxyDecision::AllowOnce),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
-        },
-        ApprovalOption {
-            label: "Allow always (add to allowlist)".to_string(),
-            decision: ApprovalDecision::Network(NetworkProxyDecision::AllowAlways),
-            display_shortcut: None,
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
-        },
-        ApprovalOption {
-            label: "Deny (add to denylist)".to_string(),
-            decision: ApprovalDecision::Network(NetworkProxyDecision::Deny),
-            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
-            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
-        },
-    ]
+        });
+    }
+    let mut allow_session = ApprovalOption {
+        label: "Allow for session".to_string(),
+        decision: ApprovalDecision::Network(NetworkProxyDecision::AllowSession),
+        display_shortcut: None,
+        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('s'))],
+    };
+    if !preflight_only {
+        allow_session
+            .additional_shortcuts
+            .push(key_hint::plain(KeyCode::Char('y')));
+    }
+    options.push(allow_session);
+    options.push(ApprovalOption {
+        label: "Allow always (add to allowlist)".to_string(),
+        decision: ApprovalDecision::Network(NetworkProxyDecision::AllowAlways),
+        display_shortcut: None,
+        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
+    });
+    options.push(ApprovalOption {
+        label: "Deny (add to denylist)".to_string(),
+        decision: ApprovalDecision::Network(NetworkProxyDecision::Deny),
+        display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
+        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+    });
+    options
 }
 
 #[cfg(test)]

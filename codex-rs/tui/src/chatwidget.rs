@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -286,6 +287,7 @@ pub(crate) struct ChatWidget {
     // Whether to add a final message separator after the last message
     needs_final_message_separator: bool,
     pending_exec_approval: Option<PendingExecApproval>,
+    network_proxy_session_allow: HashSet<String>,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
@@ -888,6 +890,10 @@ impl ChatWidget {
                 self.flush_active_cell();
             }
         }
+        self.app_event_tx
+            .send(AppEvent::NetworkProxyAllowOnceExpired {
+                call_id: ev.call_id,
+            });
     }
 
     pub(crate) fn handle_patch_apply_end_now(
@@ -903,8 +909,9 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         if self.pending_exec_approval.is_none()
-            && let Some(request) = self.preflight_network_request(&ev.command)
+            && let Some(mut request) = self.preflight_network_request(&ev.command)
         {
+            request.call_id = Some(id.clone());
             self.pending_exec_approval = Some(PendingExecApproval {
                 id,
                 event: ev,
@@ -961,8 +968,25 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn add_network_session_allow(&mut self, host: String) {
+        let host = host.trim().to_ascii_lowercase();
+        if host.is_empty() {
+            return;
+        }
+        self.network_proxy_session_allow.insert(host);
+    }
+
+    pub(crate) fn is_network_session_allowed(&self, host: &str) -> bool {
+        let normalized = host.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return false;
+        }
+        self.network_proxy_session_allow
+            .contains(normalized.as_str())
+    }
+
     fn preflight_network_request(&self, command: &[String]) -> Option<NetworkProxyBlockedRequest> {
-        match network_proxy::preflight_blocked_request_if_enabled(
+        let blocked = match network_proxy::preflight_blocked_request_if_enabled(
             &self.config.network_proxy,
             &self.config.sandbox_policy,
             command,
@@ -972,7 +996,12 @@ impl ChatWidget {
                 tracing::debug!(error = %err, "network proxy preflight failed");
                 None
             }
+        };
+        let request = blocked?;
+        if self.is_network_session_allowed(&request.host) {
+            return None;
         }
+        Some(request)
     }
 
     pub(crate) fn handle_apply_patch_approval_now(
@@ -1139,6 +1168,7 @@ impl ChatWidget {
             is_review_mode: false,
             needs_final_message_separator: false,
             pending_exec_approval: None,
+            network_proxy_session_allow: HashSet::new(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -1207,6 +1237,7 @@ impl ChatWidget {
             is_review_mode: false,
             needs_final_message_separator: false,
             pending_exec_approval: None,
+            network_proxy_session_allow: HashSet::new(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,

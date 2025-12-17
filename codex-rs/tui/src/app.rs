@@ -27,6 +27,8 @@ use codex_core::config::types::NetworkProxyConfig;
 use codex_core::default_client::create_client;
 use codex_core::model_family::find_family_for_model;
 use codex_core::network_proxy;
+use codex_core::protocol::Op;
+use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -38,6 +40,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -137,6 +140,12 @@ async fn handle_model_migration_prompt_if_needed(
     None
 }
 
+#[derive(Debug, Clone)]
+struct NetworkProxyRestore {
+    host: String,
+    state: network_proxy::DomainState,
+}
+
 pub(crate) struct App {
     pub(crate) server: Arc<ConversationManager>,
     pub(crate) app_event_tx: AppEventSender,
@@ -171,6 +180,8 @@ pub(crate) struct App {
     skip_world_writable_scan_once: bool,
 
     network_proxy_pending: HashSet<String>,
+    network_proxy_allow_once: HashMap<String, NetworkProxyRestore>,
+    network_proxy_session_restore: HashMap<String, network_proxy::DomainState>,
 }
 
 impl App {
@@ -268,6 +279,8 @@ impl App {
             pending_update_action: None,
             skip_world_writable_scan_once: false,
             network_proxy_pending: HashSet::new(),
+            network_proxy_allow_once: HashMap::new(),
+            network_proxy_session_restore: HashMap::new(),
         };
 
         if app.config.network_proxy.enabled && app.config.network_proxy.prompt_on_block {
@@ -325,6 +338,9 @@ impl App {
                 app.handle_tui_event(tui, event).await?
             }
         } {}
+        if let Err(err) = app.restore_network_proxy_approvals().await {
+            tracing::error!(error = %err, "failed to restore network proxy approvals");
+        }
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
@@ -745,10 +761,18 @@ impl App {
                 if host.is_empty() || self.network_proxy_pending.contains(&host) {
                     return Ok(true);
                 }
+                if self.chat_widget.is_network_session_allowed(&host) {
+                    self.chat_widget.resume_pending_exec_approval();
+                    return Ok(true);
+                }
                 self.network_proxy_pending.insert(host);
                 self.chat_widget.on_network_approval_request(request);
             }
-            AppEvent::NetworkProxyDecision { host, decision } => {
+            AppEvent::NetworkProxyDecision {
+                host,
+                decision,
+                call_id,
+            } => {
                 let host = host.trim().to_string();
                 if host.is_empty() {
                     return Ok(true);
@@ -756,34 +780,112 @@ impl App {
                 self.network_proxy_pending.remove(&host);
                 let client = create_client();
                 let admin_url = self.config.network_proxy.admin_url.clone();
-                let should_resume_exec = matches!(
+                let config_path = self.config.network_proxy.config_path.clone();
+                let mut reload_needed = false;
+                let mut should_resume_exec = matches!(
                     decision,
                     crate::app_event::NetworkProxyDecision::AllowOnce
+                        | crate::app_event::NetworkProxyDecision::AllowSession
                         | crate::app_event::NetworkProxyDecision::AllowAlways
                 );
                 match decision {
                     crate::app_event::NetworkProxyDecision::AllowOnce => {
-                        if let Err(err) =
-                            network_proxy::allow_once(&client, &admin_url, &host).await
-                        {
-                            self.chat_widget
-                                .add_error_message(format!("Failed to allow {host} once: {err}"));
+                        if let Some(call_id) = call_id {
+                            let original = match network_proxy::domain_state(&config_path, &host) {
+                                Ok(state) => Some(state),
+                                Err(err) => {
+                                    self.chat_widget.add_error_message(format!(
+                                        "Failed to read network policy for {host}: {err}"
+                                    ));
+                                    should_resume_exec = false;
+                                    None
+                                }
+                            };
+                            let allow_state = network_proxy::DomainState {
+                                allowed: true,
+                                denied: false,
+                            };
+                            if let Some(original) = original {
+                                match network_proxy::set_domain_state(
+                                    &config_path,
+                                    &host,
+                                    allow_state,
+                                ) {
+                                    Ok(changed) => {
+                                        reload_needed |= changed;
+                                        self.network_proxy_allow_once.insert(
+                                            call_id,
+                                            NetworkProxyRestore {
+                                                host: host.clone(),
+                                                state: original,
+                                            },
+                                        );
+                                        self.chat_widget.submit_op(Op::NetworkApprovalCache {
+                                            host: host.clone(),
+                                            decision: ReviewDecision::Approved,
+                                        });
+                                    }
+                                    Err(err) => {
+                                        self.chat_widget.add_error_message(format!(
+                                            "Failed to allow {host} once: {err}"
+                                        ));
+                                        should_resume_exec = false;
+                                    }
+                                }
+                            }
+                        } else {
+                            self.chat_widget.add_error_message(
+                                "Allow once requires a command context.".to_string(),
+                            );
+                            should_resume_exec = false;
+                        }
+                    }
+                    crate::app_event::NetworkProxyDecision::AllowSession => {
+                        let original = match network_proxy::domain_state(&config_path, &host) {
+                            Ok(state) => Some(state),
+                            Err(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to read network policy for {host}: {err}"
+                                ));
+                                should_resume_exec = false;
+                                None
+                            }
+                        };
+                        let allow_state = network_proxy::DomainState {
+                            allowed: true,
+                            denied: false,
+                        };
+                        if let Some(original) = original {
+                            match network_proxy::set_domain_state(&config_path, &host, allow_state)
+                            {
+                                Ok(changed) => {
+                                    reload_needed |= changed;
+                                    self.network_proxy_session_restore
+                                        .entry(host.clone())
+                                        .or_insert(original);
+                                    self.chat_widget.add_network_session_allow(host.clone());
+                                    self.chat_widget.submit_op(Op::NetworkApprovalCache {
+                                        host: host.clone(),
+                                        decision: ReviewDecision::ApprovedForSession,
+                                    });
+                                }
+                                Err(err) => {
+                                    self.chat_widget.add_error_message(format!(
+                                        "Failed to allow {host} for this session: {err}"
+                                    ));
+                                    should_resume_exec = false;
+                                }
+                            }
                         }
                     }
                     crate::app_event::NetworkProxyDecision::AllowAlways => {
-                        match network_proxy::add_allowed_domain(
-                            &self.config.network_proxy.config_path,
-                            &host,
-                        ) {
+                        let allow_state = network_proxy::DomainState {
+                            allowed: true,
+                            denied: false,
+                        };
+                        match network_proxy::set_domain_state(&config_path, &host, allow_state) {
                             Ok(changed) => {
-                                if changed
-                                    && let Err(err) =
-                                        network_proxy::reload(&client, &admin_url).await
-                                {
-                                    self.chat_widget.add_error_message(format!(
-                                            "Failed to reload network proxy after allowlist update: {err}"
-                                        ));
-                                }
+                                reload_needed |= changed;
                             }
                             Err(err) => {
                                 self.chat_widget.add_error_message(format!(
@@ -793,19 +895,13 @@ impl App {
                         }
                     }
                     crate::app_event::NetworkProxyDecision::Deny => {
-                        match network_proxy::add_denied_domain(
-                            &self.config.network_proxy.config_path,
-                            &host,
-                        ) {
+                        let deny_state = network_proxy::DomainState {
+                            allowed: false,
+                            denied: true,
+                        };
+                        match network_proxy::set_domain_state(&config_path, &host, deny_state) {
                             Ok(changed) => {
-                                if changed
-                                    && let Err(err) =
-                                        network_proxy::reload(&client, &admin_url).await
-                                {
-                                    self.chat_widget.add_error_message(format!(
-                                            "Failed to reload network proxy after denylist update: {err}"
-                                        ));
-                                }
+                                reload_needed |= changed;
                             }
                             Err(err) => {
                                 self.chat_widget.add_error_message(format!(
@@ -815,10 +911,41 @@ impl App {
                         }
                     }
                 }
+                if reload_needed && let Err(err) = network_proxy::reload(&client, &admin_url).await
+                {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to reload network proxy after policy update: {err}"
+                    ));
+                }
                 if should_resume_exec {
                     self.chat_widget.resume_pending_exec_approval();
                 } else {
                     self.chat_widget.reject_pending_exec_approval();
+                }
+            }
+            AppEvent::NetworkProxyAllowOnceExpired { call_id } => {
+                let Some(restore) = self.network_proxy_allow_once.remove(&call_id) else {
+                    return Ok(true);
+                };
+                let config_path = self.config.network_proxy.config_path.clone();
+                let client = create_client();
+                let admin_url = self.config.network_proxy.admin_url.clone();
+                match network_proxy::set_domain_state(&config_path, &restore.host, restore.state) {
+                    Ok(changed) => {
+                        if changed
+                            && let Err(err) = network_proxy::reload(&client, &admin_url).await
+                        {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to reload network proxy after allow-once cleanup: {err}"
+                            ));
+                        }
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to restore network policy for {}: {err}",
+                            restore.host
+                        ));
+                    }
                 }
             }
         }
@@ -827,6 +954,51 @@ impl App {
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
         self.chat_widget.token_usage()
+    }
+
+    async fn restore_network_proxy_approvals(&mut self) -> Result<()> {
+        if self.network_proxy_allow_once.is_empty() && self.network_proxy_session_restore.is_empty()
+        {
+            return Ok(());
+        }
+        let config_path = self.config.network_proxy.config_path.clone();
+        let client = create_client();
+        let admin_url = self.config.network_proxy.admin_url.clone();
+        let mut reload_needed = false;
+
+        let mut restores: HashMap<String, network_proxy::DomainState> = HashMap::new();
+        for restore in self
+            .network_proxy_allow_once
+            .drain()
+            .map(|(_, value)| value)
+        {
+            restores.insert(restore.host, restore.state);
+        }
+        for (host, state) in self.network_proxy_session_restore.drain() {
+            restores.insert(host, state);
+        }
+
+        for (host, state) in restores {
+            match network_proxy::set_domain_state(&config_path, &host, state) {
+                Ok(changed) => {
+                    reload_needed |= changed;
+                }
+                Err(err) => {
+                    tracing::error!(
+                        error = %err,
+                        host = host,
+                        "failed to restore network policy"
+                    );
+                }
+            }
+        }
+
+        if reload_needed {
+            network_proxy::reload(&client, &admin_url)
+                .await
+                .map_err(|err| color_eyre::eyre::eyre!(err))?;
+        }
+        Ok(())
     }
 
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
@@ -1027,6 +1199,8 @@ mod tests {
             pending_update_action: None,
             skip_world_writable_scan_once: false,
             network_proxy_pending: HashSet::new(),
+            network_proxy_allow_once: HashMap::new(),
+            network_proxy_session_restore: HashMap::new(),
         }
     }
 

@@ -317,6 +317,7 @@ fn make_chatwidget_manual() -> (
         is_review_mode: false,
         needs_final_message_separator: false,
         pending_exec_approval: None,
+        network_proxy_session_allow: std::collections::HashSet::new(),
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,

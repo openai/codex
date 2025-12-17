@@ -297,6 +297,15 @@ impl TurnContext {
     }
 }
 
+pub(crate) struct CommandApprovalRequest {
+    pub(crate) call_id: String,
+    pub(crate) command: Vec<String>,
+    pub(crate) cwd: PathBuf,
+    pub(crate) reason: Option<String>,
+    pub(crate) risk: Option<SandboxCommandAssessment>,
+    pub(crate) network_preflight_only: bool,
+}
+
 #[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
@@ -866,12 +875,7 @@ impl Session {
     pub async fn request_command_approval(
         &self,
         turn_context: &TurnContext,
-        call_id: String,
-        command: Vec<String>,
-        cwd: PathBuf,
-        reason: Option<String>,
-        risk: Option<SandboxCommandAssessment>,
-        network_preflight_only: bool,
+        request: CommandApprovalRequest,
     ) -> ReviewDecision {
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
@@ -891,15 +895,15 @@ impl Session {
             warn!("Overwriting existing pending approval for sub_id: {event_id}");
         }
 
-        let parsed_cmd = parse_command(&command);
+        let parsed_cmd = parse_command(&request.command);
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-            call_id,
-            command,
-            cwd,
-            reason,
-            risk,
+            call_id: request.call_id,
+            command: request.command,
+            cwd: request.cwd,
+            reason: request.reason,
+            risk: request.risk,
             parsed_cmd,
-            network_preflight_only,
+            network_preflight_only: request.network_preflight_only,
         });
         self.send_event(turn_context, event).await;
         rx_approve.await.unwrap_or_default()
@@ -1362,6 +1366,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::PatchApproval { id, decision } => {
                 handlers::patch_approval(&sess, id, decision).await;
             }
+            Op::NetworkApprovalCache { host, decision } => {
+                handlers::network_approval_cache(&sess, host, decision).await;
+            }
             Op::AddToHistory { text } => {
                 handlers::add_to_history(&sess, &config, text).await;
             }
@@ -1413,6 +1420,7 @@ mod handlers {
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
     use crate::mcp::auth::compute_auth_statuses;
+    use crate::network_proxy;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
@@ -1526,6 +1534,21 @@ mod handlers {
             }
             other => sess.notify_approval(&id, other).await,
         }
+    }
+
+    pub async fn network_approval_cache(
+        sess: &Arc<Session>,
+        host: String,
+        decision: ReviewDecision,
+    ) {
+        if !matches!(
+            decision,
+            ReviewDecision::Approved | ReviewDecision::ApprovedForSession
+        ) {
+            return;
+        }
+        let mut store = sess.services.tool_approvals.lock().await;
+        network_proxy::cache_network_approval(&mut store, &host, decision);
     }
 
     pub async fn add_to_history(sess: &Arc<Session>, config: &Arc<Config>, text: String) {

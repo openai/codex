@@ -152,6 +152,12 @@ pub(crate) enum AppEvent {
     NetworkProxyDecision {
         host: String,
         decision: NetworkProxyDecision,
+        call_id: Option<String>,
+    },
+
+    /// Restore allow-once network approvals after the command finishes.
+    NetworkProxyAllowOnceExpired {
+        call_id: String,
     },
 
     /// Open the feedback note entry overlay after the user selects a category.
@@ -169,6 +175,7 @@ pub(crate) enum AppEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NetworkProxyDecision {
     AllowOnce,
+    AllowSession,
     AllowAlways,
     Deny,
 }

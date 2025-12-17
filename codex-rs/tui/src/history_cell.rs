@@ -471,6 +471,16 @@ pub fn new_network_approval_decision_cell(
                 " this time".bold(),
             ],
         ),
+        NetworkProxyDecision::AllowSession => (
+            "✔ ".green(),
+            vec![
+                "You ".into(),
+                "approved".bold(),
+                " network access to ".into(),
+                host_span,
+                " for this session".bold(),
+            ],
+        ),
         NetworkProxyDecision::AllowAlways => (
             "✔ ".green(),
             vec![

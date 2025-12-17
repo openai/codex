@@ -1,7 +1,9 @@
 use crate::config::types::NetworkProxyConfig;
 use crate::config::types::NetworkProxyMode;
 use crate::default_client::CodexHttpClient;
+use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
+use crate::tools::sandboxing::ApprovalStore;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -26,6 +28,8 @@ const DENIED_DOMAINS_KEY: &str = "deniedDomains";
 pub struct NetworkProxyBlockedRequest {
     pub host: String,
     pub reason: String,
+    #[serde(default)]
+    pub call_id: Option<String>,
     pub client: Option<String>,
     pub method: Option<String>,
     pub mode: Option<NetworkProxyMode>,
@@ -87,6 +91,41 @@ pub async fn allow_once(client: &CodexHttpClient, admin_url: &str, host: &str) -
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct NetworkApprovalKey {
+    host: String,
+}
+
+impl NetworkApprovalKey {
+    fn new(host: &str) -> Option<Self> {
+        let host = host.trim();
+        if host.is_empty() {
+            return None;
+        }
+        Some(Self {
+            host: host.to_ascii_lowercase(),
+        })
+    }
+}
+
+pub(crate) fn cache_network_approval(
+    store: &mut ApprovalStore,
+    host: &str,
+    decision: ReviewDecision,
+) -> bool {
+    if !matches!(
+        decision,
+        ReviewDecision::Approved | ReviewDecision::ApprovedForSession
+    ) {
+        return false;
+    }
+    let Some(key) = NetworkApprovalKey::new(host) else {
+        return false;
+    };
+    store.put(key, decision);
+    true
+}
+
 pub async fn set_mode(
     client: &CodexHttpClient,
     admin_url: &str,
@@ -127,6 +166,55 @@ pub fn add_denied_domain(config_path: &Path, host: &str) -> Result<bool> {
     update_domain_list(config_path, host, DomainListKind::Deny)
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct DomainState {
+    pub allowed: bool,
+    pub denied: bool,
+}
+
+pub fn domain_state(config_path: &Path, host: &str) -> Result<DomainState> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err(anyhow!("host is empty"));
+    }
+    let policy = load_network_policy(config_path)?;
+    Ok(DomainState {
+        allowed: list_contains(&policy.allowed_domains, host),
+        denied: list_contains(&policy.denied_domains, host),
+    })
+}
+
+pub fn set_domain_state(config_path: &Path, host: &str, state: DomainState) -> Result<bool> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err(anyhow!("host is empty"));
+    }
+    let mut doc = load_document(config_path)?;
+    let network = ensure_network_table(&mut doc);
+    let mut changed = false;
+    {
+        let allowed = ensure_array(network, ALLOWED_DOMAINS_KEY);
+        if state.allowed {
+            changed |= add_domain(allowed, host);
+        } else {
+            changed |= remove_domain(allowed, host);
+        }
+    }
+    {
+        let denied = ensure_array(network, DENIED_DOMAINS_KEY);
+        if state.denied {
+            changed |= add_domain(denied, host);
+        } else {
+            changed |= remove_domain(denied, host);
+        }
+    }
+
+    if changed {
+        write_document(config_path, &doc)?;
+    }
+    Ok(changed)
+}
+
 pub fn should_preflight_network(
     network_proxy: &NetworkProxyConfig,
     sandbox_policy: &SandboxPolicy,
@@ -161,6 +249,7 @@ pub fn preflight_blocked_request_if_enabled(
         Some(hit) => Ok(Some(NetworkProxyBlockedRequest {
             host: hit.host,
             reason: hit.reason,
+            call_id: None,
             client: None,
             method: None,
             mode: Some(network_proxy.mode),
@@ -370,6 +459,10 @@ fn load_network_policy(config_path: &Path) -> Result<NetworkPolicy> {
         )
     })?;
     Ok(config.network)
+}
+
+fn list_contains(domains: &[String], host: &str) -> bool {
+    domains.iter().any(|value| value.eq_ignore_ascii_case(host))
 }
 
 fn host_matches(pattern: &str, host: &str) -> bool {

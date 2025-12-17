@@ -130,12 +130,14 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                 session
                     .request_command_approval(
                         turn,
-                        call_id,
-                        command,
-                        cwd,
-                        reason,
-                        risk,
-                        req.network_preflight_only,
+                        crate::codex::CommandApprovalRequest {
+                            call_id,
+                            command,
+                            cwd,
+                            reason,
+                            risk,
+                            network_preflight_only: req.network_preflight_only,
+                        },
                     )
                     .await
             })
