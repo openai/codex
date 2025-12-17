@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::NetworkAccess;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
@@ -326,6 +327,7 @@ pub struct UserSavedConfig {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_settings: Option<SandboxSettings>,
+    pub network_access: Option<NetworkAccess>,
     pub forced_chatgpt_workspace_id: Option<String>,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub model: Option<String>,

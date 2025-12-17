@@ -29,6 +29,7 @@ use crate::protocol::SandboxPolicy;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::NetworkAccess;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
@@ -112,6 +113,9 @@ pub struct Config {
     pub approval_policy: Constrained<AskForApproval>,
 
     pub sandbox_policy: SandboxPolicy,
+
+    /// Optional override for the network status sent in the environment context.
+    pub network_access: Option<NetworkAccess>,
 
     /// True if the user passed in an override or set a value in config.toml
     /// for either of approval_policy or sandbox_mode.
@@ -560,6 +564,9 @@ pub struct ConfigToml {
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
 
+    /// Optional override describing network access to include in environment context.
+    pub network_access: Option<NetworkAccess>,
+
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
@@ -712,6 +719,7 @@ impl From<ConfigToml> for UserSavedConfig {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
+            network_access: config_toml.network_access,
             forced_chatgpt_workspace_id: config_toml.forced_chatgpt_workspace_id,
             forced_login_method: config_toml.forced_login_method,
             model: config_toml.model,
@@ -1026,6 +1034,7 @@ impl Config {
                 }
             }
         }
+        let network_access = cfg.network_access;
         let approval_policy = approval_policy_override
             .or(config_profile.approval_policy)
             .or(cfg.approval_policy)
@@ -1165,6 +1174,7 @@ impl Config {
             cwd: resolved_cwd,
             approval_policy,
             sandbox_policy,
+            network_access,
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
@@ -1557,6 +1567,23 @@ trust_level = "trusted"
                 }
             );
         }
+    }
+
+    #[test]
+    fn network_access_override_is_loaded() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                network_access: Some(NetworkAccess::Restricted),
+                ..Default::default()
+            },
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.network_access, Some(NetworkAccess::Restricted));
+
+        Ok(())
     }
 
     #[test]
@@ -2956,6 +2983,7 @@ model_verbosity = "high"
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                network_access: None,
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3031,6 +3059,7 @@ model_verbosity = "high"
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            network_access: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3121,6 +3150,7 @@ model_verbosity = "high"
             model_provider: fixture.openai_provider.clone(),
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            network_access: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3197,6 +3227,7 @@ model_verbosity = "high"
             model_provider: fixture.openai_provider.clone(),
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            network_access: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
