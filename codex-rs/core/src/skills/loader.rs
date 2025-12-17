@@ -3,7 +3,7 @@ use crate::git_info::resolve_root_git_project_for_trust;
 use crate::skills::model::SkillError;
 use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
-use crate::skills::public::public_cache_root_dir;
+use crate::skills::system::system_cache_root_dir;
 use codex_protocol::protocol::SkillScope;
 use dunce::canonicalize as normalize_path;
 use serde::Deserialize;
@@ -92,10 +92,10 @@ pub(crate) fn user_skills_root(codex_home: &Path) -> SkillRoot {
     }
 }
 
-pub(crate) fn public_skills_root(codex_home: &Path) -> SkillRoot {
+pub(crate) fn system_skills_root(codex_home: &Path) -> SkillRoot {
     SkillRoot {
-        path: public_cache_root_dir(codex_home),
-        scope: SkillScope::Public,
+        path: system_cache_root_dir(codex_home),
+        scope: SkillScope::System,
     }
 }
 
@@ -139,9 +139,9 @@ fn skill_roots(config: &Config) -> Vec<SkillRoot> {
     }
 
     // Load order matters: we dedupe by name, keeping the first occurrence.
-    // This makes repo/user skills win over public skills.
+    // This makes repo/user skills win over system skills.
     roots.push(user_skills_root(&config.codex_home));
-    roots.push(public_skills_root(&config.codex_home));
+    roots.push(system_skills_root(&config.codex_home));
 
     roots
 }
@@ -195,7 +195,7 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
                         outcome.skills.push(skill);
                     }
                     Err(err) => {
-                        if scope != SkillScope::Public {
+                        if scope != SkillScope::System {
                             outcome.errors.push(SkillError {
                                 path,
                                 message: err.to_string(),
@@ -301,6 +301,20 @@ mod tests {
 
     fn write_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) -> PathBuf {
         write_skill_at(&codex_home.path().join("skills"), dir, name, description)
+    }
+
+    fn write_system_skill(
+        codex_home: &TempDir,
+        dir: &str,
+        name: &str,
+        description: &str,
+    ) -> PathBuf {
+        write_skill_at(
+            &codex_home.path().join("skills/.system"),
+            dir,
+            name,
+            description,
+        )
     }
 
     fn write_skill_at(root: &Path, dir: &str, name: &str, description: &str) -> PathBuf {
@@ -540,6 +554,25 @@ mod tests {
     }
 
     #[test]
+    fn loads_system_skills_with_lowest_priority() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+
+        write_system_skill(&codex_home, "system", "dupe-skill", "from system");
+        write_skill(&codex_home, "user", "dupe-skill", "from user");
+
+        let cfg = make_config(&codex_home);
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert_eq!(outcome.skills[0].description, "from user");
+        assert_eq!(outcome.skills[0].scope, SkillScope::User);
+    }
+
+    #[test]
     fn repo_skills_search_does_not_escape_repo_root() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let outer_dir = tempfile::tempdir().expect("tempdir");
@@ -643,16 +676,11 @@ mod tests {
     }
 
     #[test]
-    fn loads_skills_from_public_cache_when_present() {
+    fn loads_skills_from_system_cache_when_present() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let work_dir = tempfile::tempdir().expect("tempdir");
 
-        write_skill_at(
-            &codex_home.path().join("skills").join(".public"),
-            "public",
-            "public-skill",
-            "from public",
-        );
+        write_system_skill(&codex_home, "system", "system-skill", "from system");
 
         let mut cfg = make_config(&codex_home);
         cfg.cwd = work_dir.path().to_path_buf();
@@ -664,22 +692,17 @@ mod tests {
             outcome.errors
         );
         assert_eq!(outcome.skills.len(), 1);
-        assert_eq!(outcome.skills[0].name, "public-skill");
-        assert_eq!(outcome.skills[0].scope, SkillScope::Public);
+        assert_eq!(outcome.skills[0].name, "system-skill");
+        assert_eq!(outcome.skills[0].scope, SkillScope::System);
     }
 
     #[test]
-    fn deduplicates_by_name_preferring_user_over_public() {
+    fn deduplicates_by_name_preferring_user_over_system() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let work_dir = tempfile::tempdir().expect("tempdir");
 
         write_skill(&codex_home, "user", "dupe-skill", "from user");
-        write_skill_at(
-            &codex_home.path().join("skills").join(".public"),
-            "public",
-            "dupe-skill",
-            "from public",
-        );
+        write_system_skill(&codex_home, "system", "dupe-skill", "from system");
 
         let mut cfg = make_config(&codex_home);
         cfg.cwd = work_dir.path().to_path_buf();
@@ -696,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn deduplicates_by_name_preferring_repo_over_public() {
+    fn deduplicates_by_name_preferring_repo_over_system() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
 
@@ -716,12 +739,7 @@ mod tests {
             "dupe-skill",
             "from repo",
         );
-        write_skill_at(
-            &codex_home.path().join("skills").join(".public"),
-            "public",
-            "dupe-skill",
-            "from public",
-        );
+        write_system_skill(&codex_home, "system", "dupe-skill", "from system");
 
         let mut cfg = make_config(&codex_home);
         cfg.cwd = repo_dir.path().to_path_buf();

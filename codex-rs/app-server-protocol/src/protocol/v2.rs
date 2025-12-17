@@ -980,6 +980,10 @@ pub struct SkillsListParams {
     /// When empty, defaults to the current session working directory.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwds: Vec<PathBuf>,
+
+    /// When true, bypass the skills cache and re-scan skills from disk.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_reload: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -996,7 +1000,7 @@ pub struct SkillsListResponse {
 pub enum SkillScope {
     User,
     Repo,
-    Public,
+    System,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1042,7 +1046,7 @@ impl From<CoreSkillScope> for SkillScope {
         match value {
             CoreSkillScope::User => Self::User,
             CoreSkillScope::Repo => Self::Repo,
-            CoreSkillScope::Public => Self::Public,
+            CoreSkillScope::System => Self::System,
         }
     }
 }
@@ -1936,6 +1940,30 @@ mod tests {
                 id: "search-1".to_string(),
                 query: "docs".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn skills_list_params_serialization_uses_force_reload() {
+        assert_eq!(
+            serde_json::to_value(SkillsListParams {
+                cwds: Vec::new(),
+                force_reload: false,
+            })
+            .unwrap(),
+            json!({}),
+        );
+
+        assert_eq!(
+            serde_json::to_value(SkillsListParams {
+                cwds: vec![PathBuf::from("/repo")],
+                force_reload: true,
+            })
+            .unwrap(),
+            json!({
+                "cwds": ["/repo"],
+                "forceReload": true,
+            }),
         );
     }
 

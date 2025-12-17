@@ -79,8 +79,6 @@ pub enum Feature {
     RemoteModels,
     /// Allow model to call multiple tools in parallel (only for models supporting it).
     ParallelToolCalls,
-    /// Experimental skills injection (CLI flag-driven).
-    Skills,
     /// Experimental shell snapshotting.
     ShellSnapshot,
     /// Experimental TUI v2 (viewport) implementation.
@@ -320,16 +318,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     // Beta program. Rendered in the `/experimental` menu for users.
-    FeatureSpec {
-        id: Feature::Skills,
-        key: "skills",
-        // stage: Stage::Beta {
-        //     menu_description: "Define new `skills` for the model",
-        //     announcement: "NEW! Try the new `skills` features. Enable in /experimental!",
-        // },
-        stage: Stage::Experimental,
-        default_enabled: false,
-    },
     FeatureSpec {
         id: Feature::UnifiedExec,
         key: "unified_exec",

@@ -14,7 +14,6 @@
 //! 3.  We do **not** walk past the Git root.
 
 use crate::config::Config;
-use crate::features::Feature;
 use crate::skills::SkillMetadata;
 use crate::skills::render_skills_section;
 use dunce::canonicalize as normalize_path;
@@ -37,11 +36,7 @@ pub(crate) async fn get_user_instructions(
     config: &Config,
     skills: Option<&[SkillMetadata]>,
 ) -> Option<String> {
-    let skills_section = if config.features.enabled(Feature::Skills) {
-        skills.and_then(render_skills_section)
-    } else {
-        None
-    };
+    let skills_section = skills.and_then(render_skills_section);
 
     let project_docs = match read_project_docs(config).await {
         Ok(docs) => docs,
@@ -260,7 +255,6 @@ mod tests {
 
         config.cwd = root.path().to_path_buf();
         config.project_doc_max_bytes = limit;
-        config.features.enable(Feature::Skills);
 
         config.user_instructions = instructions.map(ToOwned::to_owned);
         config

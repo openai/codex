@@ -1291,6 +1291,7 @@ dependencies = [
  "futures",
  "http 1.3.1",
  "image",
+ "include_dir",
  "indexmap 2.12.0",
  "keyring",
  "landlock",
@@ -3366,7 +3367,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.1",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -3588,6 +3589,25 @@ name = "impl-more"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8a5a9a0ff0086c7a148acb942baaabeadf9504d10400b5a05645853729b9cd2"
+
+[[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
 
 [[package]]
 name = "indenter"
@@ -5152,7 +5172,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.1",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -5189,7 +5209,7 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.1",
  "tracing",
  "windows-sys 0.60.2",
 ]
