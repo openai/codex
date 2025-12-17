@@ -65,6 +65,7 @@ pub struct RestoreGhostCommitOptions<'a> {
 pub struct GhostSnapshotConfig {
     pub ignore_large_untracked_files: Option<i64>,
     pub ignore_large_untracked_dirs: Option<i64>,
+    pub disable_warnings: bool,
 }
 
 impl Default for GhostSnapshotConfig {
@@ -72,6 +73,7 @@ impl Default for GhostSnapshotConfig {
         Self {
             ignore_large_untracked_files: Some(DEFAULT_IGNORE_LARGE_UNTRACKED_FILES),
             ignore_large_untracked_dirs: Some(DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS),
+            disable_warnings: false,
         }
     }
 }
@@ -1164,6 +1166,7 @@ mod tests {
         let snapshot_config = GhostSnapshotConfig {
             ignore_large_untracked_files: Some(DEFAULT_IGNORE_LARGE_UNTRACKED_FILES),
             ignore_large_untracked_dirs: Some(threshold),
+            disable_warnings: false,
         };
         let (ghost, _report) = create_ghost_commit_with_report(
             &CreateGhostCommitOptions::new(repo).ghost_snapshot(snapshot_config),
