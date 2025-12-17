@@ -39,8 +39,8 @@ For each vulnerability, emit a markdown block:
 - **Snippet:** Fenced code block (specify language) showing only the relevant lines with inline comments or numbered markers that you reference in the description.
 - **Dataflow:** Describe sources, propagation, sanitization, and sinks using relative paths and `L<start>-L<end>` ranges.
     - **PoC:** Provide two variants when possible:
-      - Minimal standalone snippet or test file that runs in isolation (no full project setup) to validate the specific flaw. Run it locally first to ensure the syntax is correct and that it executes successfully. You do not need a full exploit chain—focus on the precise issue (e.g., missing validation, comparison/logic error, injection behavior) and mock other components as needed. You may use the same dependencies referenced in the reviewed code.
-      - Attacker-style reproduction steps or payload against the exposed interface (HTTP request, CLI invocation, message payload, etc.).
+      - For HIGH-severity findings, include a minimal standalone snippet or test file that runs in isolation (no full project setup) to validate the specific flaw. Run it locally first to ensure the syntax is correct and that it executes successfully. You do not need a full exploit chain—focus on the precise issue (e.g., missing validation, comparison/logic error, injection behavior) and mock other components as needed. You may use the same dependencies referenced in the reviewed code.
+      - Attacker-style reproduction steps or payload against the exposed interface (HTTP request, CLI invocation, message payload, etc.). When details are missing, add concise questions for product/engineering to confirm requirements instead of fabricating code.
       If only one is feasible, provide that. Use fenced code blocks for code where appropriate. If the minimal PoC is lengthy, include it as file contents and specify that it should be saved under `bug-<index>-poc/` (where `<index>` is this finding’s 1-based order), with clear filenames.
 - **Recommendation:** Actionable remediation guidance.
 - **Verification Type:** JSON array subset of ["network_api", "crash_poc", "web_browser"].
