@@ -280,6 +280,9 @@ fn normalize_cwd_lines(output: &[u8]) -> Vec<String> {
         .collect()
 }
 
+// This is not dead code but this is not used on Windows, and we still want compiles check
+// everywhere.
+#[allow(dead_code)]
 fn strip_echoed_input(lines: Vec<String>, input: &str) -> Vec<String> {
     lines.into_iter().filter(|line| line != input).collect()
 }

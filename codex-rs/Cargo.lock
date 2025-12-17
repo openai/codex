@@ -1879,7 +1879,6 @@ dependencies = [
  "anyhow",
  "filedescriptor",
  "lazy_static",
- "libc",
  "log",
  "portable-pty",
  "pretty_assertions",
