@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
 
 use crate::AuthManager;
 use crate::SandboxState;
@@ -217,13 +216,7 @@ impl Codex {
         let (tx_event, rx_event) = async_channel::unbounded();
 
         let loaded_skills = if config.features.enabled(Feature::Skills) {
-            let start = Instant::now();
-            let outcome = skills_manager.skills_for_cwd(&config.cwd);
-            warn!(
-                elapsed_ms = start.elapsed().as_millis(),
-                "startup: load skills"
-            );
-            Some(outcome)
+            Some(skills_manager.skills_for_cwd(&config.cwd))
         } else {
             None
         };
@@ -238,7 +231,6 @@ impl Codex {
             }
         }
 
-        let instructions_start = Instant::now();
         let user_instructions = get_user_instructions(
             &config,
             loaded_skills
@@ -246,39 +238,19 @@ impl Codex {
                 .map(|outcome| outcome.skills.as_slice()),
         )
         .await;
-        warn!(
-            elapsed_ms = instructions_start.elapsed().as_millis(),
-            "startup: user instructions"
-        );
 
-        let exec_policy_start = Instant::now();
-        let exec_policy = load_exec_policy_for_features(&config.features, &config.codex_home).await;
-        warn!(
-            elapsed_ms = exec_policy_start.elapsed().as_millis(),
-            "startup: exec policy"
-        );
-        let exec_policy = exec_policy
+        let exec_policy = load_exec_policy_for_features(&config.features, &config.codex_home)
+            .await
             .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
         let exec_policy = Arc::new(RwLock::new(exec_policy));
 
         let config = Arc::new(config);
-        if config.features.enabled(Feature::RemoteModels) {
-            let refresh_start = Instant::now();
-            let refresh = models_manager.refresh_available_models(&config).await;
-            warn!(
-                elapsed_ms = refresh_start.elapsed().as_millis(),
-                "startup: refresh remote models"
-            );
-            if let Err(err) = refresh {
-                error!("failed to refresh available models: {err:?}");
-            }
+        if config.features.enabled(Feature::RemoteModels)
+            && let Err(err) = models_manager.refresh_available_models(&config).await
+        {
+            error!("failed to refresh available models: {err:?}");
         }
-        let model_start = Instant::now();
         let model = models_manager.get_model(&config.model, &config).await;
-        warn!(
-            elapsed_ms = model_start.elapsed().as_millis(),
-            "startup: resolve model"
-        );
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             model: model.clone(),
@@ -612,38 +584,13 @@ impl Session {
         // - initialize RolloutRecorder with new or resumed session info
         // - perform default shell discovery
         // - load history metadata
-        let rollout_fut = async {
-            let start = Instant::now();
-            let res = RolloutRecorder::new(&config, rollout_params).await;
-            warn!(
-                elapsed_ms = start.elapsed().as_millis(),
-                "startup: rollout recorder"
-            );
-            res
-        };
+        let rollout_fut = RolloutRecorder::new(&config, rollout_params);
 
-        let history_meta_fut = async {
-            let start = Instant::now();
-            let res = crate::message_history::history_metadata(&config).await;
-            warn!(
-                elapsed_ms = start.elapsed().as_millis(),
-                "startup: history metadata"
-            );
-            res
-        };
-        let auth_statuses_fut = async {
-            let start = Instant::now();
-            let res = compute_auth_statuses(
-                config.mcp_servers.iter(),
-                config.mcp_oauth_credentials_store_mode,
-            )
-            .await;
-            warn!(
-                elapsed_ms = start.elapsed().as_millis(),
-                "startup: mcp auth statuses"
-            );
-            res
-        };
+        let history_meta_fut = crate::message_history::history_metadata(&config);
+        let auth_statuses_fut = compute_auth_statuses(
+            config.mcp_servers.iter(),
+            config.mcp_oauth_credentials_store_mode,
+        );
 
         // Join all independent futures.
         let (rollout_recorder, (history_log_id, history_entry_count), auth_statuses) =
@@ -702,15 +649,10 @@ impl Session {
         let mut default_shell = shell::default_user_shell();
         // Create the mutable state for the Session.
         if config.features.enabled(Feature::ShellSnapshot) {
-            let start = Instant::now();
             default_shell.shell_snapshot =
                 ShellSnapshot::try_new(&config.codex_home, &default_shell)
                     .await
                     .map(Arc::new);
-            warn!(
-                elapsed_ms = start.elapsed().as_millis(),
-                "startup: shell snapshot"
-            );
         }
         let state = SessionState::new(session_configuration.clone());
 
@@ -770,7 +712,6 @@ impl Session {
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             sandbox_cwd: session_configuration.cwd.clone(),
         };
-        let mcp_init_start = Instant::now();
         sess.services
             .mcp_connection_manager
             .write()
@@ -784,18 +725,9 @@ impl Session {
                 sandbox_state,
             )
             .await;
-        warn!(
-            elapsed_ms = mcp_init_start.elapsed().as_millis(),
-            "startup: mcp initialize"
-        );
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
-        let record_start = Instant::now();
         sess.record_initial_history(initial_history).await;
-        warn!(
-            elapsed_ms = record_start.elapsed().as_millis(),
-            "startup: record initial history"
-        );
 
         if sess.enabled(Feature::Skills) {
             let mut rx = sess
