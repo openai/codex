@@ -28,9 +28,11 @@ jobs:
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             BASE_SHA='${{ github.event.pull_request.base.sha }}'
+            HEAD_SHA='${{ github.event.pull_request.head.sha }}'
             echo "Base SHA: $BASE_SHA"
-            # List files changed between base and current HEAD (merge-base aware)
-            mapfile -t files < <(git diff --name-only --no-renames "$BASE_SHA"...HEAD)
+            echo "Head SHA: $HEAD_SHA"
+            # List files changed between base and PR head
+            mapfile -t files < <(git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA")
           else
             # On push / manual runs, default to running everything
             files=("codex-rs/force" ".github/force")

@@ -59,60 +59,8 @@ fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn codex_mini_latest_tools() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-    use pretty_assertions::assert_eq;
-
-    let server = start_mock_server().await;
-    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
-
-    let TestCodex { codex, .. } = test_codex()
-        .with_config(|config| {
-            config.user_instructions = Some("be consistent and helpful".to_string());
-            config.features.disable(Feature::ApplyPatchFreeform);
-            config.model = Some("codex-mini-latest".to_string());
-        })
-        .build(&server)
-        .await?;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 1".into(),
-            }],
-        })
-        .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello 2".into(),
-            }],
-        })
-        .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    let expected_instructions = [
-        include_str!("../../prompt.md"),
-        include_str!("../../../apply-patch/apply_patch_tool_instructions.md"),
-    ]
-    .join("\n");
-
-    let body0 = req1.single_request().body_json();
-    assert_eq!(
-        body0["instructions"],
-        serde_json::json!(expected_instructions),
-    );
-    let body1 = req2.single_request().body_json();
-    assert_eq!(
-        body1["instructions"],
-        serde_json::json!(expected_instructions),
-    );
-
-    Ok(())
+fn normalize_newlines(text: &str) -> String {
+    text.replace("\r\n", "\n")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -200,6 +148,70 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         serde_json::json!(expected_instructions),
     );
     assert_tool_names(&body1, &expected_tools_names);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_mini_latest_tools() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    use pretty_assertions::assert_eq;
+
+    let server = start_mock_server().await;
+    let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.user_instructions = Some("be consistent and helpful".to_string());
+            config.features.disable(Feature::ApplyPatchFreeform);
+            config.model = Some("codex-mini-latest".to_string());
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 1".into(),
+            }],
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 2".into(),
+            }],
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let expected_instructions = [
+        include_str!("../../prompt.md"),
+        include_str!("../../../apply-patch/apply_patch_tool_instructions.md"),
+    ]
+    .join("\n");
+
+    let body0 = req1.single_request().body_json();
+    let instructions0 = body0["instructions"]
+        .as_str()
+        .expect("instructions should be a string");
+    assert_eq!(
+        normalize_newlines(instructions0),
+        normalize_newlines(&expected_instructions)
+    );
+
+    let body1 = req2.single_request().body_json();
+    let instructions1 = body1["instructions"]
+        .as_str()
+        .expect("instructions should be a string");
+    assert_eq!(
+        normalize_newlines(instructions1),
+        normalize_newlines(&expected_instructions)
+    );
 
     Ok(())
 }
@@ -593,7 +605,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
         .await?;
 
     let default_cwd = config.cwd.clone();
-    let default_approval_policy = config.approval_policy;
+    let default_approval_policy = config.approval_policy.value();
     let default_sandbox_policy = config.sandbox_policy.clone();
     let default_model = session_configured.model;
     let default_effort = config.model_reasoning_effort;
@@ -685,7 +697,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         .await?;
 
     let default_cwd = config.cwd.clone();
-    let default_approval_policy = config.approval_policy;
+    let default_approval_policy = config.approval_policy.value();
     let default_sandbox_policy = config.sandbox_policy.clone();
     let default_model = session_configured.model;
     let default_effort = config.model_reasoning_effort;

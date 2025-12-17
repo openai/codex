@@ -23,6 +23,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
@@ -159,6 +160,15 @@ fn migration_prompt_hidden(config: &Config, migration_config_key: &str) -> bool 
     }
 }
 
+fn target_preset_for_upgrade<'a>(
+    available_models: &'a [ModelPreset],
+    target_model: &str,
+) -> Option<&'a ModelPreset> {
+    available_models
+        .iter()
+        .find(|preset| preset.model == target_model)
+}
+
 async fn handle_model_migration_prompt_if_needed(
     tui: &mut tui::Tui,
     config: &mut Config,
@@ -193,24 +203,16 @@ async fn handle_model_migration_prompt_if_needed(
         }
 
         let current_preset = available_models.iter().find(|preset| preset.model == model);
-        let target_preset = available_models
-            .iter()
-            .find(|preset| preset.model == target_model);
-        let target_display_name = target_preset
-            .map(|preset| preset.display_name.clone())
-            .unwrap_or_else(|| target_model.clone());
+        let target_preset = target_preset_for_upgrade(&available_models, &target_model);
+        let target_preset = target_preset?;
+        let target_display_name = target_preset.display_name.clone();
         let heading_label = if target_display_name == model {
             target_model.clone()
         } else {
             target_display_name.clone()
         };
-        let target_description = target_preset.and_then(|preset| {
-            if preset.description.is_empty() {
-                None
-            } else {
-                Some(preset.description.clone())
-            }
-        });
+        let target_description =
+            (!target_preset.description.is_empty()).then(|| target_preset.description.clone());
         let can_opt_out = current_preset.is_some();
         let prompt_copy = migration_copy_for_models(
             model,
@@ -944,6 +946,42 @@ impl App {
                     }
                 }
             }
+            AppEvent::UpdateFeatureFlags { updates } => {
+                if updates.is_empty() {
+                    return Ok(true);
+                }
+                let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(self.active_profile.as_deref());
+                for (feature, enabled) in &updates {
+                    let feature_key = feature.key();
+                    if *enabled {
+                        // Update the in-memory configs.
+                        self.config.features.enable(*feature);
+                        self.chat_widget.set_feature_enabled(*feature, true);
+                        builder = builder.set_feature_enabled(feature_key, true);
+                    } else {
+                        // Update the in-memory configs.
+                        self.config.features.disable(*feature);
+                        self.chat_widget.set_feature_enabled(*feature, false);
+                        if feature.default_enabled() {
+                            builder = builder.set_feature_enabled(feature_key, false);
+                        } else {
+                            // If the feature already default to `false`, we drop the key
+                            // in the config file so that the user does not miss the feature
+                            // once it gets globally released.
+                            builder = builder.with_edits(vec![ConfigEdit::ClearPath {
+                                segments: vec!["features".to_string(), feature_key.to_string()],
+                            }]);
+                        }
+                    }
+                }
+                if let Err(err) = builder.apply().await {
+                    tracing::error!(error = %err, "failed to persist feature flags");
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to update experimental features: {err}"
+                    ));
+                }
+            }
             AppEvent::SkipNextWorldWritableScan => {
                 self.skip_world_writable_scan_once = true;
             }
@@ -1346,6 +1384,32 @@ mod tests {
             &seen,
             &all_model_presets()
         ));
+    }
+
+    #[test]
+    fn model_migration_prompt_skips_when_target_missing() {
+        let mut available = all_model_presets();
+        let mut current = available
+            .iter()
+            .find(|preset| preset.model == "gpt-5-codex")
+            .cloned()
+            .expect("preset present");
+        current.upgrade = Some(ModelUpgrade {
+            id: "missing-target".to_string(),
+            reasoning_effort_mapping: None,
+            migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG.to_string(),
+        });
+        available.retain(|preset| preset.model != "gpt-5-codex");
+        available.push(current.clone());
+
+        assert!(should_show_model_migration_prompt(
+            &current.model,
+            "missing-target",
+            &BTreeMap::new(),
+            &available,
+        ));
+
+        assert!(target_preset_for_upgrade(&available, "missing-target").is_none());
     }
 
     #[test]

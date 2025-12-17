@@ -309,6 +309,41 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(target_os = "windows", ignore)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_snapshot_deleted_after_shutdown_with_skills_enabled() -> Result<()> {
+    let builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::ShellSnapshot);
+        config.features.enable(Feature::Skills);
+    });
+    let harness = TestCodexHarness::with_builder(builder).await?;
+    let home = harness.test().home.clone();
+    let codex_home = home.path().to_path_buf();
+    let codex = harness.test().codex.clone();
+
+    let mut entries = fs::read_dir(codex_home.join("shell_snapshots")).await?;
+    let snapshot_path = entries
+        .next_entry()
+        .await?
+        .map(|entry| entry.path())
+        .expect("shell snapshot created");
+    assert!(snapshot_path.exists());
+
+    codex.submit(Op::Shutdown {}).await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+
+    drop(codex);
+    drop(harness);
+
+    assert_eq!(
+        snapshot_path.exists(),
+        false,
+        "snapshot should be removed after shutdown"
+    );
+
+    Ok(())
+}
+
 #[cfg_attr(not(target_os = "macos"), ignore)]
 #[cfg_attr(
     target_os = "macos",

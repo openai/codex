@@ -232,7 +232,6 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
             false
         }
         EventMsg::ExecCommandBegin(event) if event.call_id == call_id => {
-            println!("Saw it");
             saw_exec_begin = true;
             false
         }
@@ -689,9 +688,10 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
     } = builder.build(&server).await?;
 
     let call_id = "uexec-full-lifecycle";
+    // This timing force the long-standing PTY
     let args = json!({
-        "cmd": "printf 'HELLO-FULL-LIFECYCLE'",
-        "yield_time_ms": 250,
+        "cmd": "sleep 0.5; printf 'HELLO-FULL-LIFECYCLE'",
+        "yield_time_ms": 1000,
     });
 
     let responses = vec![
@@ -727,26 +727,28 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
 
     let mut begin_event = None;
     let mut end_event = None;
-    let mut saw_delta_with_marker = 0;
+    let mut task_completed = false;
 
     loop {
         let msg = wait_for_event(&codex, |_| true).await;
         match msg {
             EventMsg::ExecCommandBegin(ev) if ev.call_id == call_id => begin_event = Some(ev),
-            EventMsg::ExecCommandOutputDelta(ev) if ev.call_id == call_id => {
-                let text = String::from_utf8_lossy(&ev.chunk);
-                if text.contains("HELLO-FULL-LIFECYCLE") {
-                    saw_delta_with_marker += 1;
-                }
-            }
             EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => {
                 assert!(
                     end_event.is_none(),
                     "expected a single ExecCommandEnd event for this call id"
                 );
                 end_event = Some(ev);
+                if task_completed && end_event.is_some() {
+                    break;
+                }
             }
-            EventMsg::TaskComplete(_) => break,
+            EventMsg::TaskComplete(_) => {
+                task_completed = true;
+                if task_completed && end_event.is_some() {
+                    break;
+                }
+            }
             _ => {}
         }
     }
@@ -756,11 +758,6 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
     assert!(
         begin_event.process_id.is_some(),
         "begin event should include a process_id for a long-lived session"
-    );
-
-    assert_eq!(
-        saw_delta_with_marker, 0,
-        "no ExecCommandOutputDelta should be sent for early exit commands"
     );
 
     let end_event = end_event.expect("expected ExecCommandEnd event");

@@ -200,7 +200,7 @@ fn gpt_5_2() -> ModelPreset {
             ),
             effort(
                 ReasoningEffort::High,
-                "Greater reasoning depth for complex or ambiguous problems",
+                "Maximizes reasoning depth for complex or ambiguous problems",
             ),
             effort(
                 ReasoningEffort::XHigh,

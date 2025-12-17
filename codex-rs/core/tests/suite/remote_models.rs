@@ -319,7 +319,7 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
     let mut config = load_default_config_for_test(&codex_home);
     config.features.enable(Feature::RemoteModels);
 
-    let auth = CodexAuth::from_api_key("dummy");
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
@@ -436,7 +436,7 @@ async fn build_remote_models_harness<F>(
 where
     F: FnOnce(&mut Config),
 {
-    let auth = CodexAuth::from_api_key("dummy");
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let home = Arc::new(TempDir::new()?);
     let cwd = Arc::new(TempDir::new()?);
 

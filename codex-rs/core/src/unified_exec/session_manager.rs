@@ -175,7 +175,6 @@ impl UnifiedExecSessionManager {
             // Short‑lived command: emit ExecCommandEnd immediately using the
             // same helper as the background watcher, so all end events share
             // one implementation.
-            self.release_process_id(&request.process_id).await;
             let exit = exit_code.unwrap_or(-1);
             emit_exec_end_for_unified_exec(
                 Arc::clone(&context.session),
@@ -191,6 +190,7 @@ impl UnifiedExecSessionManager {
             )
             .await;
 
+            self.release_process_id(&request.process_id).await;
             session.check_for_sandbox_denial_with_text(&text).await?;
         } else {
             // Long‑lived command: persist the session so write_stdin can reuse

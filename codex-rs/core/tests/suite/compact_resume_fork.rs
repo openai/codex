@@ -276,6 +276,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
@@ -345,6 +346,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
@@ -405,6 +407,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
@@ -485,6 +488,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
@@ -565,6 +569,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
