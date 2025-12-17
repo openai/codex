@@ -3,7 +3,7 @@ use super::fingerprint::version_for_toml;
 use super::merge::merge_toml_values;
 use codex_app_server_protocol::ConfigLayer;
 use codex_app_server_protocol::ConfigLayerMetadata;
-use codex_app_server_protocol::ConfigLayerName;
+use codex_app_server_protocol::ConfigLayerSource;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -18,18 +18,16 @@ pub struct LoaderOverrides {
 
 #[derive(Debug, Clone)]
 pub struct ConfigLayerEntry {
-    pub name: ConfigLayerName,
-    pub source: PathBuf,
+    pub name: ConfigLayerSource,
     pub config: TomlValue,
     pub version: String,
 }
 
 impl ConfigLayerEntry {
-    pub fn new(name: ConfigLayerName, source: PathBuf, config: TomlValue) -> Self {
+    pub fn new(name: ConfigLayerSource, config: TomlValue) -> Self {
         let version = version_for_toml(&config);
         Self {
             name,
-            source,
             config,
             version,
         }
@@ -38,7 +36,6 @@ impl ConfigLayerEntry {
     pub fn metadata(&self) -> ConfigLayerMetadata {
         ConfigLayerMetadata {
             name: self.name.clone(),
-            source: self.source.display().to_string(),
             version: self.version.clone(),
         }
     }
@@ -46,7 +43,6 @@ impl ConfigLayerEntry {
     pub fn as_layer(&self) -> ConfigLayer {
         ConfigLayer {
             name: self.name.clone(),
-            source: self.source.display().to_string(),
             version: self.version.clone(),
             config: serde_json::to_value(&self.config).unwrap_or(JsonValue::Null),
         }
@@ -64,11 +60,7 @@ pub struct ConfigLayerStack {
 impl ConfigLayerStack {
     pub fn with_user_config(&self, user_config: TomlValue) -> Self {
         Self {
-            user: ConfigLayerEntry::new(
-                self.user.name.clone(),
-                self.user.source.clone(),
-                user_config,
-            ),
+            user: ConfigLayerEntry::new(self.user.name.clone(), user_config),
             session_flags: self.session_flags.clone(),
             system: self.system.clone(),
             mdm: self.mdm.clone(),

@@ -54,10 +54,14 @@ use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
+mod constraint;
 pub mod edit;
 pub mod profile;
 pub mod service;
 pub mod types;
+pub use constraint::Constrained;
+pub use constraint::ConstraintError;
+pub use constraint::ConstraintResult;
 
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
@@ -106,7 +110,7 @@ pub struct Config {
     pub model_provider: ModelProviderInfo,
 
     /// Approval policy for executing commands.
-    pub approval_policy: AskForApproval,
+    pub approval_policy: Constrained<AskForApproval>,
 
     pub sandbox_policy: SandboxPolicy,
 
@@ -1026,15 +1030,14 @@ impl Config {
             .or(cfg.approval_policy)
             .unwrap_or_else(|| {
                 if active_project.is_trusted() {
-                    // If no explicit approval policy is set, but we trust cwd, default to OnRequest
                     AskForApproval::OnRequest
                 } else if active_project.is_untrusted() {
-                    // If project is explicitly marked untrusted, require approval for non-safe commands
                     AskForApproval::UnlessTrusted
                 } else {
                     AskForApproval::default()
                 }
             });
+        let approval_policy = Constrained::allow_any(approval_policy);
         let did_user_set_custom_approval_policy_or_sandbox_mode = approval_policy_override
             .is_some()
             || config_profile.approval_policy.is_some()
@@ -2945,7 +2948,7 @@ model_verbosity = "high"
                 model_auto_compact_token_limit: None,
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
-                approval_policy: AskForApproval::Never,
+                approval_policy: Constrained::allow_any(AskForApproval::Never),
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
@@ -3020,7 +3023,7 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
-            approval_policy: AskForApproval::UnlessTrusted,
+            approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
@@ -3110,7 +3113,7 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
-            approval_policy: AskForApproval::OnFailure,
+            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
@@ -3186,7 +3189,7 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
-            approval_policy: AskForApproval::OnFailure,
+            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
@@ -3500,26 +3503,21 @@ trust_level = "untrusted"
     }
 
     #[test]
-    fn test_untrusted_project_gets_unless_trusted_approval_policy() -> std::io::Result<()> {
+    fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
         let test_project_dir = TempDir::new()?;
         let test_path = test_project_dir.path();
 
-        let mut projects = std::collections::HashMap::new();
-        projects.insert(
-            test_path.to_string_lossy().to_string(),
-            ProjectConfig {
-                trust_level: Some(TrustLevel::Untrusted),
-            },
-        );
-
-        let cfg = ConfigToml {
-            projects: Some(projects),
-            ..Default::default()
-        };
-
         let config = Config::load_from_base_config_with_overrides(
-            cfg,
+            ConfigToml {
+                projects: Some(HashMap::from([(
+                    test_path.to_string_lossy().to_string(),
+                    ProjectConfig {
+                        trust_level: Some(TrustLevel::Untrusted),
+                    },
+                )])),
+                ..Default::default()
+            },
             ConfigOverrides {
                 cwd: Some(test_path.to_path_buf()),
                 ..Default::default()
@@ -3529,7 +3527,7 @@ trust_level = "untrusted"
 
         // Verify that untrusted projects get UnlessTrusted approval policy
         assert_eq!(
-            config.approval_policy,
+            config.approval_policy.value(),
             AskForApproval::UnlessTrusted,
             "Expected UnlessTrusted approval policy for untrusted project"
         );

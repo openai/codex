@@ -2556,7 +2556,7 @@ impl ChatWidget {
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
-        let current_approval = self.config.approval_policy;
+        let current_approval = self.config.approval_policy.value();
         let current_sandbox = self.config.sandbox_policy.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
@@ -2954,7 +2954,9 @@ impl ChatWidget {
 
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
-        self.config.approval_policy = policy;
+        if let Err(err) = self.config.approval_policy.set(policy) {
+            tracing::warn!(%err, "failed to set approval_policy on chat config");
+        }
     }
 
     /// Set the sandbox policy in the widget's config copy.

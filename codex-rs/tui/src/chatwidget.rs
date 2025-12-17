@@ -2556,7 +2556,7 @@ impl ChatWidget {
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
-        let current_approval = self.config.approval_policy;
+        let current_approval = self.config.approval_policy.value();
         let current_sandbox = self.config.sandbox_policy.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
@@ -2564,8 +2564,11 @@ impl ChatWidget {
             let is_current =
                 Self::preset_matches_current(current_approval, &current_sandbox, &preset);
             let name = preset.label.to_string();
-            let description_text = preset.description;
-            let description = Some(description_text.to_string());
+            let description = Some(preset.description.to_string());
+            let disabled_reason = match self.config.approval_policy.can_set(&preset.approval) {
+                Ok(()) => None,
+                Err(err) => Some(err.to_string()),
+            };
             let requires_confirmation = preset.id == "full-access"
                 && !self
                     .config
@@ -2618,6 +2621,7 @@ impl ChatWidget {
                 is_current,
                 actions,
                 dismiss_on_select: true,
+                disabled_reason,
                 ..Default::default()
             });
         }
@@ -2954,7 +2958,9 @@ impl ChatWidget {
 
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
-        self.config.approval_policy = policy;
+        if let Err(err) = self.config.approval_policy.set(policy) {
+            tracing::warn!(%err, "failed to set approval_policy on chat config");
+        }
     }
 
     /// Set the sandbox policy in the widget's config copy.
