@@ -293,7 +293,7 @@ pub(super) fn find_family_for_model(slug: &str) -> ModelFamily {
             context_window: Some(CONTEXT_WINDOW_272K),
         )
 
-        // Production models.
+    // Production models.
     } else if slug.starts_with("caribou") {
         // Same as gpt-5.1-codex-max.
         model_family!(
