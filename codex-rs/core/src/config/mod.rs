@@ -167,6 +167,9 @@ pub struct Config {
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
 
+    /// Emit an audible terminal bell (`BEL`, `\x07`) when a turn completes.
+    pub tui_turn_complete_bell: bool,
+
     /// Enable ASCII animations and shimmer effects in the TUI.
     pub animations: bool,
 
@@ -1232,6 +1235,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            tui_turn_complete_bell: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.turn_complete_bell)
+                .unwrap_or(false),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
             otel: {
@@ -1408,6 +1416,7 @@ persistence = "none"
 
         assert_eq!(tui.notifications, Notifications::Enabled(true));
         assert!(tui.show_tooltips);
+        assert!(!tui.turn_complete_bell);
     }
 
     #[test]
@@ -2990,6 +2999,7 @@ model_verbosity = "high"
                 check_for_update_on_startup: true,
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                tui_turn_complete_bell: false,
                 animations: true,
                 show_tooltips: true,
                 otel: OtelConfig::default(),
@@ -3065,6 +3075,7 @@ model_verbosity = "high"
             check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_turn_complete_bell: false,
             animations: true,
             show_tooltips: true,
             otel: OtelConfig::default(),
@@ -3155,6 +3166,7 @@ model_verbosity = "high"
             check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_turn_complete_bell: false,
             animations: true,
             show_tooltips: true,
             otel: OtelConfig::default(),
@@ -3231,6 +3243,7 @@ model_verbosity = "high"
             check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_turn_complete_bell: false,
             animations: true,
             show_tooltips: true,
             otel: OtelConfig::default(),
@@ -3559,7 +3572,10 @@ mod notifications_tests {
 
     #[derive(Deserialize, Debug, PartialEq)]
     struct TuiTomlTest {
+        #[serde(default)]
         notifications: Notifications,
+        #[serde(default)]
+        turn_complete_bell: bool,
     }
 
     #[derive(Deserialize, Debug, PartialEq)]
@@ -3589,5 +3605,16 @@ mod notifications_tests {
             parsed.tui.notifications,
             Notifications::Custom(ref v) if v == &vec!["foo".to_string()]
         );
+    }
+
+    #[test]
+    fn test_tui_turn_complete_bell_true() {
+        let toml = r#"
+            [tui]
+            turn_complete_bell = true
+        "#;
+        let parsed: RootTomlTest =
+            toml::from_str(toml).expect("deserialize turn_complete_bell=true");
+        assert!(parsed.tui.turn_complete_bell);
     }
 }

@@ -41,6 +41,7 @@ use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::NotificationBackendKind;
 use crate::notifications::detect_backend;
+use crate::terminal_bell::TerminalBell;
 #[cfg(unix)]
 use crate::tui::job_control::SUSPEND_KEY;
 #[cfg(unix)]
@@ -222,6 +223,15 @@ impl Tui {
                 }
             },
         }
+    }
+
+    /// Emit an audible terminal bell (`BEL`, `\x07`) if stdout is a TTY.
+    pub fn ring_bell(&mut self) -> bool {
+        if !stdout().is_terminal() {
+            return false;
+        }
+
+        TerminalBell.ring().is_ok()
     }
 
     pub fn event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {

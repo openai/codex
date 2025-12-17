@@ -371,6 +371,15 @@ pub struct Tui {
     #[serde(default)]
     pub notifications: Notifications,
 
+    /// Emit an audible terminal bell (`BEL`, `\x07`) when an agent turn completes.
+    ///
+    /// This is a cross-platform option that relies on the user's terminal settings to decide
+    /// whether the bell is audible, visual, or ignored.
+    ///
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub turn_complete_bell: bool,
+
     /// Enable animations (welcome screen, shimmer effects, spinners).
     /// Defaults to `true`.
     #[serde(default = "default_true")]

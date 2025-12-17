@@ -1997,6 +1997,11 @@ impl ChatWidget {
 
     pub(crate) fn maybe_post_pending_notification(&mut self, tui: &mut crate::tui::Tui) {
         if let Some(notif) = self.pending_notification.take() {
+            if matches!(&notif, Notification::AgentTurnComplete { .. })
+                && self.config.tui_turn_complete_bell
+            {
+                tui.ring_bell();
+            }
             tui.notify(notif.display());
         }
     }
