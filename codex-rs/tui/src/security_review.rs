@@ -655,6 +655,7 @@ impl SecurityReviewPlanItem {
 
 struct SecurityReviewPlanTracker {
     sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
     explanation: String,
     steps: Vec<SecurityReviewPlanItem>,
 }
@@ -665,6 +666,7 @@ impl SecurityReviewPlanTracker {
         scope_paths: &[PathBuf],
         repo_root: &Path,
         sender: Option<AppEventSender>,
+        log_sink: Option<Arc<SecurityReviewLogSink>>,
     ) -> Self {
         let steps = plan_steps_for_mode(mode);
         let scope_summary = summarize_scope(scope_paths, repo_root);
@@ -672,6 +674,7 @@ impl SecurityReviewPlanTracker {
         let explanation = format!("Security review plan ({mode_label}; scope: {scope_summary})");
         let tracker = Self {
             sender,
+            log_sink,
             explanation,
             steps,
         };
@@ -724,25 +727,25 @@ impl SecurityReviewPlanTracker {
     }
 
     fn emit_update(&self) {
-        let Some(sender) = self.sender.as_ref() else {
-            return;
-        };
-
-        let plan_items: Vec<PlanItemArg> = self
-            .steps
-            .iter()
-            .map(|step| PlanItemArg {
-                step: build_step_title(step),
-                status: step.status.clone(),
-            })
-            .collect();
-        sender.send(AppEvent::InsertHistoryCell(Box::new(
-            history_cell::new_plan_update(UpdatePlanArgs {
-                explanation: Some(self.explanation.clone()),
-                plan: plan_items,
-            }),
-        )));
-        sender.send(AppEvent::SecurityReviewLog(self.build_log_summary()));
+        let summary = self.build_log_summary();
+        if let Some(sender) = self.sender.as_ref() {
+            let plan_items: Vec<PlanItemArg> = self
+                .steps
+                .iter()
+                .map(|step| PlanItemArg {
+                    step: build_step_title(step),
+                    status: step.status.clone(),
+                })
+                .collect();
+            sender.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_plan_update(UpdatePlanArgs {
+                    explanation: Some(self.explanation.clone()),
+                    plan: plan_items,
+                }),
+            )));
+            sender.send(AppEvent::SecurityReviewLog(summary.clone()));
+        }
+        write_log_sink(&self.log_sink, summary.as_str());
     }
 
     fn build_log_summary(&self) -> String {
@@ -2976,12 +2979,27 @@ fn install_hint_for(name: &str) -> String {
 pub async fn run_security_review(
     request: SecurityReviewRequest,
 ) -> Result<SecurityReviewResult, SecurityReviewFailure> {
-    let progress_sender = request.progress_sender.clone();
+    let mut progress_sender = request.progress_sender.clone();
     let log_sink = request.log_sink.clone();
     let mut logs = Vec::new();
     let metrics = Arc::new(ReviewMetrics::default());
     let model_client = create_client();
     let overall_start = Instant::now();
+
+    if progress_sender.is_none() {
+        if let Some(sink) = log_sink.clone() {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let log_sink_for_task = Some(sink);
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    if let AppEvent::SecurityReviewLog(message) = event {
+                        write_log_sink(&log_sink_for_task, message.as_str());
+                    }
+                }
+            });
+            progress_sender = Some(AppEventSender::new(tx));
+        }
+    }
 
     let repo_path = request.repo_path.clone();
     let repo_slug = sanitize_repo_slug(&repo_path);
@@ -3489,8 +3507,13 @@ pub async fn run_security_review(
         });
     }
 
-    let mut plan_tracker =
-        SecurityReviewPlanTracker::new(mode, &include_paths, &repo_path, progress_sender.clone());
+    let mut plan_tracker = SecurityReviewPlanTracker::new(
+        mode,
+        &include_paths,
+        &repo_path,
+        progress_sender.clone(),
+        log_sink.clone(),
+    );
     plan_tracker.restore_statuses(&checkpoint.plan_statuses);
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
@@ -5067,9 +5090,7 @@ fn build_linear_create_tickets_prompt(issue_ref: &str, bugs_markdown: &str) -> S
     let bugs_block = if bugs_preview.is_empty() {
         "No structured findings were produced; do not create any child tickets.".to_string()
     } else {
-        format!(
-            "Source findings markdown (full content):\n```markdown\n{bugs_preview}\n```"
-        )
+        format!("Source findings markdown (full content):\n```markdown\n{bugs_preview}\n```")
     };
     format!(
         "Create Linear child tickets for validated security findings and link them to the review ticket `{issue_ref}`.\n\n{bugs_block}\n\nInstructions:\n- Work only from the findings markdown above plus the main review ticket context; do NOT invent findings.\n- For each HIGH-severity finding, first search for existing sub-issues or clearly related tickets (matching severity + component/file + summary) using Linear MCP. If a closely matching ticket already exists, link that ticket to `{issue_ref}` and **do not** create a duplicate.\n- Only create new tickets for findings that have no similar existing ticket.\n- When creating a new ticket, keep it unassigned and in the initial TODO/backlog state; do **not** auto-assign owners or move tickets to triaged/in-progress/done.\n- Parse the bugs markdown to create concise titles that include severity and the most important component/file.\n- Include reproduction/verification details and recommendations in each ticket body.\n- If the finding includes blame information or a suggested owner (for example, a `Suggested owner:` line derived from git blame), copy that line into the ticket body but do **not** set an assignee.\n- Add links back to the review ticket `{issue_ref}` so engineers can reach the full report and artifacts.\n- Do **not** post comments on the review ticket; this step is only for creating/linking child tickets. The final summary comment is handled separately.\n- Keep everything within the Linear MCP; do not use external network calls.",
