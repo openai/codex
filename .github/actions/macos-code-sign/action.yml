@@ -149,6 +149,38 @@ runs:
         }
         trap cleanup_notary EXIT
 
+        notarize_submission() {
+          local label="$1"
+          local path="$2"
+
+          if [[ ! -f "$path" ]]; then
+            echo "Notarization payload $path not found"
+            exit 1
+          fi
+
+          submission_json=$(xcrun notarytool submit "$path" \
+            --key "$notary_key_path" \
+            --key-id "$APPLE_NOTARIZATION_KEY_ID" \
+            --issuer "$APPLE_NOTARIZATION_ISSUER_ID" \
+            --output-format json \
+            --wait)
+
+          status=$(printf '%s\n' "$submission_json" | jq -r '.status // "Unknown"')
+          submission_id=$(printf '%s\n' "$submission_json" | jq -r '.id // ""')
+
+          if [[ -z "$submission_id" ]]; then
+            echo "Failed to retrieve submission ID for $label"
+            exit 1
+          fi
+
+          echo "::notice title=Notarization::$label submission ${submission_id} completed with status ${status}"
+
+          if [[ "$status" != "Accepted" ]]; then
+            echo "Notarization failed for ${label} (submission ${submission_id}, status ${status})"
+            exit 1
+          fi
+        }
+
         notarize_binary() {
           local binary="$1"
           local source_path="codex-rs/target/${{ inputs.target }}/release/${binary}"
@@ -162,31 +194,69 @@ runs:
           rm -f "$archive_path"
           ditto -c -k --keepParent "$source_path" "$archive_path"
 
-          submission_json=$(xcrun notarytool submit "$archive_path" \
-            --key "$notary_key_path" \
-            --key-id "$APPLE_NOTARIZATION_KEY_ID" \
-            --issuer "$APPLE_NOTARIZATION_ISSUER_ID" \
-            --output-format json \
-            --wait)
+          notarize_submission "$binary" "$archive_path"
+        }
 
-          status=$(printf '%s\n' "$submission_json" | jq -r '.status // "Unknown"')
-          submission_id=$(printf '%s\n' "$submission_json" | jq -r '.id // ""')
+        build_dmg() {
+          local target="${{ inputs.target }}"
+          local release_dir="codex-rs/target/${target}/release"
+          local dmg_root="${RUNNER_TEMP}/codex-dmg-root"
+          local volname="Codex (${target})"
+          local dmg_path="${release_dir}/codex-${target}.dmg"
 
-          if [[ -z "$submission_id" ]]; then
-            echo "Failed to retrieve submission ID for $binary"
+          rm -rf "$dmg_root"
+          mkdir -p "$dmg_root"
+
+          for binary in codex codex-responses-api-proxy; do
+            local bin_path="${release_dir}/${binary}"
+            if [[ ! -f "$bin_path" ]]; then
+              echo "Binary $bin_path not found"
+              exit 1
+            fi
+            ditto "$bin_path" "${dmg_root}/${binary}"
+          done
+
+          rm -f "$dmg_path"
+          hdiutil create \
+            -volname "$volname" \
+            -srcfolder "$dmg_root" \
+            -format UDZO \
+            -ov \
+            "$dmg_path"
+
+          export CODEX_DMG_PATH="$dmg_path"
+          echo "CODEX_DMG_PATH=$dmg_path" >> "$GITHUB_ENV"
+        }
+
+        sign_dmg() {
+          local dmg_path="$1"
+
+          if [[ -z "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
+            echo "APPLE_CODESIGN_IDENTITY is required for macOS signing"
             exit 1
           fi
 
-          echo "::notice title=Notarization::$binary submission ${submission_id} completed with status ${status}"
-
-          if [[ "$status" != "Accepted" ]]; then
-            echo "Notarization failed for ${binary} (submission ${submission_id}, status ${status})"
-            exit 1
+          keychain_args=()
+          if [[ -n "${APPLE_CODESIGN_KEYCHAIN:-}" && -f "${APPLE_CODESIGN_KEYCHAIN}" ]]; then
+            keychain_args+=(--keychain "${APPLE_CODESIGN_KEYCHAIN}")
           fi
+
+          codesign --force --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$dmg_path"
         }
 
         notarize_binary "codex"
         notarize_binary "codex-responses-api-proxy"
+
+        build_dmg
+
+        if [[ -z "${CODEX_DMG_PATH:-}" ]]; then
+          echo "CODEX_DMG_PATH not set after building DMG"
+          exit 1
+        fi
+
+        sign_dmg "$CODEX_DMG_PATH"
+        notarize_submission "codex-${{ inputs.target }}.dmg" "$CODEX_DMG_PATH"
+        xcrun stapler staple "$CODEX_DMG_PATH"
 
     - name: Remove signing keychain
       if: ${{ always() }}

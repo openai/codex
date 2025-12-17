@@ -160,6 +160,10 @@ jobs:
             cp target/${{ matrix.target }}/release/codex-responses-api-proxy.sigstore "$dest/codex-responses-api-proxy-${{ matrix.target }}.sigstore"
           fi
 
+          if [[ "${{ matrix.target }}" == *apple-darwin ]]; then
+            cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
+          fi
+
       - if: ${{ matrix.runner == 'windows-11-arm' }}
         name: Install zstd
         shell: powershell
@@ -194,7 +198,7 @@ jobs:
             base="$(basename "$f")"
             # Skip files that are already archives (shouldn't happen, but be
             # safe).
-            if [[ "$base" == *.tar.gz || "$base" == *.zip ]]; then
+            if [[ "$base" == *.tar.gz || "$base" == *.zip || "$base" == *.dmg ]]; then
               continue
             fi
 
