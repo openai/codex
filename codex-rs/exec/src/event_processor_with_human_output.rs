@@ -666,3 +666,72 @@ fn format_mcp_invocation(invocation: &McpInvocation) -> String {
         format!("{fq_tool_name}({args_str})")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::protocol::Event;
+    use codex_core::protocol::EventMsg;
+    use codex_core::protocol::TurnDiffEvent;
+
+    #[test]
+    fn test_suppress_duplicate_turn_diff() {
+        // Setup via core_test_support helper to get a valid Config
+        let tmp = tempfile::tempdir().unwrap();
+        let config = core_test_support::load_default_config_for_test(&tmp);
+
+        let mut processor = EventProcessorWithHumanOutput::create_with_ansi(false, &config, None);
+
+        // Define a unified diff string
+        let diff = "diff --git a/file.txt b/file.txt\nindex 1234567..89abcdef 100644\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-Hello\n+World";
+
+        let event = Event {
+            id: "1".to_string(),
+            msg: EventMsg::TurnDiff(TurnDiffEvent {
+                unified_diff: diff.to_string(),
+            }),
+        };
+
+        // Act 1: Process the event
+        processor.process_event(event.clone());
+
+        // Assert 1: State should record the diff
+        assert_eq!(
+            processor.last_unified_diff.as_deref(),
+            Some(diff),
+            "Should store the unified diff on first occurrence"
+        );
+
+        // Act 2: Process the same event again (duplicate)
+        // We use a different ID just to show it's a new event object, strictly speaking
+        let event2 = Event {
+            id: "2".to_string(),
+            msg: event.msg.clone(),
+        };
+        processor.process_event(event2);
+
+        // Assert 2: State should remain the same
+        assert_eq!(
+            processor.last_unified_diff.as_deref(),
+            Some(diff),
+            "Should still have the same diff stored"
+        );
+
+        // Act 3: Process a DIFFERENT diff
+        let diff2 = "diff --git a/other.txt b/other.txt\nindex ...";
+        let event3 = Event {
+            id: "3".to_string(),
+            msg: EventMsg::TurnDiff(TurnDiffEvent {
+                unified_diff: diff2.to_string(),
+            }),
+        };
+        processor.process_event(event3);
+
+        // Assert 3: State should update
+        assert_eq!(
+            processor.last_unified_diff.as_deref(),
+            Some(diff2),
+            "Should update stored diff when content changes"
+        );
+    }
+}
