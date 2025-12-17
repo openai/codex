@@ -90,10 +90,8 @@ impl ExperimentalFeaturesView {
             let name = format!("{prefix} [{marker}] {}", item.name);
             rows.push(GenericDisplayRow {
                 name,
-                display_shortcut: None,
-                match_indices: None,
                 description: Some(item.description.clone()),
-                wrap_indent: None,
+                ..Default::default()
             });
         }
 

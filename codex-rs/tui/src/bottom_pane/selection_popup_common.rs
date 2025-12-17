@@ -15,6 +15,7 @@ use crate::key_hint::KeyBinding;
 use super::scroll_state::ScrollState;
 
 /// A generic representation of a display row for selection popups.
+#[derive(Default)]
 pub(crate) struct GenericDisplayRow {
     pub name: String,
     pub display_shortcut: Option<KeyBinding>,
