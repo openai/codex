@@ -398,7 +398,7 @@ impl McpConnectionManager {
 
     /// Returns a single map that contains all tools. Each key is the
     /// fully-qualified name for the tool.
-    #[instrument(skip_all)]
+    #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
         let mut tools = HashMap::new();
         for managed_client in self.clients.values() {

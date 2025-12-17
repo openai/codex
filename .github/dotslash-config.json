@@ -55,6 +55,30 @@
           "path": "codex-responses-api-proxy.exe"
         }
       }
+    },
+    "codex-command-runner": {
+      "platforms": {
+        "windows-x86_64": {
+          "regex": "^codex-command-runner-x86_64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "codex-command-runner.exe"
+        },
+        "windows-aarch64": {
+          "regex": "^codex-command-runner-aarch64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "codex-command-runner.exe"
+        }
+      }
+    },
+    "codex-windows-sandbox-setup": {
+      "platforms": {
+        "windows-x86_64": {
+          "regex": "^codex-windows-sandbox-setup-x86_64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "codex-windows-sandbox-setup.exe"
+        },
+        "windows-aarch64": {
+          "regex": "^codex-windows-sandbox-setup-aarch64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "codex-windows-sandbox-setup.exe"
+        }
+      }
     }
   }
 }
