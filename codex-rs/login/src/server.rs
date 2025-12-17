@@ -616,10 +616,12 @@ pub fn build_login_http_client() -> io::Result<reqwest::Client> {
     build_login_http_client_with_env(&ProcessEnv)
 }
 
-pub fn build_login_http_client_with_env(env_source: &dyn EnvSource) -> io::Result<reqwest::Client> {
+pub(crate) fn build_login_http_client_with_env(
+    env_source: &dyn EnvSource,
+) -> io::Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder();
 
-    if let Some(path) = login_ca_certificate_path(&env_source) {
+    if let Some(path) = login_ca_certificate_path(env_source) {
         let certificates = read_ca_certificates(&path)?;
 
         for (idx, cert) in certificates.iter().enumerate() {
@@ -879,6 +881,8 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
+    const TEST_CERT_1: &str = "-----BEGIN CERTIFICATE-----\nMIIDBTCCAe2gAwIBAgIURA/8mcaBUM3VeC/959yHcE5qhg0wDQYJKoZIhvcNAQEL\nBQAwEjEQMA4GA1UEAwwHdGVzdC1jYTAeFw0yNTExMTkwMTI5NDJaFw0yNjExMTkw\nMTI5NDJaMBIxEDAOBgNVBAMMB3Rlc3QtY2EwggEiMA0GCSqGSIb3DQEBAQUAA4IB\nDwAwggEKAoIBAQCQlu3GsymtWBmmFeIYzObIWzV1/BcSYr34Q7etqNxz/FcPwVw0\nXKJ6K4+TH3kOcjnUyWazCdwKINDsniN3i9rzTnDhFxuU/kHfV2pYOAGd5zOqQZYG\nfathKAxZTGLcBFqG4EmfgwZURSugi5xPsT56UJAdOmoltkcyhy3xeRL1dK2xdi++\nCmZcI3fTD/e3ZwzubPXPUOSXRae2yt1C53p70uiA+6R9UlIIoFxpHh4cD2go8z6v\nqKwnkKWycGJD2LFXdYRYOHRP1px4OCsnLAteUjgUsGTu0K4uJEsJYyLdmhg0Dpjz\n148Cwh5UuRbkWUGvZ2BNCHZB8ttQO2g0RzP/AgMBAAGjUzBRMB0GA1UdDgQWBBTV\n08esey9TtVpv5K3saN8rUoc3KzAfBgNVHSMEGDAWgBTV08esey9TtVpv5K3saN8r\nUoc3KzAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBcxHdHiiyY\nsoWsCd/PuQLFOb4iAD5Gkftb55lxyL/WBtDqbWMGqtWSKFbjlSyVCqcrRduCTOne\nWgT5h4vyHzpBwRTuL0E3E72Y/vVc2kZ8djaB/gBO/IsEs3jDgVIOZk5SmVPTzBxI\nPBc3Rp6TmMCmLzRrrVg5BpCIH/0YVcgH71abUGpiJJp+cVvet5Yh+1+HlFZriWit\nh1OZe3bUuYvLxLnYrRpn4kDvsCXZOPJmIhEtQvoxWTllj6Xp5cVZ5JZdVyx6g9+7\npw5sOGsOCrQ4RV6U22e7T/ClsN9TYfM+JzQeIbAD0LL7mASVxXGE/LJ7EVdyGbrL\nCnUUO0SOj4m4\n-----END CERTIFICATE-----\n";
+    const TEST_CERT_2: &str = "-----BEGIN CERTIFICATE-----\nMIIDGTCCAgGgAwIBAgIUWxlcvHzwITWAHWHbKMFUTgeDmjwwDQYJKoZIhvcNAQEL\nBQAwHDEaMBgGA1UEAwwRdGVzdC1pbnRlcm1lZGlhdGUwHhcNMjUxMTE5MTU1MDIz\nWhcNMjYxMTE5MTU1MDIzWjAcMRowGAYDVQQDDBF0ZXN0LWludGVybWVkaWF0ZTCC\nASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBANq7xbeYpC2GaXANqD1nLk0t\nj9j2sOk6e7DqTapxnIUijS7z4DF0Vo1xHM07wK1m+wsB/t9CubNYRvtn6hrIzx7K\njjlmvxo4/YluwO1EDMQWZAXkaY2O28ESKVx7QLfBPYAc4bf/5B4Nmt6KX5sQyyyH\n2qTfzVBUCAl3sI+Ydd3mx7NOye1yNNkCNqyK3Hj45F1JuH8NZxcb4OlKssZhMlD+\nEQx4G46AzKE9Ho8AqlQvg/tiWrMHRluw7zolMJ/AXzedAXedNIrX4fCOmZwcTkA1\na8eLPP8oM9VFrr67a7on6p4zPqugUEQ4fawp7A5KqSjUAVCt1FXmn2V8N8V6W/sC\nAwEAAaNTMFEwHQYDVR0OBBYEFBEwRwW0gm3IjhLw1U3eOAvR0r6SMB8GA1UdIwQY\nMBaAFBEwRwW0gm3IjhLw1U3eOAvR0r6SMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZI\nhvcNAQELBQADggEBAB2fjAlpevK42Odv8XUEgV6VWlEP9HAmkRvugW9hjhzx1Iz9\nVh/l9VcxL7PcqdpyGH+BIRvQIMokcYF5TXzf/KV1T2y56U8AWaSd2/xSjYNWwkgE\nTLE5V+H/YDKzvTe58UrOaxa5N3URscQL9f+ZKworODmfMlkJ1mlREK130ZMlBexB\np9w5wo1M1fjx76Rqzq9MkpwBSbIO2zx/8+qy4BAH23MPGW+9OOnnq2DiIX3qUu1v\nhnjYOxYpCB28MZEJmqsjFJQQ9RF+Te4U2/oknVcf8lZIMJ2ZBOwt2zg8RqCtM52/\nIbATwYj77wg3CFLFKcDYs3tdUqpiniabKcf6zAs=\n-----END CERTIFICATE-----\n";
     struct MapEnv {
         values: HashMap<String, String>,
     }
