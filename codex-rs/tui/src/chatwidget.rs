@@ -9,6 +9,8 @@ use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
 use codex_core::config::types::Notifications;
+use codex_core::features::FEATURES;
+use codex_core::features::Feature;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::openai_models::model_family::ModelFamily;
@@ -85,9 +87,11 @@ use tracing::debug;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::BetaFeatureItem;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
@@ -99,6 +103,7 @@ use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
+use crate::exec_command::strip_bash_lc_and_escape;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
@@ -149,6 +154,11 @@ struct RunningCommand {
     source: ExecCommandSource,
 }
 
+struct UnifiedExecSessionSummary {
+    key: String,
+    command_display: String,
+}
+
 struct UnifiedExecWaitState {
     command_display: String,
 }
@@ -161,6 +171,20 @@ impl UnifiedExecWaitState {
     fn is_duplicate(&self, command_display: &str) -> bool {
         self.command_display == command_display
     }
+}
+
+fn is_unified_exec_source(source: ExecCommandSource) -> bool {
+    matches!(
+        source,
+        ExecCommandSource::UnifiedExecStartup | ExecCommandSource::UnifiedExecInteraction
+    )
+}
+
+fn is_standard_tool_call(parsed_cmd: &[ParsedCommand]) -> bool {
+    !parsed_cmd.is_empty()
+        && parsed_cmd
+            .iter()
+            .all(|parsed| !matches!(parsed, ParsedCommand::Unknown { .. }))
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
@@ -300,6 +324,7 @@ pub(crate) struct ChatWidget {
     suppressed_exec_calls: HashSet<String>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     task_complete_pending: bool,
+    unified_exec_sessions: Vec<UnifiedExecSessionSummary>,
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -410,7 +435,10 @@ impl ChatWidget {
         }
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
-        self.submit_op(Op::ListSkills { cwds: Vec::new() });
+        self.submit_op(Op::ListSkills {
+            cwds: Vec::new(),
+            force_reload: false,
+        });
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
@@ -828,6 +856,12 @@ impl ChatWidget {
 
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
+        if is_unified_exec_source(ev.source) {
+            self.track_unified_exec_session_begin(&ev);
+            if !is_standard_tool_call(&ev.parsed_cmd) {
+                return;
+            }
+        }
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_exec_begin(ev), |s| s.handle_exec_begin_now(ev2));
     }
@@ -839,8 +873,17 @@ impl ChatWidget {
         // TODO: Handle streaming exec output if/when implemented
     }
 
-    fn on_terminal_interaction(&mut self, _ev: TerminalInteractionEvent) {
-        // TODO: Handle once design is ready
+    fn on_terminal_interaction(&mut self, ev: TerminalInteractionEvent) {
+        self.flush_answer_stream_with_separator();
+        let command_display = self
+            .unified_exec_sessions
+            .iter()
+            .find(|session| session.key == ev.process_id)
+            .map(|session| session.command_display.clone());
+        self.add_to_history(history_cell::new_unified_exec_interaction(
+            command_display,
+            ev.stdin,
+        ));
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
@@ -868,8 +911,54 @@ impl ChatWidget {
     }
 
     fn on_exec_command_end(&mut self, ev: ExecCommandEndEvent) {
+        if is_unified_exec_source(ev.source) {
+            self.track_unified_exec_session_end(&ev);
+            if !self.bottom_pane.is_task_running() {
+                return;
+            }
+        }
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_exec_end(ev), |s| s.handle_exec_end_now(ev2));
+    }
+
+    fn track_unified_exec_session_begin(&mut self, ev: &ExecCommandBeginEvent) {
+        if ev.source != ExecCommandSource::UnifiedExecStartup {
+            return;
+        }
+        let key = ev.process_id.clone().unwrap_or(ev.call_id.to_string());
+        let command_display = strip_bash_lc_and_escape(&ev.command);
+        if let Some(existing) = self
+            .unified_exec_sessions
+            .iter_mut()
+            .find(|session| session.key == key)
+        {
+            existing.command_display = command_display;
+        } else {
+            self.unified_exec_sessions.push(UnifiedExecSessionSummary {
+                key,
+                command_display,
+            });
+        }
+        self.sync_unified_exec_footer();
+    }
+
+    fn track_unified_exec_session_end(&mut self, ev: &ExecCommandEndEvent) {
+        let key = ev.process_id.clone().unwrap_or(ev.call_id.to_string());
+        let before = self.unified_exec_sessions.len();
+        self.unified_exec_sessions
+            .retain(|session| session.key != key);
+        if self.unified_exec_sessions.len() != before {
+            self.sync_unified_exec_footer();
+        }
+    }
+
+    fn sync_unified_exec_footer(&mut self) {
+        let sessions = self
+            .unified_exec_sessions
+            .iter()
+            .map(|session| session.command_display.clone())
+            .collect();
+        self.bottom_pane.set_unified_exec_sessions(sessions);
     }
 
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
@@ -1319,6 +1408,7 @@ impl ChatWidget {
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             task_complete_pending: false,
+            unified_exec_sessions: Vec::new(),
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -1404,6 +1494,7 @@ impl ChatWidget {
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             task_complete_pending: false,
+            unified_exec_sessions: Vec::new(),
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -1567,6 +1658,9 @@ impl ChatWidget {
             }
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
+            }
+            SlashCommand::Experimental => {
+                self.open_experimental_popup();
             }
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_exit();
@@ -1886,6 +1980,12 @@ impl ChatWidget {
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
+            EventMsg::SkillsUpdateAvailable => {
+                self.submit_op(Op::ListSkills {
+                    cwds: Vec::new(),
+                    force_reload: true,
+                });
+            }
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::DeprecationNotice(ev) => self.on_deprecation_notice(ev),
@@ -1952,15 +2052,8 @@ impl ChatWidget {
                     self.app_event_tx
                         .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
                 }
-            } else {
-                let message_text =
-                    codex_core::review_format::format_review_findings_block(&output.findings, None);
-                let mut message_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
-                append_markdown(&message_text, None, &mut message_lines);
-                let body_cell = AgentMessageCell::new(message_lines, true);
-                self.app_event_tx
-                    .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
             }
+            // Final message is rendered as part of the AgentMessage.
         }
 
         self.is_review_mode = false;
@@ -2554,7 +2647,7 @@ impl ChatWidget {
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
-        let current_approval = self.config.approval_policy;
+        let current_approval = self.config.approval_policy.value();
         let current_sandbox = self.config.sandbox_policy.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
@@ -2562,8 +2655,11 @@ impl ChatWidget {
             let is_current =
                 Self::preset_matches_current(current_approval, &current_sandbox, &preset);
             let name = preset.label.to_string();
-            let description_text = preset.description;
-            let description = Some(description_text.to_string());
+            let description = Some(preset.description.to_string());
+            let disabled_reason = match self.config.approval_policy.can_set(&preset.approval) {
+                Ok(()) => None,
+                Err(err) => Some(err.to_string()),
+            };
             let requires_confirmation = preset.id == "full-access"
                 && !self
                     .config
@@ -2616,6 +2712,7 @@ impl ChatWidget {
                 is_current,
                 actions,
                 dismiss_on_select: true,
+                disabled_reason,
                 ..Default::default()
             });
         }
@@ -2627,6 +2724,24 @@ impl ChatWidget {
             header: Box::new(()),
             ..Default::default()
         });
+    }
+
+    pub(crate) fn open_experimental_popup(&mut self) {
+        let features: Vec<BetaFeatureItem> = FEATURES
+            .iter()
+            .filter_map(|spec| {
+                let description = spec.stage.beta_menu_description()?;
+                Some(BetaFeatureItem {
+                    feature: spec.id,
+                    name: feature_label_from_key(spec.key),
+                    description: description.to_string(),
+                    enabled: self.config.features.enabled(spec.id),
+                })
+            })
+            .collect();
+
+        let view = ExperimentalFeaturesView::new(features, self.app_event_tx.clone());
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     fn approval_preset_actions(
@@ -2952,7 +3067,9 @@ impl ChatWidget {
 
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
-        self.config.approval_policy = policy;
+        if let Err(err) = self.config.approval_policy.set(policy) {
+            tracing::warn!(%err, "failed to set approval_policy on chat config");
+        }
     }
 
     /// Set the sandbox policy in the widget's config copy.
@@ -2966,6 +3083,14 @@ impl ChatWidget {
         #[cfg(target_os = "windows")]
         if should_clear_downgrade {
             self.config.forced_auto_mode_downgraded_on_windows = false;
+        }
+    }
+
+    pub(crate) fn set_feature_enabled(&mut self, feature: Feature, enabled: bool) {
+        if enabled {
+            self.config.features.enable(feature);
+        } else {
+            self.config.features.disable(feature);
         }
     }
 
@@ -3300,6 +3425,23 @@ impl ChatWidget {
         );
         RenderableItem::Owned(Box::new(flex))
     }
+}
+
+fn feature_label_from_key(key: &str) -> String {
+    let mut out = String::with_capacity(key.len());
+    let mut capitalize = true;
+    for ch in key.chars() {
+        if ch == '_' || ch == '-' {
+            out.push(' ');
+            capitalize = true;
+        } else if capitalize {
+            out.push(ch.to_ascii_uppercase());
+            capitalize = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 impl Drop for ChatWidget {

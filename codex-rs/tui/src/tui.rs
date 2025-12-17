@@ -329,6 +329,14 @@ impl Tui {
         self.frame_requester().schedule_frame();
     }
 
+    pub(crate) fn stash_pending_history_lines(&mut self) -> Vec<Line<'static>> {
+        std::mem::take(&mut self.pending_history_lines)
+    }
+
+    pub(crate) fn restore_pending_history_lines(&mut self, lines: Vec<Line<'static>>) {
+        self.pending_history_lines = lines;
+    }
+
     pub fn draw(
         &mut self,
         height: u16,

@@ -1373,9 +1373,13 @@ impl CodexMessageProcessor {
                 };
 
                 // Auto-attach a conversation listener when starting a thread.
-                // Use the same behavior as the v1 API with experimental_raw_events=false.
+                // Use the same behavior as the v1 API, with opt-in support for raw item events.
                 if let Err(err) = self
-                    .attach_conversation_listener(conversation_id, false, ApiVersion::V2)
+                    .attach_conversation_listener(
+                        conversation_id,
+                        params.experimental_raw_events,
+                        ApiVersion::V2,
+                    )
                     .await
                 {
                     tracing::warn!(

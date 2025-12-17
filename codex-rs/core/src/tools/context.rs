@@ -37,9 +37,6 @@ pub enum ToolPayload {
     LocalShell {
         params: ShellToolCallParams,
     },
-    UnifiedExec {
-        arguments: String,
-    },
     Mcp {
         server: String,
         tool: String,
@@ -53,7 +50,6 @@ impl ToolPayload {
             ToolPayload::Function { arguments } => Cow::Borrowed(arguments),
             ToolPayload::Custom { input } => Cow::Borrowed(input),
             ToolPayload::LocalShell { params } => Cow::Owned(params.command.join(" ")),
-            ToolPayload::UnifiedExec { arguments } => Cow::Borrowed(arguments),
             ToolPayload::Mcp { raw_arguments, .. } => Cow::Borrowed(raw_arguments),
         }
     }

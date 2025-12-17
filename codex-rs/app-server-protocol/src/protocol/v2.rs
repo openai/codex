@@ -209,13 +209,24 @@ v2_enum_from_core!(
 );
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
-pub enum ConfigLayerName {
-    Mdm,
-    System,
+pub enum ConfigLayerSource {
+    /// Managed preferences layer delivered by MDM (macOS only).
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Mdm { domain: String, key: String },
+    /// Managed config layer from a file (usually `managed_config.toml`).
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    System { file: AbsolutePathBuf },
+    /// Session-layer overrides supplied via `-c`/`--config`.
     SessionFlags,
-    User,
+    /// User config layer from a file (usually `config.toml`).
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    User { file: AbsolutePathBuf },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
@@ -288,8 +299,7 @@ pub struct Config {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigLayerMetadata {
-    pub name: ConfigLayerName,
-    pub source: String,
+    pub name: ConfigLayerSource,
     pub version: String,
 }
 
@@ -297,8 +307,7 @@ pub struct ConfigLayerMetadata {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigLayer {
-    pub name: ConfigLayerName,
-    pub source: String,
+    pub name: ConfigLayerSource,
     pub version: String,
     pub config: JsonValue,
 }
@@ -860,6 +869,12 @@ pub struct ThreadStartParams {
     pub config: Option<HashMap<String, JsonValue>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
+    /// If true, opt into emitting raw response items on the event stream.
+    ///
+    /// This is for internal use only (e.g. Codex Cloud).
+    /// (TODO): Figure out a better way to categorize internal / experimental events & protocols.
+    #[serde(default)]
+    pub experimental_raw_events: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -981,6 +996,7 @@ pub struct SkillsListResponse {
 pub enum SkillScope {
     User,
     Repo,
+    Public,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1026,6 +1042,7 @@ impl From<CoreSkillScope> for SkillScope {
         match value {
             CoreSkillScope::User => Self::User,
             CoreSkillScope::Repo => Self::Repo,
+            CoreSkillScope::Public => Self::Public,
         }
     }
 }
@@ -1579,6 +1596,15 @@ pub struct ItemCompletedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RawResponseItemCompletedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item: ResponseItem,
 }
 
 // Item-specific progress notifications
