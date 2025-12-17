@@ -78,15 +78,10 @@ impl ToolRouter {
                         },
                     }))
                 } else {
-                    let payload = if name == "unified_exec" {
-                        ToolPayload::UnifiedExec { arguments }
-                    } else {
-                        ToolPayload::Function { arguments }
-                    };
                     Ok(Some(ToolCall {
                         tool_name: name,
                         call_id,
-                        payload,
+                        payload: ToolPayload::Function { arguments },
                     }))
                 }
             }
