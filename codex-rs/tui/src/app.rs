@@ -23,6 +23,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
@@ -950,14 +951,27 @@ impl App {
                 }
                 let mut builder = ConfigEditsBuilder::new(&self.config.codex_home);
                 for (feature, enabled) in &updates {
+                    let feature_key = feature.key();
                     if *enabled {
+                        // Update the in-memory configs.
                         self.config.features.enable(*feature);
                         self.chat_widget.set_feature_enabled(*feature, true);
+                        builder = builder.set_feature_enabled(feature_key, true);
                     } else {
+                        // Update the in-memory configs.
                         self.config.features.disable(*feature);
                         self.chat_widget.set_feature_enabled(*feature, false);
+                        if feature.default_enabled() {
+                            builder = builder.set_feature_enabled(feature_key, false);
+                        } else {
+                            // If the feature already default to `false`, we drop the key
+                            // in the config file so that the user does not miss the feature
+                            // once it gets globally released.
+                            builder = builder.with_edits(vec![ConfigEdit::ClearPath {
+                                segments: vec!["features".to_string(), feature_key.to_string()],
+                            }]);
+                        }
                     }
-                    builder = builder.set_feature_enabled(feature.key(), *enabled);
                 }
                 if let Err(err) = builder.apply().await {
                     tracing::error!(error = %err, "failed to persist feature flags");

@@ -1762,7 +1762,7 @@ fn experimental_features_popup_snapshot() {
 }
 
 #[test]
-fn experimental_features_toggle_sends_update() {
+fn experimental_features_toggle_saves_on_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
 
     let expected_feature = Feature::GhostCommit;
@@ -1778,6 +1778,13 @@ fn experimental_features_toggle_sends_update() {
     chat.bottom_pane.show_view(Box::new(view));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(
+        rx.try_recv().is_err(),
+        "expected no updates until exiting the popup"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
     let mut updates = None;
     while let Ok(event) = rx.try_recv() {

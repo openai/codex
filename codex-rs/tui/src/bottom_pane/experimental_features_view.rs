@@ -122,15 +122,9 @@ impl ExperimentalFeaturesView {
         let Some(selected_idx) = self.state.selected_idx else {
             return;
         };
-        if self.features.is_empty() {
-            return;
-        }
 
         if let Some(item) = self.features.get_mut(selected_idx) {
             item.enabled = !item.enabled;
-            self.app_event_tx.send(AppEvent::UpdateFeatureFlags {
-                updates: vec![(item.feature, item.enabled)],
-            });
         }
     }
 
@@ -198,6 +192,17 @@ impl BottomPaneView for ExperimentalFeaturesView {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
+        // Save the updates
+        if !self.features.is_empty() {
+            let updates = self
+                .features
+                .iter()
+                .map(|item| (item.feature, item.enabled))
+                .collect();
+            self.app_event_tx
+                .send(AppEvent::UpdateFeatureFlags { updates });
+        }
+
         self.complete = true;
         CancellationEvent::Handled
     }
