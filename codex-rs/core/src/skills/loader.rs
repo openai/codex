@@ -3,9 +3,11 @@ use crate::git_info::resolve_root_git_project_for_trust;
 use crate::skills::model::SkillError;
 use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
+use crate::skills::public::public_cache_root_dir;
 use codex_protocol::protocol::SkillScope;
 use dunce::canonicalize as normalize_path;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
@@ -71,6 +73,11 @@ where
         discover_skills_under_root(&root.path, root.scope, &mut outcome);
     }
 
+    let mut seen: HashSet<String> = HashSet::new();
+    outcome
+        .skills
+        .retain(|skill| seen.insert(skill.name.clone()));
+
     outcome
         .skills
         .sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
@@ -85,21 +92,56 @@ pub(crate) fn user_skills_root(codex_home: &Path) -> SkillRoot {
     }
 }
 
+pub(crate) fn public_skills_root(codex_home: &Path) -> SkillRoot {
+    SkillRoot {
+        path: public_cache_root_dir(codex_home),
+        scope: SkillScope::Public,
+    }
+}
+
 pub(crate) fn repo_skills_root(cwd: &Path) -> Option<SkillRoot> {
-    resolve_root_git_project_for_trust(cwd).map(|repo_root| SkillRoot {
-        path: repo_root
-            .join(REPO_ROOT_CONFIG_DIR_NAME)
-            .join(SKILLS_DIR_NAME),
-        scope: SkillScope::Repo,
+    let base = if cwd.is_dir() { cwd } else { cwd.parent()? };
+    let base = normalize_path(base).unwrap_or_else(|_| base.to_path_buf());
+
+    let repo_root =
+        resolve_root_git_project_for_trust(&base).map(|root| normalize_path(&root).unwrap_or(root));
+
+    let scope = SkillScope::Repo;
+    if let Some(repo_root) = repo_root.as_deref() {
+        for dir in base.ancestors() {
+            let skills_root = dir.join(REPO_ROOT_CONFIG_DIR_NAME).join(SKILLS_DIR_NAME);
+            if skills_root.is_dir() {
+                return Some(SkillRoot {
+                    path: skills_root,
+                    scope,
+                });
+            }
+
+            if dir == repo_root {
+                break;
+            }
+        }
+        return None;
+    }
+
+    let skills_root = base.join(REPO_ROOT_CONFIG_DIR_NAME).join(SKILLS_DIR_NAME);
+    skills_root.is_dir().then_some(SkillRoot {
+        path: skills_root,
+        scope,
     })
 }
 
 fn skill_roots(config: &Config) -> Vec<SkillRoot> {
-    let mut roots = vec![user_skills_root(&config.codex_home)];
+    let mut roots = Vec::new();
 
     if let Some(repo_root) = repo_skills_root(&config.cwd) {
         roots.push(repo_root);
     }
+
+    // Load order matters: we dedupe by name, keeping the first occurrence.
+    // This makes repo/user skills win over public skills.
+    roots.push(user_skills_root(&config.codex_home));
+    roots.push(public_skills_root(&config.codex_home));
 
     roots
 }
@@ -149,11 +191,17 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
 
             if file_type.is_file() && file_name == SKILLS_FILENAME {
                 match parse_skill_file(&path, scope) {
-                    Ok(skill) => outcome.skills.push(skill),
-                    Err(err) => outcome.errors.push(SkillError {
-                        path,
-                        message: err.to_string(),
-                    }),
+                    Ok(skill) => {
+                        outcome.skills.push(skill);
+                    }
+                    Err(err) => {
+                        if scope != SkillScope::Public {
+                            outcome.errors.push(SkillError {
+                                path,
+                                message: err.to_string(),
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -233,6 +281,7 @@ mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
+    use codex_protocol::protocol::SkillScope;
     use pretty_assertions::assert_eq;
     use std::path::Path;
     use std::process::Command;
@@ -251,11 +300,11 @@ mod tests {
     }
 
     fn write_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) -> PathBuf {
-        write_skill_at(codex_home.path(), dir, name, description)
+        write_skill_at(&codex_home.path().join("skills"), dir, name, description)
     }
 
     fn write_skill_at(root: &Path, dir: &str, name: &str, description: &str) -> PathBuf {
-        let skill_dir = root.join(format!("skills/{dir}"));
+        let skill_dir = root.join(dir);
         fs::create_dir_all(&skill_dir).unwrap();
         let indented_description = description.replace('\n', "\n  ");
         let content = format!(
@@ -374,5 +423,317 @@ mod tests {
         let skill = &outcome.skills[0];
         assert_eq!(skill.name, "repo-skill");
         assert!(skill.path.starts_with(&repo_root));
+    }
+
+    #[test]
+    fn loads_skills_from_nearest_codex_dir_under_repo_root() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let repo_dir = tempfile::tempdir().expect("tempdir");
+
+        let status = Command::new("git")
+            .arg("init")
+            .current_dir(repo_dir.path())
+            .status()
+            .expect("git init");
+        assert!(status.success(), "git init failed");
+
+        let nested_dir = repo_dir.path().join("nested/inner");
+        fs::create_dir_all(&nested_dir).unwrap();
+
+        write_skill_at(
+            &repo_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
+            "root",
+            "root-skill",
+            "from root",
+        );
+        write_skill_at(
+            &repo_dir
+                .path()
+                .join("nested")
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
+            "nested",
+            "nested-skill",
+            "from nested",
+        );
+
+        let mut cfg = make_config(&codex_home);
+        cfg.cwd = nested_dir;
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert_eq!(outcome.skills[0].name, "nested-skill");
+    }
+
+    #[test]
+    fn loads_skills_from_codex_dir_when_not_git_repo() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let work_dir = tempfile::tempdir().expect("tempdir");
+
+        write_skill_at(
+            &work_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
+            "local",
+            "local-skill",
+            "from cwd",
+        );
+
+        let mut cfg = make_config(&codex_home);
+        cfg.cwd = work_dir.path().to_path_buf();
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert_eq!(outcome.skills[0].name, "local-skill");
+        assert_eq!(outcome.skills[0].scope, SkillScope::Repo);
+    }
+
+    #[test]
+    fn deduplicates_by_name_preferring_repo_over_user() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let repo_dir = tempfile::tempdir().expect("tempdir");
+
+        let status = Command::new("git")
+            .arg("init")
+            .current_dir(repo_dir.path())
+            .status()
+            .expect("git init");
+        assert!(status.success(), "git init failed");
+
+        write_skill(&codex_home, "user", "dupe-skill", "from user");
+        write_skill_at(
+            &repo_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
+            "repo",
+            "dupe-skill",
+            "from repo",
+        );
+
+        let mut cfg = make_config(&codex_home);
+        cfg.cwd = repo_dir.path().to_path_buf();
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert_eq!(outcome.skills[0].name, "dupe-skill");
+        assert_eq!(outcome.skills[0].scope, SkillScope::Repo);
+    }
+
+    #[test]
+    fn repo_skills_search_does_not_escape_repo_root() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let outer_dir = tempfile::tempdir().expect("tempdir");
+        let repo_dir = outer_dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        write_skill_at(
+            &outer_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
+            "outer",
+            "outer-skill",
+            "from outer",
+        );
+
+        let status = Command::new("git")
+            .arg("init")
+            .current_dir(&repo_dir)
+            .status()
+            .expect("git init");
+        assert!(status.success(), "git init failed");
+
+        let mut cfg = make_config(&codex_home);
+        cfg.cwd = repo_dir;
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 0);
+    }
+
+    #[test]
+    fn loads_skills_when_cwd_is_file_in_repo() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let repo_dir = tempfile::tempdir().expect("tempdir");
+
+        let status = Command::new("git")
+            .arg("init")
+            .current_dir(repo_dir.path())
+            .status()
+            .expect("git init");
+        assert!(status.success(), "git init failed");
+
+        write_skill_at(
+            &repo_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
+            "repo",
+            "repo-skill",
+            "from repo",
+        );
+        let file_path = repo_dir.path().join("some-file.txt");
+        fs::write(&file_path, "contents").unwrap();
+
+        let mut cfg = make_config(&codex_home);
+        cfg.cwd = file_path;
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert_eq!(outcome.skills[0].name, "repo-skill");
+        assert_eq!(outcome.skills[0].scope, SkillScope::Repo);
+    }
+
+    #[test]
+    fn non_git_repo_skills_search_does_not_walk_parents() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let outer_dir = tempfile::tempdir().expect("tempdir");
+        let nested_dir = outer_dir.path().join("nested/inner");
+        fs::create_dir_all(&nested_dir).unwrap();
+
+        write_skill_at(
+            &outer_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
+            "outer",
+            "outer-skill",
+            "from outer",
+        );
+
+        let mut cfg = make_config(&codex_home);
+        cfg.cwd = nested_dir;
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 0);
+    }
+
+    #[test]
+    fn loads_skills_from_public_cache_when_present() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let work_dir = tempfile::tempdir().expect("tempdir");
+
+        write_skill_at(
+            &codex_home.path().join("skills").join(".public"),
+            "public",
+            "public-skill",
+            "from public",
+        );
+
+        let mut cfg = make_config(&codex_home);
+        cfg.cwd = work_dir.path().to_path_buf();
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert_eq!(outcome.skills[0].name, "public-skill");
+        assert_eq!(outcome.skills[0].scope, SkillScope::Public);
+    }
+
+    #[test]
+    fn deduplicates_by_name_preferring_user_over_public() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let work_dir = tempfile::tempdir().expect("tempdir");
+
+        write_skill(&codex_home, "user", "dupe-skill", "from user");
+        write_skill_at(
+            &codex_home.path().join("skills").join(".public"),
+            "public",
+            "dupe-skill",
+            "from public",
+        );
+
+        let mut cfg = make_config(&codex_home);
+        cfg.cwd = work_dir.path().to_path_buf();
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert_eq!(outcome.skills[0].name, "dupe-skill");
+        assert_eq!(outcome.skills[0].scope, SkillScope::User);
+    }
+
+    #[test]
+    fn deduplicates_by_name_preferring_repo_over_public() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let repo_dir = tempfile::tempdir().expect("tempdir");
+
+        let status = Command::new("git")
+            .arg("init")
+            .current_dir(repo_dir.path())
+            .status()
+            .expect("git init");
+        assert!(status.success(), "git init failed");
+
+        write_skill_at(
+            &repo_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
+            "repo",
+            "dupe-skill",
+            "from repo",
+        );
+        write_skill_at(
+            &codex_home.path().join("skills").join(".public"),
+            "public",
+            "dupe-skill",
+            "from public",
+        );
+
+        let mut cfg = make_config(&codex_home);
+        cfg.cwd = repo_dir.path().to_path_buf();
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert_eq!(outcome.skills[0].name, "dupe-skill");
+        assert_eq!(outcome.skills[0].scope, SkillScope::Repo);
     }
 }

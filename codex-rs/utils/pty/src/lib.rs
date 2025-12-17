@@ -133,6 +133,15 @@ pub struct SpawnedPty {
     pub exit_rx: oneshot::Receiver<i32>,
 }
 
+#[allow(unreachable_code)]
+pub fn conpty_supported() -> bool {
+    // Annotation required because `win` can't be compiled on other OS.
+    #[cfg(windows)]
+    return win::conpty_supported();
+
+    true
+}
+
 #[cfg(windows)]
 fn platform_native_pty_system() -> Box<dyn portable_pty::PtySystem + Send> {
     Box::new(win::ConPtySystem::default())

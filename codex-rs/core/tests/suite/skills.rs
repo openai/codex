@@ -27,6 +27,20 @@ fn write_skill(home: &Path, name: &str, description: &str, body: &str) -> std::p
     path
 }
 
+fn write_public_skill(
+    home: &Path,
+    name: &str,
+    description: &str,
+    body: &str,
+) -> std::path::PathBuf {
+    let skill_dir = home.join("skills").join(".public").join(name);
+    fs::create_dir_all(&skill_dir).unwrap();
+    let contents = format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n");
+    let path = skill_dir.join("SKILL.md");
+    fs::write(&path, contents).unwrap();
+    path
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_includes_skill_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -115,7 +129,10 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
     let test = builder.build(&server).await?;
 
     test.codex
-        .submit(Op::ListSkills { cwds: Vec::new() })
+        .submit(Op::ListSkills {
+            cwds: Vec::new(),
+            force_reload: false,
+        })
         .await?;
     let response =
         core_test_support::wait_for_event_match(test.codex.as_ref(), |event| match event {
@@ -133,14 +150,68 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
         .unwrap_or_default();
 
     assert!(
-        skills.is_empty(),
-        "expected no skills loaded, got {skills:?}"
+        skills.iter().all(|skill| {
+            !skill
+                .path
+                .to_string_lossy()
+                .ends_with("skills/broken/SKILL.md")
+        }),
+        "expected broken skill not loaded, got {skills:?}"
     );
     assert_eq!(errors.len(), 1, "expected one load error");
     let error_path = errors[0].path.to_string_lossy();
     assert!(
         error_path.ends_with("skills/broken/SKILL.md"),
         "unexpected error path: {error_path}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_skills_includes_public_cache_entries() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_config(|cfg| {
+            cfg.features.enable(Feature::Skills);
+        })
+        .with_pre_build_hook(|home| {
+            write_public_skill(home, "public-demo", "public skill", "public body");
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::ListSkills {
+            cwds: Vec::new(),
+            force_reload: true,
+        })
+        .await?;
+    let response =
+        core_test_support::wait_for_event_match(test.codex.as_ref(), |event| match event {
+            codex_core::protocol::EventMsg::ListSkillsResponse(response) => Some(response.clone()),
+            _ => None,
+        })
+        .await;
+
+    let cwd = test.cwd_path();
+    let (skills, _errors) = response
+        .skills
+        .iter()
+        .find(|entry| entry.cwd.as_path() == cwd)
+        .map(|entry| (entry.skills.clone(), entry.errors.clone()))
+        .unwrap_or_default();
+
+    let skill = skills
+        .iter()
+        .find(|skill| skill.name == "public-demo")
+        .expect("expected public skill to be present");
+    assert_eq!(skill.scope, codex_protocol::protocol::SkillScope::Public);
+    let path_str = skill.path.to_string_lossy().replace('\\', "/");
+    assert!(
+        path_str.ends_with("/skills/.public/public-demo/SKILL.md"),
+        "unexpected skill path: {path_str}"
     );
 
     Ok(())

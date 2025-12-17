@@ -43,7 +43,12 @@ impl ToolsConfig {
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
         } else if features.enabled(Feature::UnifiedExec) {
-            ConfigShellToolType::UnifiedExec
+            // If ConPTY not supported (for old Windows versions), fallback on ShellCommand.
+            if codex_utils_pty::conpty_supported() {
+                ConfigShellToolType::UnifiedExec
+            } else {
+                ConfigShellToolType::ShellCommand
+            }
         } else {
             model_family.shell_type
         };

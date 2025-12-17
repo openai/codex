@@ -46,8 +46,8 @@ use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListConversationsParams;
 use codex_app_server_protocol::ListConversationsResponse;
-use codex_app_server_protocol::ListMcpServersParams;
-use codex_app_server_protocol::ListMcpServersResponse;
+use codex_app_server_protocol::ListMcpServerStatusParams;
+use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LoginApiKeyResponse;
@@ -55,10 +55,10 @@ use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::LogoutChatGptResponse;
-use codex_app_server_protocol::McpServer;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
+use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
@@ -368,13 +368,6 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadList { request_id, params } => {
                 self.thread_list(request_id, params).await;
             }
-            ClientRequest::ThreadCompact {
-                request_id,
-                params: _,
-            } => {
-                self.send_unimplemented_error(request_id, "thread/compact")
-                    .await;
-            }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
             }
@@ -405,8 +398,8 @@ impl CodexMessageProcessor {
             ClientRequest::McpServerOauthLogin { request_id, params } => {
                 self.mcp_server_oauth_login(request_id, params).await;
             }
-            ClientRequest::McpServersList { request_id, params } => {
-                self.list_mcp_servers(request_id, params).await;
+            ClientRequest::McpServerStatusList { request_id, params } => {
+                self.list_mcp_server_status(request_id, params).await;
             }
             ClientRequest::LoginAccount { request_id, params } => {
                 self.login_v2(request_id, params).await;
@@ -513,15 +506,6 @@ impl CodexMessageProcessor {
                 self.upload_feedback(request_id, params).await;
             }
         }
-    }
-
-    async fn send_unimplemented_error(&self, request_id: RequestId, method: &str) {
-        let error = JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: format!("{method} is not implemented yet"),
-            data: None,
-        };
-        self.outgoing.send_error(request_id, error).await;
     }
 
     async fn login_v2(&mut self, request_id: RequestId, params: LoginAccountParams) {
@@ -1270,7 +1254,7 @@ impl CodexMessageProcessor {
         let mut cli_overrides = cli_overrides.unwrap_or_default();
         if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
             cli_overrides.insert(
-                "features.enable_experimental_windows_sandbox".to_string(),
+                "features.experimental_windows_sandbox".to_string(),
                 serde_json::json!(true),
             );
         }
@@ -1389,9 +1373,13 @@ impl CodexMessageProcessor {
                 };
 
                 // Auto-attach a conversation listener when starting a thread.
-                // Use the same behavior as the v1 API with experimental_raw_events=false.
+                // Use the same behavior as the v1 API, with opt-in support for raw item events.
                 if let Err(err) = self
-                    .attach_conversation_listener(conversation_id, false, ApiVersion::V2)
+                    .attach_conversation_listener(
+                        conversation_id,
+                        params.experimental_raw_events,
+                        ApiVersion::V2,
+                    )
                     .await
                 {
                     tracing::warn!(
@@ -2068,7 +2056,11 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn list_mcp_servers(&self, request_id: RequestId, params: ListMcpServersParams) {
+    async fn list_mcp_server_status(
+        &self,
+        request_id: RequestId,
+        params: ListMcpServerStatusParams,
+    ) {
         let config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
@@ -2123,9 +2115,9 @@ impl CodexMessageProcessor {
 
         let end = start.saturating_add(effective_limit).min(total);
 
-        let data: Vec<McpServer> = server_names[start..end]
+        let data: Vec<McpServerStatus> = server_names[start..end]
             .iter()
-            .map(|name| McpServer {
+            .map(|name| McpServerStatus {
                 name: name.clone(),
                 tools: tools_by_server.get(name).cloned().unwrap_or_default(),
                 resources: snapshot.resources.get(name).cloned().unwrap_or_default(),
@@ -2149,7 +2141,7 @@ impl CodexMessageProcessor {
             None
         };
 
-        let response = ListMcpServersResponse { data, next_cursor };
+        let response = ListMcpServerStatusResponse { data, next_cursor };
 
         self.outgoing.send_response(request_id, response).await;
     }
@@ -2187,7 +2179,7 @@ impl CodexMessageProcessor {
                 let mut cli_overrides = cli_overrides.unwrap_or_default();
                 if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
                     cli_overrides.insert(
-                        "features.enable_experimental_windows_sandbox".to_string(),
+                        "features.experimental_windows_sandbox".to_string(),
                         serde_json::json!(true),
                     );
                 }
