@@ -13,6 +13,7 @@ const SKILLS_DIR_NAME: &str = "skills";
 
 struct TempDirCleanup {
     path: PathBuf,
+    // Disable Drop cleanup after explicit cleanup to avoid double-delete.
     active: bool,
 }
 
