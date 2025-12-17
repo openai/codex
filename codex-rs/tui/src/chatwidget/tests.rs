@@ -1944,6 +1944,7 @@ fn single_reasoning_option_skips_selection() {
         is_default: false,
         upgrade: None,
         show_in_picker: true,
+        supported_in_api: true,
     };
     chat.open_reasoning_popup(preset);
 

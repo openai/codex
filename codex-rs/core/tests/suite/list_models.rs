@@ -89,6 +89,7 @@ fn gpt_5_1_codex_max() -> ModelPreset {
         is_default: true,
         upgrade: None,
         show_in_picker: true,
+        supported_in_api: true,
     }
 }
 
@@ -116,6 +117,7 @@ fn gpt_5_1_codex() -> ModelPreset {
         is_default: false,
         upgrade: Some(gpt_5_1_codex_max_upgrade()),
         show_in_picker: true,
+        supported_in_api: true,
     }
 }
 
@@ -139,6 +141,7 @@ fn gpt_5_1_codex_mini() -> ModelPreset {
         is_default: false,
         upgrade: Some(gpt_5_1_codex_max_upgrade()),
         show_in_picker: true,
+        supported_in_api: true,
     }
 }
 
@@ -172,6 +175,7 @@ fn gpt_5_2() -> ModelPreset {
         is_default: false,
         upgrade: None,
         show_in_picker: true,
+        supported_in_api: true,
     }
 }
 
@@ -199,6 +203,7 @@ fn gpt_5_1() -> ModelPreset {
         is_default: false,
         upgrade: Some(gpt_5_1_codex_max_upgrade()),
         show_in_picker: true,
+        supported_in_api: true,
     }
 }
 

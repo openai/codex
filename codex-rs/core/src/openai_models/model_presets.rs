@@ -38,6 +38,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             is_default: true,
             upgrade: None,
             show_in_picker: true,
+            supported_in_api: false,
         },
         ModelPreset {
             id: "gpt-5.1-codex-max".to_string(),
@@ -70,6 +71,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 migration_config_key: "caribou".to_string(),
             }),
             show_in_picker: true,
+            supported_in_api: true,
         },
         ModelPreset {
             id: "gpt-5.1-codex".to_string(),
@@ -99,6 +101,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 migration_config_key: "caribou".to_string(),
             }),
             show_in_picker: true,
+            supported_in_api: true,
         },
         ModelPreset {
             id: "gpt-5.1-codex-mini".to_string(),
@@ -120,6 +123,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             is_default: false,
             upgrade: None,
             show_in_picker: true,
+            supported_in_api: true,
         },
         ModelPreset {
             id: "gpt-5.2".to_string(),
@@ -152,6 +156,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 migration_config_key: "caribou".to_string(),
             }),
             show_in_picker: true,
+            supported_in_api: true,
         },
         ModelPreset {
             id: "gpt-5.1".to_string(),
@@ -180,6 +185,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 migration_config_key: "caribou".to_string(),
             }),
             show_in_picker: true,
+            supported_in_api: true,
         },
         // Deprecated models.
         ModelPreset {
@@ -209,6 +215,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 migration_config_key: "caribou".to_string(),
             }),
             show_in_picker: false,
+            supported_in_api: true,
         },
         ModelPreset {
             id: "gpt-5-codex-mini".to_string(),
@@ -233,6 +240,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG.to_string(),
             }),
             show_in_picker: false,
+            supported_in_api: true,
         },
         ModelPreset {
             id: "gpt-5".to_string(),
@@ -265,6 +273,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 migration_config_key: "caribou".to_string(),
             }),
             show_in_picker: false,
+            supported_in_api: true,
         },
     ]
 });
