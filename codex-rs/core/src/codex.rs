@@ -77,6 +77,9 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
+use crate::config::Constrained;
+use crate::config::ConstraintError;
+use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
@@ -96,6 +99,7 @@ use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::DeprecationNoticeEvent;
+use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
@@ -260,7 +264,7 @@ impl Codex {
             user_instructions,
             base_instructions: config.base_instructions.clone(),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy,
+            approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
@@ -411,7 +415,7 @@ pub(crate) struct SessionConfiguration {
     compact_prompt: Option<String>,
 
     /// When to escalate for approval for execution
-    approval_policy: AskForApproval,
+    approval_policy: Constrained<AskForApproval>,
     /// How to sandbox commands executed in the system
     sandbox_policy: SandboxPolicy,
 
@@ -434,7 +438,7 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
-    pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> Self {
+    pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
         if let Some(model) = updates.model.clone() {
             next_configuration.model = model;
@@ -446,7 +450,7 @@ impl SessionConfiguration {
             next_configuration.model_reasoning_summary = summary;
         }
         if let Some(approval_policy) = updates.approval_policy {
-            next_configuration.approval_policy = approval_policy;
+            next_configuration.approval_policy.set(approval_policy)?;
         }
         if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
             next_configuration.sandbox_policy = sandbox_policy;
@@ -454,7 +458,7 @@ impl SessionConfiguration {
         if let Some(cwd) = updates.cwd.clone() {
             next_configuration.cwd = cwd;
         }
-        next_configuration
+        Ok(next_configuration)
     }
 }
 
@@ -523,7 +527,7 @@ impl Session {
             base_instructions: session_configuration.base_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
-            approval_policy: session_configuration.approval_policy,
+            approval_policy: session_configuration.approval_policy.value(),
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             shell_environment_policy: per_turn_config.shell_environment_policy.clone(),
             tools_config,
@@ -640,7 +644,7 @@ impl Session {
             config.model_reasoning_summary,
             config.model_context_window,
             config.model_auto_compact_token_limit,
-            config.approval_policy,
+            config.approval_policy.value(),
             config.sandbox_policy.clone(),
             config.mcp_servers.keys().map(String::as_str).collect(),
             config.active_profile.clone(),
@@ -690,7 +694,7 @@ impl Session {
                 session_id: conversation_id,
                 model: session_configuration.model.clone(),
                 model_provider_id: config.model_provider_id.clone(),
-                approval_policy: session_configuration.approval_policy,
+                approval_policy: session_configuration.approval_policy.value(),
                 sandbox_policy: session_configuration.sandbox_policy.clone(),
                 cwd: session_configuration.cwd.clone(),
                 reasoning_effort: session_configuration.model_reasoning_effort,
@@ -739,8 +743,7 @@ impl Session {
                 loop {
                     match rx.recv().await {
                         Ok(()) => {
-                            let turn_context =
-                                sess.new_turn(SessionSettingsUpdate::default()).await;
+                            let turn_context = sess.new_default_turn().await;
                             sess.send_event(turn_context.as_ref(), EventMsg::SkillsUpdateAvailable)
                                 .await;
                         }
@@ -784,7 +787,7 @@ impl Session {
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
-        let turn_context = self.new_turn(SessionSettingsUpdate::default()).await;
+        let turn_context = self.new_default_turn().await;
         match conversation_history {
             InitialHistory::New => {
                 // Build and record initial items (user instructions + environment context)
@@ -843,30 +846,76 @@ impl Session {
         }
     }
 
-    pub(crate) async fn update_settings(&self, updates: SessionSettingsUpdate) {
+    pub(crate) async fn update_settings(
+        &self,
+        updates: SessionSettingsUpdate,
+    ) -> ConstraintResult<()> {
         let mut state = self.state.lock().await;
 
-        state.session_configuration = state.session_configuration.apply(&updates);
-    }
-
-    pub(crate) async fn new_turn(&self, updates: SessionSettingsUpdate) -> Arc<TurnContext> {
-        let sub_id = self.next_internal_sub_id();
-        self.new_turn_with_sub_id(sub_id, updates).await
+        match state.session_configuration.apply(&updates) {
+            Ok(updated) => {
+                state.session_configuration = updated;
+                Ok(())
+            }
+            Err(err) => {
+                let wrapped = ConstraintError {
+                    message: format!("Could not update config: {err}"),
+                };
+                warn!(%wrapped, "rejected session settings update");
+                Err(wrapped)
+            }
+        }
     }
 
     pub(crate) async fn new_turn_with_sub_id(
         &self,
         sub_id: String,
         updates: SessionSettingsUpdate,
-    ) -> Arc<TurnContext> {
+    ) -> ConstraintResult<Arc<TurnContext>> {
         let (session_configuration, sandbox_policy_changed) = {
             let mut state = self.state.lock().await;
-            let session_configuration = state.session_configuration.clone().apply(&updates);
-            let sandbox_policy_changed =
-                state.session_configuration.sandbox_policy != session_configuration.sandbox_policy;
-            state.session_configuration = session_configuration.clone();
-            (session_configuration, sandbox_policy_changed)
+            match state.session_configuration.clone().apply(&updates) {
+                Ok(next) => {
+                    let sandbox_policy_changed =
+                        state.session_configuration.sandbox_policy != next.sandbox_policy;
+                    state.session_configuration = next.clone();
+                    (next, sandbox_policy_changed)
+                }
+                Err(err) => {
+                    drop(state);
+                    let wrapped = ConstraintError {
+                        message: format!("Could not update config: {err}"),
+                    };
+                    self.send_event_raw(Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: wrapped.to_string(),
+                            codex_error_info: Some(CodexErrorInfo::BadRequest),
+                        }),
+                    })
+                    .await;
+                    return Err(wrapped);
+                }
+            }
         };
+
+        Ok(self
+            .new_turn_from_configuration(
+                sub_id,
+                session_configuration,
+                updates.final_output_json_schema,
+                sandbox_policy_changed,
+            )
+            .await)
+    }
+
+    async fn new_turn_from_configuration(
+        &self,
+        sub_id: String,
+        session_configuration: SessionConfiguration,
+        final_output_json_schema: Option<Option<Value>>,
+        sandbox_policy_changed: bool,
+    ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
 
         if sandbox_policy_changed {
@@ -902,10 +951,24 @@ impl Session {
             self.conversation_id,
             sub_id,
         );
-        if let Some(final_schema) = updates.final_output_json_schema {
+        if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
         Arc::new(turn_context)
+    }
+
+    pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
+        self.new_default_turn_with_sub_id(self.next_internal_sub_id())
+            .await
+    }
+
+    pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
+        let session_configuration = {
+            let state = self.state.lock().await;
+            state.session_configuration.clone()
+        };
+        self.new_turn_from_configuration(sub_id, session_configuration, None, false)
+            .await
     }
 
     fn build_environment_update_item(
@@ -1551,8 +1614,7 @@ impl Session {
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
     // Seed with context in case there is an OverrideTurnContext first.
-    let mut previous_context: Option<Arc<TurnContext>> =
-        Some(sess.new_turn(SessionSettingsUpdate::default()).await);
+    let mut previous_context: Option<Arc<TurnContext>> = Some(sess.new_default_turn().await);
 
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
@@ -1571,6 +1633,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             } => {
                 handlers::override_turn_context(
                     &sess,
+                    sub.id.clone(),
                     SessionSettingsUpdate {
                         cwd,
                         approval_policy,
@@ -1688,8 +1751,21 @@ mod handlers {
         sess.interrupt_task().await;
     }
 
-    pub async fn override_turn_context(sess: &Session, updates: SessionSettingsUpdate) {
-        sess.update_settings(updates).await;
+    pub async fn override_turn_context(
+        sess: &Session,
+        sub_id: String,
+        updates: SessionSettingsUpdate,
+    ) {
+        if let Err(err) = sess.update_settings(updates).await {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: err.to_string(),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                }),
+            })
+            .await;
+        }
     }
 
     pub async fn user_input_or_turn(
@@ -1724,7 +1800,10 @@ mod handlers {
             _ => unreachable!(),
         };
 
-        let current_context = sess.new_turn_with_sub_id(sub_id, updates).await;
+        let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
+            // new_turn_with_sub_id already emits the error event.
+            return;
+        };
         current_context
             .client
             .get_otel_manager()
@@ -1751,9 +1830,7 @@ mod handlers {
         command: String,
         previous_context: &mut Option<Arc<TurnContext>>,
     ) {
-        let turn_context = sess
-            .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
-            .await;
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
         sess.spawn_task(
             Arc::clone(&turn_context),
             Vec::new(),
@@ -1950,17 +2027,13 @@ mod handlers {
     }
 
     pub async fn undo(sess: &Arc<Session>, sub_id: String) {
-        let turn_context = sess
-            .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
-            .await;
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
         sess.spawn_task(turn_context, Vec::new(), UndoTask::new())
             .await;
     }
 
     pub async fn compact(sess: &Arc<Session>, sub_id: String) {
-        let turn_context = sess
-            .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
-            .await;
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
         sess.spawn_task(
             Arc::clone(&turn_context),
@@ -2014,9 +2087,7 @@ mod handlers {
         sub_id: String,
         review_request: ReviewRequest,
     ) {
-        let turn_context = sess
-            .new_turn_with_sub_id(sub_id.clone(), SessionSettingsUpdate::default())
-            .await;
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
         match resolve_review_request(review_request, config.cwd.as_path()) {
             Ok(resolved) => {
                 spawn_review_thread(
@@ -2806,7 +2877,7 @@ mod tests {
             user_instructions: config.user_instructions.clone(),
             base_instructions: config.base_instructions.clone(),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy,
+            approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
@@ -2878,7 +2949,7 @@ mod tests {
             user_instructions: config.user_instructions.clone(),
             base_instructions: config.base_instructions.clone(),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy,
+            approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
@@ -3082,7 +3153,7 @@ mod tests {
             user_instructions: config.user_instructions.clone(),
             base_instructions: config.base_instructions.clone(),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy,
+            approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
@@ -3173,7 +3244,7 @@ mod tests {
             user_instructions: config.user_instructions.clone(),
             base_instructions: config.base_instructions.clone(),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy,
+            approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),

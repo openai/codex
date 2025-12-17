@@ -9,10 +9,10 @@ mod state;
 mod tests;
 
 use crate::config::CONFIG_TOML_FILE;
-use codex_app_server_protocol::ConfigLayerName;
+use codex_app_server_protocol::ConfigLayerSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::io;
 use std::path::Path;
-use std::path::PathBuf;
 use toml::Value as TomlValue;
 
 pub use merge::merge_toml_values;
@@ -20,8 +20,8 @@ pub use state::ConfigLayerEntry;
 pub use state::ConfigLayerStack;
 pub use state::LoaderOverrides;
 
-const SESSION_FLAGS_SOURCE: &str = "--config";
-const MDM_SOURCE: &str = "com.openai.codex/config_toml_base64";
+const MDM_PREFERENCES_DOMAIN: &str = "com.openai.codex";
+const MDM_PREFERENCES_KEY: &str = "config_toml_base64";
 
 /// Configuration layering pipeline (top overrides bottom):
 ///
@@ -51,24 +51,32 @@ pub async fn load_config_layers_state(
         .unwrap_or_else(|| layer_io::managed_config_default_path(codex_home));
 
     let layers = layer_io::load_config_layers_internal(codex_home, overrides).await?;
-    let cli_overrides = overrides::build_cli_overrides_layer(cli_overrides);
+    let cli_overrides_layer = overrides::build_cli_overrides_layer(cli_overrides);
+    let user_file = AbsolutePathBuf::from_absolute_path(codex_home.join(CONFIG_TOML_FILE))?;
+
+    let system = match layers.managed_config {
+        Some(cfg) => {
+            let system_file = AbsolutePathBuf::from_absolute_path(managed_config_path.clone())?;
+            Some(ConfigLayerEntry::new(
+                ConfigLayerSource::System { file: system_file },
+                cfg,
+            ))
+        }
+        None => None,
+    };
 
     Ok(ConfigLayerStack {
-        user: ConfigLayerEntry::new(
-            ConfigLayerName::User,
-            codex_home.join(CONFIG_TOML_FILE),
-            layers.base,
-        ),
-        session_flags: ConfigLayerEntry::new(
-            ConfigLayerName::SessionFlags,
-            PathBuf::from(SESSION_FLAGS_SOURCE),
-            cli_overrides,
-        ),
-        system: layers.managed_config.map(|cfg| {
-            ConfigLayerEntry::new(ConfigLayerName::System, managed_config_path.clone(), cfg)
+        user: ConfigLayerEntry::new(ConfigLayerSource::User { file: user_file }, layers.base),
+        session_flags: ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, cli_overrides_layer),
+        system,
+        mdm: layers.managed_preferences.map(|cfg| {
+            ConfigLayerEntry::new(
+                ConfigLayerSource::Mdm {
+                    domain: MDM_PREFERENCES_DOMAIN.to_string(),
+                    key: MDM_PREFERENCES_KEY.to_string(),
+                },
+                cfg,
+            )
         }),
-        mdm: layers
-            .managed_preferences
-            .map(|cfg| ConfigLayerEntry::new(ConfigLayerName::Mdm, PathBuf::from(MDM_SOURCE), cfg)),
     })
 }
