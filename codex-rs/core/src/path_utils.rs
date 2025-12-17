@@ -86,7 +86,7 @@ fn lower_ascii_path(path: PathBuf) -> PathBuf {
 mod tests {
     #[cfg(target_os = "linux")]
     mod wsl {
-        use super::normalize_for_wsl_with_flag;
+        use super::super::normalize_for_wsl_with_flag;
         use pretty_assertions::assert_eq;
         use std::path::PathBuf;
 
