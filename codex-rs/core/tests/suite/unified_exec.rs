@@ -740,15 +740,15 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
                 );
                 end_event = Some(ev);
                 if task_completed && end_event.is_some() {
-                    break
+                    break;
                 }
             }
             EventMsg::TaskComplete(_) => {
                 task_completed = true;
                 if task_completed && end_event.is_some() {
-                    break
+                    break;
                 }
-            },
+            }
             _ => {}
         }
     }
