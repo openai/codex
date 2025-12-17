@@ -1449,10 +1449,11 @@ pub(crate) fn new_reasoning_summary_block(
             }
         }
     }
+    // Show reasoning summaries in the main view, not just transcript
     Box::new(ReasoningSummaryCell::new(
         "".to_string(),
         full_reasoning_buffer,
-        true,
+        false,
     ))
 }
 
