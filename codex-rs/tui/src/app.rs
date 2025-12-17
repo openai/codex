@@ -23,6 +23,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
@@ -942,6 +943,42 @@ impl App {
                             tx,
                         );
                     }
+                }
+            }
+            AppEvent::UpdateFeatureFlags { updates } => {
+                if updates.is_empty() {
+                    return Ok(true);
+                }
+                let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(self.active_profile.as_deref());
+                for (feature, enabled) in &updates {
+                    let feature_key = feature.key();
+                    if *enabled {
+                        // Update the in-memory configs.
+                        self.config.features.enable(*feature);
+                        self.chat_widget.set_feature_enabled(*feature, true);
+                        builder = builder.set_feature_enabled(feature_key, true);
+                    } else {
+                        // Update the in-memory configs.
+                        self.config.features.disable(*feature);
+                        self.chat_widget.set_feature_enabled(*feature, false);
+                        if feature.default_enabled() {
+                            builder = builder.set_feature_enabled(feature_key, false);
+                        } else {
+                            // If the feature already default to `false`, we drop the key
+                            // in the config file so that the user does not miss the feature
+                            // once it gets globally released.
+                            builder = builder.with_edits(vec![ConfigEdit::ClearPath {
+                                segments: vec!["features".to_string(), feature_key.to_string()],
+                            }]);
+                        }
+                    }
+                }
+                if let Err(err) = builder.apply().await {
+                    tracing::error!(error = %err, "failed to persist feature flags");
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to update experimental features: {err}"
+                    ));
                 }
             }
             AppEvent::SkipNextWorldWritableScan => {

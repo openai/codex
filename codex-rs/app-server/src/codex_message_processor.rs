@@ -2061,6 +2061,7 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: ListMcpServerStatusParams,
     ) {
+        let outgoing = Arc::clone(&self.outgoing);
         let config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
@@ -2069,6 +2070,17 @@ impl CodexMessageProcessor {
             }
         };
 
+        tokio::spawn(async move {
+            Self::list_mcp_server_status_task(outgoing, request_id, params, config).await;
+        });
+    }
+
+    async fn list_mcp_server_status_task(
+        outgoing: Arc<OutgoingMessageSender>,
+        request_id: RequestId,
+        params: ListMcpServerStatusParams,
+        config: Config,
+    ) {
         let snapshot = collect_mcp_snapshot(&config).await;
 
         let tools_by_server = group_tools_by_server(&snapshot.tools);
@@ -2096,7 +2108,7 @@ impl CodexMessageProcessor {
                         message: format!("invalid cursor: {cursor}"),
                         data: None,
                     };
-                    self.outgoing.send_error(request_id, error).await;
+                    outgoing.send_error(request_id, error).await;
                     return;
                 }
             },
@@ -2109,7 +2121,7 @@ impl CodexMessageProcessor {
                 message: format!("cursor {start} exceeds total MCP servers {total}"),
                 data: None,
             };
-            self.outgoing.send_error(request_id, error).await;
+            outgoing.send_error(request_id, error).await;
             return;
         }
 
@@ -2143,7 +2155,7 @@ impl CodexMessageProcessor {
 
         let response = ListMcpServerStatusResponse { data, next_cursor };
 
-        self.outgoing.send_response(request_id, response).await;
+        outgoing.send_response(request_id, response).await;
     }
 
     async fn handle_resume_conversation(

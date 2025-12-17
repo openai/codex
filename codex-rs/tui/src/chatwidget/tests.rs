@@ -389,6 +389,7 @@ fn make_chatwidget_manual(
         suppressed_exec_calls: HashSet::new(),
         last_unified_wait: None,
         task_complete_pending: false,
+        unified_exec_sessions: Vec::new(),
         mcp_startup_status: None,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
@@ -1184,6 +1185,7 @@ fn exec_end_without_begin_uses_event_command() {
 #[test]
 fn exec_history_shows_unified_exec_startup_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
+    chat.on_task_started();
 
     let begin = begin_exec_with_source(
         &mut chat,
@@ -1204,6 +1206,46 @@ fn exec_history_shows_unified_exec_startup_commands() {
     assert!(
         blob.contains("• Ran echo unified exec startup"),
         "expected startup command to render: {blob:?}"
+    );
+}
+
+#[test]
+fn exec_history_shows_unified_exec_tool_calls() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None);
+    chat.on_task_started();
+
+    let begin = begin_exec_with_source(
+        &mut chat,
+        "call-startup",
+        "ls",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    end_exec(&mut chat, begin, "", "", 0);
+
+    let blob = active_blob(&chat);
+    assert_eq!(blob, "• Explored\n  └ List ls\n");
+}
+
+#[test]
+fn unified_exec_end_after_task_complete_is_suppressed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
+    chat.on_task_started();
+
+    let begin = begin_exec_with_source(
+        &mut chat,
+        "call-startup",
+        "echo unified exec startup",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    drain_insert_history(&mut rx);
+
+    chat.on_task_complete(None);
+    end_exec(&mut chat, begin, "", "", 0);
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected unified exec end after task complete to be suppressed"
     );
 }
 
@@ -1736,6 +1778,71 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     }
 
     lines.join("\n")
+}
+
+#[test]
+fn experimental_features_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None);
+
+    let features = vec![
+        BetaFeatureItem {
+            feature: Feature::GhostCommit,
+            name: "Ghost snapshots".to_string(),
+            description: "Capture undo snapshots each turn.".to_string(),
+            enabled: false,
+        },
+        BetaFeatureItem {
+            feature: Feature::ShellTool,
+            name: "Shell tool".to_string(),
+            description: "Allow the model to run shell commands.".to_string(),
+            enabled: true,
+        },
+    ];
+    let view = ExperimentalFeaturesView::new(features, chat.app_event_tx.clone());
+    chat.bottom_pane.show_view(Box::new(view));
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("experimental_features_popup", popup);
+}
+
+#[test]
+fn experimental_features_toggle_saves_on_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
+
+    let expected_feature = Feature::GhostCommit;
+    let view = ExperimentalFeaturesView::new(
+        vec![BetaFeatureItem {
+            feature: expected_feature,
+            name: "Ghost snapshots".to_string(),
+            description: "Capture undo snapshots each turn.".to_string(),
+            enabled: false,
+        }],
+        chat.app_event_tx.clone(),
+    );
+    chat.bottom_pane.show_view(Box::new(view));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(
+        rx.try_recv().is_err(),
+        "expected no updates until exiting the popup"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    let mut updates = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::UpdateFeatureFlags {
+            updates: event_updates,
+        } = event
+        {
+            updates = Some(event_updates);
+            break;
+        }
+    }
+
+    let updates = updates.expect("expected UpdateFeatureFlags event");
+    assert_eq!(updates, vec![(expected_feature, true)]);
 }
 
 #[test]

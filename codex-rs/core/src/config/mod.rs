@@ -766,9 +766,11 @@ pub struct GhostSnapshotToml {
     #[serde(alias = "ignore_untracked_files_over_bytes")]
     pub ignore_large_untracked_files: Option<i64>,
     /// Ignore untracked directories that contain this many files or more.
-    /// (Still emits a warning.)
+    /// (Still emits a warning unless warnings are disabled.)
     #[serde(alias = "large_untracked_dir_warning_threshold")]
     pub ignore_large_untracked_dirs: Option<i64>,
+    /// Disable all ghost snapshot warning events.
+    pub disable_warnings: Option<bool>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1086,6 +1088,11 @@ impl Config {
             {
                 config.ignore_large_untracked_dirs =
                     if threshold > 0 { Some(threshold) } else { None };
+            }
+            if let Some(ghost_snapshot) = cfg.ghost_snapshot.as_ref()
+                && let Some(disable_warnings) = ghost_snapshot.disable_warnings
+            {
+                config.disable_warnings = disable_warnings;
             }
             config
         };
