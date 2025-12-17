@@ -6,11 +6,13 @@ use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::time::Duration;
 
 use anyhow::Result;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::Mutex as TokioMutex;
 use tokio::task::JoinHandle;
 
 use super::ExecCommandSession;
@@ -39,7 +41,6 @@ pub async fn spawn_piped_process(
         .stderr(Stdio::piped());
 
     let mut child = command.spawn()?;
-    let pid = child.id();
 
     let stdin = child.stdin.take().ok_or_else(|| {
         anyhow::anyhow!("stdin pipe was unexpectedly not available for exec spawn")
@@ -68,17 +69,26 @@ pub async fn spawn_piped_process(
         }
     });
 
+    let child = Arc::new(TokioMutex::new(child));
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
     let exit_status = Arc::new(AtomicBool::new(false));
     let wait_exit_status = Arc::clone(&exit_status);
     let exit_code = Arc::new(StdMutex::new(None));
     let wait_exit_code = Arc::clone(&exit_code);
+    let wait_child = Arc::clone(&child);
     let wait_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
-        let code = match child.wait() {
-            Ok(status) => status
-                .code()
-                .unwrap_or_else(|| if status.success() { 0 } else { 1 }),
-            Err(_) => -1,
+        let code = loop {
+            let mut guard = wait_child.blocking_lock();
+            let status = guard.try_wait();
+            match status {
+                Ok(Some(status)) => {
+                    break status
+                        .code()
+                        .unwrap_or_else(|| if status.success() { 0 } else { 1 });
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                Err(_) => break -1,
+            }
         };
         wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Ok(mut guard) = wait_exit_code.lock() {
@@ -91,7 +101,7 @@ pub async fn spawn_piped_process(
         writer_tx,
         output_tx,
         initial_output_rx,
-        Box::new(PipedChildKiller::new(pid)),
+        Box::new(PipedChildKiller::new(child)),
         vec![stdout_handle, stderr_handle],
         writer_handle,
         wait_handle,
@@ -128,55 +138,24 @@ fn spawn_pipe_reader<R: std::io::Read + Send + 'static>(
 
 #[derive(Debug)]
 struct PipedChildKiller {
-    pid: u32,
+    child: Arc<TokioMutex<std::process::Child>>,
 }
 
 impl PipedChildKiller {
-    fn new(pid: u32) -> Self {
-        Self { pid }
+    fn new(child: Arc<TokioMutex<std::process::Child>>) -> Self {
+        Self { child }
     }
 }
 
 impl portable_pty::ChildKiller for PipedChildKiller {
     fn kill(&mut self) -> io::Result<()> {
-        terminate_pid(self.pid)
+        let mut guard = self.child.blocking_lock();
+        guard.kill()
     }
 
     fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
-        Box::new(Self { pid: self.pid })
-    }
-}
-
-#[cfg(unix)]
-fn terminate_pid(pid: u32) -> io::Result<()> {
-    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
-#[cfg(windows)]
-fn terminate_pid(pid: u32) -> io::Result<()> {
-    use winapi::shared::minwindef::FALSE;
-    use winapi::um::handleapi::CloseHandle;
-    use winapi::um::processthreadsapi::OpenProcess;
-    use winapi::um::processthreadsapi::TerminateProcess;
-    use winapi::um::winnt::PROCESS_TERMINATE;
-
-    unsafe {
-        let handle = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
-        if handle.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        let ok = TerminateProcess(handle, 1) != 0;
-        let err = io::Error::last_os_error();
-        CloseHandle(handle);
-        if ok {
-            Ok(())
-        } else {
-            Err(err)
-        }
+        Box::new(Self {
+            child: Arc::clone(&self.child),
+        })
     }
 }
