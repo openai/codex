@@ -36,7 +36,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          CODEX_VERSION=0.40.0
+          # Use a rust-release version that includes all native binaries.
+          CODEX_VERSION=0.74.0-alpha.3
           OUTPUT_DIR="${RUNNER_TEMP}"
           python3 ./scripts/stage_npm_packages.py \
             --release-version "$CODEX_VERSION" \
