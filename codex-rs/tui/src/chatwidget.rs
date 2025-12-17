@@ -506,6 +506,12 @@ impl ChatWidget {
     fn on_reasoning_section_break(&mut self) {
         let reasoning_summary_format = self.get_model_family().reasoning_summary_format;
         if !self.reasoning_buffer.trim().is_empty() {
+            // Extract header from the section we're about to flush so the status
+            // doesn't fall back to "Working" while waiting for the next section.
+            if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
+                self.set_status_header(header);
+            }
+
             let cell = history_cell::new_reasoning_summary_block(
                 std::mem::take(&mut self.reasoning_buffer),
                 reasoning_summary_format,
