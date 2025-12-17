@@ -158,7 +158,7 @@ fn create_exec_command_tool() -> ToolSpec {
         "login".to_string(),
         JsonSchema::Boolean {
             description: Some(
-                "Whether to run the shell with -l/-i semantics. Defaults to false unless a shell snapshot is available."
+                "Whether to run the shell with -l/-i semantics. Defaults to true."
                     .to_string(),
             ),
         },
@@ -341,7 +341,7 @@ fn create_shell_command_tool() -> ToolSpec {
         "login".to_string(),
         JsonSchema::Boolean {
             description: Some(
-                "Whether to run the shell with login shell semantics. Defaults to false unless a shell snapshot is available."
+                "Whether to run the shell with login shell semantics. Defaults to true."
                     .to_string(),
             ),
         },
