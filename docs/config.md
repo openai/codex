@@ -393,13 +393,14 @@ set = { CI = "1" }
 include_only = ["PATH", "HOME"]
 ```
 
-| Field                     | Type                 | Default | Description                                                                                                                                     |
-| ------------------------- | -------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inherit`                 | string               | `all`   | Starting template for the environment:<br>`all` (clone full parent env), `core` (`HOME`, `PATH`, `USER`, …), or `none` (start empty).           |
-| `ignore_default_excludes` | boolean              | `false` | When `false`, Codex removes any var whose **name** contains `KEY`, `SECRET`, or `TOKEN` (case-insensitive) before other rules run.              |
-| `exclude`                 | array<string>        | `[]`    | Case-insensitive glob patterns to drop after the default filter.<br>Examples: `"AWS_*"`, `"AZURE_*"`.                                           |
-| `set`                     | table<string,string> | `{}`    | Explicit key/value overrides or additions – always win over inherited values.                                                                   |
-| `include_only`            | array<string>        | `[]`    | If non-empty, a whitelist of patterns; only variables that match _one_ pattern survive the final step. (Generally used with `inherit = "all"`.) |
+| Field                       | Type                 | Default | Description                                                                                                                                     |
+| --------------------------- | -------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inherit`                   | string               | `all`   | Starting template for the environment:<br>`all` (clone full parent env), `core` (`HOME`, `PATH`, `USER`, …), or `none` (start empty).           |
+| `ignore_default_excludes`   | boolean              | `false` | When `false`, Codex removes any var whose **name** contains `KEY`, `SECRET`, or `TOKEN` (case-insensitive) before other rules run.              |
+| `exclude`                   | array<string>        | `[]`    | Case-insensitive glob patterns to drop after the default filter.<br>Examples: `"AWS_*"`, `"AZURE_*"`.                                           |
+| `set`                       | table<string,string> | `{}`    | Explicit key/value overrides or additions – always win over inherited values.                                                                   |
+| `include_only`              | array<string>        | `[]`    | If non-empty, a whitelist of patterns; only variables that match _one_ pattern survive the final step. (Generally used with `inherit = "all"`.) |
+| `experimental_use_profile`  | boolean              | `false` | When `true`, spawns shells in interactive mode (`-lic` instead of `-lc`), which sources `~/.zshrc` / `~/.bashrc`. Useful for rbenv/pyenv/nvm.  |
 
 The patterns are **glob style**, not full regular expressions: `*` matches any
 number of characters, `?` matches exactly one, and character classes like
@@ -414,6 +415,18 @@ If you just need a clean slate with a few custom entries you can write:
 inherit = "none"
 set = { PATH = "/usr/bin", MY_FLAG = "1" }
 ```
+
+If you use environment managers like **rbenv**, **pyenv**, **nvm**, or **asdf** that are initialized in your `~/.zshrc` or `~/.bashrc`:
+
+- **Full-access mode** (`--full-access` or `--dangerously-auto-approve`): Interactive shells are enabled automatically, so your environment managers will work out of the box.
+- **Other modes**: Set `experimental_use_profile = true` to enable interactive shells:
+
+```toml
+[shell_environment_policy]
+experimental_use_profile = true
+```
+
+Interactive mode spawns shells with `-lic` instead of `-lc`, which sources your interactive shell configuration files (`~/.zshrc`/`~/.bashrc`). Without this, tools initialized only in `~/.zshrc` (not `~/.zprofile`) won't be available to Codex commands.
 
 Currently, `CODEX_SANDBOX_NETWORK_DISABLED=1` is also added to the environment, assuming network is disabled. This is not configurable.
 

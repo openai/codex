@@ -41,13 +41,13 @@ pub(crate) fn build_command_spec(
 }
 
 /// POSIX-only helper: for commands produced by `Shell::derive_exec_args`
-/// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]`, and
-/// when a snapshot is configured on the session shell, rewrite the argv
-/// to a single non-login shell that sources the snapshot before running
-/// the original script:
+/// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]`, and when a
+/// snapshot is configured on the session shell, rewrite the argv to a single
+/// non-login shell that sources the snapshot before running the original script:
 ///
-///   shell -lc "<script>"
-///   => shell -c ". SNAPSHOT && <script>"
+///   shell -lc "<script>"   => shell -c ". SNAPSHOT && <script>"
+///
+/// Interactive shells (`-lic`/`-ic`) are left untouched so rc files can apply.
 ///
 /// On non-POSIX shells or non-matching commands this is a no-op.
 pub(crate) fn maybe_wrap_shell_lc_with_snapshot(

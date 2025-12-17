@@ -237,6 +237,14 @@ mod tests {
     }
 
     #[test]
+    fn interactive_shell_flags_are_recognized() {
+        assert!(is_known_safe_command(&vec_str(&["bash", "-lic", "ls"])));
+        assert!(is_known_safe_command(&vec_str(&["zsh", "-lic", "ls"])));
+        assert!(is_known_safe_command(&vec_str(&["bash", "-ic", "ls"])));
+        assert!(is_known_safe_command(&vec_str(&["zsh", "-ic", "ls"])));
+    }
+
+    #[test]
     fn unknown_or_partial() {
         assert!(!is_safe_to_call_with_exec(&vec_str(&["foo"])));
         assert!(!is_safe_to_call_with_exec(&vec_str(&["git", "fetch"])));

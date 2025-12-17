@@ -92,7 +92,7 @@ impl ToolHandler for UnifiedExecHandler {
         let Ok(params) = serde_json::from_str::<ExecCommandArgs>(arguments) else {
             return true;
         };
-        let command = get_command(&params, invocation.session.user_shell());
+        let command = get_command(&params, invocation.session.user_shell(), false);
         !is_known_safe_command(&command)
     }
 
@@ -127,7 +127,9 @@ impl ToolHandler for UnifiedExecHandler {
                     ))
                 })?;
                 let process_id = manager.allocate_process_id().await;
-                let command = get_command(&args, session.user_shell());
+                let use_interactive = turn.sandbox_policy.has_full_disk_write_access()
+                    || turn.shell_environment_policy.use_profile;
+                let command = get_command(&args, session.user_shell(), use_interactive);
 
                 let ExecCommandArgs {
                     workdir,
@@ -250,7 +252,11 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
-fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String> {
+fn get_command(
+    args: &ExecCommandArgs,
+    session_shell: Arc<Shell>,
+    use_interactive: bool,
+) -> Vec<String> {
     let model_shell = args.shell.as_ref().map(|shell_str| {
         let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
         shell.shell_snapshot = None;
@@ -259,7 +265,7 @@ fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String>
 
     let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
 
-    shell.derive_exec_args(&args.cmd, args.login)
+    shell.derive_exec_args(&args.cmd, args.login, use_interactive)
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {
@@ -306,7 +312,7 @@ mod tests {
 
         assert!(args.shell.is_none());
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()), false);
 
         assert_eq!(command.len(), 3);
         assert_eq!(command[2], "echo hello");
@@ -321,7 +327,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()), false);
 
         assert_eq!(command.last(), Some(&"echo hello".to_string()));
         if command
@@ -341,7 +347,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("powershell"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()), false);
 
         assert_eq!(command[2], "echo hello");
     }
@@ -355,8 +361,30 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("cmd"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, Arc::new(default_user_shell()), false);
 
         assert_eq!(command[2], "echo hello");
+    }
+
+    #[test]
+    fn test_get_command_with_interactive_mode() {
+        let json = r#"{"cmd": "echo hello"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        // Without interactive mode
+        let command_non_interactive = get_command(&args, Arc::new(default_user_shell()), false);
+        // With interactive mode
+        let command_interactive = get_command(&args, Arc::new(default_user_shell()), true);
+
+        // Both should have the command
+        assert_eq!(command_non_interactive[2], "echo hello");
+        assert_eq!(command_interactive[2], "echo hello");
+
+        // Interactive mode should use -lic instead of -lc (for POSIX shells)
+        if command_non_interactive[1] == "-lc" {
+            assert_eq!(command_interactive[1], "-lic");
+        }
     }
 }

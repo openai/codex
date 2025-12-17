@@ -97,7 +97,7 @@ pub fn extract_bash_command(command: &[String]) -> Option<(&str, &str)> {
     let [shell, flag, script] = command else {
         return None;
     };
-    if !matches!(flag.as_str(), "-lc" | "-c")
+    if !matches!(flag.as_str(), "-lc" | "-c" | "-lic" | "-ic")
         || !matches!(
             detect_shell_type(&PathBuf::from(shell)),
             Some(ShellType::Zsh) | Some(ShellType::Bash) | Some(ShellType::Sh)

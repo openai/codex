@@ -43,9 +43,14 @@ impl ShellHandler {
 }
 
 impl ShellCommandHandler {
-    fn base_command(shell: &Shell, command: &str, login: Option<bool>) -> Vec<String> {
+    fn base_command(
+        shell: &Shell,
+        command: &str,
+        login: Option<bool>,
+        use_interactive: bool,
+    ) -> Vec<String> {
         let use_login_shell = login.unwrap_or(true);
-        shell.derive_exec_args(command, use_login_shell)
+        shell.derive_exec_args(command, use_login_shell, use_interactive)
     }
 
     fn to_exec_params(
@@ -54,7 +59,14 @@ impl ShellCommandHandler {
         turn_context: &TurnContext,
     ) -> ExecParams {
         let shell = session.user_shell();
-        let command = Self::base_command(shell.as_ref(), &params.command, params.login);
+        let use_interactive = turn_context.sandbox_policy.has_full_disk_write_access()
+            || turn_context.shell_environment_policy.use_profile;
+        let command = Self::base_command(
+            shell.as_ref(),
+            &params.command,
+            params.login,
+            use_interactive,
+        );
 
         ExecParams {
             command,
@@ -161,7 +173,8 @@ impl ToolHandler for ShellCommandHandler {
         serde_json::from_str::<ShellCommandToolCallParams>(arguments)
             .map(|params| {
                 let shell = invocation.session.user_shell();
-                let command = Self::base_command(shell.as_ref(), &params.command, params.login);
+                let command =
+                    Self::base_command(shell.as_ref(), &params.command, params.login, false);
                 !is_known_safe_command(&command)
             })
             .unwrap_or(true)
@@ -350,12 +363,15 @@ mod tests {
     }
 
     fn assert_safe(shell: &Shell, command: &str) {
-        assert!(is_known_safe_command(
-            &shell.derive_exec_args(command, /* use_login_shell */ true)
-        ));
-        assert!(is_known_safe_command(
-            &shell.derive_exec_args(command, /* use_login_shell */ false)
-        ));
+        assert!(is_known_safe_command(&shell.derive_exec_args(
+            command, /* use_login_shell */ true, /* use_interactive */ false
+        )));
+        assert!(is_known_safe_command(&shell.derive_exec_args(
+            command, /* use_login_shell */ false, /* use_interactive */ false
+        )));
+        assert!(is_known_safe_command(&shell.derive_exec_args(
+            command, /* use_login_shell */ true, /* use_interactive */ true
+        )));
     }
 
     #[test]
@@ -369,7 +385,12 @@ mod tests {
         let sandbox_permissions = SandboxPermissions::RequireEscalated;
         let justification = Some("because tests".to_string());
 
-        let expected_command = session.user_shell().derive_exec_args(&command, true);
+        let use_interactive = turn_context.sandbox_policy.has_full_disk_write_access()
+            || turn_context.shell_environment_policy.use_profile;
+        let expected_command =
+            session
+                .user_shell()
+                .derive_exec_args(&command, true, use_interactive);
         let expected_cwd = turn_context.resolve_path(workdir.clone());
         let expected_env = create_env(&turn_context.shell_environment_policy);
 
@@ -405,17 +426,24 @@ mod tests {
         };
 
         let login_command =
-            ShellCommandHandler::base_command(&shell, "echo login shell", Some(true));
+            ShellCommandHandler::base_command(&shell, "echo login shell", Some(true), false);
         assert_eq!(
             login_command,
-            shell.derive_exec_args("echo login shell", true)
+            shell.derive_exec_args("echo login shell", true, false)
         );
 
         let non_login_command =
-            ShellCommandHandler::base_command(&shell, "echo non login shell", Some(false));
+            ShellCommandHandler::base_command(&shell, "echo non login shell", Some(false), false);
         assert_eq!(
             non_login_command,
-            shell.derive_exec_args("echo non login shell", false)
+            shell.derive_exec_args("echo non login shell", false, false)
+        );
+
+        let interactive_command =
+            ShellCommandHandler::base_command(&shell, "echo interactive", Some(true), true);
+        assert_eq!(
+            interactive_command,
+            shell.derive_exec_args("echo interactive", true, true)
         );
     }
 }
