@@ -75,7 +75,9 @@ pub async fn spawn_piped_process(
     let wait_exit_code = Arc::clone(&exit_code);
     let wait_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
         let code = match child.wait() {
-            Ok(status) => status.code().unwrap_or(-1),
+            Ok(status) => status
+                .code()
+                .unwrap_or_else(|| if status.success() { 0 } else { 1 }),
             Err(_) => -1,
         };
         wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);

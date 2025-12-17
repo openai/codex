@@ -11,6 +11,9 @@ mod fallback;
 #[cfg(windows)]
 mod win;
 
+#[cfg(test)]
+mod tests;
+
 use anyhow::Result;
 #[cfg(not(windows))]
 use portable_pty::native_pty_system;

@@ -1882,6 +1882,7 @@ dependencies = [
  "libc",
  "log",
  "portable-pty",
+ "pretty_assertions",
  "shared_library",
  "tokio",
  "winapi",
