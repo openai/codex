@@ -10,6 +10,10 @@ In non-interactive mode, Codex does not ask for command or edit approvals. By de
 
 Use `codex exec --full-auto` to allow file edits. Use `codex exec --sandbox danger-full-access` to allow edits and networked commands.
 
+### Interactive prompts are disabled
+
+`codex exec` is non-interactive. If the agent attempts to ask an interactive multiple-choice question (AskUserQuestion), the request is automatically cancelled.
+
 ### Default output mode
 
 By default, Codex streams its activity to stderr and only writes the final message from the agent to stdout. This makes it easier to pipe `codex exec` into another tool without extra filtering.

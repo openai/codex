@@ -68,10 +68,12 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
   - `Op::UserInput` – Any input from the user to kick off a `Task`
   - `Op::Interrupt` – Interrupts a running task
   - `Op::ExecApproval` – Approve or deny code execution
+  - `Op::ResolveAskUserQuestion` – Reply to an interactive question prompt
   - `Op::ListSkills` – Request skills for one or more cwd values (optionally `force_reload`)
 - `EventMsg`
   - `EventMsg::AgentMessage` – Messages from the `Model`
   - `EventMsg::ExecApprovalRequest` – Request approval from user to execute a command
+  - `EventMsg::AskUserQuestionRequest` – Ask the user a multiple-choice question and await an answer
   - `EventMsg::TaskComplete` – A task completed successfully
   - `EventMsg::Error` – A task stopped with an error
   - `EventMsg::Warning` – A non-fatal warning that the client should surface to the user
@@ -172,4 +174,31 @@ sequenceDiagram
     task2->>user: Event::AgentMessage
     task2->>user: Event::TurnCompleted
     task2->>-user: Event::TaskCompleted
+```
+
+### AskUserQuestion (interactive prompt)
+
+Pausing a task to ask the user a question, then resuming after the answer is provided.
+
+```mermaid
+sequenceDiagram
+    box UI
+    participant user as User
+    end
+    box Daemon
+    participant session as Session
+    participant task as Task
+    end
+    box Rest API
+    participant agent as Model
+    end
+    user->>session: Op::UserInput
+    session-->>+task: start task
+    task->>agent: prompt
+    agent->>task: response (tool call: ask_user_question)
+    task->>user: Event::AskUserQuestionRequest
+    user->>task: Op::ResolveAskUserQuestion
+    task->>agent: tool output (answers)
+    agent->>task: response (continue)
+    task->>-user: Event::AgentMessage
 ```

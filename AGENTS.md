@@ -14,6 +14,14 @@ In the codex-rs folder where the rust code lives:
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
 
+## Interactive questions (AskUserQuestion)
+
+When you need user input mid-run, use the `ask_user_question` tool instead of asking questions in plain text.
+
+- Put up to 4 questions in a single tool call.
+- Don’t include an explicit “Other” choice; the UI provides it automatically.
+- Don’t put numbering into option labels (the UI adds numbering).
+
 Run `just fmt` (in `codex-rs` directory) automatically after making Rust code changes; do not ask for approval to run it. Before finalizing a change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Additionally, run the tests:
 
 1. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `cargo test -p codex-tui`.
