@@ -3354,6 +3354,7 @@ fn chatwidget_tall() {
 
 #[test]
 fn skill_mentions_use_percent_prefix() {
+    // Guard against treating shell/env-style `$name` tokens as skill mentions.
     let deploy = SkillMetadata {
         name: "deploy".to_string(),
         description: "deploy skill".to_string(),
