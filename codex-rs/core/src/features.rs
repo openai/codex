@@ -64,6 +64,8 @@ pub enum Feature {
     ShellSnapshot,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
+    /// Enable multi-agent collaboration workflows.
+    MultiAgents,
 }
 
 impl Feature {
@@ -350,6 +352,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Skills,
         key: "skills",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MultiAgents,
+        key: "multi_agents",
         stage: Stage::Experimental,
         default_enabled: false,
     },

@@ -35,6 +35,7 @@ pub(crate) fn spawn_agent(
                 let message = err.to_string();
                 eprintln!("{message}");
                 app_event_tx_clone.send(AppEvent::CodexEvent(Event {
+                    agent_idx: Some(0),
                     id: "".to_string(),
                     msg: EventMsg::Error(err.to_error_event(None)),
                 }));
@@ -46,6 +47,7 @@ pub(crate) fn spawn_agent(
 
         // Forward the captured `SessionConfigured` event so it can be rendered in the UI.
         let ev = codex_core::protocol::Event {
+            agent_idx: Some(0),
             // The `id` does not matter for rendering, so we can use a fake value.
             id: "".to_string(),
             msg: codex_core::protocol::EventMsg::SessionConfigured(session_configured),
@@ -84,6 +86,7 @@ pub(crate) fn spawn_agent_from_existing(
     tokio::spawn(async move {
         // Forward the captured `SessionConfigured` event so it can be rendered in the UI.
         let ev = codex_core::protocol::Event {
+            agent_idx: Some(0),
             id: "".to_string(),
             msg: codex_core::protocol::EventMsg::SessionConfigured(session_configured),
         };

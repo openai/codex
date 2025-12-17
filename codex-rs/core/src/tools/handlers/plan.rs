@@ -19,11 +19,18 @@ pub struct PlanHandler;
 
 pub static PLAN_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut plan_item_props = BTreeMap::new();
-    plan_item_props.insert("step".to_string(), JsonSchema::String { description: None });
+    plan_item_props.insert(
+        "step".to_string(),
+        JsonSchema::String {
+            description: None,
+            enum_values: None,
+        },
+    );
     plan_item_props.insert(
         "status".to_string(),
         JsonSchema::String {
             description: Some("One of: pending, in_progress, completed".to_string()),
+            enum_values: None,
         },
     );
 
@@ -39,7 +46,10 @@ pub static PLAN_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
         "explanation".to_string(),
-        JsonSchema::String { description: None },
+        JsonSchema::String {
+            description: None,
+            enum_values: None,
+        },
     );
     properties.insert("plan".to_string(), plan_items_schema);
 

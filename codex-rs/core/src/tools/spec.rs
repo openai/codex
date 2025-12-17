@@ -6,6 +6,11 @@ use crate::openai_models::model_family::ModelFamily;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
+use crate::tools::handlers::collaboration::create_collaboration_close_tool;
+use crate::tools::handlers::collaboration::create_collaboration_get_state_tool;
+use crate::tools::handlers::collaboration::create_collaboration_init_agent_tool;
+use crate::tools::handlers::collaboration::create_collaboration_send_tool;
+use crate::tools::handlers::collaboration::create_collaboration_wait_tool;
 use crate::tools::registry::ToolRegistryBuilder;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -23,6 +28,7 @@ pub(crate) struct ToolsConfig {
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
     pub experimental_supported_tools: Vec<String>,
+    pub collaboration_agent_allowlist: Option<Vec<String>>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -66,6 +72,7 @@ impl ToolsConfig {
             web_search_request: include_web_search_request,
             include_view_image_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
+            collaboration_agent_allowlist: None,
         }
     }
 }
@@ -81,6 +88,8 @@ pub(crate) enum JsonSchema {
     String {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        #[serde(rename = "enum", skip_serializing_if = "Option::is_none")]
+        enum_values: Option<Vec<String>>,
     },
     /// MCP schema allows "number" | "integer" for Number
     #[serde(alias = "integer")]
@@ -132,6 +141,7 @@ fn create_exec_command_tool() -> ToolSpec {
         "cmd".to_string(),
         JsonSchema::String {
             description: Some("Shell command to execute.".to_string()),
+            enum_values: None,
         },
     );
     properties.insert(
@@ -141,12 +151,14 @@ fn create_exec_command_tool() -> ToolSpec {
                 "Optional working directory to run the command in; defaults to the turn cwd."
                     .to_string(),
             ),
+            enum_values: None,
         },
     );
     properties.insert(
         "shell".to_string(),
         JsonSchema::String {
             description: Some("Shell binary to launch. Defaults to /bin/bash.".to_string()),
+            enum_values: None,
         },
     );
     properties.insert(
@@ -181,6 +193,7 @@ fn create_exec_command_tool() -> ToolSpec {
                 "Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
                     .to_string(),
             ),
+            enum_values: None,
         },
     );
     properties.insert(
@@ -190,6 +203,7 @@ fn create_exec_command_tool() -> ToolSpec {
                 "Only set if sandbox_permissions is \"require_escalated\". 1-sentence explanation of why we want to run this command."
                     .to_string(),
             ),
+            enum_values: None,
         },
     );
 
@@ -219,6 +233,7 @@ fn create_write_stdin_tool() -> ToolSpec {
         "chars".to_string(),
         JsonSchema::String {
             description: Some("Bytes to write to stdin (may be empty to poll).".to_string()),
+            enum_values: None,
         },
     );
     properties.insert(
@@ -257,7 +272,10 @@ fn create_shell_tool() -> ToolSpec {
     properties.insert(
         "command".to_string(),
         JsonSchema::Array {
-            items: Box::new(JsonSchema::String { description: None }),
+            items: Box::new(JsonSchema::String {
+                description: None,
+                enum_values: None,
+            }),
             description: Some("The command to execute".to_string()),
         },
     );
@@ -265,6 +283,7 @@ fn create_shell_tool() -> ToolSpec {
         "workdir".to_string(),
         JsonSchema::String {
             description: Some("The working directory to execute the command in".to_string()),
+            enum_values: None,
         },
     );
     properties.insert(
@@ -278,12 +297,14 @@ fn create_shell_tool() -> ToolSpec {
         "sandbox_permissions".to_string(),
         JsonSchema::String {
             description: Some("Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\".".to_string()),
+            enum_values: None,
         },
     );
     properties.insert(
         "justification".to_string(),
         JsonSchema::String {
             description: Some("Only set if sandbox_permissions is \"require_escalated\". 1-sentence explanation of why we want to run this command.".to_string()),
+            enum_values: None,
         },
     );
 
@@ -324,12 +345,14 @@ fn create_shell_command_tool() -> ToolSpec {
             description: Some(
                 "The shell script to execute in the user's default shell".to_string(),
             ),
+            enum_values: None,
         },
     );
     properties.insert(
         "workdir".to_string(),
         JsonSchema::String {
             description: Some("The working directory to execute the command in".to_string()),
+            enum_values: None,
         },
     );
     properties.insert(
@@ -351,12 +374,14 @@ fn create_shell_command_tool() -> ToolSpec {
         "sandbox_permissions".to_string(),
         JsonSchema::String {
             description: Some("Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\".".to_string()),
+            enum_values: None,
         },
     );
     properties.insert(
         "justification".to_string(),
         JsonSchema::String {
             description: Some("Only set if sandbox_permissions is \"require_escalated\". 1-sentence explanation of why we want to run this command.".to_string()),
+            enum_values: None,
         },
     );
 
@@ -395,6 +420,7 @@ fn create_view_image_tool() -> ToolSpec {
         "path".to_string(),
         JsonSchema::String {
             description: Some("Local filesystem path to an image file".to_string()),
+            enum_values: None,
         },
     );
 
@@ -436,6 +462,7 @@ fn create_test_sync_tool() -> ToolSpec {
             description: Some(
                 "Identifier shared by concurrent calls that should rendezvous".to_string(),
             ),
+            enum_values: None,
         },
     );
     barrier_properties.insert(
@@ -480,6 +507,7 @@ fn create_grep_files_tool() -> ToolSpec {
         "pattern".to_string(),
         JsonSchema::String {
             description: Some("Regular expression pattern to search for.".to_string()),
+            enum_values: None,
         },
     );
     properties.insert(
@@ -490,6 +518,7 @@ fn create_grep_files_tool() -> ToolSpec {
                  \"*.{ts,tsx}\")."
                     .to_string(),
             ),
+            enum_values: None,
         },
     );
     properties.insert(
@@ -499,6 +528,7 @@ fn create_grep_files_tool() -> ToolSpec {
                 "Directory or file path to search. Defaults to the session's working directory."
                     .to_string(),
             ),
+            enum_values: None,
         },
     );
     properties.insert(
@@ -530,6 +560,7 @@ fn create_read_file_tool() -> ToolSpec {
         "file_path".to_string(),
         JsonSchema::String {
             description: Some("Absolute path to the file".to_string()),
+            enum_values: None,
         },
     );
     properties.insert(
@@ -554,6 +585,7 @@ fn create_read_file_tool() -> ToolSpec {
                  to expand around an anchor line."
                     .to_string(),
             ),
+            enum_values: None,
         },
     );
 
@@ -628,6 +660,7 @@ fn create_list_dir_tool() -> ToolSpec {
         "dir_path".to_string(),
         JsonSchema::String {
             description: Some("Absolute path to the directory to list.".to_string()),
+            enum_values: None,
         },
     );
     properties.insert(
@@ -676,6 +709,7 @@ fn create_list_mcp_resources_tool() -> ToolSpec {
                 "Optional MCP server name. When omitted, lists resources from every configured server."
                     .to_string(),
             ),
+            enum_values: None,
         },
     );
     properties.insert(
@@ -685,6 +719,7 @@ fn create_list_mcp_resources_tool() -> ToolSpec {
                 "Opaque cursor returned by a previous list_mcp_resources call for the same server."
                     .to_string(),
             ),
+            enum_values: None,
         },
     );
 
@@ -709,6 +744,7 @@ fn create_list_mcp_resource_templates_tool() -> ToolSpec {
                 "Optional MCP server name. When omitted, lists resource templates from all configured servers."
                     .to_string(),
             ),
+            enum_values: None,
         },
     );
     properties.insert(
@@ -718,6 +754,7 @@ fn create_list_mcp_resource_templates_tool() -> ToolSpec {
                 "Opaque cursor returned by a previous list_mcp_resource_templates call for the same server."
                     .to_string(),
             ),
+            enum_values: None,
         },
     );
 
@@ -742,6 +779,7 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
                 "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."
                     .to_string(),
             ),
+            enum_values: None,
         },
     );
     properties.insert(
@@ -751,6 +789,7 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
                 "Resource URI to read. Must be one of the URIs returned by list_mcp_resources."
                     .to_string(),
             ),
+            enum_values: None,
         },
     );
 
@@ -977,6 +1016,7 @@ pub(crate) fn build_specs(
     mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
+    use crate::tools::handlers::CollaborationHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
@@ -997,6 +1037,7 @@ pub(crate) fn build_specs(
     let plan_handler = Arc::new(PlanHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
+    let collaboration_handler = Arc::new(CollaborationHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
@@ -1039,6 +1080,32 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+
+    if config
+        .experimental_supported_tools
+        .contains(&"collaboration".to_string())
+        && config
+            .collaboration_agent_allowlist
+            .as_ref()
+            .is_some_and(|allowlist| !allowlist.is_empty())
+    {
+        builder.push_spec(create_collaboration_init_agent_tool(
+            config
+                .collaboration_agent_allowlist
+                .as_deref()
+                .unwrap_or_default(),
+        ));
+        builder.push_spec(create_collaboration_send_tool());
+        builder.push_spec(create_collaboration_wait_tool());
+        builder.push_spec(create_collaboration_get_state_tool());
+        builder.push_spec(create_collaboration_close_tool());
+
+        builder.register_handler("collaboration_init_agent", collaboration_handler.clone());
+        builder.register_handler("collaboration_send", collaboration_handler.clone());
+        builder.register_handler("collaboration_wait", collaboration_handler.clone());
+        builder.register_handler("collaboration_get_state", collaboration_handler.clone());
+        builder.register_handler("collaboration_close", collaboration_handler);
+    }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
@@ -1183,7 +1250,10 @@ mod tests {
     fn strip_descriptions_schema(schema: &mut JsonSchema) {
         match schema {
             JsonSchema::Boolean { description }
-            | JsonSchema::String { description }
+            | JsonSchema::String {
+                description,
+                enum_values: _,
+            }
             | JsonSchema::Number { description } => {
                 *description = None;
             }
@@ -1255,6 +1325,10 @@ mod tests {
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
             create_apply_patch_freeform_tool(),
+            create_grep_files_tool(),
+            create_read_file_tool(),
+            create_list_dir_tool(),
+            create_test_sync_tool(),
             ToolSpec::WebSearch {},
             create_view_image_tool(),
         ] {
@@ -1300,6 +1374,10 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
+                "grep_files",
+                "read_file",
+                "list_dir",
+                "test_sync_tool",
                 "view_image",
             ],
         );
@@ -1317,6 +1395,10 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
+                "grep_files",
+                "read_file",
+                "list_dir",
+                "test_sync_tool",
                 "view_image",
             ],
         );
@@ -1337,6 +1419,10 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
+                "grep_files",
+                "read_file",
+                "list_dir",
+                "test_sync_tool",
                 "web_search",
                 "view_image",
             ],
@@ -1358,7 +1444,37 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
+                "grep_files",
+                "read_file",
+                "list_dir",
+                "test_sync_tool",
                 "web_search",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_build_specs_gpt51_codex_max_default() {
+        assert_model_tools(
+            "gpt-5.1-codex-max",
+            &Features::with_defaults(),
+            &[
+                "shell_command",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "collaboration_init_agent",
+                "collaboration_send",
+                "collaboration_wait",
+                "collaboration_get_state",
+                "collaboration_close",
+                "apply_patch",
+                "grep_files",
+                "read_file",
+                "list_dir",
+                "test_sync_tool",
                 "view_image",
             ],
         );
@@ -1392,6 +1508,10 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
+                "grep_files",
+                "read_file",
+                "list_dir",
+                "test_sync_tool",
                 "view_image",
             ],
         );
@@ -1600,7 +1720,10 @@ mod tests {
                     properties: BTreeMap::from([
                         (
                             "string_argument".to_string(),
-                            JsonSchema::String { description: None }
+                            JsonSchema::String {
+                                description: None,
+                                enum_values: None,
+                            }
                         ),
                         (
                             "number_argument".to_string(),
@@ -1612,7 +1735,10 @@ mod tests {
                                 properties: BTreeMap::from([
                                     (
                                         "string_property".to_string(),
-                                        JsonSchema::String { description: None }
+                                        JsonSchema::String {
+                                            description: None,
+                                            enum_values: None,
+                                        }
                                     ),
                                     (
                                         "number_property".to_string(),
@@ -1757,7 +1883,8 @@ mod tests {
                     properties: BTreeMap::from([(
                         "query".to_string(),
                         JsonSchema::String {
-                            description: Some("search query".to_string())
+                            description: Some("search query".to_string()),
+                            enum_values: None,
                         }
                     )]),
                     required: None,
@@ -1866,7 +1993,10 @@ mod tests {
                     properties: BTreeMap::from([(
                         "tags".to_string(),
                         JsonSchema::Array {
-                            items: Box::new(JsonSchema::String { description: None }),
+                            items: Box::new(JsonSchema::String {
+                                description: None,
+                                enum_values: None,
+                            }),
                             description: None
                         }
                     )]),
@@ -1921,7 +2051,10 @@ mod tests {
                 parameters: JsonSchema::Object {
                     properties: BTreeMap::from([(
                         "value".to_string(),
-                        JsonSchema::String { description: None }
+                        JsonSchema::String {
+                            description: None,
+                            enum_values: None,
+                        }
                     )]),
                     required: None,
                     additional_properties: None,
@@ -2059,7 +2192,10 @@ Examples of valid command strings:
                     properties: BTreeMap::from([
                         (
                             "string_argument".to_string(),
-                            JsonSchema::String { description: None }
+                            JsonSchema::String {
+                                description: None,
+                                enum_values: None,
+                            }
                         ),
                         (
                             "number_argument".to_string(),
@@ -2071,7 +2207,10 @@ Examples of valid command strings:
                                 properties: BTreeMap::from([
                                     (
                                         "string_property".to_string(),
-                                        JsonSchema::String { description: None }
+                                        JsonSchema::String {
+                                            description: None,
+                                            enum_values: None,
+                                        }
                                     ),
                                     (
                                         "number_property".to_string(),
@@ -2086,7 +2225,10 @@ Examples of valid command strings:
                                     JsonSchema::Object {
                                         properties: BTreeMap::from([(
                                             "addtl_prop".to_string(),
-                                            JsonSchema::String { description: None }
+                                            JsonSchema::String {
+                                                description: None,
+                                                enum_values: None,
+                                            }
                                         ),]),
                                         required: Some(vec!["addtl_prop".to_string(),]),
                                         additional_properties: Some(false.into()),
@@ -2108,7 +2250,13 @@ Examples of valid command strings:
     #[test]
     fn chat_tools_include_top_level_name() {
         let mut properties = BTreeMap::new();
-        properties.insert("foo".to_string(), JsonSchema::String { description: None });
+        properties.insert(
+            "foo".to_string(),
+            JsonSchema::String {
+                description: None,
+                enum_values: None,
+            },
+        );
         let tools = vec![ToolSpec::Function(ResponsesApiTool {
             name: "demo".to_string(),
             description: "A demo tool".to_string(),

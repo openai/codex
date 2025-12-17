@@ -25,7 +25,7 @@ When using the planning tool:
 - Do not make single-step plans.
 - When you made a plan, update it after having performed one of the sub-tasks that you shared on the plan.
 
-## Codex CLI harness, sandboxing, and approvals
+## Codex CLI harness, sandboxing, and approvals[q_and_a.rs](src/agents/builtins/q_and_a.rs)
 
 The Codex CLI harness supports several different configurations for sandboxing and escalation approvals that the user can choose from.
 

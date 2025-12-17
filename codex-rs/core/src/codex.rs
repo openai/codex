@@ -126,8 +126,13 @@ use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
 use crate::state::ActiveTurn;
+use crate::state::AgentId;
+use crate::state::AgentState;
+use crate::state::CollaborationLimits;
+use crate::state::CollaborationState;
 use crate::state::SessionServices;
 use crate::state::SessionState;
+use crate::tasks::CollaborationSupervisor;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
@@ -195,6 +200,7 @@ fn maybe_push_chat_wire_api_deprecation(
 
     post_session_configured_events.push(Event {
         id: INITIAL_SUBMIT_ID.to_owned(),
+        agent_idx: None,
         msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
             summary: CHAT_WIRE_API_DEPRECATION_SUMMARY.to_string(),
             details: None,
@@ -345,6 +351,10 @@ pub(crate) struct Session {
     features: Features,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
+    agents_config: Option<Arc<crate::agents::AgentsConfig>>,
+    default_sandbox_policy: SandboxPolicy,
+    collaboration: Mutex<CollaborationState>,
+    collaboration_supervisor: Mutex<Option<CollaborationSupervisor>>,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -371,6 +381,7 @@ pub(crate) struct TurnContext {
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) exec_policy: Arc<RwLock<ExecPolicy>>,
     pub(crate) truncation_policy: TruncationPolicy,
+    pub(crate) collaboration_agent: AgentId,
 }
 
 impl TurnContext {
@@ -385,9 +396,13 @@ impl TurnContext {
             .as_deref()
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
     }
+
+    pub(crate) fn collaboration_agent(&self) -> AgentId {
+        self.collaboration_agent.clone()
+    }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
     provider: ModelProviderInfo,
@@ -456,6 +471,40 @@ impl SessionConfiguration {
         }
         next_configuration
     }
+
+    pub(crate) fn developer_instructions(&self) -> Option<String> {
+        self.developer_instructions.clone()
+    }
+
+    pub(crate) fn user_instructions(&self) -> Option<String> {
+        self.user_instructions.clone()
+    }
+
+    pub(crate) fn with_instructions(
+        mut self,
+        developer_instructions: Option<String>,
+        user_instructions: Option<String>,
+    ) -> Self {
+        self.developer_instructions = developer_instructions;
+        self.user_instructions = user_instructions;
+        self
+    }
+
+    pub(crate) fn approval_policy(&self) -> AskForApproval {
+        self.approval_policy
+    }
+
+    pub(crate) fn sandbox_policy(&self) -> SandboxPolicy {
+        self.sandbox_policy.clone()
+    }
+
+    pub(crate) fn cwd(&self) -> &PathBuf {
+        &self.cwd
+    }
+
+    pub(crate) fn model(&self) -> &str {
+        self.model.as_str()
+    }
 }
 
 #[derive(Default, Clone)]
@@ -491,6 +540,7 @@ impl Session {
         model_family: ModelFamily,
         conversation_id: ConversationId,
         sub_id: String,
+        agent_id: AgentId,
     ) -> TurnContext {
         let otel_manager = otel_manager.clone().with_model(
             session_configuration.model.as_str(),
@@ -536,7 +586,41 @@ impl Session {
                 per_turn_config.as_ref(),
                 model_family.truncation_policy,
             ),
+            collaboration_agent: agent_id,
         }
+    }
+
+    pub(crate) async fn make_collaboration_turn_context(
+        &self,
+        agent: &AgentState,
+        sub_id: String,
+    ) -> Arc<TurnContext> {
+        let per_turn_config = Self::build_per_turn_config(&agent.config);
+        let model_family = self
+            .services
+            .models_manager
+            .construct_model_family(agent.config.model.as_str(), &per_turn_config)
+            .await;
+        let mut turn_context = Self::make_turn_context(
+            Some(Arc::clone(&self.services.auth_manager)),
+            &self.services.otel_manager,
+            agent.config.provider.clone(),
+            &agent.config,
+            per_turn_config,
+            model_family,
+            self.conversation_id,
+            sub_id,
+            agent.id.clone(),
+        );
+        if let Some(agents_config) = self.agents_config()
+            && let Some(agent_config) = agents_config.agent(agent.name.as_str())
+        {
+            let allowlist = agent_config.sub_agents.clone();
+            if !allowlist.is_empty() {
+                turn_context.tools_config.collaboration_agent_allowlist = Some(allowlist);
+            }
+        }
+        Arc::new(turn_context)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -550,6 +634,25 @@ impl Session {
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
     ) -> anyhow::Result<Arc<Self>> {
+        let agents_config = crate::agents::AgentsConfig::try_load(&config.codex_home).await;
+
+        let default_sandbox_policy = session_configuration.sandbox_policy.clone();
+        let mut session_configuration = session_configuration;
+        if let Some(agents_config) = agents_config.as_ref() {
+            let main = agents_config.main();
+            session_configuration.developer_instructions = main.instructions.clone();
+            session_configuration.user_instructions = None;
+            if let Some(model) = main.model.clone() {
+                session_configuration.model = model;
+            }
+            if let Some(effort) = main.reasoning_effort {
+                session_configuration.model_reasoning_effort = Some(effort);
+            }
+            if main.read_only {
+                session_configuration.sandbox_policy = SandboxPolicy::ReadOnly;
+            }
+        }
+
         debug!(
             "Configuring session: model={}; provider={:?}",
             session_configuration.model, session_configuration.provider
@@ -616,6 +719,7 @@ impl Session {
             };
             post_session_configured_events.push(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
+                agent_idx: Some(0),
                 msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }),
             });
         }
@@ -655,6 +759,7 @@ impl Session {
                     .map(Arc::new);
         }
         let state = SessionState::new(session_configuration.clone());
+        let collaboration = CollaborationState::new(CollaborationLimits::default());
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -678,6 +783,10 @@ impl Session {
             features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
+            agents_config: agents_config.map(Arc::new),
+            default_sandbox_policy,
+            collaboration: Mutex::new(collaboration),
+            collaboration_supervisor: Mutex::new(None),
             next_internal_sub_id: AtomicU64::new(0),
         });
 
@@ -686,6 +795,7 @@ impl Session {
         let initial_messages = initial_history.get_event_msgs();
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
+            agent_idx: Some(0),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: session_configuration.model.clone(),
@@ -734,6 +844,30 @@ impl Session {
 
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
         self.tx_event.clone()
+    }
+
+    pub(crate) fn collaboration_state(&self) -> &Mutex<CollaborationState> {
+        &self.collaboration
+    }
+
+    pub(crate) fn agents_config(&self) -> Option<&crate::agents::AgentsConfig> {
+        self.agents_config.as_deref()
+    }
+
+    pub(crate) fn default_sandbox_policy(&self) -> &SandboxPolicy {
+        &self.default_sandbox_policy
+    }
+
+    pub(crate) async fn ensure_collaboration_supervisor(
+        self: &Arc<Self>,
+    ) -> CollaborationSupervisor {
+        let mut guard = self.collaboration_supervisor.lock().await;
+        if let Some(existing) = guard.clone() {
+            return existing;
+        }
+        let handle = CollaborationSupervisor::spawn(Arc::clone(self));
+        *guard = Some(handle.clone());
+        handle
     }
 
     /// Ensure all rollout writes are durably flushed.
@@ -870,6 +1004,7 @@ impl Session {
             .models_manager
             .construct_model_family(session_configuration.model.as_str(), &per_turn_config)
             .await;
+        let root_id = AgentId::root();
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.otel_manager,
@@ -879,11 +1014,35 @@ impl Session {
             model_family,
             self.conversation_id,
             sub_id,
+            root_id.clone(),
         );
         if let Some(final_schema) = updates.final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
+        if let Some(agents_config) = self.agents_config() {
+            let allowlist = agents_config.main().sub_agents.clone();
+            if !allowlist.is_empty() {
+                turn_context.tools_config.collaboration_agent_allowlist = Some(allowlist);
+            }
+        }
+
+        let session_history = self.clone_history().await;
+        let mut collab = self.collaboration.lock().await;
+        collab.ensure_root_agent(&session_configuration, &session_history);
+        drop(collab);
+        self.register_sub_id(&root_id, turn_context.sub_id.clone())
+            .await;
         Arc::new(turn_context)
+    }
+
+    pub(crate) async fn register_sub_id(&self, agent: &AgentId, sub_id: String) {
+        let mut collab = self.collaboration.lock().await;
+        collab.register_sub_id(agent, sub_id);
+    }
+
+    pub(crate) async fn current_session_configuration(&self) -> SessionConfiguration {
+        let state = self.state.lock().await;
+        state.session_configuration.clone()
     }
 
     fn build_environment_update_item(
@@ -908,9 +1067,21 @@ impl Session {
 
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
+        let agent = turn_context.collaboration_agent();
+        let is_root = agent.is_root();
+        if !Self::should_emit_event_for_agent(is_root, &msg) {
+            return;
+        }
         let legacy_source = msg.clone();
+        let agent_idx = if is_root {
+            Some(0)
+        } else {
+            let collab = self.collaboration.lock().await;
+            collab.agent_index(&agent)
+        };
         let event = Event {
             id: turn_context.sub_id.clone(),
+            agent_idx,
             msg,
         };
         self.send_event_raw(event).await;
@@ -919,13 +1090,42 @@ impl Session {
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
             let legacy_event = Event {
                 id: turn_context.sub_id.clone(),
+                agent_idx,
                 msg: legacy,
             };
             self.send_event_raw(legacy_event).await;
         }
     }
 
+    fn should_emit_event_for_agent(is_root: bool, msg: &EventMsg) -> bool {
+        if is_root {
+            return true;
+        }
+        !matches!(
+            msg,
+            EventMsg::AgentMessage(_)
+                | EventMsg::AgentMessageDelta(_)
+                | EventMsg::AgentMessageContentDelta(_)
+                | EventMsg::AgentReasoning(_)
+                | EventMsg::AgentReasoningDelta(_)
+                | EventMsg::AgentReasoningRawContent(_)
+                | EventMsg::AgentReasoningRawContentDelta(_)
+                | EventMsg::AgentReasoningSectionBreak(_)
+                | EventMsg::ReasoningContentDelta(_)
+                | EventMsg::ReasoningRawContentDelta(_)
+                | EventMsg::RawResponseItem(_)
+                | EventMsg::UserMessage(_)
+                | EventMsg::TurnDiff(_)
+        )
+    }
+
     pub(crate) async fn send_event_raw(&self, event: Event) {
+        if let Some(agent_idx) = event.agent_idx
+            && agent_idx != 0
+            && !Self::should_emit_event_for_agent(false, &event.msg)
+        {
+            return;
+        }
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
@@ -1168,8 +1368,33 @@ impl Session {
         items: &[ResponseItem],
         turn_context: &TurnContext,
     ) {
-        let mut state = self.state.lock().await;
-        state.record_items(items.iter(), turn_context.truncation_policy);
+        let agent = turn_context.collaboration_agent();
+        if agent.is_root() {
+            let (history, token_info, config) = {
+                let mut state = self.state.lock().await;
+                state.record_items(items.iter(), turn_context.truncation_policy);
+                (
+                    state.clone_history(),
+                    state.token_info(),
+                    state.session_configuration.clone(),
+                )
+            };
+
+            let mut collab = self.collaboration.lock().await;
+            collab.ensure_root_agent(&config, &history);
+            let root_id = AgentId::root();
+            if let Some(root) = collab.agent_mut(&root_id) {
+                root.history = history;
+                root.history.set_token_info(token_info);
+            }
+        } else {
+            let mut collab = self.collaboration.lock().await;
+            if let Some(agent_state) = collab.agent_mut(&agent) {
+                agent_state
+                    .history
+                    .record_items(items.iter(), turn_context.truncation_policy);
+            }
+        }
     }
 
     pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
@@ -1189,8 +1414,8 @@ impl Session {
     }
 
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
-        let mut state = self.state.lock().await;
-        state.replace_history(items);
+        let root_id = AgentId::root();
+        self.set_history_for_agent(&root_id, items, None).await;
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -1257,8 +1482,35 @@ impl Session {
     }
 
     pub(crate) async fn clone_history(&self) -> ContextManager {
-        let state = self.state.lock().await;
-        state.clone_history()
+        let root_id = AgentId::root();
+        self.clone_history_for_agent(&root_id).await
+    }
+
+    pub(crate) async fn clone_history_for_agent(&self, agent: &AgentId) -> ContextManager {
+        if agent.is_root() {
+            let state = self.state.lock().await;
+            return state.clone_history();
+        }
+        let collab = self.collaboration.lock().await;
+        collab
+            .clone_agent_history(agent)
+            .unwrap_or_else(ContextManager::new)
+    }
+
+    pub(crate) async fn set_history_for_agent(
+        &self,
+        agent: &AgentId,
+        items: Vec<ResponseItem>,
+        token_info: Option<TokenUsageInfo>,
+    ) {
+        if agent.is_root() {
+            let mut state = self.state.lock().await;
+            state.replace_history(items.clone());
+            state.set_token_info(token_info.clone());
+        }
+
+        let mut collab = self.collaboration.lock().await;
+        let _ = collab.set_agent_history(agent, items, token_info);
     }
 
     pub(crate) async fn update_token_usage_info(
@@ -1266,49 +1518,94 @@ impl Session {
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
     ) {
-        {
-            let mut state = self.state.lock().await;
-            if let Some(token_usage) = token_usage {
-                state.update_token_info_from_usage(
-                    token_usage,
-                    turn_context.client.get_model_context_window(),
-                );
+        let agent = turn_context.collaboration_agent();
+        if agent == AgentId::root() {
+            let token_info = {
+                let mut state = self.state.lock().await;
+                if let Some(token_usage) = token_usage {
+                    state.update_token_info_from_usage(
+                        token_usage,
+                        turn_context.client.get_model_context_window(),
+                    );
+                }
+                state.token_info()
+            };
+            {
+                let mut collab = self.collaboration.lock().await;
+                if let Some(root) = collab.agent_mut(AgentId::root()) {
+                    root.history.set_token_info(token_info);
+                }
+            }
+            self.send_token_count_event(turn_context).await;
+        } else if let Some(token_usage) = token_usage {
+            let mut collab = self.collaboration.lock().await;
+            if let Some(agent_state) = collab.agent_mut(agent) {
+                agent_state
+                    .history
+                    .update_token_info(token_usage, turn_context.client.get_model_context_window());
             }
         }
-        self.send_token_count_event(turn_context).await;
     }
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
-        let Some(estimated_total_tokens) = self
-            .clone_history()
-            .await
-            .estimate_token_count(turn_context)
-        else {
+        let agent = turn_context.collaboration_agent();
+        let history = self.clone_history_for_agent(&agent).await;
+        let Some(estimated_total_tokens) = history.estimate_token_count(turn_context) else {
             return;
         };
-        {
-            let mut state = self.state.lock().await;
-            let mut info = state.token_info().unwrap_or(TokenUsageInfo {
-                total_token_usage: TokenUsage::default(),
-                last_token_usage: TokenUsage::default(),
-                model_context_window: None,
-            });
 
-            info.last_token_usage = TokenUsage {
-                input_tokens: 0,
-                cached_input_tokens: 0,
-                output_tokens: 0,
-                reasoning_output_tokens: 0,
-                total_tokens: estimated_total_tokens.max(0),
+        if agent == AgentId::root() {
+            let token_info = {
+                let mut state = self.state.lock().await;
+                let mut info = state.token_info().unwrap_or(TokenUsageInfo {
+                    total_token_usage: TokenUsage::default(),
+                    last_token_usage: TokenUsage::default(),
+                    model_context_window: None,
+                });
+
+                info.last_token_usage = TokenUsage {
+                    input_tokens: 0,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    reasoning_output_tokens: 0,
+                    total_tokens: estimated_total_tokens.max(0),
+                };
+
+                if info.model_context_window.is_none() {
+                    info.model_context_window = turn_context.client.get_model_context_window();
+                }
+
+                state.set_token_info(Some(info.clone()));
+                info
             };
-
-            if info.model_context_window.is_none() {
-                info.model_context_window = turn_context.client.get_model_context_window();
+            {
+                let mut collab = self.collaboration.lock().await;
+                if let Some(root) = collab.agent_mut(AgentId::root()) {
+                    root.history.set_token_info(Some(token_info));
+                }
             }
-
-            state.set_token_info(Some(info));
+            self.send_token_count_event(turn_context).await;
+        } else {
+            let mut collab = self.collaboration.lock().await;
+            if let Some(agent_state) = collab.agent_mut(agent) {
+                let mut info = agent_state.history.token_info().unwrap_or(TokenUsageInfo {
+                    total_token_usage: TokenUsage::default(),
+                    last_token_usage: TokenUsage::default(),
+                    model_context_window: None,
+                });
+                info.last_token_usage = TokenUsage {
+                    input_tokens: 0,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    reasoning_output_tokens: 0,
+                    total_tokens: estimated_total_tokens.max(0),
+                };
+                if info.model_context_window.is_none() {
+                    info.model_context_window = turn_context.client.get_model_context_window();
+                }
+                agent_state.history.set_token_info(Some(info));
+            }
         }
-        self.send_token_count_event(turn_context).await;
     }
 
     pub(crate) async fn update_rate_limits(
@@ -1333,13 +1630,28 @@ impl Session {
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
+        let agent = turn_context.collaboration_agent();
         let context_window = turn_context.client.get_model_context_window();
         if let Some(context_window) = context_window {
-            {
-                let mut state = self.state.lock().await;
-                state.set_token_usage_full(context_window);
+            if agent == AgentId::root() {
+                let token_info = {
+                    let mut state = self.state.lock().await;
+                    state.set_token_usage_full(context_window);
+                    state.token_info()
+                };
+                {
+                    let mut collab = self.collaboration.lock().await;
+                    if let Some(root) = collab.agent_mut(AgentId::root()) {
+                        root.history.set_token_info(token_info);
+                    }
+                }
+                self.send_token_count_event(turn_context).await;
+            } else {
+                let mut collab = self.collaboration.lock().await;
+                if let Some(agent_state) = collab.agent_mut(agent) {
+                    agent_state.history.set_token_usage_full(context_window);
+                }
             }
-            self.send_token_count_event(turn_context).await;
         }
     }
 
@@ -1635,6 +1947,7 @@ mod handlers {
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::review_prompts::resolve_review_request;
+    use crate::tasks::CollaborationTask;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
@@ -1717,8 +2030,13 @@ mod handlers {
                     .await;
             }
 
-            sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
-                .await;
+            if sess.enabled(Feature::MultiAgents) {
+                sess.spawn_task(Arc::clone(&current_context), items, CollaborationTask)
+                    .await;
+            } else {
+                sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
+                    .await;
+            }
             *previous_context = Some(current_context);
         }
     }
@@ -1782,6 +2100,7 @@ mod handlers {
             let warning = EventMsg::Warning(WarningEvent { message });
             sess.send_event_raw(Event {
                 id: id.clone(),
+                agent_idx: Some(0),
                 msg: warning,
             })
             .await;
@@ -1833,6 +2152,7 @@ mod handlers {
 
             let event = Event {
                 id: sub_id,
+                agent_idx: Some(0),
                 msg: EventMsg::GetHistoryEntryResponse(
                     crate::protocol::GetHistoryEntryResponseEvent {
                         offset,
@@ -1863,6 +2183,7 @@ mod handlers {
         .await;
         let event = Event {
             id: sub_id,
+            agent_idx: Some(0),
             msg: EventMsg::McpListToolsResponse(snapshot),
         };
         sess.send_event_raw(event).await;
@@ -1878,6 +2199,7 @@ mod handlers {
 
         let event = Event {
             id: sub_id,
+            agent_idx: Some(0),
             msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
                 custom_prompts,
             }),
@@ -1917,6 +2239,7 @@ mod handlers {
         };
         let event = Event {
             id: sub_id,
+            agent_idx: None,
             msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
         };
         sess.send_event_raw(event).await;
@@ -1965,6 +2288,7 @@ mod handlers {
             warn!("failed to shutdown rollout recorder: {e}");
             let event = Event {
                 id: sub_id.clone(),
+                agent_idx: Some(0),
                 msg: EventMsg::Error(ErrorEvent {
                     message: "Failed to shutdown rollout recorder".to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),
@@ -1975,6 +2299,7 @@ mod handlers {
 
         let event = Event {
             id: sub_id,
+            agent_idx: Some(0),
             msg: EventMsg::ShutdownComplete,
         };
         sess.send_event_raw(event).await;
@@ -2004,6 +2329,7 @@ mod handlers {
             Err(err) => {
                 let event = Event {
                     id: sub_id,
+                    agent_idx: Some(0),
                     msg: EventMsg::Error(ErrorEvent {
                         message: err.to_string(),
                         codex_error_info: Some(CodexErrorInfo::Other),
@@ -2087,6 +2413,7 @@ async fn spawn_review_thread(
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         exec_policy: parent_turn_context.exec_policy.clone(),
         truncation_policy: TruncationPolicy::new(&per_turn_config, model_family.truncation_policy),
+        collaboration_agent: AgentId::root(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2411,6 +2738,31 @@ async fn run_turn(
     }
 }
 
+pub(crate) async fn run_collaboration_turn(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    turn_diff_tracker: SharedTurnDiffTracker,
+    input: Vec<ResponseItem>,
+    cancellation_token: CancellationToken,
+) -> CodexResult<(bool, Option<String>)> {
+    let TurnRunResult {
+        needs_follow_up,
+        last_agent_message,
+    } = run_turn(
+        sess,
+        turn_context,
+        turn_diff_tracker,
+        input,
+        cancellation_token,
+    )
+    .await?;
+    Ok((needs_follow_up, last_agent_message))
+}
+
+/// When the model is prompted, it returns a stream of events. Some of these
+/// events map to a `ResponseItem`. A `ResponseItem` may need to be
+/// "handled" such that it produces a `ResponseInputItem` that needs to be
+/// sent back to the model on the next turn.
 #[derive(Debug)]
 struct TurnRunResult {
     needs_follow_up: bool,
@@ -2647,7 +2999,7 @@ async fn try_run_turn(
     outcome
 }
 
-pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
+pub(crate) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
     responses.iter().rev().find_map(|item| {
         if let ResponseItem::Message { role, content, .. } = item {
             if role == "assistant" {
@@ -3076,6 +3428,7 @@ mod tests {
 
         let state = SessionState::new(session_configuration.clone());
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
+        let collaboration = CollaborationState::new(CollaborationLimits::default());
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -3101,6 +3454,7 @@ mod tests {
             model_family,
             conversation_id,
             "turn_id".to_string(),
+            AgentId::root(),
         );
 
         let session = Session {
@@ -3110,6 +3464,10 @@ mod tests {
             features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
+            agents_config: None,
+            default_sandbox_policy: session_configuration.sandbox_policy,
+            collaboration: Mutex::new(collaboration),
+            collaboration_supervisor: Mutex::new(None),
             next_internal_sub_id: AtomicU64::new(0),
         };
 
@@ -3167,6 +3525,7 @@ mod tests {
 
         let state = SessionState::new(session_configuration.clone());
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
+        let collaboration = CollaborationState::new(CollaborationLimits::default());
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -3192,6 +3551,7 @@ mod tests {
             model_family,
             conversation_id,
             "turn_id".to_string(),
+            AgentId::root(),
         ));
 
         let session = Arc::new(Session {
@@ -3201,6 +3561,10 @@ mod tests {
             features: config.features.clone(),
             active_turn: Mutex::new(None),
             services,
+            agents_config: None,
+            default_sandbox_policy: session_configuration.sandbox_policy,
+            collaboration: Mutex::new(collaboration),
+            collaboration_supervisor: Mutex::new(None),
             next_internal_sub_id: AtomicU64::new(0),
         });
 

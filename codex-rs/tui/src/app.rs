@@ -1454,6 +1454,7 @@ mod tests {
         };
 
         app.chat_widget.handle_codex_event(Event {
+            agent_idx: None,
             id: String::new(),
             msg: EventMsg::SessionConfigured(event),
         });

@@ -88,6 +88,7 @@ pub(crate) async fn apply_bespoke_event_handling(
 ) {
     let Event {
         id: event_turn_id,
+        agent_idx: _,
         msg,
     } = event;
     match msg {
