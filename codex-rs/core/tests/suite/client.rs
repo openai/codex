@@ -68,18 +68,6 @@ fn assert_message_role(request_body: &serde_json::Value, role: &str) {
 }
 
 #[expect(clippy::expect_used)]
-fn assert_message_equals(request_body: &serde_json::Value, text: &str) {
-    let content = request_body["content"][0]["text"]
-        .as_str()
-        .expect("invalid message content");
-
-    assert_eq!(
-        content, text,
-        "expected message content '{content}' to equal '{text}'"
-    );
-}
-
-#[expect(clippy::expect_used)]
 fn assert_message_starts_with(request_body: &serde_json::Value, text: &str) {
     let content = request_body["content"][0]["text"]
         .as_str()
@@ -1066,7 +1054,8 @@ async fn includes_developer_instructions_message_in_request() {
             .contains("be nice")
     );
     assert_message_role(&request_body["input"][0], "developer");
-    assert_message_equals(&request_body["input"][0], "be useful");
+    assert_message_starts_with(&request_body["input"][0], "be useful");
+    assert_message_ends_with(&request_body["input"][0], "be useful");
     assert_message_role(&request_body["input"][1], "user");
     assert_message_starts_with(&request_body["input"][1], "# AGENTS.md instructions for ");
     assert_message_ends_with(&request_body["input"][1], "</INSTRUCTIONS>");

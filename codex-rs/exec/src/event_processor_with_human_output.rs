@@ -241,6 +241,13 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     "auto-cancelling (not supported in exec mode)".style(self.dimmed)
                 );
             }
+            EventMsg::AskUserQuestionRequest(_) => {
+                ts_msg!(
+                    self,
+                    "{}",
+                    "AskUserQuestion request (auto-cancelling in exec mode)".style(self.dimmed)
+                );
+            }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
                 let last_message = last_agent_message.as_deref();
                 if let Some(output_file) = self.last_message_path.as_deref() {

@@ -443,6 +443,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 })
                 .await?;
         }
+        if matches!(event.msg, EventMsg::AskUserQuestionRequest(_)) {
+            conversation
+                .submit(Op::ResolveAskUserQuestion {
+                    id: event.id.clone(),
+                    response: codex_protocol::protocol::AskUserQuestionResponse::Cancelled,
+                })
+                .await?;
+        }
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
         }

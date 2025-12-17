@@ -19,6 +19,7 @@ use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+mod ask_user_question;
 mod codex_tool_config;
 mod codex_tool_runner;
 mod error_code;
@@ -31,6 +32,8 @@ use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
 
+pub use crate::ask_user_question::AskUserQuestionElicitRequestParams;
+pub use crate::ask_user_question::AskUserQuestionElicitResponse;
 pub use crate::codex_tool_config::CodexToolCallParam;
 pub use crate::codex_tool_config::CodexToolCallReplyParam;
 pub use crate::exec_approval::ExecApprovalElicitRequestParams;

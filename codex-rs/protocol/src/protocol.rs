@@ -42,6 +42,11 @@ pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
+pub use crate::ask_user_question::AskUserQuestion;
+pub use crate::ask_user_question::AskUserQuestionArgs;
+pub use crate::ask_user_question::AskUserQuestionOption;
+pub use crate::ask_user_question::AskUserQuestionRequestEvent;
+pub use crate::ask_user_question::AskUserQuestionResponse;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -165,6 +170,14 @@ pub enum Op {
         request_id: RequestId,
         /// User's decision for the request.
         decision: ElicitationAction,
+    },
+
+    /// Resolve an AskUserQuestion request emitted during a tool call.
+    ResolveAskUserQuestion {
+        /// The id of the submission we are responding to.
+        id: String,
+        /// The user's response (answered or cancelled).
+        response: AskUserQuestionResponse,
     },
 
     /// Append an entry to the persistent cross-session message history.
@@ -575,6 +588,8 @@ pub enum EventMsg {
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
     ElicitationRequest(ElicitationRequestEvent),
+
+    AskUserQuestionRequest(AskUserQuestionRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 

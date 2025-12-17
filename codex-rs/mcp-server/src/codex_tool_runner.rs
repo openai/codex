@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::ask_user_question::handle_ask_user_question_request;
 use crate::exec_approval::handle_exec_approval_request;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotificationMeta;
@@ -15,6 +16,7 @@ use codex_core::NewConversation;
 use codex_core::config::Config as CodexConfig;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::AskUserQuestionRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
@@ -209,6 +211,22 @@ async fn run_codex_tool_session_inner(
                     }
                     EventMsg::ElicitationRequest(_) => {
                         // TODO: forward elicitation requests to the client?
+                        continue;
+                    }
+                    EventMsg::AskUserQuestionRequest(AskUserQuestionRequestEvent {
+                        call_id,
+                        questions,
+                    }) => {
+                        handle_ask_user_question_request(
+                            call_id,
+                            questions,
+                            outgoing.clone(),
+                            codex.clone(),
+                            request_id.clone(),
+                            request_id_str.clone(),
+                            event.id.clone(),
+                        )
+                        .await;
                         continue;
                     }
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {

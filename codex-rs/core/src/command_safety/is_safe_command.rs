@@ -321,8 +321,14 @@ mod tests {
             return;
         }
 
+        let Some(pwsh_path) = crate::powershell::try_find_pwsh_executable_blocking() else {
+            // Skip if PowerShell 7 isn't installed on this machine.
+            return;
+        };
+        let pwsh = pwsh_path.to_string_lossy().to_string();
+
         assert!(is_known_safe_command(&vec_str(&[
-            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            pwsh.as_str(),
             "-Command",
             "Get-Location",
         ])));

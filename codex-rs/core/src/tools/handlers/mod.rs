@@ -1,4 +1,5 @@
 pub mod apply_patch;
+mod ask_user_question;
 mod grep_files;
 mod list_dir;
 mod mcp;
@@ -13,6 +14,8 @@ mod view_image;
 pub use plan::PLAN_TOOL;
 
 pub use apply_patch::ApplyPatchHandler;
+pub(crate) use ask_user_question::ASK_USER_QUESTION_TOOL_NAME;
+pub use ask_user_question::AskUserQuestionHandler;
 pub use grep_files::GrepFilesHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;

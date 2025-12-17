@@ -5,6 +5,8 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_async_utils::OrCancelExt;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use codex_protocol::protocol::AskUserQuestionRequestEvent;
+use codex_protocol::protocol::AskUserQuestionResponse;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
@@ -217,6 +219,20 @@ async fn forward_events(
                         )
                         .await;
                     }
+                    Event {
+                        id,
+                        msg: EventMsg::AskUserQuestionRequest(event),
+                    } => {
+                        handle_ask_user_question(
+                            &codex,
+                            id,
+                            &parent_session,
+                            &parent_ctx,
+                            event,
+                            &cancel_token,
+                        )
+                        .await;
+                    }
                     other => {
                         match tx_sub.send(other).or_cancel(&cancel_token).await {
                             Ok(Ok(())) => {}
@@ -322,6 +338,27 @@ async fn handle_patch_approval(
     let _ = codex.submit(Op::PatchApproval { id, decision }).await;
 }
 
+async fn handle_ask_user_question(
+    codex: &Codex,
+    id: String,
+    parent_session: &Session,
+    parent_ctx: &TurnContext,
+    event: AskUserQuestionRequestEvent,
+    cancel_token: &CancellationToken,
+) {
+    let fut = parent_session.request_ask_user_question(
+        parent_ctx,
+        parent_ctx.sub_id.clone(),
+        event.questions,
+    );
+    let response =
+        await_ask_user_question_with_cancel(fut, parent_session, &parent_ctx.sub_id, cancel_token)
+            .await;
+    let _ = codex
+        .submit(Op::ResolveAskUserQuestion { id, response })
+        .await;
+}
+
 /// Await an approval decision, aborting on cancellation.
 async fn await_approval_with_cancel<F>(
     fut: F,
@@ -342,6 +379,29 @@ where
         }
         decision = fut => {
             decision
+        }
+    }
+}
+
+async fn await_ask_user_question_with_cancel<F>(
+    fut: F,
+    parent_session: &Session,
+    sub_id: &str,
+    cancel_token: &CancellationToken,
+) -> AskUserQuestionResponse
+where
+    F: core::future::Future<Output = AskUserQuestionResponse>,
+{
+    tokio::select! {
+        biased;
+        _ = cancel_token.cancelled() => {
+            parent_session
+                .notify_ask_user_question(sub_id, AskUserQuestionResponse::Cancelled)
+                .await;
+            AskUserQuestionResponse::Cancelled
+        }
+        response = fut => {
+            response
         }
     }
 }

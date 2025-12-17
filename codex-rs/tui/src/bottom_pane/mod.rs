@@ -21,6 +21,7 @@ use std::time::Duration;
 mod approval_overlay;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
+mod ask_user_question_overlay;
 mod bottom_pane_view;
 mod chat_composer;
 mod chat_composer_history;
@@ -53,13 +54,14 @@ pub(crate) enum CancellationEvent {
 
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
-use codex_protocol::custom_prompts::CustomPrompt;
-
-use crate::status_indicator_widget::StatusIndicatorWidget;
-pub(crate) use experimental_features_view::BetaFeatureItem;
-pub(crate) use experimental_features_view::ExperimentalFeaturesView;
-pub(crate) use list_selection_view::SelectionAction;
-pub(crate) use list_selection_view::SelectionItem;
+use codex_protocol::custom_prompts::CustomPrompt; 
+ 
+use crate::status_indicator_widget::StatusIndicatorWidget; 
+pub(crate) use ask_user_question_overlay::AskUserQuestionOverlay; 
+pub(crate) use experimental_features_view::BetaFeatureItem; 
+pub(crate) use experimental_features_view::ExperimentalFeaturesView; 
+pub(crate) use list_selection_view::SelectionAction; 
+pub(crate) use list_selection_view::SelectionItem; 
 
 /// Pane displayed in the lower half of the chat UI.
 pub(crate) struct BottomPane {

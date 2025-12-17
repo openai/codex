@@ -97,6 +97,9 @@ use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
+use crate::protocol::AskUserQuestion;
+use crate::protocol::AskUserQuestionRequestEvent;
+use crate::protocol::AskUserQuestionResponse;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::DeprecationNoticeEvent;
 use crate::protocol::ErrorEvent;
@@ -522,7 +525,17 @@ impl Session {
             sub_id,
             client,
             cwd: session_configuration.cwd.clone(),
-            developer_instructions: session_configuration.developer_instructions.clone(),
+            developer_instructions: match session_configuration.session_source {
+                SessionSource::Cli | SessionSource::VSCode => {
+                    crate::tools::spec::prepend_ask_user_question_developer_instructions(
+                        session_configuration.developer_instructions.clone(),
+                    )
+                }
+                SessionSource::Exec
+                | SessionSource::Mcp
+                | SessionSource::SubAgent(_)
+                | SessionSource::Unknown => session_configuration.developer_instructions.clone(),
+            },
             base_instructions: session_configuration.base_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
@@ -1164,6 +1177,56 @@ impl Session {
         }
     }
 
+    pub async fn request_ask_user_question(
+        &self,
+        turn_context: &TurnContext,
+        call_id: String,
+        questions: Vec<AskUserQuestion>,
+    ) -> AskUserQuestionResponse {
+        let sub_id = turn_context.sub_id.clone();
+        let (tx, rx) = oneshot::channel();
+
+        let prev_entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_user_question(sub_id.clone(), tx)
+                }
+                None => None,
+            }
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending AskUserQuestion for sub_id: {sub_id}");
+        }
+
+        let event =
+            EventMsg::AskUserQuestionRequest(AskUserQuestionRequestEvent { call_id, questions });
+        self.send_event(turn_context, event).await;
+        rx.await.unwrap_or(AskUserQuestionResponse::Cancelled)
+    }
+
+    pub async fn notify_ask_user_question(&self, sub_id: &str, response: AskUserQuestionResponse) {
+        let entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_user_question(sub_id)
+                }
+                None => None,
+            }
+        };
+        match entry {
+            Some(tx) => {
+                tx.send(response).ok();
+            }
+            None => {
+                warn!("No pending AskUserQuestion found for sub_id: {sub_id}");
+            }
+        }
+    }
+
     pub async fn resolve_elicitation(
         &self,
         server_name: String,
@@ -1672,6 +1735,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             } => {
                 handlers::resolve_elicitation(&sess, server_name, request_id, decision).await;
             }
+            Op::ResolveAskUserQuestion { id, response } => {
+                handlers::resolve_ask_user_question(&sess, id, response).await;
+            }
             Op::Shutdown => {
                 if handlers::shutdown(&sess, sub.id.clone()).await {
                     break;
@@ -1703,6 +1769,7 @@ mod handlers {
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
+    use codex_protocol::protocol::AskUserQuestionResponse;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -1842,6 +1909,14 @@ mod handlers {
                 "failed to resolve elicitation request in session"
             );
         }
+    }
+
+    pub async fn resolve_ask_user_question(
+        sess: &Arc<Session>,
+        id: String,
+        response: AskUserQuestionResponse,
+    ) {
+        sess.notify_ask_user_question(&id, response).await;
     }
 
     /// Propagate a user's exec approval decision to the session.

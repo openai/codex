@@ -21,6 +21,7 @@ use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::AskUserQuestionRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::DeprecationNoticeEvent;
@@ -85,6 +86,7 @@ use tracing::debug;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::AskUserQuestionOverlay;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
@@ -368,6 +370,25 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
+    fn prepare_for_immediate_interrupt(&mut self) {
+        if self.stream_controller.is_some() {
+            self.flush_answer_stream_with_separator();
+        }
+        if !self.interrupts.is_empty() {
+            self.flush_interrupt_queue();
+        }
+    }
+
+    fn prepare_for_immediate_interrupt_discard_stream(&mut self) {
+        if self.stream_controller.is_some() {
+            self.stream_controller = None;
+            self.app_event_tx.send(AppEvent::StopCommitAnimation);
+        }
+        if !self.interrupts.is_empty() {
+            self.flush_interrupt_queue();
+        }
+    }
+
     fn flush_answer_stream_with_separator(&mut self) {
         if let Some(mut controller) = self.stream_controller.take()
             && let Some(cell) = controller.finalize()
@@ -804,6 +825,7 @@ impl ChatWidget {
     }
 
     fn on_exec_approval_request(&mut self, id: String, ev: ExecApprovalRequestEvent) {
+        self.prepare_for_immediate_interrupt();
         let id2 = id.clone();
         let ev2 = ev.clone();
         self.defer_or_handle(
@@ -813,6 +835,7 @@ impl ChatWidget {
     }
 
     fn on_apply_patch_approval_request(&mut self, id: String, ev: ApplyPatchApprovalRequestEvent) {
+        self.prepare_for_immediate_interrupt();
         let id2 = id.clone();
         let ev2 = ev.clone();
         self.defer_or_handle(
@@ -822,10 +845,21 @@ impl ChatWidget {
     }
 
     fn on_elicitation_request(&mut self, ev: ElicitationRequestEvent) {
+        self.prepare_for_immediate_interrupt();
         let ev2 = ev.clone();
         self.defer_or_handle(
             |q| q.push_elicitation(ev),
             |s| s.handle_elicitation_request_now(ev2),
+        );
+    }
+
+    fn on_ask_user_question_request(&mut self, id: String, ev: AskUserQuestionRequestEvent) {
+        self.prepare_for_immediate_interrupt_discard_stream();
+        let id2 = id.clone();
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_ask_user_question(id, ev),
+            |s| s.handle_ask_user_question_request_now(id2, ev2),
         );
     }
 
@@ -1151,6 +1185,21 @@ impl ChatWidget {
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
+        self.request_redraw();
+    }
+
+    pub(crate) fn handle_ask_user_question_request_now(
+        &mut self,
+        id: String,
+        ev: AskUserQuestionRequestEvent,
+    ) {
+        self.flush_answer_stream_with_separator();
+        self.bottom_pane
+            .show_view(Box::new(AskUserQuestionOverlay::new(
+                id,
+                ev,
+                self.app_event_tx.clone(),
+            )));
         self.request_redraw();
     }
 
@@ -1870,6 +1919,9 @@ impl ChatWidget {
             }
             EventMsg::ElicitationRequest(ev) => {
                 self.on_elicitation_request(ev);
+            }
+            EventMsg::AskUserQuestionRequest(ev) => {
+                self.on_ask_user_question_request(id.unwrap_or_default(), ev)
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
