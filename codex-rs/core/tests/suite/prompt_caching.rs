@@ -20,7 +20,6 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
-use tokio::time::Instant;
 
 fn text_user_input(text: String) -> serde_json::Value {
     serde_json::json!({
