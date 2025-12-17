@@ -60,6 +60,10 @@ fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
     );
 }
 
+fn normalize_newlines(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
@@ -158,10 +162,6 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
     let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
     let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
-    let start_time = Instant::now();
-
-    eprintln!("requests constructed in {:?}", start_time.elapsed());
-
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
@@ -171,8 +171,6 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
         .build(&server)
         .await?;
 
-    eprintln!("codex constructed in {:?}", start_time.elapsed());
-
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -180,9 +178,8 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
             }],
         })
         .await?;
-    eprintln!("codex submitted in {:?}", start_time.elapsed());
+
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-    eprintln!("wait for event complete first finished");
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -190,12 +187,8 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
             }],
         })
         .await?;
-    eprintln!("codex submitted second in {:?}", start_time.elapsed());
+
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-    eprintln!(
-        "wait for event complete second finished in {:?}",
-        start_time.elapsed()
-    );
 
     let expected_instructions = [
         include_str!("../../prompt.md"),
@@ -203,21 +196,24 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
     ]
     .join("\n");
 
-    eprintln!("body0 constructed in {:?}", start_time.elapsed());
     let body0 = req1.single_request().body_json();
-    eprintln!("body0 parsed in {:?}", start_time.elapsed());
+    let instructions0 = body0["instructions"]
+        .as_str()
+        .expect("instructions should be a string");
     assert_eq!(
-        body0["instructions"],
-        serde_json::json!(expected_instructions),
+        normalize_newlines(instructions0),
+        normalize_newlines(&expected_instructions)
     );
-    eprintln!("body0 assert eq in {:?}", start_time.elapsed());
+
     let body1 = req2.single_request().body_json();
-    eprintln!("body1 parsed in {:?}", start_time.elapsed());
+    let instructions1 = body1["instructions"]
+        .as_str()
+        .expect("instructions should be a string");
     assert_eq!(
-        body1["instructions"],
-        serde_json::json!(expected_instructions),
+        normalize_newlines(instructions1),
+        normalize_newlines(&expected_instructions)
     );
-    eprintln!("body1 assert eq in {:?}", start_time.elapsed());
+
     Ok(())
 }
 
