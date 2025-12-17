@@ -19,6 +19,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
+    pub apply_patch_enabled: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
@@ -36,7 +37,8 @@ impl ToolsConfig {
             model_family,
             features,
         } = params;
-        let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
+        let apply_patch_enabled = features.enabled(Feature::ApplyPatchTool);
+        let include_freeform_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
 
@@ -48,20 +50,25 @@ impl ToolsConfig {
             model_family.shell_type
         };
 
-        let apply_patch_tool_type = match model_family.apply_patch_tool_type {
-            Some(ApplyPatchToolType::Freeform) => Some(ApplyPatchToolType::Freeform),
-            Some(ApplyPatchToolType::Function) => Some(ApplyPatchToolType::Function),
-            None => {
-                if include_apply_patch_tool {
-                    Some(ApplyPatchToolType::Freeform)
-                } else {
-                    None
+        let apply_patch_tool_type = if !apply_patch_enabled {
+            None
+        } else {
+            match model_family.apply_patch_tool_type {
+                Some(ApplyPatchToolType::Freeform) => Some(ApplyPatchToolType::Freeform),
+                Some(ApplyPatchToolType::Function) => Some(ApplyPatchToolType::Function),
+                None => {
+                    if include_freeform_apply_patch_tool {
+                        Some(ApplyPatchToolType::Freeform)
+                    } else {
+                        None
+                    }
                 }
             }
         };
 
         Self {
             shell_type,
+            apply_patch_enabled,
             apply_patch_tool_type,
             web_search_request: include_web_search_request,
             include_view_image_tool,
@@ -1317,6 +1324,22 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "apply_patch",
+                "view_image",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_build_specs_gpt52_apply_patch_disabled() {
+        assert_model_tools(
+            "gpt-5.2",
+            Features::with_defaults().disable(Feature::ApplyPatchTool),
+            &[
+                "shell_command",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
                 "view_image",
             ],
         );

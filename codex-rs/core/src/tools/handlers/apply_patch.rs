@@ -170,6 +170,10 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<ToolOutput>, FunctionCallError> {
+    if !turn.tools_config.apply_patch_enabled {
+        return Ok(None);
+    }
+
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd) {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             session

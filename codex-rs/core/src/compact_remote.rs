@@ -47,6 +47,7 @@ async fn run_remote_compact_task_inner_impl(
         parallel_tool_calls: false,
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: None,
+        apply_patch_enabled: turn_context.tools_config.apply_patch_enabled,
     };
 
     let mut new_history = turn_context

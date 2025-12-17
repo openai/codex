@@ -44,6 +44,7 @@ Supported features:
 | `unified_exec`                        |  false  | Experimental | Use the unified PTY-backed exec tool                  |
 | `rmcp_client`                         |  false  | Experimental | Enable oauth support for streamable HTTP MCP servers  |
 | `apply_patch_freeform`                |  false  | Beta         | Include the freeform `apply_patch` tool               |
+| `apply_patch_tool`                    |  true   | Stable       | Enable the built-in `apply_patch` tool and command interception |
 | `view_image_tool`                     |  true   | Stable       | Include the `view_image` tool                         |
 | `web_search_request`                  |  false  | Stable       | Allow the model to issue web searches                 |
 | `ghost_commit`                        |  false  | Experimental | Create a ghost commit each turn                       |

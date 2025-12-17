@@ -36,6 +36,8 @@ pub enum Feature {
     ModelWarnings,
     /// Enable the default shell tool.
     ShellTool,
+    /// Enable the built-in apply_patch editing tool and apply_patch command interception.
+    ApplyPatchTool,
 
     // Experimental
     /// Use the single unified PTY-backed exec tool.
@@ -271,6 +273,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ParallelToolCalls,
         key: "parallel",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ApplyPatchTool,
+        key: "apply_patch_tool",
         stage: Stage::Stable,
         default_enabled: true,
     },

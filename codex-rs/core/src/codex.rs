@@ -2336,6 +2336,7 @@ async fn run_turn(
         parallel_tool_calls: model_supports_parallel && sess.enabled(Feature::ParallelToolCalls),
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
+        apply_patch_enabled: turn_context.tools_config.apply_patch_enabled,
     };
 
     let mut retries = 0;

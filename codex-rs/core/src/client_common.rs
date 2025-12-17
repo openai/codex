@@ -24,7 +24,7 @@ pub const REVIEW_EXIT_INTERRUPTED_TMPL: &str =
     include_str!("../templates/review/exit_interrupted.xml");
 
 /// API request payload for a single model turn
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Prompt {
     /// Conversation context input items.
     pub input: Vec<ResponseItem>,
@@ -41,6 +41,24 @@ pub struct Prompt {
 
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
+
+    /// Whether apply_patch (tool and interception behavior) is enabled for this
+    /// prompt. When disabled, Codex should not inject apply_patch-specific
+    /// instructions.
+    pub(crate) apply_patch_enabled: bool,
+}
+
+impl Default for Prompt {
+    fn default() -> Self {
+        Self {
+            input: Vec::new(),
+            tools: Vec::new(),
+            parallel_tool_calls: false,
+            base_instructions_override: None,
+            output_schema: None,
+            apply_patch_enabled: true,
+        }
+    }
 }
 
 impl Prompt {
@@ -59,6 +77,7 @@ impl Prompt {
             _ => false,
         });
         if self.base_instructions_override.is_none()
+            && self.apply_patch_enabled
             && model.needs_special_apply_patch_instructions
             && !is_apply_patch_tool_present
         {
@@ -327,6 +346,20 @@ mod tests {
             let full = prompt.get_full_instructions(&model_family);
             assert_eq!(full, expected);
         }
+    }
+
+    #[test]
+    fn get_full_instructions_skips_apply_patch_when_disabled() {
+        let config = test_config();
+        let model_family = ModelsManager::construct_model_family_offline("gpt-5", &config);
+
+        let prompt = Prompt {
+            apply_patch_enabled: false,
+            ..Default::default()
+        };
+
+        let full = prompt.get_full_instructions(&model_family);
+        assert_eq!(full, model_family.base_instructions);
     }
 
     #[test]
