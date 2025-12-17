@@ -196,21 +196,17 @@ async fn handle_model_migration_prompt_if_needed(
         let target_preset = available_models
             .iter()
             .find(|preset| preset.model == target_model);
-        let target_display_name = target_preset
-            .map(|preset| preset.display_name.clone())
-            .unwrap_or_else(|| target_model.clone());
+        let Some(target_preset) = target_preset else {
+            return None;
+        };
+        let target_display_name = target_preset.display_name.clone();
         let heading_label = if target_display_name == model {
             target_model.clone()
         } else {
             target_display_name.clone()
         };
-        let target_description = target_preset.and_then(|preset| {
-            if preset.description.is_empty() {
-                None
-            } else {
-                Some(preset.description.clone())
-            }
-        });
+        let target_description =
+            (!target_preset.description.is_empty()).then(|| target_preset.description.clone());
         let can_opt_out = current_preset.is_some();
         let prompt_copy = migration_copy_for_models(
             model,
