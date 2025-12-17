@@ -111,12 +111,12 @@ impl ModelsManager {
         if let Err(err) = self.refresh_available_models(config).await {
             error!("failed to refresh available models: {err}");
         }
-        let remote_models = self.remote_models.read().await.clone();
+        let remote_models = self.remote_models(config).await;
         self.build_available_models(remote_models)
     }
 
-    pub fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
-        let remote_models = self.remote_models.try_read()?.clone();
+    pub fn try_list_models(&self, config: &Config) -> Result<Vec<ModelPreset>, TryLockError> {
+        let remote_models = self.try_get_remote_models(config)?;
         Ok(self.build_available_models(remote_models))
     }
 
@@ -127,7 +127,7 @@ impl ModelsManager {
     /// Look up the requested model family while applying remote metadata overrides.
     pub async fn construct_model_family(&self, model: &str, config: &Config) -> ModelFamily {
         Self::find_family_for_model(model)
-            .with_remote_overrides(self.remote_models.read().await.clone())
+            .with_remote_overrides(self.remote_models(config).await)
             .with_config_overrides(config)
     }
 
@@ -140,7 +140,7 @@ impl ModelsManager {
         }
         // if codex-auto-balanced exists & signed in with chatgpt mode, return it, otherwise return the default model
         let auth_mode = self.auth_manager.get_auth_mode();
-        let remote_models = self.remote_models.read().await.clone();
+        let remote_models = self.remote_models(config).await;
         if auth_mode == Some(AuthMode::ChatGPT)
             && self
                 .build_available_models(remote_models)
@@ -263,6 +263,22 @@ impl ModelsManager {
         }
 
         merged_presets
+    }
+
+    async fn remote_models(&self, config: &Config) -> Vec<ModelInfo> {
+        if config.features.enabled(Feature::RemoteModels) {
+            self.remote_models.read().await.clone()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn try_get_remote_models(&self, config: &Config) -> Result<Vec<ModelInfo>, TryLockError> {
+        if config.features.enabled(Feature::RemoteModels) {
+            Ok(self.remote_models.try_read()?.clone())
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     fn cache_path(&self) -> PathBuf {
@@ -397,7 +413,7 @@ mod tests {
             .refresh_available_models(&config)
             .await
             .expect("refresh succeeds");
-        let cached_remote = manager.remote_models.read().await.clone();
+        let cached_remote = manager.remote_models(&config).await;
         assert_eq!(cached_remote, remote_models);
 
         let available = manager.list_models(&config).await;
@@ -459,7 +475,7 @@ mod tests {
             .await
             .expect("first refresh succeeds");
         assert_eq!(
-            *manager.remote_models.read().await,
+            manager.remote_models(&config).await,
             remote_models,
             "remote cache should store fetched models"
         );
@@ -470,7 +486,7 @@ mod tests {
             .await
             .expect("cached refresh succeeds");
         assert_eq!(
-            *manager.remote_models.read().await,
+            manager.remote_models(&config).await,
             remote_models,
             "cache path should not mutate stored models"
         );
@@ -541,7 +557,7 @@ mod tests {
             .await
             .expect("second refresh succeeds");
         assert_eq!(
-            *manager.remote_models.read().await,
+            manager.remote_models(&config).await,
             updated_models,
             "stale cache should trigger refetch"
         );
@@ -606,7 +622,7 @@ mod tests {
             .expect("second refresh succeeds");
 
         let available = manager
-            .try_list_models()
+            .try_list_models(&config)
             .expect("models should be available");
         assert!(
             available.iter().any(|preset| preset.model == "remote-new"),
