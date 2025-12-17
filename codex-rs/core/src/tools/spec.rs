@@ -3,8 +3,10 @@ use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::openai_models::model_family::ModelFamily;
+use crate::tools::handlers::APPROVE_PLAN_TOOL_NAME;
 use crate::tools::handlers::ASK_USER_QUESTION_TOOL_NAME;
 use crate::tools::handlers::PLAN_TOOL;
+use crate::tools::handlers::PROPOSE_PLAN_VARIANTS_TOOL_NAME;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::registry::ToolRegistryBuilder;
@@ -368,6 +370,110 @@ fn create_ask_user_question_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties: root_props,
             required: Some(vec!["questions".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_approve_plan_tool() -> ToolSpec {
+    let mut plan_item_props = BTreeMap::new();
+    plan_item_props.insert("step".to_string(), JsonSchema::String { description: None });
+    plan_item_props.insert(
+        "status".to_string(),
+        JsonSchema::String {
+            description: Some("One of: pending, in_progress, completed".to_string()),
+        },
+    );
+
+    let update_plan_props = {
+        let mut props = BTreeMap::new();
+        props.insert(
+            "explanation".to_string(),
+            JsonSchema::String {
+                description: Some("Optional explanation for the plan.".to_string()),
+            },
+        );
+        props.insert(
+            "plan".to_string(),
+            JsonSchema::Array {
+                items: Box::new(JsonSchema::Object {
+                    properties: plan_item_props,
+                    required: Some(vec!["step".to_string(), "status".to_string()]),
+                    additional_properties: Some(false.into()),
+                }),
+                description: Some("The list of steps.".to_string()),
+            },
+        );
+        props
+    };
+
+    let mut proposal_props = BTreeMap::new();
+    proposal_props.insert(
+        "title".to_string(),
+        JsonSchema::String {
+            description: Some("Short title for the plan.".to_string()),
+        },
+    );
+    proposal_props.insert(
+        "summary".to_string(),
+        JsonSchema::String {
+            description: Some("Short summary of what the plan will do.".to_string()),
+        },
+    );
+    proposal_props.insert(
+        "plan".to_string(),
+        JsonSchema::Object {
+            properties: update_plan_props,
+            required: Some(vec!["plan".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    );
+
+    let mut root_props = BTreeMap::new();
+    root_props.insert(
+        "proposal".to_string(),
+        JsonSchema::Object {
+            properties: proposal_props,
+            required: Some(vec![
+                "title".to_string(),
+                "summary".to_string(),
+                "plan".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: APPROVE_PLAN_TOOL_NAME.to_string(),
+        description: "Present a plan to the user for approval. The UI will offer options to approve, request revisions (with feedback), or reject."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties: root_props,
+            required: Some(vec!["proposal".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_propose_plan_variants_tool() -> ToolSpec {
+    let mut root_props = BTreeMap::new();
+    root_props.insert(
+        "goal".to_string(),
+        JsonSchema::String {
+            description: Some("The user's goal to plan for.".to_string()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: PROPOSE_PLAN_VARIANTS_TOOL_NAME.to_string(),
+        description:
+            "Generate 3 plan variants for a given goal using non-interactive planning subagents."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties: root_props,
+            required: Some(vec!["goal".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1103,7 +1209,9 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
+    use crate::tools::handlers::PlanApprovalHandler;
     use crate::tools::handlers::PlanHandler;
+    use crate::tools::handlers::PlanVariantsHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
@@ -1117,6 +1225,8 @@ pub(crate) fn build_specs(
     let shell_handler = Arc::new(ShellHandler);
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
+    let plan_approval_handler = Arc::new(PlanApprovalHandler);
+    let plan_variants_handler = Arc::new(PlanVariantsHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
     let ask_user_question_handler = Arc::new(AskUserQuestionHandler);
@@ -1165,6 +1275,12 @@ pub(crate) fn build_specs(
 
     builder.push_spec(create_ask_user_question_tool());
     builder.register_handler(ASK_USER_QUESTION_TOOL_NAME, ask_user_question_handler);
+
+    builder.push_spec(create_approve_plan_tool());
+    builder.register_handler(APPROVE_PLAN_TOOL_NAME, plan_approval_handler);
+
+    builder.push_spec(create_propose_plan_variants_tool());
+    builder.register_handler(PROPOSE_PLAN_VARIANTS_TOOL_NAME, plan_variants_handler);
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
@@ -1381,6 +1497,8 @@ mod tests {
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
             create_ask_user_question_tool(),
+            create_approve_plan_tool(),
+            create_propose_plan_variants_tool(),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {},
             create_view_image_tool(),
@@ -1427,6 +1545,8 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "ask_user_question",
+                "approve_plan",
+                "propose_plan_variants",
                 "apply_patch",
                 "view_image",
             ],
@@ -1445,6 +1565,8 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "ask_user_question",
+                "approve_plan",
+                "propose_plan_variants",
                 "apply_patch",
                 "view_image",
             ],
@@ -1466,6 +1588,8 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "ask_user_question",
+                "approve_plan",
+                "propose_plan_variants",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1488,6 +1612,8 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "ask_user_question",
+                "approve_plan",
+                "propose_plan_variants",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1507,6 +1633,8 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "ask_user_question",
+                "approve_plan",
+                "propose_plan_variants",
                 "view_image",
             ],
         );
@@ -1524,6 +1652,8 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "ask_user_question",
+                "approve_plan",
+                "propose_plan_variants",
                 "apply_patch",
                 "view_image",
             ],
@@ -1542,6 +1672,8 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "ask_user_question",
+                "approve_plan",
+                "propose_plan_variants",
                 "view_image",
             ],
         );
@@ -1559,6 +1691,8 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "ask_user_question",
+                "approve_plan",
+                "propose_plan_variants",
                 "apply_patch",
                 "view_image",
             ],
@@ -1578,6 +1712,8 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "ask_user_question",
+                "approve_plan",
+                "propose_plan_variants",
                 "apply_patch",
                 "view_image",
             ],
@@ -1599,6 +1735,8 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "ask_user_question",
+                "approve_plan",
+                "propose_plan_variants",
                 "web_search",
                 "view_image",
             ],

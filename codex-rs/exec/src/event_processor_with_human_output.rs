@@ -248,6 +248,28 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     "AskUserQuestion request (auto-cancelling in exec mode)".style(self.dimmed)
                 );
             }
+            EventMsg::PlanApprovalRequest(_) => {
+                ts_msg!(
+                    self,
+                    "{}",
+                    "PlanApproval request (auto-rejecting in exec mode)".style(self.dimmed)
+                );
+            }
+            EventMsg::EnteredPlanMode(req) => {
+                let goal = req.goal.trim();
+                if goal.is_empty() {
+                    ts_msg!(self, "{}", "plan mode: started".style(self.cyan));
+                } else {
+                    ts_msg!(self, "{} {}", "plan mode:".style(self.cyan), goal);
+                }
+            }
+            EventMsg::ExitedPlanMode(ev) => {
+                if ev.plan_output.is_some() {
+                    ts_msg!(self, "{}", "plan mode: finished".style(self.cyan));
+                } else {
+                    ts_msg!(self, "{}", "plan mode: ended".style(self.cyan));
+                }
+            }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
                 let last_message = last_agent_message.as_deref();
                 if let Some(output_file) = self.last_message_path.as_deref() {

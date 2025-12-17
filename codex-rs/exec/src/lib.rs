@@ -451,6 +451,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 })
                 .await?;
         }
+        if matches!(event.msg, EventMsg::PlanApprovalRequest(_)) {
+            conversation
+                .submit(Op::ResolvePlanApproval {
+                    id: event.id.clone(),
+                    response: codex_protocol::protocol::PlanApprovalResponse::Rejected,
+                })
+                .await?;
+        }
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
         }

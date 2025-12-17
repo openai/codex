@@ -2,6 +2,8 @@ use async_trait::async_trait;
 use codex_protocol::ask_user_question::AskUserQuestion;
 use codex_protocol::ask_user_question::AskUserQuestionArgs;
 use codex_protocol::ask_user_question::AskUserQuestionResponse;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use serde_json::json;
 
 use crate::function_tool::FunctionCallError;
@@ -96,6 +98,16 @@ impl ToolHandler for AskUserQuestionHandler {
                 "unsupported payload for {tool_name}"
             )));
         };
+
+        let source = turn.client.get_session_source();
+        if let SessionSource::SubAgent(SubAgentSource::Other(label)) = &source
+            && label.starts_with("plan_variant")
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "AskUserQuestion is not supported in non-interactive planning subagents"
+                    .to_string(),
+            ));
+        }
 
         let args: AskUserQuestionArgs = serde_json::from_str(&arguments).map_err(|e| {
             FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e:?}"))

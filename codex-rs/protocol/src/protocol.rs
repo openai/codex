@@ -47,6 +47,12 @@ pub use crate::ask_user_question::AskUserQuestionArgs;
 pub use crate::ask_user_question::AskUserQuestionOption;
 pub use crate::ask_user_question::AskUserQuestionRequestEvent;
 pub use crate::ask_user_question::AskUserQuestionResponse;
+pub use crate::plan_approval::PlanApprovalRequestEvent;
+pub use crate::plan_approval::PlanApprovalResponse;
+pub use crate::plan_approval::PlanProposal;
+pub use crate::plan_mode::ExitedPlanModeEvent;
+pub use crate::plan_mode::PlanOutputEvent;
+pub use crate::plan_mode::PlanRequest;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -178,6 +184,17 @@ pub enum Op {
         id: String,
         /// The user's response (answered or cancelled).
         response: AskUserQuestionResponse,
+    },
+
+    /// Start a planning session (/plan).
+    Plan { plan_request: PlanRequest },
+
+    /// Resolve a PlanApproval request emitted during a tool call.
+    ResolvePlanApproval {
+        /// The id of the submission we are responding to.
+        id: String,
+        /// The user's response (approved/revised/rejected).
+        response: PlanApprovalResponse,
     },
 
     /// Append an entry to the persistent cross-session message history.
@@ -591,6 +608,9 @@ pub enum EventMsg {
 
     AskUserQuestionRequest(AskUserQuestionRequestEvent),
 
+    /// Ask the user to approve, revise, or reject a proposed plan.
+    PlanApprovalRequest(PlanApprovalRequestEvent),
+
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 
     /// Notification advising the user that something they are using has been
@@ -643,6 +663,12 @@ pub enum EventMsg {
 
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
+
+    /// Entered plan mode.
+    EnteredPlanMode(PlanRequest),
+
+    /// Exited plan mode with an optional accepted plan.
+    ExitedPlanMode(ExitedPlanModeEvent),
 
     RawResponseItem(RawResponseItemEvent),
 
@@ -1420,17 +1446,13 @@ pub struct ReviewLineRange {
 
 #[derive(Debug, Clone, Copy, Display, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ExecCommandSource {
+    #[default]
     Agent,
     UserShell,
     UnifiedExecStartup,
     UnifiedExecInteraction,
-}
-
-impl Default for ExecCommandSource {
-    fn default() -> Self {
-        Self::Agent
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

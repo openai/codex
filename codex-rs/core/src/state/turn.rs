@@ -10,6 +10,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::ask_user_question::AskUserQuestionResponse;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::plan_approval::PlanApprovalResponse;
 use tokio::sync::oneshot;
 
 use crate::codex::TurnContext;
@@ -35,6 +36,7 @@ impl Default for ActiveTurn {
 pub(crate) enum TaskKind {
     Regular,
     Review,
+    Plan,
     Compact,
 }
 
@@ -69,6 +71,7 @@ impl ActiveTurn {
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_user_questions: HashMap<String, oneshot::Sender<AskUserQuestionResponse>>,
+    pending_plan_approvals: HashMap<String, oneshot::Sender<PlanApprovalResponse>>,
     pending_input: Vec<ResponseInputItem>,
 }
 
@@ -103,9 +106,25 @@ impl TurnState {
         self.pending_user_questions.remove(key)
     }
 
+    pub(crate) fn insert_pending_plan_approval(
+        &mut self,
+        key: String,
+        tx: oneshot::Sender<PlanApprovalResponse>,
+    ) -> Option<oneshot::Sender<PlanApprovalResponse>> {
+        self.pending_plan_approvals.insert(key, tx)
+    }
+
+    pub(crate) fn remove_pending_plan_approval(
+        &mut self,
+        key: &str,
+    ) -> Option<oneshot::Sender<PlanApprovalResponse>> {
+        self.pending_plan_approvals.remove(key)
+    }
+
     pub(crate) fn clear_pending(&mut self) {
         self.pending_approvals.clear();
         self.pending_user_questions.clear();
+        self.pending_plan_approvals.clear();
         self.pending_input.clear();
     }
 

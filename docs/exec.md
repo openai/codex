@@ -12,7 +12,7 @@ Use `codex exec --full-auto` to allow file edits. Use `codex exec --sandbox dang
 
 ### Interactive prompts are disabled
 
-`codex exec` is non-interactive. If the agent attempts to ask an interactive multiple-choice question (AskUserQuestion), the request is automatically cancelled.
+`codex exec` is non-interactive. If the agent attempts to ask an interactive multiple-choice question (AskUserQuestion), the request is automatically cancelled. Plan approval prompts are automatically rejected.
 
 ### Default output mode
 

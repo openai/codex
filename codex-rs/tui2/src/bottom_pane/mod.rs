@@ -29,6 +29,8 @@ pub mod custom_prompt_view;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
+mod plan_approval_overlay;
+mod plan_request_overlay;
 mod prompt_args;
 mod skill_popup;
 pub(crate) use list_selection_view::SelectionViewParams;
@@ -57,6 +59,8 @@ use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use ask_user_question_overlay::AskUserQuestionOverlay;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
+pub(crate) use plan_approval_overlay::PlanApprovalOverlay;
+pub(crate) use plan_request_overlay::PlanRequestOverlay;
 
 /// Pane displayed in the lower half of the chat UI.
 pub(crate) struct BottomPane {

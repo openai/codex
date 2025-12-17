@@ -32,6 +32,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
+use codex_core::protocol::ExitedPlanModeEvent;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::ListSkillsResponseEvent;
@@ -43,6 +44,8 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::PlanApprovalRequestEvent;
+use codex_core::protocol::PlanRequest;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
@@ -91,6 +94,8 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
+use crate::bottom_pane::PlanApprovalOverlay;
+use crate::bottom_pane::PlanRequestOverlay;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -863,6 +868,16 @@ impl ChatWidget {
         );
     }
 
+    fn on_plan_approval_request(&mut self, id: String, ev: PlanApprovalRequestEvent) {
+        self.prepare_for_immediate_interrupt_discard_stream();
+        let id2 = id.clone();
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_plan_approval(id, ev),
+            |s| s.handle_plan_approval_request_now(id2, ev2),
+        );
+    }
+
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         let ev2 = ev.clone();
@@ -1196,6 +1211,21 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         self.bottom_pane
             .show_view(Box::new(AskUserQuestionOverlay::new(
+                id,
+                ev,
+                self.app_event_tx.clone(),
+            )));
+        self.request_redraw();
+    }
+
+    pub(crate) fn handle_plan_approval_request_now(
+        &mut self,
+        id: String,
+        ev: PlanApprovalRequestEvent,
+    ) {
+        self.flush_answer_stream_with_separator();
+        self.bottom_pane
+            .show_view(Box::new(PlanApprovalOverlay::new(
                 id,
                 ev,
                 self.app_event_tx.clone(),
@@ -1611,6 +1641,11 @@ impl ChatWidget {
             SlashCommand::Review => {
                 self.open_review_popup();
             }
+            SlashCommand::Plan => {
+                self.bottom_pane
+                    .show_view(Box::new(PlanRequestOverlay::new(self.app_event_tx.clone())));
+                self.request_redraw();
+            }
             SlashCommand::Model => {
                 self.open_model_popup();
             }
@@ -1923,6 +1958,9 @@ impl ChatWidget {
             EventMsg::AskUserQuestionRequest(ev) => {
                 self.on_ask_user_question_request(id.unwrap_or_default(), ev)
             }
+            EventMsg::PlanApprovalRequest(ev) => {
+                self.on_plan_approval_request(id.unwrap_or_default(), ev)
+            }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
@@ -1964,6 +2002,8 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
+            EventMsg::EnteredPlanMode(request) => self.on_entered_plan_mode(request),
+            EventMsg::ExitedPlanMode(ev) => self.on_exited_plan_mode(ev),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
@@ -2020,6 +2060,25 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_review_status_line(
             "<< Code review finished >>".to_string(),
         ));
+        self.request_redraw();
+    }
+
+    fn on_entered_plan_mode(&mut self, request: PlanRequest) {
+        let goal = request.goal.trim();
+        if goal.is_empty() {
+            self.add_info_message(">> Plan mode started <<".to_string(), None);
+        } else {
+            self.add_info_message(format!(">> Plan mode started: {goal} <<"), None);
+        }
+        self.request_redraw();
+    }
+
+    fn on_exited_plan_mode(&mut self, ev: ExitedPlanModeEvent) {
+        if ev.plan_output.is_some() {
+            self.add_info_message("<< Plan mode finished <<".to_string(), None);
+        } else {
+            self.add_info_message("<< Plan mode ended <<".to_string(), None);
+        }
         self.request_redraw();
     }
 

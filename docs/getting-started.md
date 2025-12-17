@@ -84,7 +84,11 @@ When Codex needs a decision mid-run, it may pause and show an interactive questi
 - Some questions support multi-select (Space toggles selections).
 - A free-text option is always available for custom input (you do not need to type it as an explicit option).
 
-#### Esc–Esc to edit a previous message
+#### Plan with `/plan`
+
+Use `/plan` to create a plan and approve it before making changes.
+
+#### Esc—Esc to edit a previous message
 
 When the chat composer is empty, press Esc to prime “backtrack” mode. Press Esc again to open a transcript preview highlighting the last user message; press Esc repeatedly to step to older user messages. Press Enter to confirm and Codex will fork the conversation from that point, trim the visible transcript accordingly, and pre‑fill the composer with the selected user message so you can edit and resubmit it.
 

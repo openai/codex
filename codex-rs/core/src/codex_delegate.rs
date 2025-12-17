@@ -11,6 +11,8 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::PlanApprovalRequestEvent;
+use codex_protocol::protocol::PlanApprovalResponse;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
@@ -35,6 +37,7 @@ use codex_protocol::protocol::InitialHistory;
 /// The returned `events_rx` yields non-approval events emitted by the sub-agent.
 /// Approval requests are handled via `parent_session` and are not surfaced.
 /// The returned `ops_tx` allows the caller to submit additional `Op`s to the sub-agent.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_codex_conversation_interactive(
     config: Config,
     auth_manager: Arc<AuthManager>,
@@ -43,6 +46,7 @@ pub(crate) async fn run_codex_conversation_interactive(
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
     initial_history: Option<InitialHistory>,
+    sub_agent_source: SubAgentSource,
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -53,7 +57,7 @@ pub(crate) async fn run_codex_conversation_interactive(
         models_manager,
         Arc::clone(&parent_session.services.skills_manager),
         initial_history.unwrap_or(InitialHistory::New),
-        SessionSource::SubAgent(SubAgentSource::Review),
+        SessionSource::SubAgent(sub_agent_source),
     )
     .await?;
     let codex = Arc::new(codex);
@@ -104,6 +108,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
     initial_history: Option<InitialHistory>,
+    sub_agent_source: SubAgentSource,
 ) -> Result<Codex, CodexErr> {
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
@@ -116,6 +121,7 @@ pub(crate) async fn run_codex_conversation_one_shot(
         parent_ctx,
         child_cancel.clone(),
         initial_history,
+        sub_agent_source,
     )
     .await?;
 
@@ -224,6 +230,20 @@ async fn forward_events(
                         msg: EventMsg::AskUserQuestionRequest(event),
                     } => {
                         handle_ask_user_question(
+                            &codex,
+                            id,
+                            &parent_session,
+                            &parent_ctx,
+                            event,
+                            &cancel_token,
+                        )
+                        .await;
+                    }
+                    Event {
+                        id,
+                        msg: EventMsg::PlanApprovalRequest(event),
+                    } => {
+                        handle_plan_approval(
                             &codex,
                             id,
                             &parent_session,
@@ -359,6 +379,22 @@ async fn handle_ask_user_question(
         .await;
 }
 
+async fn handle_plan_approval(
+    codex: &Codex,
+    id: String,
+    parent_session: &Session,
+    parent_ctx: &TurnContext,
+    event: PlanApprovalRequestEvent,
+    cancel_token: &CancellationToken,
+) {
+    let fut =
+        parent_session.request_plan_approval(parent_ctx, parent_ctx.sub_id.clone(), event.proposal);
+    let response =
+        await_plan_approval_with_cancel(fut, parent_session, &parent_ctx.sub_id, cancel_token)
+            .await;
+    let _ = codex.submit(Op::ResolvePlanApproval { id, response }).await;
+}
+
 /// Await an approval decision, aborting on cancellation.
 async fn await_approval_with_cancel<F>(
     fut: F,
@@ -399,6 +435,29 @@ where
                 .notify_ask_user_question(sub_id, AskUserQuestionResponse::Cancelled)
                 .await;
             AskUserQuestionResponse::Cancelled
+        }
+        response = fut => {
+            response
+        }
+    }
+}
+
+async fn await_plan_approval_with_cancel<F>(
+    fut: F,
+    parent_session: &Session,
+    sub_id: &str,
+    cancel_token: &CancellationToken,
+) -> PlanApprovalResponse
+where
+    F: core::future::Future<Output = PlanApprovalResponse>,
+{
+    tokio::select! {
+        biased;
+        _ = cancel_token.cancelled() => {
+            parent_session
+                .notify_plan_approval(sub_id, PlanApprovalResponse::Rejected)
+                .await;
+            PlanApprovalResponse::Rejected
         }
         response = fut => {
             response

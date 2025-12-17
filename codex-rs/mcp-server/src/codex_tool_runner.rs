@@ -21,6 +21,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::Op;
+use codex_core::protocol::PlanApprovalResponse;
 use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_protocol::ConversationId;
@@ -229,6 +230,16 @@ async fn run_codex_tool_session_inner(
                         .await;
                         continue;
                     }
+                    EventMsg::PlanApprovalRequest(_) => {
+                        // Plan approval is not supported via MCP today; reject to avoid hanging.
+                        let _ = codex
+                            .submit(Op::ResolvePlanApproval {
+                                id: event.id.clone(),
+                                response: PlanApprovalResponse::Rejected,
+                            })
+                            .await;
+                        continue;
+                    }
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                         call_id,
                         turn_id: _,
@@ -317,6 +328,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::ViewImageToolCall(_)
                     | EventMsg::RawResponseItem(_)
                     | EventMsg::EnteredReviewMode(_)
+                    | EventMsg::EnteredPlanMode(_)
                     | EventMsg::ItemStarted(_)
                     | EventMsg::ItemCompleted(_)
                     | EventMsg::AgentMessageContentDelta(_)
@@ -326,6 +338,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::UndoStarted(_)
                     | EventMsg::UndoCompleted(_)
                     | EventMsg::ExitedReviewMode(_)
+                    | EventMsg::ExitedPlanMode(_)
                     | EventMsg::ContextCompacted(_)
                     | EventMsg::DeprecationNotice(_) => {
                         // For now, we do not do anything extra for these

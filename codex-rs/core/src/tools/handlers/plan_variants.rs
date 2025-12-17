@@ -1,0 +1,184 @@
+use async_trait::async_trait;
+use codex_protocol::plan_mode::PlanOutputEvent;
+use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::user_input::UserInput;
+use serde::Deserialize;
+use serde_json::json;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
+
+use crate::codex_delegate::run_codex_conversation_one_shot;
+use crate::config::Config;
+use crate::features::Feature;
+use crate::function_tool::FunctionCallError;
+use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolPayload;
+use crate::tools::registry::ToolHandler;
+use crate::tools::registry::ToolKind;
+
+pub(crate) const PROPOSE_PLAN_VARIANTS_TOOL_NAME: &str = "propose_plan_variants";
+
+pub struct PlanVariantsHandler;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposePlanVariantsArgs {
+    goal: String,
+}
+
+const PLAN_VARIANT_PROMPT: &str = r#"You are a planning subagent producing a single plan variant for the user's goal.
+
+Requirements:
+- Do not ask the user questions.
+- Do not propose or perform edits. Do not call apply_patch.
+- Prefer exploring the codebase using read-only commands (ripgrep, cat, ls).
+- Output ONLY valid JSON matching this shape:
+  { "title": string, "summary": string, "plan": { "explanation": string|null, "plan": [ { "step": string, "status": "pending"|"in_progress"|"completed" } ] } }
+"#;
+
+#[async_trait]
+impl ToolHandler for PlanVariantsHandler {
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+        let ToolInvocation {
+            session,
+            turn,
+            payload,
+            tool_name,
+            ..
+        } = invocation;
+
+        let ToolPayload::Function { arguments } = payload else {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "unsupported payload for {tool_name}"
+            )));
+        };
+
+        let args: ProposePlanVariantsArgs = serde_json::from_str(&arguments).map_err(|e| {
+            FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e:?}"))
+        })?;
+
+        let goal = args.goal.trim();
+        if goal.is_empty() {
+            return Err(FunctionCallError::RespondToModel(
+                "goal must be non-empty".to_string(),
+            ));
+        }
+
+        let mut variants = Vec::with_capacity(3);
+        for idx in 1..=3 {
+            let label = format!("plan_variant_{idx}");
+            let out = run_one_variant(
+                turn.client.config().as_ref(),
+                goal,
+                idx,
+                &label,
+                Arc::clone(&session),
+                Arc::clone(&turn),
+            )
+            .await;
+            variants.push(out);
+        }
+
+        Ok(ToolOutput::Function {
+            content: json!({ "variants": variants }).to_string(),
+            content_items: None,
+            success: Some(true),
+        })
+    }
+}
+
+async fn run_one_variant(
+    base_config: &Config,
+    goal: &str,
+    idx: usize,
+    label: &str,
+    parent_session: Arc<crate::codex::Session>,
+    parent_ctx: Arc<crate::codex::TurnContext>,
+) -> PlanOutputEvent {
+    let mut cfg = base_config.clone();
+    cfg.base_instructions = Some(PLAN_VARIANT_PROMPT.to_string());
+    cfg.developer_instructions = None;
+    let mut features = cfg.features.clone();
+    features
+        .disable(Feature::ApplyPatchFreeform)
+        .disable(Feature::WebSearchRequest)
+        .disable(Feature::ViewImageTool);
+    cfg.features = features;
+    cfg.approval_policy = codex_protocol::protocol::AskForApproval::Never;
+    cfg.sandbox_policy = codex_protocol::protocol::SandboxPolicy::ReadOnly;
+
+    let input = vec![UserInput::Text {
+        text: format!("Goal: {goal}\n\nReturn plan variant #{idx}."),
+    }];
+
+    let cancel = CancellationToken::new();
+    let io = match run_codex_conversation_one_shot(
+        cfg,
+        Arc::clone(&parent_session.services.auth_manager),
+        Arc::clone(&parent_session.services.models_manager),
+        input,
+        parent_session,
+        parent_ctx,
+        cancel,
+        None,
+        SubAgentSource::Other(label.to_string()),
+    )
+    .await
+    {
+        Ok(io) => io,
+        Err(err) => {
+            return PlanOutputEvent {
+                title: format!("Variant {idx}"),
+                summary: format!("Failed to start subagent: {err}"),
+                plan: UpdatePlanArgs {
+                    explanation: None,
+                    plan: Vec::new(),
+                },
+            };
+        }
+    };
+
+    let mut last_agent_message: Option<String> = None;
+    while let Ok(Event { msg, .. }) = io.rx_event.recv().await {
+        match msg {
+            EventMsg::TaskComplete(ev) => {
+                last_agent_message = ev.last_agent_message;
+                break;
+            }
+            EventMsg::TurnAborted(_) => break,
+            _ => {}
+        }
+    }
+
+    let text = last_agent_message.unwrap_or_default();
+    parse_plan_output_event(idx, text.as_str())
+}
+
+fn parse_plan_output_event(idx: usize, text: &str) -> PlanOutputEvent {
+    if let Ok(ev) = serde_json::from_str::<PlanOutputEvent>(text) {
+        return ev;
+    }
+    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}'))
+        && start < end
+        && let Some(slice) = text.get(start..=end)
+        && let Ok(ev) = serde_json::from_str::<PlanOutputEvent>(slice)
+    {
+        return ev;
+    }
+    PlanOutputEvent {
+        title: format!("Variant {idx}"),
+        summary: "Subagent did not return valid JSON.".to_string(),
+        plan: UpdatePlanArgs {
+            explanation: Some(text.to_string()),
+            plan: Vec::new(),
+        },
+    }
+}

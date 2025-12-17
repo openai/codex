@@ -107,6 +107,9 @@ use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
 use crate::protocol::Op;
+use crate::protocol::PlanApprovalRequestEvent;
+use crate::protocol::PlanApprovalResponse;
+use crate::protocol::PlanProposal;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReasoningContentDeltaEvent;
 use crate::protocol::ReasoningRawContentDeltaEvent;
@@ -1227,6 +1230,55 @@ impl Session {
         }
     }
 
+    pub async fn request_plan_approval(
+        &self,
+        turn_context: &TurnContext,
+        call_id: String,
+        proposal: PlanProposal,
+    ) -> PlanApprovalResponse {
+        let sub_id = turn_context.sub_id.clone();
+        let (tx, rx) = oneshot::channel();
+
+        let prev_entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_plan_approval(sub_id.clone(), tx)
+                }
+                None => None,
+            }
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending PlanApproval for sub_id: {sub_id}");
+        }
+
+        let event = EventMsg::PlanApprovalRequest(PlanApprovalRequestEvent { call_id, proposal });
+        self.send_event(turn_context, event).await;
+        rx.await.unwrap_or(PlanApprovalResponse::Rejected)
+    }
+
+    pub async fn notify_plan_approval(&self, sub_id: &str, response: PlanApprovalResponse) {
+        let entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_plan_approval(sub_id)
+                }
+                None => None,
+            }
+        };
+        match entry {
+            Some(tx) => {
+                tx.send(response).ok();
+            }
+            None => {
+                warn!("No pending PlanApproval found for sub_id: {sub_id}");
+            }
+        }
+    }
+
     pub async fn resolve_elicitation(
         &self,
         server_name: String,
@@ -1738,6 +1790,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ResolveAskUserQuestion { id, response } => {
                 handlers::resolve_ask_user_question(&sess, id, response).await;
             }
+            Op::ResolvePlanApproval { id, response } => {
+                handlers::resolve_plan_approval(&sess, id, response).await;
+            }
             Op::Shutdown => {
                 if handlers::shutdown(&sess, sub.id.clone()).await {
                     break;
@@ -1745,6 +1800,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             }
             Op::Review { review_request } => {
                 handlers::review(&sess, &config, sub.id.clone(), review_request).await;
+            }
+            Op::Plan { plan_request } => {
+                handlers::plan(&sess, &config, sub.id.clone(), plan_request).await;
             }
             _ => {} // Ignore unknown ops; enum is non_exhaustive to allow extensions.
         }
@@ -1765,6 +1823,7 @@ mod handlers {
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::review_prompts::resolve_review_request;
     use crate::tasks::CompactTask;
+    use crate::tasks::PlanTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
@@ -1777,6 +1836,8 @@ mod handlers {
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::PlanApprovalResponse;
+    use codex_protocol::protocol::PlanRequest;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::SkillsListEntry;
@@ -1917,6 +1978,14 @@ mod handlers {
         response: AskUserQuestionResponse,
     ) {
         sess.notify_ask_user_question(&id, response).await;
+    }
+
+    pub async fn resolve_plan_approval(
+        sess: &Arc<Session>,
+        id: String,
+        response: PlanApprovalResponse,
+    ) {
+        sess.notify_plan_approval(&id, response).await;
     }
 
     /// Propagate a user's exec approval decision to the session.
@@ -2163,6 +2232,26 @@ mod handlers {
                 sess.send_event(&turn_context, event.msg).await;
             }
         }
+    }
+
+    pub async fn plan(
+        sess: &Arc<Session>,
+        _config: &Arc<Config>,
+        sub_id: String,
+        plan_request: PlanRequest,
+    ) {
+        let turn_context = sess
+            .new_turn_with_sub_id(sub_id.clone(), SessionSettingsUpdate::default())
+            .await;
+        let tc = turn_context.clone();
+        sess.spawn_task(
+            tc.clone(),
+            Vec::<UserInput>::new(),
+            PlanTask::new(plan_request.clone()),
+        )
+        .await;
+        sess.send_event(&tc, EventMsg::EnteredPlanMode(plan_request))
+            .await;
     }
 }
 

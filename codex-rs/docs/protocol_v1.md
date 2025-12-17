@@ -69,11 +69,16 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
   - `Op::Interrupt` – Interrupts a running task
   - `Op::ExecApproval` – Approve or deny code execution
   - `Op::ResolveAskUserQuestion` – Reply to an interactive question prompt
+  - `Op::Plan` – Start a planning session (/plan)
+  - `Op::ResolvePlanApproval` – Reply to an interactive plan approval prompt
   - `Op::ListSkills` – Request skills for one or more cwd values (optionally `force_reload`)
 - `EventMsg`
   - `EventMsg::AgentMessage` – Messages from the `Model`
   - `EventMsg::ExecApprovalRequest` – Request approval from user to execute a command
   - `EventMsg::AskUserQuestionRequest` – Ask the user a multiple-choice question and await an answer
+  - `EventMsg::PlanApprovalRequest` – Ask the user to approve / revise / reject a proposed plan
+  - `EventMsg::EnteredPlanMode` – Notify the UI that plan mode started
+  - `EventMsg::ExitedPlanMode` – Notify the UI that plan mode ended (optional final plan included)
   - `EventMsg::TaskComplete` – A task completed successfully
   - `EventMsg::Error` – A task stopped with an error
   - `EventMsg::Warning` – A non-fatal warning that the client should surface to the user
@@ -201,4 +206,59 @@ sequenceDiagram
     task->>agent: tool output (answers)
     agent->>task: response (continue)
     task->>-user: Event::AgentMessage
+```
+
+### PlanApproval (interactive prompt)
+
+Pausing a task to ask the user to approve a proposed plan, then resuming after the decision is provided.
+
+```mermaid
+sequenceDiagram
+    box UI
+    participant user as User
+    end
+    box Daemon
+    participant session as Session
+    participant task as Task
+    end
+    box Rest API
+    participant agent as Model
+    end
+    user->>session: Op::UserInput
+    session-->>+task: start task
+    task->>agent: prompt
+    agent->>task: response (tool call: approve_plan)
+    task->>user: Event::PlanApprovalRequest
+    user->>task: Op::ResolvePlanApproval
+    task->>agent: tool output (approved/revised/rejected)
+    agent->>task: response (continue)
+    task->>-user: Event::AgentMessage
+```
+
+### Plan Mode (/plan)
+
+Starting a planning session that runs in a dedicated planning context, optionally uses planning subagents for variants, then exits back to the main session.
+
+```mermaid
+sequenceDiagram
+    box UI
+    participant user as User
+    end
+    box Daemon
+    participant session as Session
+    participant task as PlanTask
+    end
+    box Rest API
+    participant agent as PlanAgent
+    end
+    user->>session: Op::Plan { goal }
+    session-->>+task: start plan task
+    task->>user: Event::EnteredPlanMode
+    task->>agent: prompt (plan mode)
+    agent->>task: tool call(s) (propose_plan_variants)
+    agent->>task: tool call (approve_plan)
+    task->>user: Event::PlanApprovalRequest
+    user->>task: Op::ResolvePlanApproval
+    task->>user: Event::ExitedPlanMode
+    task->>-user: Event::TaskComplete
 ```

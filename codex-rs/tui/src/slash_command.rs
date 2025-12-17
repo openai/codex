@@ -17,6 +17,7 @@ pub enum SlashCommand {
     Experimental,
     Skills,
     Review,
+    Plan,
     New,
     Resume,
     Init,
@@ -43,6 +44,7 @@ impl SlashCommand {
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
+            SlashCommand::Plan => "plan a task before making changes",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
@@ -78,6 +80,7 @@ impl SlashCommand {
             | SlashCommand::Approvals
             | SlashCommand::Experimental
             | SlashCommand::Review
+            | SlashCommand::Plan
             | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Mention
