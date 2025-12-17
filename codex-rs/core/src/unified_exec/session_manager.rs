@@ -460,7 +460,7 @@ impl UnifiedExecSessionManager {
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
 
-        let spawned = codex_utils_pty::spawn_pty_process(
+        let spawned = codex_utils_pty::spawn_exec_session(
             program,
             args,
             env.cwd.as_path(),

@@ -12,6 +12,9 @@ anyhow = { workspace = true }
 portable-pty = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 filedescriptor = "0.8.3"
 lazy_static = { workspace = true }

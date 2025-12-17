@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
+mod fallback;
 #[cfg(windows)]
 mod win;
 
@@ -33,14 +34,14 @@ pub struct ExecCommandSession {
     writer_tx: mpsc::Sender<Vec<u8>>,
     output_tx: broadcast::Sender<Vec<u8>>,
     killer: StdMutex<Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
-    reader_handle: StdMutex<Option<JoinHandle<()>>>,
+    reader_handles: StdMutex<Vec<JoinHandle<()>>>,
     writer_handle: StdMutex<Option<JoinHandle<()>>>,
     wait_handle: StdMutex<Option<JoinHandle<()>>>,
     exit_status: Arc<AtomicBool>,
     exit_code: Arc<StdMutex<Option<i32>>>,
     // PtyPair must be preserved because the process will receive Control+C if the
     // slave is closed
-    _pair: StdMutex<PtyPairWrapper>,
+    _pair: StdMutex<Option<PtyPairWrapper>>,
 }
 
 impl fmt::Debug for PtyPairWrapper {
@@ -56,19 +57,19 @@ impl ExecCommandSession {
         output_tx: broadcast::Sender<Vec<u8>>,
         initial_output_rx: broadcast::Receiver<Vec<u8>>,
         killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
-        reader_handle: JoinHandle<()>,
+        reader_handles: Vec<JoinHandle<()>>,
         writer_handle: JoinHandle<()>,
         wait_handle: JoinHandle<()>,
         exit_status: Arc<AtomicBool>,
         exit_code: Arc<StdMutex<Option<i32>>>,
-        pair: PtyPairWrapper,
+        pair: Option<PtyPairWrapper>,
     ) -> (Self, broadcast::Receiver<Vec<u8>>) {
         (
             Self {
                 writer_tx,
                 output_tx,
                 killer: StdMutex::new(Some(killer)),
-                reader_handle: StdMutex::new(Some(reader_handle)),
+                reader_handles: StdMutex::new(reader_handles),
                 writer_handle: StdMutex::new(Some(writer_handle)),
                 wait_handle: StdMutex::new(Some(wait_handle)),
                 exit_status,
@@ -102,8 +103,8 @@ impl ExecCommandSession {
             }
         }
 
-        if let Ok(mut h) = self.reader_handle.lock() {
-            if let Some(handle) = h.take() {
+        if let Ok(mut handles) = self.reader_handles.lock() {
+            for handle in handles.drain(..) {
                 handle.abort();
             }
         }
@@ -152,6 +153,20 @@ fn platform_native_pty_system() -> Box<dyn portable_pty::PtySystem + Send> {
     native_pty_system()
 }
 
+pub async fn spawn_exec_session(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    arg0: &Option<String>,
+) -> Result<SpawnedPty> {
+    if cfg!(windows) && !conpty_supported() {
+        return fallback::spawn_piped_process(program, args, cwd, env, arg0).await;
+    }
+
+    spawn_pty_process(program, args, cwd, env, arg0).await
+}
+
 pub async fn spawn_pty_process(
     program: &str,
     args: &[String],
@@ -171,7 +186,8 @@ pub async fn spawn_pty_process(
         pixel_height: 0,
     })?;
 
-    let mut command_builder = CommandBuilder::new(arg0.as_ref().unwrap_or(&program.to_string()));
+    let program = arg0.as_deref().unwrap_or(program);
+    let mut command_builder = CommandBuilder::new(program);
     command_builder.cwd(cwd);
     command_builder.env_clear();
     for arg in args {
@@ -255,12 +271,12 @@ pub async fn spawn_pty_process(
         output_tx,
         initial_output_rx,
         killer,
-        reader_handle,
+        vec![reader_handle],
         writer_handle,
         wait_handle,
         exit_status,
         exit_code,
-        pair,
+        Some(pair),
     );
 
     Ok(SpawnedPty {
