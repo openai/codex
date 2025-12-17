@@ -50,12 +50,12 @@ const PLAN_MODE_DEVELOPER_PREFIX: &str = r#"## Plan Mode (Slash Command)
 Goal: produce a clear, actionable plan for the user's request without making code changes.
 
 Rules:
-- You may explore the repo with read-only commands.
+- You may explore the repo with read-only commands, but keep it minimal and avoid dumping large files.
 - Do not attempt to edit files or run mutating commands.
 - You may ask clarifying questions via AskUserQuestion.
-- Use `propose_plan_variants` to generate 3 alternative plans as input if helpful.
+- Use `propose_plan_variants` to generate 3 alternative plans as input if helpful (at most once per plan draft).
 - When you have a final plan, call `approve_plan` with a concise title, summary, and step list.
-- If the user requests revisions, incorporate feedback and propose a revised plan (you may call `propose_plan_variants` again).
+- If the user requests revisions, incorporate feedback and propose a revised plan (you may call `propose_plan_variants` again, but only if the plan materially changes or the user asks for alternatives).
 - If the user rejects, stop.
 
 When the plan is approved, your final assistant message MUST be ONLY valid JSON matching:

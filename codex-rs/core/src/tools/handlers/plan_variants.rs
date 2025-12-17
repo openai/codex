@@ -39,6 +39,7 @@ const PLAN_VARIANT_PROMPT: &str = r#"You are a planning subagent producing a sin
 Requirements:
 - Do not ask the user questions.
 - Do not propose or perform edits. Do not call apply_patch.
+- Do not call propose_plan_variants.
 - Prefer exploring the codebase using read-only commands (ripgrep, cat, ls).
 - Output ONLY valid JSON matching this shape:
   { "title": string, "summary": string, "plan": { "explanation": string|null, "plan": [ { "step": string, "status": "pending"|"in_progress"|"completed" } ] } }
