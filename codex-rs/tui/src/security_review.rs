@@ -2992,8 +2992,33 @@ pub async fn run_security_review(
             let log_sink_for_task = Some(sink);
             tokio::spawn(async move {
                 while let Some(event) = rx.recv().await {
-                    if let AppEvent::SecurityReviewLog(message) = event {
-                        write_log_sink(&log_sink_for_task, message.as_str());
+                    match event {
+                        AppEvent::SecurityReviewLog(message) => {
+                            write_log_sink(&log_sink_for_task, message.as_str());
+                        }
+                        AppEvent::SecurityReviewCommandStatus {
+                            summary,
+                            state,
+                            preview,
+                            ..
+                        } => {
+                            let state_label = match state {
+                                SecurityReviewCommandState::Running => "running",
+                                SecurityReviewCommandState::Matches => "matches",
+                                SecurityReviewCommandState::NoMatches => "no matches",
+                                SecurityReviewCommandState::Error => "error",
+                            };
+                            write_log_sink(
+                                &log_sink_for_task,
+                                format!("Command [{state_label}]: {summary}").as_str(),
+                            );
+                            for line in preview {
+                                if !line.trim().is_empty() {
+                                    write_log_sink(&log_sink_for_task, line.as_str());
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             });
