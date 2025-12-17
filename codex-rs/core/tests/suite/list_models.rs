@@ -206,7 +206,7 @@ fn gpt_5_2() -> ModelPreset {
             ),
         ],
         is_default: false,
-        upgrade: None,
+        upgrade: Some(caribou_upgrade()),
         show_in_picker: true,
         supported_in_api: true,
     }
