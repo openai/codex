@@ -72,7 +72,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.features.disable(Feature::ApplyPatchFreeform);
-            config.model = Some("gpt-5.1-codex-max".to_string());
+            config.model = Some("codex-mini-latest".to_string());
         })
         .build(&server)
         .await?;
