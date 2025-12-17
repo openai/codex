@@ -5,6 +5,8 @@ use regex_lite::Regex;
 use shlex::Shlex;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs;
+use std::path::PathBuf;
 
 lazy_static! {
     static ref PROMPT_ARG_REGEX: Regex =
@@ -36,6 +38,11 @@ pub enum PromptExpansionError {
         command: String,
         error: PromptArgsError,
     },
+    ReadFailed {
+        command: String,
+        path: PathBuf,
+        error: String,
+    },
     MissingArgs {
         command: String,
         missing: Vec<String>,
@@ -46,6 +53,11 @@ impl PromptExpansionError {
     pub fn user_message(&self) -> String {
         match self {
             PromptExpansionError::Args { command, error } => error.describe(command),
+            PromptExpansionError::ReadFailed {
+                command,
+                path,
+                error,
+            } => format!("Could not load prompt file for {command}: {path:?} ({error}).",),
             PromptExpansionError::MissingArgs { command, missing } => {
                 let list = missing.join(", ");
                 format!(
@@ -54,6 +66,17 @@ impl PromptExpansionError {
             }
         }
     }
+}
+
+fn load_prompt_content(
+    prompt: &CustomPrompt,
+    command: &str,
+) -> Result<String, PromptExpansionError> {
+    fs::read_to_string(&prompt.path).map_err(|error| PromptExpansionError::ReadFailed {
+        command: command.to_string(),
+        path: prompt.path.clone(),
+        error: error.to_string(),
+    })
 }
 
 /// Parse a first-line slash command of the form `/name <rest>`.
@@ -151,11 +174,17 @@ pub fn expand_custom_prompt(
         Some(prompt) => prompt,
         None => return Ok(None),
     };
+
+    // Reload prompt content at execution time so edits to `.codex/prompts/*.md` (or `$CODEX_HOME/prompts`)
+    // take effect without restarting the session.
+    let command = format!("/{name}");
+    let content = load_prompt_content(prompt, &command)?;
+
     // If there are named placeholders, expect key=value inputs.
-    let required = prompt_argument_names(&prompt.content);
+    let required = prompt_argument_names(&content);
     if !required.is_empty() {
         let inputs = parse_prompt_inputs(rest).map_err(|error| PromptExpansionError::Args {
-            command: format!("/{name}"),
+            command: command.clone(),
             error,
         })?;
         let missing: Vec<String> = required
@@ -163,13 +192,9 @@ pub fn expand_custom_prompt(
             .filter(|k| !inputs.contains_key(k))
             .collect();
         if !missing.is_empty() {
-            return Err(PromptExpansionError::MissingArgs {
-                command: format!("/{name}"),
-                missing,
-            });
+            return Err(PromptExpansionError::MissingArgs { command, missing });
         }
-        let content = &prompt.content;
-        let replaced = PROMPT_ARG_REGEX.replace_all(content, |caps: &regex_lite::Captures<'_>| {
+        let replaced = PROMPT_ARG_REGEX.replace_all(&content, |caps: &regex_lite::Captures<'_>| {
             if let Some(matched) = caps.get(0)
                 && matched.start() > 0
                 && content.as_bytes()[matched.start() - 1] == b'$'
@@ -188,7 +213,7 @@ pub fn expand_custom_prompt(
 
     // Otherwise, treat it as numeric/positional placeholder prompt (or none).
     let pos_args: Vec<String> = Shlex::new(rest).collect();
-    let expanded = expand_numeric_placeholders(&prompt.content, &pos_args);
+    let expanded = expand_numeric_placeholders(&content, &pos_args);
     Ok(Some(expanded))
 }
 
@@ -313,16 +338,28 @@ pub fn prompt_command_with_arg_placeholders(name: &str, args: &[String]) -> (Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+
+    fn prompt_with_content(name: &str, content: &str) -> (CustomPrompt, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(format!("{name}.md"));
+        fs::write(&path, content).unwrap();
+        (
+            CustomPrompt {
+                name: name.to_string(),
+                path,
+                content: "stale".to_string(),
+                description: None,
+                argument_hint: None,
+            },
+            dir,
+        )
+    }
 
     #[test]
     fn expand_arguments_basic() {
-        let prompts = vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: "Review $USER changes on $BRANCH".to_string(),
-            description: None,
-            argument_hint: None,
-        }];
+        let (prompt, _dir) = prompt_with_content("my-prompt", "Review $USER changes on $BRANCH");
+        let prompts = vec![prompt];
 
         let out =
             expand_custom_prompt("/prompts:my-prompt USER=Alice BRANCH=main", &prompts).unwrap();
@@ -331,13 +368,8 @@ mod tests {
 
     #[test]
     fn quoted_values_ok() {
-        let prompts = vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: "Pair $USER with $BRANCH".to_string(),
-            description: None,
-            argument_hint: None,
-        }];
+        let (prompt, _dir) = prompt_with_content("my-prompt", "Pair $USER with $BRANCH");
+        let prompts = vec![prompt];
 
         let out = expand_custom_prompt(
             "/prompts:my-prompt USER=\"Alice Smith\" BRANCH=dev-main",
@@ -349,13 +381,8 @@ mod tests {
 
     #[test]
     fn invalid_arg_token_reports_error() {
-        let prompts = vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: "Review $USER changes".to_string(),
-            description: None,
-            argument_hint: None,
-        }];
+        let (prompt, _dir) = prompt_with_content("my-prompt", "Review $USER changes");
+        let prompts = vec![prompt];
         let err = expand_custom_prompt("/prompts:my-prompt USER=Alice stray", &prompts)
             .unwrap_err()
             .user_message();
@@ -364,13 +391,8 @@ mod tests {
 
     #[test]
     fn missing_required_args_reports_error() {
-        let prompts = vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: "Review $USER changes on $BRANCH".to_string(),
-            description: None,
-            argument_hint: None,
-        }];
+        let (prompt, _dir) = prompt_with_content("my-prompt", "Review $USER changes on $BRANCH");
+        let prompts = vec![prompt];
         let err = expand_custom_prompt("/prompts:my-prompt USER=Alice", &prompts)
             .unwrap_err()
             .user_message();
@@ -392,15 +414,27 @@ mod tests {
 
     #[test]
     fn escaped_placeholder_remains_literal() {
-        let prompts = vec![CustomPrompt {
-            name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string().into(),
-            content: "literal $$USER".to_string(),
-            description: None,
-            argument_hint: None,
-        }];
+        let (prompt, _dir) = prompt_with_content("my-prompt", "literal $$USER");
+        let prompts = vec![prompt];
 
         let out = expand_custom_prompt("/prompts:my-prompt", &prompts).unwrap();
         assert_eq!(out, Some("literal $$USER".to_string()));
+    }
+
+    #[test]
+    fn editing_prompt_file_is_reflected_without_restart() {
+        let (prompt, dir) = prompt_with_content("my-prompt", "Hello $USER");
+        let path = prompt.path.clone();
+        let prompts = vec![prompt];
+
+        let out = expand_custom_prompt("/prompts:my-prompt USER=Alice", &prompts).unwrap();
+        assert_eq!(out, Some("Hello Alice".to_string()));
+
+        fs::write(&path, "Goodbye $USER").unwrap();
+        // Keep tempdir alive for the duration of the test.
+        let _dir = dir;
+
+        let out = expand_custom_prompt("/prompts:my-prompt USER=Alice", &prompts).unwrap();
+        assert_eq!(out, Some("Goodbye Alice".to_string()));
     }
 }
