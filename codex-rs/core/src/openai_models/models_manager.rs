@@ -51,7 +51,7 @@ impl ModelsManager {
         let codex_home = auth_manager.codex_home().to_path_buf();
         Self {
             local_models: builtin_model_presets(auth_manager.get_auth_mode()),
-            remote_models: RwLock::new(Vec::new()),
+            remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
             auth_manager,
             etag: RwLock::new(None),
             codex_home,
@@ -66,7 +66,7 @@ impl ModelsManager {
         let codex_home = auth_manager.codex_home().to_path_buf();
         Self {
             local_models: builtin_model_presets(auth_manager.get_auth_mode()),
-            remote_models: RwLock::new(Vec::new()),
+            remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
             auth_manager,
             etag: RwLock::new(None),
             codex_home,
@@ -77,7 +77,9 @@ impl ModelsManager {
 
     /// Fetch the latest remote models, using the on-disk cache when still fresh.
     pub async fn refresh_available_models(&self, config: &Config) -> CoreResult<()> {
-        if !config.features.enabled(Feature::RemoteModels) {
+        if !config.features.enabled(Feature::RemoteModels)
+            || self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey)
+        {
             return Ok(());
         }
         if self.try_load_cache().await {
@@ -163,6 +165,12 @@ impl ModelsManager {
     /// Replace the cached remote models and rebuild the derived presets list.
     async fn apply_remote_models(&self, models: Vec<ModelInfo>) {
         *self.remote_models.write().await = models;
+    }
+
+    fn load_remote_models_from_file() -> Result<Vec<ModelInfo>, std::io::Error> {
+        let file_contents = include_str!("../../models.json");
+        let response: ModelsResponse = serde_json::from_str(file_contents)?;
+        Ok(response.models)
     }
 
     /// Attempt to satisfy the refresh from the cache when it matches the provider and TTL.
@@ -633,5 +641,16 @@ mod tests {
         let available = manager.build_available_models(vec![hidden_model, visible_model]);
 
         assert_eq!(available, vec![expected]);
+    }
+
+    #[test]
+    fn bundled_models_json_roundtrips() {
+        let models = ModelsManager::load_remote_models_from_file()
+            .expect("bundled models.json should deserialize");
+
+        assert!(
+            !models.is_empty(),
+            "bundled models.json should contain at least one model"
+        );
     }
 }
