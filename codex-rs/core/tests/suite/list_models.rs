@@ -52,9 +52,11 @@ fn expected_models_for_api_key() -> Vec<ModelPreset> {
 }
 
 fn expected_models_for_chatgpt() -> Vec<ModelPreset> {
+    let mut gpt_5_1_codex_max = gpt_5_1_codex_max();
+    gpt_5_1_codex_max.is_default = false;
     vec![
         caribou(),
-        gpt_5_1_codex_max(),
+        gpt_5_1_codex_max,
         gpt_5_1_codex(),
         gpt_5_1_codex_mini(),
         gpt_5_2(),
@@ -90,7 +92,7 @@ fn caribou() -> ModelPreset {
         is_default: true,
         upgrade: None,
         show_in_picker: true,
-        supported_in_api: true,
+        supported_in_api: false,
     }
 }
 
