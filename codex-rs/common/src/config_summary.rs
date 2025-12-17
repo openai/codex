@@ -9,7 +9,7 @@ pub fn create_config_summary_entries(config: &Config, model: &str) -> Vec<(&'sta
         ("workdir", config.cwd.display().to_string()),
         ("model", model.to_string()),
         ("provider", config.model_provider_id.clone()),
-        ("approval", config.approval_policy.to_string()),
+        ("approval", config.approval_policy.value().to_string()),
         ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
     ];
     if config.model_provider.wire_api == WireApi::Responses {

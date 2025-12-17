@@ -257,7 +257,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     }
 
     let default_cwd = config.cwd.to_path_buf();
-    let default_approval_policy = config.approval_policy;
+    let default_approval_policy = config.approval_policy.value();
     let default_sandbox_policy = config.sandbox_policy.clone();
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;

@@ -15,11 +15,13 @@ use crate::key_hint::KeyBinding;
 use super::scroll_state::ScrollState;
 
 /// A generic representation of a display row for selection popups.
+#[derive(Default)]
 pub(crate) struct GenericDisplayRow {
     pub name: String,
     pub display_shortcut: Option<KeyBinding>,
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
+    pub disabled_reason: Option<String>,   // optional disabled message
     pub wrap_indent: Option<usize>,        // optional indent for wrapped lines
 }
 
@@ -37,7 +39,13 @@ fn compute_desc_col(
         .iter()
         .enumerate()
         .filter(|(i, _)| visible_range.contains(i))
-        .map(|(_, r)| Line::from(r.name.clone()).width())
+        .map(|(_, r)| {
+            let mut spans: Vec<Span> = vec![r.name.clone().into()];
+            if r.disabled_reason.is_some() {
+                spans.push(" (disabled)".dim());
+            }
+            Line::from(spans).width()
+        })
         .max()
         .unwrap_or(0);
     let mut desc_col = max_name_width.saturating_add(2);
@@ -51,7 +59,7 @@ fn compute_desc_col(
 fn wrap_indent(row: &GenericDisplayRow, desc_col: usize, max_width: u16) -> usize {
     let max_indent = max_width.saturating_sub(1) as usize;
     let indent = row.wrap_indent.unwrap_or_else(|| {
-        if row.description.is_some() {
+        if row.description.is_some() || row.disabled_reason.is_some() {
             desc_col
         } else {
             0
@@ -64,10 +72,16 @@ fn wrap_indent(row: &GenericDisplayRow, desc_col: usize, max_width: u16) -> usiz
 /// at `desc_col`. Applies fuzzy-match bolding when indices are present and
 /// dims the description.
 fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
+    let combined_description = match (&row.description, &row.disabled_reason) {
+        (Some(desc), Some(reason)) => Some(format!("{desc} (disabled: {reason})")),
+        (Some(desc), None) => Some(desc.clone()),
+        (None, Some(reason)) => Some(format!("disabled: {reason}")),
+        (None, None) => None,
+    };
+
     // Enforce single-line name: allow at most desc_col - 2 cells for name,
     // reserving two spaces before the description column.
-    let name_limit = row
-        .description
+    let name_limit = combined_description
         .as_ref()
         .map(|_| desc_col.saturating_sub(2))
         .unwrap_or(usize::MAX);
@@ -113,6 +127,10 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
         name_spans.push("…".into());
     }
 
+    if row.disabled_reason.is_some() {
+        name_spans.push(" (disabled)".dim());
+    }
+
     let this_name_width = Line::from(name_spans.clone()).width();
     let mut full_spans: Vec<Span> = name_spans;
     if let Some(display_shortcut) = row.display_shortcut {
@@ -120,7 +138,7 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
         full_spans.push(display_shortcut.into());
         full_spans.push(")".into());
     }
-    if let Some(desc) = row.description.as_ref() {
+    if let Some(desc) = combined_description.as_ref() {
         let gap = desc_col.saturating_sub(this_name_width);
         if gap > 0 {
             full_spans.push(" ".repeat(gap).into());
