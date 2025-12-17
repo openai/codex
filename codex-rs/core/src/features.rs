@@ -323,19 +323,31 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Skills,
         key: "skills",
-        stage: Stage::Beta {
-            menu_description: "Define new `skills` for the model",
-            announcement: "NEW! Try the new `skills` features. Enable in /experimental!",
-        },
+        // stage: Stage::Beta {
+        //     menu_description: "Define new `skills` for the model",
+        //     announcement: "NEW! Try the new `skills` features. Enable in /experimental!",
+        // },
+        stage: Stage::Experimental,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::UnifiedExec,
         key: "unified_exec",
-        stage: Stage::Beta {
-            menu_description: "Run long-running terminal commands in the background.",
-            announcement: "NEW! Try Background terminals for long running processes. Enable in /experimental!",
-        },
+        // stage: Stage::Beta {
+        //     menu_description: "Run long-running terminal commands in the background.",
+        //     announcement: "NEW! Try Background terminals for long running processes. Enable in /experimental!",
+        // },
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ShellSnapshot,
+        key: "shell_snapshot",
+        // stage: Stage::Beta {
+        //     menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
+        //     announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
+        // },
+        stage: Stage::Experimental,
         default_enabled: false,
     },
     // Unstable features.
