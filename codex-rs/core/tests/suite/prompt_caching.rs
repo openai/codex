@@ -157,6 +157,8 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
     let req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
     let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
 
+    eprintln!("requests constructed");
+
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
@@ -166,6 +168,8 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
         .build(&server)
         .await?;
 
+    eprintln!("codex constructed");
+
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -173,8 +177,9 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
             }],
         })
         .await?;
+    eprintln!("codex submitted");
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
+    eprintln!("wait for event complete first finished");
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -182,7 +187,9 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
             }],
         })
         .await?;
+    eprintln!("codex submitted second");
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    eprintln!("wait for event complete second finished");
 
     let expected_instructions = [
         include_str!("../../prompt.md"),
@@ -190,17 +197,21 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
     ]
     .join("\n");
 
+    eprintln!("body0 constructed");
     let body0 = req1.single_request().body_json();
+    eprintln!("body0 parsed");
     assert_eq!(
         body0["instructions"],
         serde_json::json!(expected_instructions),
     );
+    eprintln!("body0 assert eq");
     let body1 = req2.single_request().body_json();
+    eprintln!("body1 parsed");
     assert_eq!(
         body1["instructions"],
         serde_json::json!(expected_instructions),
     );
-
+    eprintln!("body1 assert eq");
     Ok(())
 }
 
