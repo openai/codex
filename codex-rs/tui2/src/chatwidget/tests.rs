@@ -394,6 +394,7 @@ fn make_chatwidget_manual(
         full_reasoning_buffer: String::new(),
         current_status_header: String::from("Working"),
         retry_status_header: None,
+        plan_variants_progress: None,
         conversation_id: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,

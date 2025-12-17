@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -343,6 +344,7 @@ pub(crate) struct ChatWidget {
     current_status_header: String,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
+    plan_variants_progress: Option<PlanVariantsProgress>,
     conversation_id: Option<ConversationId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
@@ -371,6 +373,55 @@ pub(crate) struct ChatWidget {
 struct UserMessage {
     text: String,
     image_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProgressStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+#[derive(Debug, Clone)]
+struct PlanVariantsProgress {
+    total: usize,
+    steps: Vec<ProgressStatus>,
+}
+
+impl PlanVariantsProgress {
+    fn new(total: usize) -> Self {
+        Self {
+            total,
+            steps: vec![ProgressStatus::Pending; total],
+        }
+    }
+
+    fn set_in_progress(&mut self, idx: usize) {
+        if idx < self.steps.len() {
+            self.steps[idx] = ProgressStatus::InProgress;
+        }
+    }
+
+    fn set_completed(&mut self, idx: usize) {
+        if idx < self.steps.len() {
+            self.steps[idx] = ProgressStatus::Completed;
+        }
+    }
+
+    fn render_detail_lines(&self) -> Vec<ratatui::text::Line<'static>> {
+        use ratatui::style::Stylize;
+        let mut lines = Vec::with_capacity(self.total);
+        for (idx, status) in self.steps.iter().copied().enumerate() {
+            let label = format!("Variant {}/{}", idx + 1, self.total);
+            let status_span = match status {
+                ProgressStatus::Pending => "○".dim(),
+                ProgressStatus::InProgress => "●".cyan(),
+                ProgressStatus::Completed => "✓".green(),
+            };
+            lines.push(vec!["  ".into(), status_span, " ".into(), label.into()].into());
+        }
+        lines
+    }
 }
 
 impl From<String> for UserMessage {
@@ -430,6 +481,17 @@ impl ChatWidget {
     fn set_status_header(&mut self, header: String) {
         self.current_status_header = header.clone();
         self.bottom_pane.update_status_header(header);
+        if self.plan_variants_progress.is_none() {
+            self.clear_status_detail_lines();
+        }
+    }
+
+    fn set_status_detail_lines(&mut self, lines: Vec<ratatui::text::Line<'static>>) {
+        self.bottom_pane.update_status_detail_lines(lines);
+    }
+
+    fn clear_status_detail_lines(&mut self) {
+        self.bottom_pane.clear_status_detail_lines();
     }
 
     fn restore_retry_status_header_if_present(&mut self) {
@@ -574,6 +636,7 @@ impl ChatWidget {
         self.bottom_pane.clear_ctrl_c_quit_hint();
         self.bottom_pane.set_task_running(true);
         self.retry_status_header = None;
+        self.plan_variants_progress = None;
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
@@ -1060,7 +1123,64 @@ impl ChatWidget {
         debug!("BackgroundEvent: {message}");
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(true);
+
+        if let Some(progress) = self.maybe_update_plan_variants_progress(message.as_str()) {
+            self.plan_variants_progress = Some(progress);
+            self.set_status_header("Planning plan variants".to_string());
+            self.set_status_detail_lines(
+                self.plan_variants_progress
+                    .as_ref()
+                    .map(PlanVariantsProgress::render_detail_lines)
+                    .unwrap_or_default(),
+            );
+            return;
+        }
+
+        self.plan_variants_progress = None;
+        self.clear_status_detail_lines();
         self.set_status_header(message);
+    }
+
+    fn maybe_update_plan_variants_progress(
+        &mut self,
+        message: &str,
+    ) -> Option<PlanVariantsProgress> {
+        let message = message.trim();
+        if !message.starts_with("Plan variants:") {
+            return None;
+        }
+
+        // Expected shapes:
+        // - "Plan variants: generating 1/3…"
+        // - "Plan variants: finished 1/3"
+        let tokens: Vec<&str> = message.split_whitespace().collect();
+        if tokens.len() < 4 {
+            return None;
+        }
+
+        let action = tokens.get(2).copied()?;
+        let fraction = tokens.get(3).copied()?;
+        let fraction = fraction.trim_end_matches('…');
+        let (idx_str, total_str) = fraction.split_once('/')?;
+        let idx = usize::from_str(idx_str).ok()?.saturating_sub(1);
+        let total = usize::from_str(total_str).ok()?;
+        if total == 0 {
+            return None;
+        }
+
+        let mut progress = self
+            .plan_variants_progress
+            .clone()
+            .filter(|p| p.total == total)
+            .unwrap_or_else(|| PlanVariantsProgress::new(total));
+
+        match action {
+            "generating" => progress.set_in_progress(idx),
+            "finished" => progress.set_completed(idx),
+            _ => return None,
+        }
+
+        Some(progress)
     }
 
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
@@ -1491,6 +1611,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
             retry_status_header: None,
+            plan_variants_progress: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
@@ -1577,6 +1698,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
             retry_status_header: None,
+            plan_variants_progress: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,

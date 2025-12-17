@@ -23,6 +23,7 @@ use crate::tui::FrameRequester;
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
     header: String,
+    detail_lines: Vec<Line<'static>>,
     show_interrupt_hint: bool,
 
     elapsed_running: Duration,
@@ -58,6 +59,7 @@ impl StatusIndicatorWidget {
     ) -> Self {
         Self {
             header: String::from("Working"),
+            detail_lines: Vec::new(),
             show_interrupt_hint: true,
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
@@ -76,6 +78,14 @@ impl StatusIndicatorWidget {
     /// Update the animated header label (left of the brackets).
     pub(crate) fn update_header(&mut self, header: String) {
         self.header = header;
+    }
+
+    pub(crate) fn set_detail_lines(&mut self, lines: Vec<Line<'static>>) {
+        self.detail_lines = lines;
+    }
+
+    pub(crate) fn clear_detail_lines(&mut self) {
+        self.detail_lines.clear();
     }
 
     #[cfg(test)]
@@ -136,7 +146,7 @@ impl StatusIndicatorWidget {
 
 impl Renderable for StatusIndicatorWidget {
     fn desired_height(&self, _width: u16) -> u16 {
-        1
+        1u16.saturating_add(self.detail_lines.len().try_into().unwrap_or(u16::MAX))
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -170,7 +180,23 @@ impl Renderable for StatusIndicatorWidget {
             spans.push(format!("({pretty_elapsed})").dim());
         }
 
-        Line::from(spans).render_ref(area, buf);
+        let mut row = area;
+        row.height = 1;
+        Line::from(spans).render_ref(row, buf);
+
+        for (idx, line) in self.detail_lines.iter().enumerate() {
+            let y = area.y.saturating_add((idx as u16).saturating_add(1));
+            if y >= area.y.saturating_add(area.height) {
+                break;
+            }
+            let detail_area = Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: 1,
+            };
+            line.render_ref(detail_area, buf);
+        }
     }
 }
 

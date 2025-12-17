@@ -282,6 +282,23 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn update_status_detail_lines(
+        &mut self,
+        detail_lines: Vec<ratatui::text::Line<'static>>,
+    ) {
+        if let Some(status) = self.status.as_mut() {
+            status.set_detail_lines(detail_lines);
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn clear_status_detail_lines(&mut self) {
+        if let Some(status) = self.status.as_mut() {
+            status.clear_detail_lines();
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn show_ctrl_c_quit_hint(&mut self) {
         self.ctrl_c_quit_hint = true;
         self.composer
