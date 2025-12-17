@@ -110,7 +110,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::High,
-                    description: "Greater reasoning depth for complex or ambiguous problems".to_string(),
+                    description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
                 },
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::XHigh,
