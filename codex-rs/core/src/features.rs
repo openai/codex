@@ -319,12 +319,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Stable,
         default_enabled: false,
     },
-    // Beta program.
+    // Beta program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
         id: Feature::Skills,
         key: "skills",
         stage: Stage::Beta {
-            menu_description: "Define new `skills` the model",
+            menu_description: "Define new `skills` for the model",
             announcement: "NEW! Try the new `skills` features. Enable in /experimental!",
         },
         default_enabled: false,

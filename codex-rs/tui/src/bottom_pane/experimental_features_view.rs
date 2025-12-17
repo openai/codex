@@ -284,6 +284,6 @@ fn experimental_popup_hint_line() -> Line<'static> {
         key_hint::plain(KeyCode::Enter).into(),
         " to toggle or ".into(),
         key_hint::plain(KeyCode::Esc).into(),
-        " to go back".into(),
+        " to save for next conversation".into(),
     ])
 }
