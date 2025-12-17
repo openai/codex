@@ -78,8 +78,10 @@ pub async fn spawn_piped_process(
     let wait_child = Arc::clone(&child);
     let wait_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
         let code = loop {
-            let mut guard = wait_child.blocking_lock();
-            let status = guard.try_wait();
+            let status = {
+                let mut guard = wait_child.blocking_lock();
+                guard.try_wait()
+            };
             match status {
                 Ok(Some(status)) => {
                     break status
@@ -149,8 +151,16 @@ impl PipedChildKiller {
 
 impl portable_pty::ChildKiller for PipedChildKiller {
     fn kill(&mut self) -> io::Result<()> {
-        let mut guard = self.child.blocking_lock();
-        guard.kill()
+        if let Ok(mut guard) = self.child.try_lock() {
+            return guard.kill();
+        }
+
+        let child = Arc::clone(&self.child);
+        std::thread::spawn(move || {
+            let mut guard = child.blocking_lock();
+            let _ = guard.kill();
+        });
+        Ok(())
     }
 
     fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
