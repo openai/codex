@@ -949,7 +949,8 @@ impl App {
                 if updates.is_empty() {
                     return Ok(true);
                 }
-                let mut builder = ConfigEditsBuilder::new(&self.config.codex_home);
+                let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(self.active_profile.as_deref());
                 for (feature, enabled) in &updates {
                     let feature_key = feature.key();
                     if *enabled {
