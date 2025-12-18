@@ -290,9 +290,17 @@ mod tests {
             "command to write {} should fail under seatbelt",
             &config_toml.display()
         );
-        assert_eq!(
-            String::from_utf8_lossy(&output.stderr),
-            format!("bash: {}: Operation not permitted\n", config_toml.display()),
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "bash: {}: Operation not permitted\n",
+                config_toml.display()
+            )) || stderr.contains(&format!(
+                "bash: line 1: {}: Operation not permitted\n",
+                config_toml.display()
+            )),
+            "unexpected stderr: {}",
+            stderr
         );
 
         // Create a similar Seatbelt command that tries to write to a file in
@@ -324,12 +332,17 @@ mod tests {
             "command to write {} should fail under seatbelt",
             &pre_commit_hook.display()
         );
-        assert_eq!(
-            String::from_utf8_lossy(&output.stderr),
-            format!(
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
                 "bash: {}: Operation not permitted\n",
                 pre_commit_hook.display()
-            ),
+            )) || stderr.contains(&format!(
+                "bash: line 1: {}: Operation not permitted\n",
+                pre_commit_hook.display()
+            )),
+            "unexpected stderr: {}",
+            stderr
         );
 
         // Verify that writing a file to the folder containing .git and .codex is allowed.
