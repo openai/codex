@@ -188,7 +188,7 @@ mod tests {
     use super::session::OutputBufferState;
 
     fn test_session_and_turn() -> (Arc<Session>, Arc<TurnContext>) {
-        let (session, mut turn, _rx_submission) = make_session_and_context();
+        let (session, mut turn) = make_session_and_context();
         turn.approval_policy = AskForApproval::Never;
         turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
         (Arc::new(session), Arc::new(turn))

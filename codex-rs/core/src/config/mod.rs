@@ -45,8 +45,10 @@ use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::ErrorKind;
+use std::num::NonZeroU64;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 #[cfg(test)]
 use tempfile::tempdir;
 
@@ -177,6 +179,10 @@ pub struct Config {
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
 
+    pub progress: ProgressConfig,
+
+    pub auto_continue: AutoContinueConfig,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -303,6 +309,36 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
+}
+
+pub const MIN_PROGRESS_INTERVAL_SECONDS: u64 = 5;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProgressConfig {
+    pub no_progress: bool,
+    pub interval_seconds: Option<NonZeroU64>,
+}
+
+pub const DEFAULT_AUTO_CONTINUE_PROMPT: &str = "continue";
+pub const MAX_AUTO_CONTINUE_PROMPT_LEN: usize = 400;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoContinueConfig {
+    pub enabled: bool,
+    pub prompt: String,
+    pub max_turns: Option<NonZeroU64>,
+    pub max_duration: Option<Duration>,
+}
+
+impl Default for AutoContinueConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            prompt: DEFAULT_AUTO_CONTINUE_PROMPT.to_string(),
+            max_turns: None,
+            max_duration: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -600,7 +636,27 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
-#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct ProgressToml {
+    #[serde(default)]
+    pub no_progress: Option<bool>,
+    #[serde(default)]
+    pub interval_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct AutoContinueToml {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub max_turns: Option<u64>,
+    #[serde(default)]
+    pub max_duration_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
@@ -692,6 +748,14 @@ pub struct ConfigToml {
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     #[serde(default)]
     pub history: Option<History>,
+
+    /// Controls how model progress updates should be surfaced to front-ends.
+    #[serde(default)]
+    pub progress: Option<ProgressToml>,
+
+    /// Controls whether Codex should automatically continue turns.
+    #[serde(default)]
+    pub auto_continue: Option<AutoContinueToml>,
 
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
@@ -943,7 +1007,7 @@ impl ConfigToml {
 }
 
 /// Optional overrides for user configuration (e.g., from CLI flags).
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ConfigOverrides {
     pub model: Option<String>,
     pub review_model: Option<String>,
@@ -959,6 +1023,12 @@ pub struct ConfigOverrides {
     pub include_apply_patch_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub progress_no_progress: Option<bool>,
+    pub progress_interval_seconds: Option<u64>,
+    pub auto_continue_enabled: Option<bool>,
+    pub auto_continue_prompt: Option<String>,
+    pub auto_continue_max_turns: Option<u64>,
+    pub auto_continue_max_duration_seconds: Option<u64>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1018,6 +1088,12 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            progress_no_progress,
+            progress_interval_seconds,
+            auto_continue_enabled,
+            auto_continue_prompt,
+            auto_continue_max_turns,
+            auto_continue_max_duration_seconds,
             additional_writable_roots,
         } = overrides;
 
@@ -1136,6 +1212,22 @@ impl Config {
         let shell_environment_policy = cfg.shell_environment_policy.into();
 
         let history = cfg.history.unwrap_or_default();
+
+        let progress = resolve_progress_config(
+            cfg.progress.as_ref(),
+            config_profile.progress.as_ref(),
+            progress_no_progress,
+            progress_interval_seconds,
+            active_profile_name.as_deref(),
+        )?;
+        let auto_continue = resolve_auto_continue_config(
+            cfg.auto_continue.as_ref(),
+            config_profile.auto_continue.as_ref(),
+            auto_continue_enabled,
+            auto_continue_prompt,
+            auto_continue_max_turns,
+            auto_continue_max_duration_seconds,
+        )?;
 
         let ghost_snapshot = {
             let mut config = GhostSnapshotConfig::default();
@@ -1267,7 +1359,7 @@ impl Config {
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
 
-            hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
+            hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false) || progress.no_progress,
             show_raw_agent_reasoning: cfg
                 .show_raw_agent_reasoning
                 .or(show_raw_agent_reasoning)
@@ -1300,6 +1392,8 @@ impl Config {
             notices: cfg.notice.unwrap_or_default(),
             check_for_update_on_startup,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
+            progress,
+            auto_continue,
             tui_notifications: cfg
                 .tui
                 .as_ref()
@@ -1379,6 +1473,193 @@ impl Config {
         }
         self.forced_auto_mode_downgraded_on_windows = !value;
     }
+}
+
+fn resolve_progress_config(
+    base: Option<&ProgressToml>,
+    profile: Option<&ProgressToml>,
+    override_no_progress: Option<bool>,
+    override_interval_seconds: Option<u64>,
+    active_profile_name: Option<&str>,
+) -> std::io::Result<ProgressConfig> {
+    let mut resolved = ProgressConfig::default();
+
+    if let Some(progress) = base {
+        if let Some(value) = progress.no_progress {
+            resolved.no_progress = value;
+        }
+        if progress.interval_seconds.is_some() {
+            resolved.interval_seconds =
+                sanitize_progress_interval(progress.interval_seconds, "progress.interval_seconds")?;
+        }
+    }
+
+    if let Some(progress) = profile {
+        if let Some(value) = progress.no_progress {
+            resolved.no_progress = value;
+        }
+        if progress.interval_seconds.is_some() {
+            let label = active_profile_name
+                .map(|name| format!("profile `{name}` progress.interval_seconds"))
+                .unwrap_or_else(|| "profile progress.interval_seconds".to_string());
+            resolved.interval_seconds =
+                sanitize_progress_interval(progress.interval_seconds, &label)?;
+        }
+    }
+
+    if let Some(value) = override_no_progress {
+        resolved.no_progress = value;
+    }
+
+    if let Some(value) = override_interval_seconds {
+        resolved.interval_seconds =
+            sanitize_progress_interval(Some(value), "CLI flag --progress-interval")?;
+    }
+
+    Ok(resolved)
+}
+
+fn sanitize_progress_interval(
+    raw: Option<u64>,
+    source: &str,
+) -> std::io::Result<Option<NonZeroU64>> {
+    let Some(value) = raw else {
+        return Ok(None);
+    };
+
+    if value == 0 {
+        return Ok(None);
+    }
+
+    if value < MIN_PROGRESS_INTERVAL_SECONDS {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "{source} must be at least {MIN_PROGRESS_INTERVAL_SECONDS} seconds when set (got {value})"
+            ),
+        ));
+    }
+
+    Ok(NonZeroU64::new(value))
+}
+
+fn resolve_auto_continue_config(
+    base: Option<&AutoContinueToml>,
+    profile: Option<&AutoContinueToml>,
+    override_enabled: Option<bool>,
+    override_prompt: Option<String>,
+    override_max_turns: Option<u64>,
+    override_max_duration_seconds: Option<u64>,
+) -> std::io::Result<AutoContinueConfig> {
+    let mut resolved = AutoContinueConfig::default();
+
+    apply_auto_continue_table(&mut resolved, base, "auto_continue")?;
+    apply_auto_continue_table(&mut resolved, profile, "profile auto_continue")?;
+
+    if let Some(enabled) = override_enabled {
+        resolved.enabled = enabled;
+    }
+
+    if let Some(prompt) = override_prompt {
+        resolved.prompt =
+            sanitize_auto_continue_prompt(&prompt, "CLI flag --auto-continue-prompt")?;
+    }
+
+    if let Some(max_turns) = override_max_turns {
+        resolved.max_turns =
+            sanitize_auto_continue_turns(Some(max_turns), "CLI flag --auto-continue-max-turns")?;
+    }
+
+    if let Some(seconds) = override_max_duration_seconds {
+        resolved.max_duration = sanitize_auto_continue_duration(
+            Some(seconds),
+            "CLI flag --auto-continue-max-duration",
+        )?;
+    }
+
+    Ok(resolved)
+}
+
+fn apply_auto_continue_table(
+    resolved: &mut AutoContinueConfig,
+    table: Option<&AutoContinueToml>,
+    source: &str,
+) -> std::io::Result<()> {
+    let Some(table) = table else {
+        return Ok(());
+    };
+
+    if let Some(enabled) = table.enabled {
+        resolved.enabled = enabled;
+    }
+    if let Some(ref prompt) = table.prompt {
+        resolved.prompt = sanitize_auto_continue_prompt(prompt, source)?;
+    }
+    if table.max_turns.is_some() {
+        resolved.max_turns = sanitize_auto_continue_turns(table.max_turns, source)?;
+    }
+    if table.max_duration_seconds.is_some() {
+        resolved.max_duration =
+            sanitize_auto_continue_duration(table.max_duration_seconds, source)?;
+    }
+    Ok(())
+}
+
+fn sanitize_auto_continue_prompt(prompt: &str, source: &str) -> std::io::Result<String> {
+    let trimmed = prompt.trim();
+    if trimmed.is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("{source} prompt must be non-empty when set"),
+        ));
+    }
+    if trimmed.len() > MAX_AUTO_CONTINUE_PROMPT_LEN {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "{source} prompt must be at most {MAX_AUTO_CONTINUE_PROMPT_LEN} characters (got {})",
+                trimmed.len()
+            ),
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn sanitize_auto_continue_turns(
+    raw: Option<u64>,
+    source: &str,
+) -> std::io::Result<Option<NonZeroU64>> {
+    let Some(value) = raw else {
+        return Ok(None);
+    };
+
+    if value == 0 {
+        return Ok(None);
+    }
+
+    NonZeroU64::new(value)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("{source} max_turns must be greater than zero when set"),
+            )
+        })
+        .map(Some)
+}
+
+fn sanitize_auto_continue_duration(
+    raw: Option<u64>,
+    _source: &str,
+) -> std::io::Result<Option<Duration>> {
+    let Some(seconds) = raw else {
+        return Ok(None);
+    };
+
+    if seconds == 0 {
+        return Ok(None);
+    }
+
+    Ok(Some(Duration::from_secs(seconds)))
 }
 
 fn default_review_model() -> String {
@@ -3064,6 +3345,8 @@ model_verbosity = "high"
                 notices: Default::default(),
                 check_for_update_on_startup: true,
                 disable_paste_burst: false,
+                progress: ProgressConfig::default(),
+                auto_continue: AutoContinueConfig::default(),
                 tui_notifications: Default::default(),
                 animations: true,
                 show_tooltips: true,
@@ -3139,6 +3422,8 @@ model_verbosity = "high"
             notices: Default::default(),
             check_for_update_on_startup: true,
             disable_paste_burst: false,
+            progress: ProgressConfig::default(),
+            auto_continue: AutoContinueConfig::default(),
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
@@ -3229,6 +3514,8 @@ model_verbosity = "high"
             notices: Default::default(),
             check_for_update_on_startup: true,
             disable_paste_burst: false,
+            progress: ProgressConfig::default(),
+            auto_continue: AutoContinueConfig::default(),
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
@@ -3305,6 +3592,8 @@ model_verbosity = "high"
             notices: Default::default(),
             check_for_update_on_startup: true,
             disable_paste_burst: false,
+            progress: ProgressConfig::default(),
+            auto_continue: AutoContinueConfig::default(),
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,

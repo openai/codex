@@ -90,7 +90,7 @@ mod tests {
             duration: Duration::from_secs(1),
             timed_out: false,
         };
-        let (_, turn_context, _) = make_session_and_context();
+        let (_, turn_context) = make_session_and_context();
         let item = user_shell_command_record_item("echo hi", &exec_output, &turn_context);
         let ResponseItem::Message { content, .. } = item else {
             panic!("expected message");
@@ -114,7 +114,7 @@ mod tests {
             duration: Duration::from_millis(120),
             timed_out: false,
         };
-        let (_, turn_context, _) = make_session_and_context();
+        let (_, turn_context) = make_session_and_context();
         let record = format_user_shell_command_record("false", &exec_output, &turn_context);
         assert_eq!(
             record,

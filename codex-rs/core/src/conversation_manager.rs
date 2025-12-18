@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn ignores_session_prefix_messages_when_truncating() {
-        let (session, turn_context, _rx_submission) = make_session_and_context();
+        let (session, turn_context) = make_session_and_context();
         let mut items = session.build_initial_context(&turn_context);
         items.push(user_msg("feature request"));
         items.push(assistant_msg("ack"));

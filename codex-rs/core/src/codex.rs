@@ -13,6 +13,7 @@ use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
+use crate::config::AutoContinueConfig;
 use crate::exec_policy::load_exec_policy_for_features;
 use crate::features::Feature;
 use crate::features::Features;
@@ -265,6 +266,7 @@ impl Codex {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
+            auto_continue: config.auto_continue.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             exec_policy,
@@ -417,6 +419,8 @@ pub(crate) struct SessionConfiguration {
     approval_policy: Constrained<AskForApproval>,
     /// How to sandbox commands executed in the system
     sandbox_policy: SandboxPolicy,
+
+    pub(crate) auto_continue: AutoContinueConfig,
 
     /// Working directory that should be treated as the *root* of the
     /// session. All relative paths supplied by the model as well as the
@@ -667,6 +671,7 @@ impl Session {
             rollout: Mutex::new(Some(rollout_recorder)),
             user_shell: Arc::new(default_shell),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            progress: config.progress.clone(),
             auth_manager: Arc::clone(&auth_manager),
             otel_manager,
             models_manager: Arc::clone(&models_manager),
@@ -2853,6 +2858,7 @@ mod tests {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
+            auto_continue: config.auto_continue.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
@@ -2925,6 +2931,7 @@ mod tests {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
+            auto_continue: config.auto_continue.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
@@ -3129,6 +3136,7 @@ mod tests {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
+            auto_continue: config.auto_continue.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
@@ -3157,6 +3165,7 @@ mod tests {
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            progress: config.progress.clone(),
             auth_manager: auth_manager.clone(),
             otel_manager: otel_manager.clone(),
             models_manager,
@@ -3220,6 +3229,7 @@ mod tests {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
+            auto_continue: config.auto_continue.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
@@ -3248,6 +3258,7 @@ mod tests {
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            progress: config.progress.clone(),
             auth_manager: Arc::clone(&auth_manager),
             otel_manager: otel_manager.clone(),
             models_manager,
