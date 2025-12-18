@@ -5,8 +5,8 @@ expression: popup
   Select Model and Effort
   Access legacy models by running codex -m <model_name> or in your config.toml
 
-› 1. gpt-5.1-codex-max (default)  Latest Codex-optimized flagship for deep and
-                                  fast reasoning.
+› 1. gpt-5.1-codex-max (default)  Codex-optimized flagship for deep and fast
+                                  reasoning.
   2. gpt-5.1-codex-mini           Optimized for codex. Cheaper, faster, but
                                   less capable.
   3. gpt-5.2                      Latest frontier model with improvements
