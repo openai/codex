@@ -19,8 +19,8 @@ Skills are behind the experimental `skills` feature flag and are disabled by def
 
 ## Where skills live
 
-- Location (v1): `~/.codex/skills/**/SKILL.md` (recursive). Hidden entries and symlinks are skipped. Only files named exactly `SKILL.md` count.
-- Sorting: rendered by name, then path for stability.
+- Location (v1): `~/.codex/skills/**/SKILL.md` and `<repo>/.codex/skills/**/SKILL.md` (recursive). Hidden entries and symlinks are skipped. Only files named exactly `SKILL.md` count.
+- Sorting: rendered by name. If multiple skills share the same `name`, Codex keeps one (preferring `<repo>/.codex/skills` over `~/.codex/skills`), with path as a deterministic tie-breaker.
 
 ## File format
 

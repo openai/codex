@@ -71,11 +71,22 @@ where
         discover_skills_under_root(&root.path, root.scope, &mut outcome);
     }
 
-    outcome
-        .skills
-        .sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
+    outcome.skills.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| scope_precedence(a.scope).cmp(&scope_precedence(b.scope)))
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    outcome.skills.dedup_by(|a, b| a.name == b.name);
 
     outcome
+}
+
+fn scope_precedence(scope: SkillScope) -> u8 {
+    match scope {
+        SkillScope::Repo => 0,
+        SkillScope::User => 1,
+    }
 }
 
 pub(crate) fn user_skills_root(codex_home: &Path) -> SkillRoot {
@@ -374,5 +385,43 @@ mod tests {
         let skill = &outcome.skills[0];
         assert_eq!(skill.name, "repo-skill");
         assert!(skill.path.starts_with(&repo_root));
+    }
+
+    #[test]
+    fn dedupes_skills_by_name_preferring_repo_scope() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let repo_dir = tempfile::tempdir().expect("tempdir");
+
+        let status = Command::new("git")
+            .arg("init")
+            .current_dir(repo_dir.path())
+            .status()
+            .expect("git init");
+        assert!(status.success(), "git init failed");
+
+        write_skill(&codex_home, "dup-skill", "duplicated-skill", "from user");
+
+        let repo_codex_dir = repo_dir.path().join(REPO_ROOT_CONFIG_DIR_NAME);
+        write_skill_at(
+            &repo_codex_dir,
+            "dup-skill",
+            "duplicated-skill",
+            "from repo",
+        );
+
+        let mut cfg = make_config(&codex_home);
+        cfg.cwd = repo_dir.path().to_path_buf();
+
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        let skill = &outcome.skills[0];
+        assert_eq!(skill.name, "duplicated-skill");
+        assert_eq!(skill.scope, SkillScope::Repo);
+        assert_eq!(skill.description, "from repo");
     }
 }
