@@ -27,6 +27,7 @@ use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExecPolicyAmendment;
+use codex_core::protocol::ExitedPlanModeEvent;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpStartupStatus;
@@ -34,6 +35,7 @@ use codex_core::protocol::McpStartupUpdateEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::PlanOutputEvent;
 use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
@@ -336,6 +338,39 @@ async fn helpers_are_available_and_do_not_panic() {
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
     let _ = &mut w;
+}
+
+#[test]
+fn exiting_plan_mode_with_approved_output_auto_executes() {
+    let (mut chat, _app_event_rx, mut op_rx) = make_chatwidget_manual(None);
+
+    chat.on_exited_plan_mode(ExitedPlanModeEvent {
+        plan_output: Some(PlanOutputEvent {
+            title: "Example".to_string(),
+            summary: "Summary".to_string(),
+            plan: UpdatePlanArgs {
+                explanation: None,
+                plan: vec![PlanItemArg {
+                    step: "Step 1".to_string(),
+                    status: StepStatus::Pending,
+                }],
+            },
+        }),
+    });
+
+    let op = op_rx
+        .try_recv()
+        .expect("expected an auto-execute user turn");
+    let items = match op {
+        Op::UserTurn { items, .. } | Op::UserInput { items } => items,
+        other => panic!("unexpected op: {other:?}"),
+    };
+    assert_eq!(
+        items,
+        vec![codex_protocol::user_input::UserInput::Text {
+            text: "Proceed with the approved plan.".to_string(),
+        }]
+    );
 }
 
 // --- Helpers for tests that need direct construction and event draining ---

@@ -2388,7 +2388,14 @@ impl ChatWidget {
 
     fn on_exited_plan_mode(&mut self, ev: ExitedPlanModeEvent) {
         if ev.plan_output.is_some() {
-            self.add_info_message("<< Plan mode finished <<".to_string(), None);
+            self.add_info_message(
+                "<< Plan mode finished; executing approved plan >>".to_string(),
+                None,
+            );
+            self.queue_user_message(UserMessage {
+                text: "Proceed with the approved plan.".to_string(),
+                image_paths: Vec::new(),
+            });
         } else {
             self.add_info_message("<< Plan mode ended <<".to_string(), None);
         }

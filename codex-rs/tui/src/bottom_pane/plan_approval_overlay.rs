@@ -37,11 +37,6 @@ use crate::style::user_message_style;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
-use super::popup_consts::MAX_POPUP_ROWS;
-use super::scroll_state::ScrollState;
-use super::selection_popup_common::GenericDisplayRow;
-use super::selection_popup_common::measure_rows_height;
-use super::selection_popup_common::render_rows;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
@@ -51,11 +46,16 @@ enum Mode {
     FeedbackInput,
 }
 
+const MAX_PLAN_APPROVAL_OVERLAY_ROWS: u16 = 22;
+const DEFAULT_PLAN_APPROVAL_VISIBLE_LINES: u16 = 12;
+const FEEDBACK_BLOCK_HEIGHT: u16 = 8;
+
 pub(crate) struct PlanApprovalOverlay {
     id: String,
     proposal: PlanProposal,
     mode: Mode,
-    state: ScrollState,
+    scroll_top: usize,
+    selected_action: usize,
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
     error: Option<String>,
@@ -69,65 +69,18 @@ impl PlanApprovalOverlay {
         ev: PlanApprovalRequestEvent,
         app_event_tx: AppEventSender,
     ) -> Self {
-        let mut state = ScrollState::new();
-        state.selected_idx = Some(0);
         Self {
             id,
             proposal: ev.proposal,
             mode: Mode::Select,
-            state,
+            scroll_top: 0,
+            selected_action: 0,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             error: None,
             app_event_tx,
             complete: false,
         }
-    }
-
-    fn option_rows(&self) -> Vec<GenericDisplayRow> {
-        vec![
-            GenericDisplayRow {
-                name: "1. Approve plan".to_string(),
-                display_shortcut: None,
-                match_indices: None,
-                description: Some("Accept this plan and proceed.".to_string()),
-                wrap_indent: None,
-            },
-            GenericDisplayRow {
-                name: "2. Revise plan".to_string(),
-                display_shortcut: None,
-                match_indices: None,
-                description: Some("Request changes and provide feedback.".to_string()),
-                wrap_indent: None,
-            },
-            GenericDisplayRow {
-                name: "3. Reject plan".to_string(),
-                display_shortcut: None,
-                match_indices: None,
-                description: Some("Reject and stop plan mode.".to_string()),
-                wrap_indent: None,
-            },
-        ]
-    }
-
-    fn max_visible_rows(&self) -> usize {
-        MAX_POPUP_ROWS
-    }
-
-    fn move_up(&mut self) {
-        let len = self.option_rows().len();
-        self.state.move_up_wrap(len);
-        self.state.ensure_visible(len, self.max_visible_rows());
-    }
-
-    fn move_down(&mut self) {
-        let len = self.option_rows().len();
-        self.state.move_down_wrap(len);
-        self.state.ensure_visible(len, self.max_visible_rows());
-    }
-
-    fn current_selection(&self) -> Option<usize> {
-        self.state.selected_idx
     }
 
     fn finish(&mut self, response: PlanApprovalResponse) {
@@ -144,12 +97,7 @@ impl PlanApprovalOverlay {
     }
 
     fn accept_selection(&mut self) {
-        let Some(idx) = self.current_selection() else {
-            self.error = Some("Select an option.".to_string());
-            return;
-        };
-
-        match idx {
+        match self.selected_action {
             0 => self.finish(PlanApprovalResponse::Approved),
             1 => {
                 self.mode = Mode::FeedbackInput;
@@ -171,8 +119,14 @@ impl PlanApprovalOverlay {
     fn footer_hint(&self) -> Line<'static> {
         match self.mode {
             Mode::Select => Line::from(vec![
+                "↑/↓ ".into(),
+                "scroll".bold(),
+                ", ".into(),
+                "←/→ ".into(),
+                "action".bold(),
+                ", ".into(),
                 key_hint::plain(KeyCode::Enter).into(),
-                " choose, ".into(),
+                " select, ".into(),
                 key_hint::plain(KeyCode::Esc).into(),
                 " reject".into(),
             ]),
@@ -185,7 +139,7 @@ impl PlanApprovalOverlay {
         }
     }
 
-    fn header_lines(&self, width: u16) -> Vec<Line<'static>> {
+    fn plan_lines(&self, width: u16) -> Vec<Line<'static>> {
         let usable_width = width.saturating_sub(4).max(1) as usize;
         let mut lines = Vec::new();
 
@@ -207,6 +161,28 @@ impl PlanApprovalOverlay {
             }
         }
 
+        let explanation = self
+            .proposal
+            .plan
+            .explanation
+            .as_deref()
+            .unwrap_or_default()
+            .trim();
+        if !explanation.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from("Explanation:".bold()));
+            for raw_line in explanation.lines() {
+                let raw_line = raw_line.trim_end();
+                if raw_line.trim().is_empty() {
+                    lines.push(Line::from(""));
+                    continue;
+                }
+                for w in wrap(raw_line, usable_width) {
+                    lines.push(Line::from(vec!["  ".into(), w.into_owned().into()]));
+                }
+            }
+        }
+
         lines.push(Line::from(""));
         lines.push(Line::from("Steps:".bold()));
 
@@ -221,6 +197,63 @@ impl PlanApprovalOverlay {
         lines.extend(prefix_lines(step_lines, "  ".into(), "  ".into()));
 
         lines
+    }
+
+    fn action_bar(&self) -> Line<'static> {
+        let selected = Style::default().cyan().bold();
+        let normal = Style::default().dim();
+
+        let approve_style = if self.selected_action == 0 {
+            selected
+        } else {
+            normal
+        };
+        let revise_style = if self.selected_action == 1 {
+            selected
+        } else {
+            normal
+        };
+        let reject_style = if self.selected_action == 2 {
+            selected
+        } else {
+            normal
+        };
+
+        Line::from(vec![
+            Span::from("[1] Approve").set_style(approve_style),
+            "  ".into(),
+            Span::from("[2] Revise").set_style(revise_style),
+            "  ".into(),
+            Span::from("[3] Reject").set_style(reject_style),
+        ])
+    }
+
+    fn move_action_left(&mut self) {
+        self.selected_action = self.selected_action.saturating_sub(1);
+    }
+
+    fn move_action_right(&mut self) {
+        self.selected_action = (self.selected_action + 1).min(2);
+    }
+
+    fn scroll_up(&mut self) {
+        self.scroll_top = self.scroll_top.saturating_sub(1);
+    }
+
+    fn scroll_down(&mut self) {
+        self.scroll_top = self.scroll_top.saturating_add(1);
+    }
+
+    fn page_up(&mut self) {
+        self.scroll_top = self.scroll_top.saturating_sub(8);
+    }
+
+    fn page_down(&mut self) {
+        self.scroll_top = self.scroll_top.saturating_add(8);
+    }
+
+    fn scroll_home(&mut self) {
+        self.scroll_top = 0;
     }
 
     fn cursor_pos_for_feedback(&self, area: Rect) -> Option<(u16, u16)> {
@@ -251,6 +284,14 @@ impl BottomPaneView for PlanApprovalOverlay {
         match self.mode {
             Mode::Select => match key_event {
                 KeyEvent {
+                    code: KeyCode::Left,
+                    ..
+                } => self.move_action_left(),
+                KeyEvent {
+                    code: KeyCode::Right,
+                    ..
+                } => self.move_action_right(),
+                KeyEvent {
                     code: KeyCode::Up, ..
                 }
                 | KeyEvent {
@@ -262,12 +303,12 @@ impl BottomPaneView for PlanApprovalOverlay {
                     code: KeyCode::Char('\u{0010}'),
                     modifiers: KeyModifiers::NONE,
                     ..
-                } => self.move_up(),
+                } => self.scroll_up(),
                 KeyEvent {
                     code: KeyCode::Char('k'),
                     modifiers: KeyModifiers::NONE,
                     ..
-                } => self.move_up(),
+                } => self.scroll_up(),
                 KeyEvent {
                     code: KeyCode::Down,
                     ..
@@ -281,12 +322,24 @@ impl BottomPaneView for PlanApprovalOverlay {
                     code: KeyCode::Char('\u{000e}'),
                     modifiers: KeyModifiers::NONE,
                     ..
-                } => self.move_down(),
+                } => self.scroll_down(),
                 KeyEvent {
                     code: KeyCode::Char('j'),
                     modifiers: KeyModifiers::NONE,
                     ..
-                } => self.move_down(),
+                } => self.scroll_down(),
+                KeyEvent {
+                    code: KeyCode::PageUp,
+                    ..
+                } => self.page_up(),
+                KeyEvent {
+                    code: KeyCode::PageDown,
+                    ..
+                } => self.page_down(),
+                KeyEvent {
+                    code: KeyCode::Home,
+                    ..
+                } => self.scroll_home(),
                 KeyEvent {
                     code: KeyCode::Esc, ..
                 } => {
@@ -303,11 +356,9 @@ impl BottomPaneView for PlanApprovalOverlay {
                         .to_digit(10)
                         .map(|d| d as usize)
                         .and_then(|d| d.checked_sub(1))
-                        && idx < self.option_rows().len()
+                        && idx <= 2
                     {
-                        self.state.selected_idx = Some(idx);
-                        self.state
-                            .ensure_visible(self.option_rows().len(), self.max_visible_rows());
+                        self.selected_action = idx;
                         self.accept_selection();
                     }
                 }
@@ -366,24 +417,17 @@ impl BottomPaneView for PlanApprovalOverlay {
 
 impl crate::render::renderable::Renderable for PlanApprovalOverlay {
     fn desired_height(&self, width: u16) -> u16 {
-        let header_height = self.header_lines(width).len() as u16;
-        let rows_height = measure_rows_height(
-            &self.option_rows(),
-            &self.state,
-            MAX_POPUP_ROWS,
-            width.saturating_sub(1).max(1),
-        );
-        let footer_height = 1u16;
+        let plan_lines = self.plan_lines(width);
+        let plan_height = (plan_lines.len() as u16).min(DEFAULT_PLAN_APPROVAL_VISIBLE_LINES);
 
-        let mut total = header_height
-            .saturating_add(1)
-            .saturating_add(rows_height)
-            .saturating_add(footer_height)
-            .saturating_add(2);
+        let mut total = 2 // outer padding
+            + 1 // action bar
+            + 1 // footer hint
+            + plan_height.max(4);
         if self.mode == Mode::FeedbackInput {
-            total = total.saturating_add(6);
+            total = total.saturating_add(FEEDBACK_BLOCK_HEIGHT);
         }
-        total
+        total.clamp(8, MAX_PLAN_APPROVAL_OVERLAY_ROWS)
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -404,64 +448,61 @@ impl crate::render::renderable::Renderable for PlanApprovalOverlay {
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
         let inset = content_area.inset(Insets::vh(1, 2));
 
-        let header_lines = self.header_lines(inset.width);
-        let header_height = header_lines.len() as u16;
-        let [header_area, body_area] =
-            Layout::vertical([Constraint::Length(header_height), Constraint::Fill(1)]).areas(inset);
-        Paragraph::new(header_lines).render(header_area, buf);
-
         match self.mode {
             Mode::Select => {
-                let rows = self.option_rows();
-                let rows_height = measure_rows_height(
-                    &rows,
-                    &self.state,
-                    MAX_POPUP_ROWS,
-                    body_area.width.saturating_sub(1).max(1),
-                );
-                let list_area = Rect {
-                    x: body_area.x,
-                    y: body_area.y,
-                    width: body_area.width,
-                    height: rows_height.min(body_area.height),
-                };
-                render_rows(
-                    list_area,
-                    buf,
-                    &rows,
-                    &self.state,
-                    MAX_POPUP_ROWS,
-                    "no options",
-                );
+                let [plan_area, actions_area] =
+                    Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(inset);
+
+                let plan_lines = self.plan_lines(plan_area.width);
+                let max_scroll = plan_lines.len().saturating_sub(plan_area.height as usize);
+                let scroll = self.scroll_top.min(max_scroll) as u16;
+                Paragraph::new(plan_lines)
+                    .scroll((scroll, 0))
+                    .render(plan_area, buf);
+
+                self.action_bar().render(actions_area, buf);
             }
             Mode::FeedbackInput => {
+                let [plan_area, feedback_area] = Layout::vertical([
+                    Constraint::Fill(1),
+                    Constraint::Length(FEEDBACK_BLOCK_HEIGHT),
+                ])
+                .areas(inset);
+
+                let plan_lines = self.plan_lines(plan_area.width);
+                let max_scroll = plan_lines.len().saturating_sub(plan_area.height as usize);
+                let scroll = self.scroll_top.min(max_scroll) as u16;
+                Paragraph::new(plan_lines)
+                    .scroll((scroll, 0))
+                    .render(plan_area, buf);
+
                 let label_area = Rect {
-                    x: body_area.x,
-                    y: body_area.y,
-                    width: body_area.width,
+                    x: feedback_area.x,
+                    y: feedback_area.y,
+                    width: feedback_area.width,
                     height: 1,
                 };
                 Paragraph::new(Line::from(vec![
-                    Span::from("Feedback: ".to_string()).bold(),
+                    Span::from("Feedback: ").bold(),
                     "(press Enter to submit)".dim(),
                 ]))
                 .render(label_area, buf);
 
                 if let Some(err) = &self.error {
                     let err_area = Rect {
-                        x: body_area.x,
-                        y: body_area.y.saturating_add(1),
-                        width: body_area.width,
+                        x: feedback_area.x,
+                        y: feedback_area.y.saturating_add(1),
+                        width: feedback_area.width,
                         height: 1,
                     };
                     Line::from(err.clone().red()).render(err_area, buf);
                 }
 
                 let input_outer = Rect {
-                    x: body_area.x,
-                    y: body_area.y.saturating_add(2),
-                    width: body_area.width,
-                    height: body_area.height.saturating_sub(2).max(1),
+                    x: feedback_area.x,
+                    y: feedback_area.y.saturating_add(2),
+                    width: feedback_area.width,
+                    height: feedback_area.height.saturating_sub(2).max(1),
                 };
                 let textarea_rect = self.textarea_rect(input_outer);
                 let mut state = self.textarea_state.borrow_mut();

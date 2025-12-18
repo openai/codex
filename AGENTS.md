@@ -130,3 +130,8 @@ If you don’t have the tool:
   let request = mock.single_request();
   // assert using request.function_call_output(call_id) or request.json_body() or other helpers.
   ```
+
+## Git workflow
+
+- Do not run `git restore` or `git checkout` unless the user explicitly asks.
+- After executing an approved plan, if `git status` shows changes, create a `git commit` (ask for a commit message only if unclear).

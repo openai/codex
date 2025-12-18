@@ -73,6 +73,16 @@ impl PlanRequestOverlay {
             " cancel".into(),
         ])
     }
+
+    fn textarea_rect(&self, area: Rect) -> Rect {
+        let inset = area.inset(Insets::vh(1, 2));
+        Rect {
+            x: inset.x,
+            y: inset.y,
+            width: inset.width,
+            height: inset.height.clamp(1, 6),
+        }
+    }
 }
 
 impl BottomPaneView for PlanRequestOverlay {
@@ -181,17 +191,5 @@ impl crate::render::renderable::Renderable for PlanRequestOverlay {
             height: 1,
         };
         self.footer_hint().dim().render(hint_area, buf);
-    }
-}
-
-impl PlanRequestOverlay {
-    fn textarea_rect(&self, area: Rect) -> Rect {
-        let inset = area.inset(Insets::vh(1, 2));
-        Rect {
-            x: inset.x,
-            y: inset.y,
-            width: inset.width,
-            height: inset.height.clamp(1, 6),
-        }
     }
 }
