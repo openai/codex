@@ -1809,8 +1809,8 @@ impl ChatWidget {
     }
 
     fn should_handle_agent_event(&self, agent_id: Option<&str>, msg: &EventMsg) -> bool {
-        let agent_id = agent_id.unwrap_or(DEFAULT_AGENT_ID);
-        if agent_id == DEFAULT_AGENT_ID {
+        let agent_id = agent_id.unwrap_or(&DEFAULT_AGENT_ID);
+        if agent_id == *DEFAULT_AGENT_ID {
             return true;
         }
 

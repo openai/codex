@@ -354,9 +354,15 @@ pub(crate) struct Session {
     next_internal_sub_id: AtomicU64,
 }
 
+/// Per-agent mutable state shared across async tasks.
+///
+/// The struct itself is stored in an `Arc`, so fields use `Mutex` to guard
+/// concurrent mutation rather than additional `Arc` layers.
 pub(crate) struct AgentState {
     pub(crate) agent_id: AgentId,
+    /// Session configuration + conversation history for this agent.
     state: Mutex<SessionState>,
+    /// Active turn state is tracked per-agent (each agent can have its own task).
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
 }
 
@@ -1686,11 +1692,14 @@ impl Session {
         self.services.mcp_startup_cancellation_token.cancel();
     }
 
+    /// Returns the agent state if it already exists; does not create or seed it.
     async fn get_agent(&self, agent_id: &AgentId) -> Option<Arc<AgentState>> {
         let agents = self.agents.read().await;
         agents.get(agent_id).cloned()
     }
 
+    /// Ensures an agent exists, creating it with the default session configuration if needed.
+    /// When `seed_history` is true, records the initial context and emits rollout items.
     async fn ensure_agent(&self, agent_id: &AgentId, seed_history: bool) -> Arc<AgentState> {
         if let Some(agent) = self.get_agent(agent_id).await {
             return agent;
@@ -1711,15 +1720,18 @@ impl Session {
         agent
     }
 
+    /// Returns an existing agent state or creates it without seeding history.
     pub(crate) async fn get_or_create_agent(&self, agent_id: &AgentId) -> Arc<AgentState> {
         self.ensure_agent(agent_id, false).await
     }
 
+    /// Snapshot of all agent states currently tracked by the session.
     pub(crate) async fn agent_states(&self) -> Vec<Arc<AgentState>> {
         let agents = self.agents.read().await;
         agents.values().cloned().collect()
     }
 
+    /// Returns true if any agent currently has an active task.
     pub(crate) async fn has_active_tasks(&self) -> bool {
         for agent in self.agent_states().await {
             if agent.active_turn.lock().await.is_some() {
@@ -1729,6 +1741,8 @@ impl Session {
         false
     }
 
+    /// Aborts the active task that owns `sub_id` (the per-turn submission/turn id).
+    /// This is used when approvals arrive without an agent id, so we must locate the owner.
     async fn abort_task_for_sub_id(self: &Arc<Self>, sub_id: &str, reason: TurnAbortReason) {
         for agent in self.agent_states().await {
             let matches_sub_id = {
@@ -1745,6 +1759,7 @@ impl Session {
         }
     }
 
+    /// Returns the agent id that owns `sub_id` (the per-turn submission/turn id), if any.
     async fn agent_id_for_sub_id(&self, sub_id: &str) -> Option<AgentId> {
         for agent in self.agent_states().await {
             let matches_sub_id = {
