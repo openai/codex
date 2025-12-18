@@ -131,9 +131,8 @@ use crate::skills::SkillInjections;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
-use crate::state::ActiveTurn;
+use crate::state::AgentState;
 use crate::state::SessionServices;
-use crate::state::SessionState;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
@@ -358,24 +357,6 @@ pub(crate) struct Session {
 ///
 /// The struct itself is stored in an `Arc`, so fields use `Mutex` to guard
 /// concurrent mutation rather than additional `Arc` layers.
-pub(crate) struct AgentState {
-    pub(crate) agent_id: AgentId,
-    /// Session configuration + conversation history for this agent.
-    state: Mutex<SessionState>,
-    /// Active turn state is tracked per-agent (each agent can have its own task).
-    pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
-}
-
-impl AgentState {
-    fn new(agent_id: AgentId, session_configuration: SessionConfiguration) -> Self {
-        Self {
-            agent_id,
-            state: Mutex::new(SessionState::new(session_configuration)),
-            active_turn: Mutex::new(None),
-        }
-    }
-}
-
 /// The context needed for a single turn of the conversation.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -3059,7 +3040,6 @@ mod tests {
     use crate::tools::format_exec_output_str;
     use codex_protocol::models::FunctionCallOutputPayload;
 
-    use super::AgentState;
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
     use crate::protocol::DEFAULT_AGENT_ID;
@@ -3068,6 +3048,8 @@ mod tests {
     use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
     use crate::protocol::RolloutLine;
+    use crate::state::AgentState;
+    use crate::state::SessionState;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
