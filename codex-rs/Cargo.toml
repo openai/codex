@@ -179,6 +179,7 @@ regex = "1.12.2"
 regex-lite = "0.1.7"
 reqwest = "0.12"
 rmcp = { version = "0.10.0", default-features = false }
+rustls-pki-types = "1.13.0"
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 sentry = "0.46.0"
