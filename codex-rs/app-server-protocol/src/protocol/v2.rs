@@ -1057,6 +1057,9 @@ pub enum SkillScope {
 pub struct SkillMetadata {
     pub name: String,
     pub description: String,
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_description: Option<String>,
     pub path: PathBuf,
     pub scope: SkillScope,
 }
@@ -1083,6 +1086,7 @@ impl From<CoreSkillMetadata> for SkillMetadata {
         Self {
             name: value.name,
             description: value.description,
+            short_description: value.short_description,
             path: value.path,
             scope: value.scope.into(),
         }

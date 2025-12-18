@@ -2187,6 +2187,7 @@ fn skills_to_info(skills: &[SkillMetadata]) -> Vec<ProtocolSkillMetadata> {
         .map(|skill| ProtocolSkillMetadata {
             name: skill.name.clone(),
             description: skill.description.clone(),
+            short_description: skill.short_description.clone(),
             path: skill.path.clone(),
             scope: skill.scope,
         })

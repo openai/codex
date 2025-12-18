@@ -3319,6 +3319,7 @@ fn skills_to_info(
         .map(|skill| codex_app_server_protocol::SkillMetadata {
             name: skill.name.clone(),
             description: skill.description.clone(),
+            short_description: skill.short_description.clone(),
             path: skill.path.clone(),
             scope: skill.scope.into(),
         })

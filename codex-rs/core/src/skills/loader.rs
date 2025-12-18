@@ -20,6 +20,19 @@ use tracing::error;
 struct SkillFrontmatter {
     name: String,
     description: String,
+    #[serde(default)]
+    metadata: SkillFrontmatterMetadata,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SkillFrontmatterMetadata {
+    #[serde(
+        default,
+        rename = "short-description",
+        alias = "shortDescription",
+        alias = "short_description"
+    )]
+    short_description: Option<String>,
 }
 
 const SKILLS_FILENAME: &str = "SKILL.md";
@@ -27,6 +40,7 @@ const SKILLS_DIR_NAME: &str = "skills";
 const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
 const MAX_NAME_LEN: usize = 64;
 const MAX_DESCRIPTION_LEN: usize = 1024;
+const MAX_SHORT_DESCRIPTION_LEN: usize = 500;
 
 #[derive(Debug)]
 enum SkillParseError {
@@ -218,15 +232,29 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
 
     let name = sanitize_single_line(&parsed.name);
     let description = sanitize_single_line(&parsed.description);
+    let short_description = parsed
+        .metadata
+        .short_description
+        .as_deref()
+        .map(sanitize_single_line)
+        .filter(|value| !value.is_empty());
 
     validate_field(&name, MAX_NAME_LEN, "name")?;
     validate_field(&description, MAX_DESCRIPTION_LEN, "description")?;
+    if let Some(short_description) = short_description.as_deref() {
+        validate_field(
+            short_description,
+            MAX_SHORT_DESCRIPTION_LEN,
+            "metadata.short-description",
+        )?;
+    }
 
     let resolved_path = normalize_path(path).unwrap_or_else(|_| path.to_path_buf());
 
     Ok(SkillMetadata {
         name,
         description,
+        short_description,
         path: resolved_path,
         scope,
     })
@@ -345,10 +373,79 @@ mod tests {
         let skill = &outcome.skills[0];
         assert_eq!(skill.name, "demo-skill");
         assert_eq!(skill.description, "does things carefully");
+        assert_eq!(skill.short_description, None);
         let path_str = skill.path.to_string_lossy().replace('\\', "/");
         assert!(
             path_str.ends_with("skills/demo/SKILL.md"),
             "unexpected path {path_str}"
+        );
+    }
+
+    #[test]
+    fn loads_short_description_from_metadata() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_dir = codex_home.path().join("skills/demo");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let contents = "---\nname: demo-skill\ndescription: long description\nmetadata:\n  short-description: short summary\n---\n\n# Body\n";
+        fs::write(skill_dir.join(SKILLS_FILENAME), contents).unwrap();
+
+        let cfg = make_config(&codex_home);
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert_eq!(
+            outcome.skills[0].short_description,
+            Some("short summary".to_string())
+        );
+    }
+
+    #[test]
+    fn loads_short_description_from_metadata_aliases() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_dir = codex_home.path().join("skills/demo");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let contents = "---\nname: demo-skill\ndescription: long description\nmetadata:\n  shortDescription: short summary\n---\n\n# Body\n";
+        fs::write(skill_dir.join(SKILLS_FILENAME), contents).unwrap();
+
+        let cfg = make_config(&codex_home);
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert_eq!(
+            outcome.skills[0].short_description,
+            Some("short summary".to_string())
+        );
+    }
+
+    #[test]
+    fn enforces_short_description_length_limits() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_dir = codex_home.path().join("skills/demo");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let too_long = "x".repeat(MAX_SHORT_DESCRIPTION_LEN + 1);
+        let contents = format!(
+            "---\nname: demo-skill\ndescription: long description\nmetadata:\n  short-description: {too_long}\n---\n\n# Body\n"
+        );
+        fs::write(skill_dir.join(SKILLS_FILENAME), contents).unwrap();
+
+        let cfg = make_config(&codex_home);
+        let outcome = load_skills(&cfg);
+        assert_eq!(outcome.skills.len(), 0);
+        assert_eq!(outcome.errors.len(), 1);
+        assert!(
+            outcome.errors[0]
+                .message
+                .contains("invalid metadata.short-description"),
+            "expected length error, got: {:?}",
+            outcome.errors
         );
     }
 

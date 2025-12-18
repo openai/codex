@@ -6,6 +6,7 @@ use codex_protocol::protocol::SkillScope;
 pub struct SkillMetadata {
     pub name: String,
     pub description: String,
+    pub short_description: Option<String>,
     pub path: PathBuf,
     pub scope: SkillScope,
 }

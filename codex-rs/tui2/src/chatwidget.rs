@@ -3539,6 +3539,7 @@ fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMe
                 .map(|skill| SkillMetadata {
                     name: skill.name.clone(),
                     description: skill.description.clone(),
+                    short_description: skill.short_description.clone(),
                     path: skill.path.clone(),
                     scope: skill.scope,
                 })

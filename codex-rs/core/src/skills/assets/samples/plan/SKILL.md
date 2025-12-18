@@ -1,6 +1,8 @@
 ---
 name: plan
 description: Generate a plan for how an agent should accomplish a complex coding task. Use when a user asks for a plan, and optionally when they want to save, find, read, update, or delete plan files in $CODEX_HOME/plans (default ~/.codex/plans).
+metadata:
+  short-description: Create and manage plan markdown files under $CODEX_HOME/plans.
 ---
 
 # Plan
