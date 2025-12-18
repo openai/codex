@@ -2987,46 +2987,44 @@ pub async fn run_security_review(
     let overall_start = Instant::now();
 
     if progress_sender.is_none() {
-        if let Some(sink) = log_sink.clone() {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            let log_sink_for_task = Some(sink);
-            tokio::spawn(async move {
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        AppEvent::SecurityReviewLog(message) => {
-                            eprintln!("{message}");
-                            write_log_sink(&log_sink_for_task, message.as_str());
-                        }
-                        AppEvent::SecurityReviewCommandStatus {
-                            summary,
-                            state,
-                            preview,
-                            ..
-                        } => {
-                            let state_label = match state {
-                                SecurityReviewCommandState::Running => "running",
-                                SecurityReviewCommandState::Matches => "matches",
-                                SecurityReviewCommandState::NoMatches => "no matches",
-                                SecurityReviewCommandState::Error => "error",
-                            };
-                            eprintln!("Command [{state_label}]: {summary}");
-                            write_log_sink(
-                                &log_sink_for_task,
-                                format!("Command [{state_label}]: {summary}").as_str(),
-                            );
-                            for line in preview {
-                                if !line.trim().is_empty() {
-                                    eprintln!("{line}");
-                                    write_log_sink(&log_sink_for_task, line.as_str());
-                                }
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let log_sink_for_task = log_sink.clone();
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                match event {
+                    AppEvent::SecurityReviewLog(message) => {
+                        eprintln!("{message}");
+                        write_log_sink(&log_sink_for_task, message.as_str());
+                    }
+                    AppEvent::SecurityReviewCommandStatus {
+                        summary,
+                        state,
+                        preview,
+                        ..
+                    } => {
+                        let state_label = match state {
+                            SecurityReviewCommandState::Running => "running",
+                            SecurityReviewCommandState::Matches => "matches",
+                            SecurityReviewCommandState::NoMatches => "no matches",
+                            SecurityReviewCommandState::Error => "error",
+                        };
+                        eprintln!("Command [{state_label}]: {summary}");
+                        write_log_sink(
+                            &log_sink_for_task,
+                            format!("Command [{state_label}]: {summary}").as_str(),
+                        );
+                        for line in preview {
+                            if !line.trim().is_empty() {
+                                eprintln!("{line}");
+                                write_log_sink(&log_sink_for_task, line.as_str());
                             }
                         }
-                        _ => {}
                     }
+                    _ => {}
                 }
-            });
-            progress_sender = Some(AppEventSender::new(tx));
-        }
+            }
+        });
+        progress_sender = Some(AppEventSender::new(tx));
     }
 
     let repo_path = request.repo_path.clone();
