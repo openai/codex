@@ -14,6 +14,15 @@ In the `codex-rs` folder where the Rust code lives:
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
 
+## Changelog (Codexel)
+
+- `CHANGELOG.md` tracks Codexel-only commits (not in `upstream/main`).
+- Regenerate the generated Details blocks with `scripts/gen-changelog.ps1` (Windows) or
+  `bash scripts/gen-changelog.sh` (macOS/Linux).
+- Use `--check` in CI to ensure the changelog is up to date.
+- When cutting a release, update the release and upstream baseline SHAs in `CHANGELOG.md`,
+  then rerun the generator.
+
 ## Interactive questions (AskUserQuestion)
 
 When you need user input mid-run, use the `ask_user_question` tool instead of asking questions in plain text.
