@@ -9,12 +9,9 @@ inputs:
     required: false
     default: "true"
   sign-dmg:
-    description: Whether to sign and notarize the macOS DMG.
+    description: Whether to sign and notarize the macOS dmg.
     required: false
     default: "true"
-  dmg-path:
-    description: Path to the DMG to sign and notarize (defaults to codex-rs/target/<target>/release/codex-<target>.dmg).
-    required: false
   apple-certificate:
     description: Base64-encoded Apple signing certificate (P12).
     required: true
@@ -213,7 +210,7 @@ runs:
         notarize_binary "codex"
         notarize_binary "codex-responses-api-proxy"
 
-    - name: Sign and notarize macOS DMG
+    - name: Sign and notarize macOS dmg
       if: ${{ inputs.sign-dmg == 'true' }}
       shell: bash
       env:
@@ -223,14 +220,9 @@ runs:
       run: |
         set -euo pipefail
 
-        if [[ -z "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
-          echo "APPLE_CODESIGN_IDENTITY is required for macOS signing"
-          exit 1
-        fi
-
-        for var in APPLE_NOTARIZATION_KEY_P8 APPLE_NOTARIZATION_KEY_ID APPLE_NOTARIZATION_ISSUER_ID; do
+        for var in APPLE_CODESIGN_IDENTITY APPLE_NOTARIZATION_KEY_P8 APPLE_NOTARIZATION_KEY_ID APPLE_NOTARIZATION_ISSUER_ID; do
           if [[ -z "${!var:-}" ]]; then
-            echo "$var is required for notarization"
+            echo "$var is required"
             exit 1
           fi
         done
@@ -274,13 +266,10 @@ runs:
           fi
         }
 
-        dmg_path="${{ inputs.dmg-path }}"
-        if [[ -z "$dmg_path" ]]; then
-          dmg_path="codex-rs/target/${{ inputs.target }}/release/codex-${{ inputs.target }}.dmg"
-        fi
+        dmg_path="codex-rs/target/${{ inputs.target }}/release/codex-${{ inputs.target }}.dmg"
 
         if [[ ! -f "$dmg_path" ]]; then
-          echo "DMG $dmg_path not found"
+          echo "dmg $dmg_path not found"
           exit 1
         fi
 

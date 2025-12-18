@@ -128,7 +128,7 @@ jobs:
           account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
 
-      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
+      - if: ${{ runner.os == 'macOS' }}
         name: MacOS code signing (binaries)
         uses: ./.github/actions/macos-code-sign
         with:
@@ -141,8 +141,8 @@ jobs:
           apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
           apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
 
-      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
-        name: Build macOS DMG
+      - if: ${{ runner.os == 'macOS' }}
+        name: Build macOS dmg
         shell: bash
         run: |
           set -euo pipefail
@@ -155,7 +155,7 @@ jobs:
 
           # The previous "MacOS code signing (binaries)" step signs + notarizes the
           # built artifacts in `${release_dir}`. This step packages *those same*
-          # signed binaries into a DMG.
+          # signed binaries into a dmg.
           codex_binary_path="${release_dir}/codex"
           proxy_binary_path="${release_dir}/codex-responses-api-proxy"
 
@@ -183,11 +183,11 @@ jobs:
             "$dmg_path"
 
           if [[ ! -f "$dmg_path" ]]; then
-            echo "DMG $dmg_path not found after build"
+            echo "dmg $dmg_path not found after build"
             exit 1
           fi
 
-      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
+      - if: ${{ runner.os == 'macOS' }}
         name: MacOS code signing (dmg)
         uses: ./.github/actions/macos-code-sign
         with:
