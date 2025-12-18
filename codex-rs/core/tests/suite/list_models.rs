@@ -247,6 +247,7 @@ fn caribou_upgrade() -> codex_protocol::openai_models::ModelUpgrade {
         id: "caribou".to_string(),
         reasoning_effort_mapping: None,
         migration_config_key: "caribou".to_string(),
+        model_link: Some("https://www.codex.com/models/caribou".to_string()),
     }
 }
 

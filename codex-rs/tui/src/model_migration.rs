@@ -58,6 +58,7 @@ impl MigrationMenuOption {
 pub(crate) fn migration_copy_for_models(
     current_model: &str,
     target_model: &str,
+    model_link: Option<String>,
     target_display_name: String,
     target_description: Option<String>,
     can_opt_out: bool,
@@ -80,6 +81,13 @@ pub(crate) fn migration_copy_for_models(
         description_line,
         Line::from(""),
     ];
+
+    if let Some(model_link) = model_link {
+        content.push(Line::from(vec![
+            format!("Learn more about {target_display_name} at ").into(),
+            model_link.cyan().underlined(),
+        ]));
+    }
 
     if can_opt_out {
         content.push(Line::from(format!(
@@ -353,6 +361,7 @@ mod tests {
             migration_copy_for_models(
                 "gpt-5.1-codex-mini",
                 "gpt-5.1-codex-max",
+                Some("https://www.codex.com/models/gpt-5.1-codex-max".to_string()),
                 "gpt-5.1-codex-max".to_string(),
                 Some("Latest Codex-optimized flagship for deep and fast reasoning.".to_string()),
                 true,
@@ -379,6 +388,7 @@ mod tests {
             migration_copy_for_models(
                 "gpt-5",
                 "gpt-5.1",
+                Some("https://www.codex.com/models/gpt-5.1".to_string()),
                 "gpt-5.1".to_string(),
                 Some("Broad world knowledge with strong general reasoning.".to_string()),
                 false,
@@ -403,6 +413,7 @@ mod tests {
             migration_copy_for_models(
                 "gpt-5-codex",
                 "gpt-5.1-codex-max",
+                Some("https://www.codex.com/models/gpt-5.1-codex-max".to_string()),
                 "gpt-5.1-codex-max".to_string(),
                 Some("Latest Codex-optimized flagship for deep and fast reasoning.".to_string()),
                 false,
@@ -427,6 +438,7 @@ mod tests {
             migration_copy_for_models(
                 "gpt-5-codex-mini",
                 "gpt-5.1-codex-mini",
+                Some("https://www.codex.com/models/gpt-5.1-codex-mini".to_string()),
                 "gpt-5.1-codex-mini".to_string(),
                 Some("Optimized for codex. Cheaper, faster, but less capable.".to_string()),
                 false,
@@ -447,6 +459,7 @@ mod tests {
             migration_copy_for_models(
                 "gpt-old",
                 "gpt-new",
+                Some("https://www.codex.com/models/gpt-new".to_string()),
                 "gpt-new".to_string(),
                 Some("Latest recommended model for better performance.".to_string()),
                 true,
@@ -473,6 +486,7 @@ mod tests {
             migration_copy_for_models(
                 "gpt-old",
                 "gpt-new",
+                Some("https://www.codex.com/models/gpt-new".to_string()),
                 "gpt-new".to_string(),
                 Some("Latest recommended model for better performance.".to_string()),
                 true,

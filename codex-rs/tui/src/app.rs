@@ -186,6 +186,7 @@ async fn handle_model_migration_prompt_if_needed(
         id: target_model,
         reasoning_effort_mapping,
         migration_config_key,
+        model_link,
     }) = upgrade
     {
         if migration_prompt_hidden(config, migration_config_key.as_str()) {
@@ -217,6 +218,7 @@ async fn handle_model_migration_prompt_if_needed(
         let prompt_copy = migration_copy_for_models(
             model,
             &target_model,
+            model_link.clone(),
             heading_label,
             target_description,
             can_opt_out,
@@ -1398,6 +1400,7 @@ mod tests {
             id: "missing-target".to_string(),
             reasoning_effort_mapping: None,
             migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG.to_string(),
+            model_link: None,
         });
         available.retain(|preset| preset.model != "gpt-5-codex");
         available.push(current.clone());

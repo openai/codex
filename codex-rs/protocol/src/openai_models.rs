@@ -52,6 +52,7 @@ pub struct ModelUpgrade {
     pub id: String,
     pub reasoning_effort_mapping: Option<HashMap<ReasoningEffort, ReasoningEffort>>,
     pub migration_config_key: String,
+    pub model_link: Option<String>,
 }
 
 /// Metadata describing a Codex-supported model.
@@ -216,6 +217,8 @@ impl From<ModelInfo> for ModelPreset {
                     &info.supported_reasoning_levels,
                 ),
                 migration_config_key: info.slug.clone(),
+                // todo(aibrahim): add the model link here.
+                model_link: None,
             }),
             show_in_picker: info.visibility == ModelVisibility::List,
             supported_in_api: info.supported_in_api,
