@@ -64,7 +64,10 @@ pub(crate) fn migration_copy_for_models(
     target_description: Option<String>,
     can_opt_out: bool,
 ) -> ModelMigrationCopy {
-    let heading_text = Span::from(format!("Try {target_display_name}")).bold();
+    let heading_text = Span::from(format!(
+        "Codex just got an upgrade. Introducing {target_display_name}."
+    ))
+    .bold();
     let description_line: Line<'static>;
     if let Some(migration_copy) = &migration_copy {
         description_line = Line::from(migration_copy.clone());
@@ -80,7 +83,7 @@ pub(crate) fn migration_copy_for_models(
     }
 
     let mut content = vec![];
-    if !migration_copy.is_some() {
+    if migration_copy.is_none() {
         content.push(Line::from(format!(
             "We recommend switching from {current_model} to {target_model}."
         )));

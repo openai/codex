@@ -257,7 +257,7 @@ fn gpt_52_codex_upgrade() -> ModelUpgrade {
         migration_config_key: "gpt-5.2-codex".to_string(),
         model_link: Some("https://openai.com/index/introducing-gpt-5-2-codex".to_string()),
         upgrade_copy: Some(
-            "Codex is now powered by GPT-5.1-Codex-Max, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work."
+            "Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work."
                 .to_string(),
         ),
     }
