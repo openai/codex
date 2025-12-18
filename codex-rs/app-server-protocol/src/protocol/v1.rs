@@ -3,20 +3,20 @@ use std::path::PathBuf;
 
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxCommandAssessment;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -226,7 +226,6 @@ pub struct ExecCommandApprovalParams {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub reason: Option<String>,
-    pub risk: Option<SandboxCommandAssessment>,
     pub parsed_cmd: Vec<ParsedCommand>,
 }
 
@@ -361,7 +360,7 @@ pub struct Tools {
 #[serde(rename_all = "camelCase")]
 pub struct SandboxSettings {
     #[serde(default)]
-    pub writable_roots: Vec<PathBuf>,
+    pub writable_roots: Vec<AbsolutePathBuf>,
     pub network_access: Option<bool>,
     pub exclude_tmpdir_env_var: Option<bool>,
     pub exclude_slash_tmp: Option<bool>,

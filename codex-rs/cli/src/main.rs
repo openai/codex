@@ -18,11 +18,14 @@ use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
+use codex_exec::Command as ExecCommand;
+use codex_exec::ReviewArgs;
 use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::update_action::UpdateAction;
+use codex_tui2 as tui2;
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use supports_color::Stream;
@@ -35,6 +38,11 @@ use crate::mcp_cmd::McpCli;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::find_codex_home;
+use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::features::Feature;
+use codex_core::features::FeatureOverrides;
+use codex_core::features::Features;
 use codex_core::features::is_known_feature_key;
 
 /// Codex CLI
@@ -71,6 +79,9 @@ enum Subcommand {
     /// Run Codex non-interactively.
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
+
+    /// Run a code review non-interactively.
+    Review(ReviewArgs),
 
     /// Manage login.
     Login(LoginCommand),
@@ -285,7 +296,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     )];
 
     if let Some(session_id) = conversation_id {
-        let resume_cmd = format!("codex resume {session_id}");
+        let resume_cmd = format!("codex-local resume {session_id}");
         let command = if color_enabled {
             resume_cmd.cyan().to_string()
         } else {
@@ -399,7 +410,7 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
     use codex_core::features::Stage;
     match stage {
         Stage::Experimental => "experimental",
-        Stage::Beta => "beta",
+        Stage::Beta { .. } => "beta",
         Stage::Stable => "stable",
         Stage::Deprecated => "deprecated",
         Stage::Removed => "removed",
@@ -439,10 +450,19 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 &mut interactive.config_overrides,
                 root_config_overrides.clone(),
             );
-            let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
+            let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
             handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
+            prepend_config_flags(
+                &mut exec_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
+        }
+        Some(Subcommand::Review(review_args)) => {
+            let mut exec_cli = ExecCli::try_parse_from(["codex", "exec"])?;
+            exec_cli.command = Some(ExecCommand::Review(review_args));
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
@@ -485,7 +505,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 all,
                 config_overrides,
             );
-            let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
+            let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
             handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
@@ -611,7 +631,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     ..Default::default()
                 };
 
-                let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
+                let config = Config::load_with_cli_overrides_and_harness_overrides(
+                    cli_kv_overrides,
+                    overrides,
+                )
+                .await?;
                 for def in codex_core::features::FEATURES.iter() {
                     let name = def.key;
                     let stage = stage_str(def.stage);
@@ -634,6 +658,40 @@ fn prepend_config_flags(
     subcommand_config_overrides
         .raw_overrides
         .splice(0..0, cli_config_overrides.raw_overrides);
+}
+
+/// Run the interactive Codex TUI, dispatching to either the legacy implementation or the
+/// experimental TUI v2 shim based on feature flags resolved from config.
+async fn run_interactive_tui(
+    interactive: TuiCli,
+    codex_linux_sandbox_exe: Option<PathBuf>,
+) -> std::io::Result<AppExitInfo> {
+    if is_tui2_enabled(&interactive).await? {
+        let result = tui2::run_main(interactive.into(), codex_linux_sandbox_exe).await?;
+        Ok(result.into())
+    } else {
+        codex_tui::run_main(interactive, codex_linux_sandbox_exe).await
+    }
+}
+
+/// Returns `Ok(true)` when the resolved configuration enables the `tui2` feature flag.
+///
+/// This performs a lightweight config load (honoring the same precedence as the lower-level TUI
+/// bootstrap: `$CODEX_HOME`, config.toml, profile, and CLI `-c` overrides) solely to decide which
+/// TUI frontend to launch. The full configuration is still loaded later by the interactive TUI.
+async fn is_tui2_enabled(cli: &TuiCli) -> std::io::Result<bool> {
+    let raw_overrides = cli.config_overrides.raw_overrides.clone();
+    let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
+    let cli_kv_overrides = overrides_cli
+        .parse_overrides()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+    let codex_home = find_codex_home()?;
+    let config_toml = load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides).await?;
+    let config_profile = config_toml.get_config_profile(cli.config_profile.clone())?;
+    let overrides = FeatureOverrides::default();
+    let features = Features::from_config(&config_toml, &config_profile, overrides);
+    Ok(features.enabled(Feature::Tui2))
 }
 
 /// Build the final `TuiCli` for a `codex resume` invocation.
@@ -786,7 +844,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
+                "To continue this session, run codex-local resume 123e4567-e89b-12d3-a456-426614174000"
                     .to_string(),
             ]
         );

@@ -26,6 +26,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::get_responses_request_bodies;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::wait_for_event;
@@ -771,17 +772,11 @@ fn normalize_line_endings(value: &mut Value) {
 }
 
 async fn gather_request_bodies(server: &MockServer) -> Vec<Value> {
-    server
-        .received_requests()
-        .await
-        .expect("mock server should not fail")
-        .into_iter()
-        .map(|req| {
-            let mut value = req.body_json::<Value>().expect("valid JSON body");
-            normalize_line_endings(&mut value);
-            value
-        })
-        .collect()
+    let mut bodies = get_responses_request_bodies(server).await;
+    for body in &mut bodies {
+        normalize_line_endings(body);
+    }
+    bodies
 }
 
 async fn mount_initial_flow(server: &MockServer) {
@@ -862,6 +857,7 @@ async fn start_test_conversation(
     model: Option<&str>,
 ) -> (TempDir, Config, ConversationManager, Arc<CodexConversation>) {
     let model_provider = ModelProviderInfo {
+        name: "Non-OpenAI Model provider".into(),
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
     };
@@ -870,9 +866,12 @@ async fn start_test_conversation(
     config.model_provider = model_provider;
     config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
     if let Some(model) = model {
-        config.model = model.to_string();
+        config.model = Some(model.to_string());
     }
-    let manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let manager = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
     let NewConversation { conversation, .. } = manager
         .new_conversation(config.clone())
         .await

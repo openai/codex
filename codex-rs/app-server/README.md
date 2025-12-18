@@ -1,15 +1,16 @@
 # codex-app-server
 
-`codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt). The message schema is currently unstable, but those who wish to build experimental UIs on top of Codex may find it valuable.
+`codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
 
 ## Table of Contents
+
 - [Protocol](#protocol)
 - [Message Schema](#message-schema)
+- [Core Primitives](#core-primitives)
 - [Lifecycle Overview](#lifecycle-overview)
 - [Initialization](#initialization)
-- [Core primitives](#core-primitives)
-- [Thread & turn endpoints](#thread--turn-endpoints)
-- [Events (work-in-progress)](#events-work-in-progress)
+- [API Overview](#api-overview)
+- [Events](#events)
 - [Auth endpoints](#auth-endpoints)
 
 ## Protocol
@@ -25,6 +26,16 @@ codex app-server generate-ts --out DIR
 codex app-server generate-json-schema --out DIR
 ```
 
+## Core Primitives
+
+The API exposes three top level primitives representing an interaction between a user and Codex:
+
+- **Thread**: A conversation between a user and the Codex agent. Each thread contains multiple turns.
+- **Turn**: One turn of the conversation, typically starting with a user message and finishing with an agent message. Each turn contains multiple items.
+- **Item**: Represents user inputs and agent outputs as part of the turn, persisted and used as the context for future conversations. Example items include user message, agent reasoning, agent message, shell command, file edit, etc.
+
+Use the thread APIs to create, list, or archive conversations. Drive a conversation with turn APIs and stream progress via turn notifications.
+
 ## Lifecycle Overview
 
 - Initialize once: Immediately after launching the codex app-server process, send an `initialize` request with your client metadata, then emit an `initialized` notification. Any other request before this handshake gets rejected.
@@ -37,28 +48,26 @@ codex app-server generate-json-schema --out DIR
 
 Clients must send a single `initialize` request before invoking any other method, then acknowledge with an `initialized` notification. The server returns the user agent string it will present to upstream services; subsequent requests issued before initialization receive a `"Not initialized"` error, and repeated `initialize` calls receive an `"Already initialized"` error.
 
-Example:
+Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
+
+Example (from OpenAI's official VSCode extension):
 
 ```json
-{ "method": "initialize", "id": 0, "params": {
-    "clientInfo": { "name": "codex-vscode", "title": "Codex VS Code Extension", "version": "0.1.0" }
-} }
-{ "id": 0, "result": { "userAgent": "codex-app-server/0.1.0 codex-vscode/0.1.0" } }
-{ "method": "initialized" }
+{
+  "method": "initialize",
+  "id": 0,
+  "params": {
+    "clientInfo": {
+      "name": "codex-vscode",
+      "title": "Codex VS Code Extension",
+      "version": "0.1.0"
+    }
+  }
+}
 ```
 
-## Core primitives
+## API Overview
 
-We have 3 top level primitives:
-- Thread - a conversation between the Codex agent and a user. Each thread contains multiple turns.
-- Turn - one turn of the conversation, typically starting with a user message and finishing with an agent message. Each turn contains multiple items.
-- Item - represents user inputs and agent outputs as part of the turn, persisted and used as the context for future conversations.
-
-## Thread & turn endpoints
-
-The JSON-RPC API exposes dedicated methods for managing Codex conversations. Threads store long-lived conversation metadata, and turns store the per-message exchange (input → Codex output, including streamed items). Use the thread APIs to create, list, or archive sessions, then drive the conversation with turn APIs and notifications.
-
-### Quick reference
 - `thread/start` — create a new thread; emits `thread/started` and auto-subscribes you to turn/item events for that thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders` filtering.
@@ -66,8 +75,18 @@ The JSON-RPC API exposes dedicated methods for managing Codex conversations. Thr
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
+- `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
+- `model/list` — list available models (with reasoning effort options).
+- `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
+- `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
+- `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
+- `feedback/upload` — submit a feedback report (classification + optional reason/logs and conversation_id); returns the tracking thread id.
+- `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
+- `config/read` — fetch the effective config on disk after resolving config layering.
+- `config/value/write` — write a single config key/value to the user's config.toml on disk.
+- `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk.
 
-### 1) Start or resume a thread
+### Example: Start or resume a thread
 
 Start a fresh thread when you need a new Codex conversation.
 
@@ -98,9 +117,10 @@ To continue a stored session, call `thread/resume` with the `thread.id` you prev
 { "id": 11, "result": { "thread": { "id": "thr_123", … } } }
 ```
 
-### 2) List threads (pagination & filters)
+### Example: List threads (with pagination & filters)
 
 `thread/list` lets you render a history UI. Pass any combination of:
+
 - `cursor` — opaque string from a prior response; omit for the first page.
 - `limit` — server defaults to a reasonable page size if unset.
 - `modelProviders` — restrict results to specific providers; unset, null, or an empty array will include all providers.
@@ -123,7 +143,7 @@ Example:
 
 When `nextCursor` is `null`, you’ve reached the final page.
 
-### 3) Archive a thread
+### Example: Archive a thread
 
 Use `thread/archive` to move the persisted rollout (stored as a JSONL file on disk) into the archived sessions directory.
 
@@ -134,7 +154,7 @@ Use `thread/archive` to move the persisted rollout (stored as a JSONL file on di
 
 An archived thread will not appear in future calls to `thread/list`.
 
-### 4) Start a turn (send user input)
+### Example: Start a turn (send user input)
 
 Turns attach user input (text or images) to a thread and trigger Codex generation. The `input` field is a list of discriminated unions:
 
@@ -168,7 +188,7 @@ You can optionally specify config overrides on the new turn. If specified, these
 } } }
 ```
 
-### 5) Interrupt an active turn
+### Example: Interrupt an active turn
 
 You can cancel a running Turn with `turn/interrupt`.
 
@@ -182,7 +202,7 @@ You can cancel a running Turn with `turn/interrupt`.
 
 The server requests cancellations for running subprocesses, then emits a `turn/completed` event with `status: "interrupted"`. Rely on the `turn/completed` to know when Codex-side cleanup is done.
 
-### 6) Request a code review
+### Example: Request a code review
 
 Use `review/start` to run Codex’s reviewer on the currently checked-out project. The request takes the thread id plus a `target` describing what should be reviewed:
 
@@ -221,27 +241,57 @@ Codex streams the usual `turn/started` notification followed by an `item/started
 with an `enteredReviewMode` item so clients can show progress:
 
 ```json
-{ "method": "item/started", "params": { "item": {
-    "type": "enteredReviewMode",
-    "id": "turn_900",
-    "review": "current changes"
-} } }
+{
+  "method": "item/started",
+  "params": {
+    "item": {
+      "type": "enteredReviewMode",
+      "id": "turn_900",
+      "review": "current changes"
+    }
+  }
+}
 ```
 
 When the reviewer finishes, the server emits `item/started` and `item/completed`
 containing an `exitedReviewMode` item with the final review text:
 
 ```json
-{ "method": "item/completed", "params": { "item": {
-    "type": "exitedReviewMode",
-    "id": "turn_900",
-    "review": "Looks solid overall...\n\n- Prefer Stylize helpers — app.rs:10-20\n  ..."
-} } }
+{
+  "method": "item/completed",
+  "params": {
+    "item": {
+      "type": "exitedReviewMode",
+      "id": "turn_900",
+      "review": "Looks solid overall...\n\n- Prefer Stylize helpers — app.rs:10-20\n  ..."
+    }
+  }
+}
 ```
 
 The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::ExitedReviewMode` in the generated schema). Use this notification to render the reviewer output in your client.
 
-## Events (work-in-progress)
+### Example: One-off command execution
+
+Run a standalone command (argv vector) in the server’s sandbox without creating a thread or turn:
+
+```json
+{ "method": "command/exec", "id": 32, "params": {
+    "command": ["ls", "-la"],
+    "cwd": "/Users/me/project",                    // optional; defaults to server cwd
+    "sandboxPolicy": { "type": "workspaceWrite" }, // optional; defaults to user config
+    "timeoutMs": 10000                             // optional; ms timeout; defaults to server timeout
+} }
+{ "id": 32, "result": { "exitCode": 0, "stdout": "...", "stderr": "" } }
+```
+
+Notes:
+
+- Empty `command` arrays are rejected.
+- `sandboxPolicy` accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags).
+- When omitted, `timeoutMs` falls back to the server default.
+
+## Events
 
 Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
 
@@ -251,13 +301,15 @@ The app-server streams JSON-RPC notifications while a turn is running. Each turn
 
 - `turn/started` — `{ turn }` with the turn id, empty `items`, and `status: "inProgress"`.
 - `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorInfo? } }`.
+- `turn/diff/updated` — `{ threadId, turnId, diff }` represents the up-to-date snapshot of the turn-level unified diff, emitted after every FileChange item. `diff` is the latest aggregated unified diff across every file change in the turn. UIs can render this to show the full "what changed" view without stitching individual `fileChange` items.
 - `turn/plan/updated` — `{ turnId, explanation?, plan }` whenever the agent shares or changes its plan; each `plan` entry is `{ step, status }` with `status` in `pending`, `inProgress`, or `completed`.
 
 Today both notifications carry an empty `items` array even when item events were streamed; rely on `item/*` notifications for the canonical item list until this is fixed.
 
-#### Thread items
+#### Items
 
 `ThreadItem` is the tagged union carried in turn responses and `item/*` notifications. Currently we support events for the following items:
+
 - `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`).
 - `agentMessage` — `{id, text}` containing the accumulated agent reply.
 - `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).
@@ -265,40 +317,54 @@ Today both notifications carry an empty `items` array even when item events were
 - `fileChange` — `{id, changes, status}` describing proposed edits; `changes` list `{path, kind, diff}` and `status` is `inProgress`, `completed`, `failed`, or `declined`.
 - `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?}` describing MCP calls; `status` is `inProgress`, `completed`, or `failed`.
 - `webSearch` — `{id, query}` for a web search request issued by the agent.
+- `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
+- `enteredReviewMode` — `{id, review}` sent when the reviewer starts; `review` is a short user-facing label such as `"current changes"` or the requested target description.
+- `exitedReviewMode` — `{id, review}` emitted when the reviewer finishes; `review` is the full plain-text review (usually, overall notes plus bullet point findings).
 - `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically.
 
 All items emit two shared lifecycle events:
+
 - `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.
 - `item/completed` — sends the final `item` once that work finishes (e.g., after a tool call or message completes); treat this as the authoritative state.
 
 There are additional item-specific events:
+
 #### agentMessage
+
 - `item/agentMessage/delta` — appends streamed text for the agent message; concatenate `delta` values for the same `itemId` in order to reconstruct the full reply.
+
 #### reasoning
+
 - `item/reasoning/summaryTextDelta` — streams readable reasoning summaries; `summaryIndex` increments when a new summary section opens.
 - `item/reasoning/summaryPartAdded` — marks the boundary between reasoning summary sections for an `itemId`; subsequent `summaryTextDelta` entries share the same `summaryIndex`.
 - `item/reasoning/textDelta` — streams raw reasoning text (only applicable for e.g. open source models); use `contentIndex` to group deltas that belong together before showing them in the UI.
+
 #### commandExecution
+
 - `item/commandExecution/outputDelta` — streams stdout/stderr for the command; append deltas in order to render live output alongside `aggregatedOutput` in the final item.
-Final `commandExecution` items include parsed `commandActions`, `status`, `exitCode`, and `durationMs` so the UI can summarize what ran and whether it succeeded.
+  Final `commandExecution` items include parsed `commandActions`, `status`, `exitCode`, and `durationMs` so the UI can summarize what ran and whether it succeeded.
+
 #### fileChange
-`fileChange` items contain a `changes` list with `{path, kind, diff}` entries (`kind` is `add`, `delete`, or `update` with an optional `movePath`). The `status` tracks whether apply succeeded (`completed`), failed, or was `declined`.
+
+- `item/fileChange/outputDelta` - contains the tool call response of the underlying `apply_patch` tool call.
 
 ### Errors
+
 `error` event is emitted whenever the server hits an error mid-turn (for example, upstream model errors or quota limits). Carries the same `{ error: { message, codexErrorInfo? } }` payload as `turn.status: "failed"` and may precede that terminal notification.
 
-  `codexErrorInfo` maps to the `CodexErrorInfo` enum. Common values:
-  - `ContextWindowExceeded`
-  - `UsageLimitExceeded`
-  - `HttpConnectionFailed { httpStatusCode? }`: upstream HTTP failures including 4xx/5xx
-  - `ResponseStreamConnectionFailed { httpStatusCode? }`: failure to connect to the response SSE stream
-  - `ResponseStreamDisconnected { httpStatusCode? }`: disconnect of the response SSE stream in the middle of a turn before completion
-  - `ResponseTooManyFailedAttempts { httpStatusCode? }`
-  - `BadRequest`
-  - `Unauthorized`
-  - `SandboxError`
-  - `InternalServerError`
-  - `Other`: all unclassified errors
+`codexErrorInfo` maps to the `CodexErrorInfo` enum. Common values:
+
+- `ContextWindowExceeded`
+- `UsageLimitExceeded`
+- `HttpConnectionFailed { httpStatusCode? }`: upstream HTTP failures including 4xx/5xx
+- `ResponseStreamConnectionFailed { httpStatusCode? }`: failure to connect to the response SSE stream
+- `ResponseStreamDisconnected { httpStatusCode? }`: disconnect of the response SSE stream in the middle of a turn before completion
+- `ResponseTooManyFailedAttempts { httpStatusCode? }`
+- `BadRequest`
+- `Unauthorized`
+- `SandboxError`
+- `InternalServerError`
+- `Other`: all unclassified errors
 
 When an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.
 
@@ -312,6 +378,7 @@ Certain actions (shell commands or modifying files) may require explicit user ap
 ### Command execution approvals
 
 Order of messages:
+
 1. `item/started` — shows the pending `commandExecution` item with `command`, `cwd`, and other fields so you can render the proposed action.
 2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `reason` or `risk`, plus `parsedCmd` for friendly display.
 3. Client response — `{ "decision": "accept", "acceptSettings": { "forSession": false } }` or `{ "decision": "decline" }`.
@@ -320,6 +387,7 @@ Order of messages:
 ### File change approvals
 
 Order of messages:
+
 1. `item/started` — emits a `fileChange` item with `changes` (diff chunk summaries) and `status: "inProgress"`. Show the proposed edits and paths to the user.
 2. `item/fileChange/requestApproval` (request) — includes `itemId`, `threadId`, `turnId`, and an optional `reason`.
 3. Client response — `{ "decision": "accept" }` or `{ "decision": "decline" }`.
@@ -331,7 +399,8 @@ UI guidance for IDEs: surface an approval dialog as soon as the request arrives.
 
 The JSON-RPC auth/account surface exposes request/response methods plus server-initiated notifications (no `id`). Use these to determine auth state, start or cancel logins, logout, and inspect ChatGPT rate limits.
 
-### Quick reference
+### API Overview
+
 - `account/read` — fetch current account info; optionally refresh tokens.
 - `account/login/start` — begin login (`apiKey` or `chatgpt`).
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
@@ -339,15 +408,19 @@ The JSON-RPC auth/account surface exposes request/response methods plus server-i
 - `account/logout` — sign out; triggers `account/updated`.
 - `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`).
 - `account/rateLimits/read` — fetch ChatGPT rate limits; updates arrive via `account/rateLimits/updated` (notify).
+- `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change.
+- `mcpServer/oauthLogin/completed` (notify) — emitted after a `mcpServer/oauth/login` flow finishes for a server; payload includes `{ name, success, error? }`.
 
 ### 1) Check auth state
 
 Request:
+
 ```json
 { "method": "account/read", "id": 1, "params": { "refreshToken": false } }
 ```
 
 Response examples:
+
 ```json
 { "id": 1, "result": { "account": null, "requiresOpenaiAuth": false } } // No OpenAI auth needed (e.g., OSS/local models)
 { "id": 1, "result": { "account": null, "requiresOpenaiAuth": true } }  // OpenAI auth required (typical for OpenAI-hosted models)
@@ -356,6 +429,7 @@ Response examples:
 ```
 
 Field notes:
+
 - `refreshToken` (bool): set `true` to force a token refresh.
 - `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
 
@@ -363,7 +437,11 @@ Field notes:
 
 1. Send:
    ```json
-   { "method": "account/login/start", "id": 2, "params": { "type": "apiKey", "apiKey": "sk-…" } }
+   {
+     "method": "account/login/start",
+     "id": 2,
+     "params": { "type": "apiKey", "apiKey": "sk-…" }
+   }
    ```
 2. Expect:
    ```json
@@ -413,12 +491,7 @@ Field notes:
 ```
 
 Field notes:
+
 - `usedPercent` is current usage within the OpenAI quota window.
 - `windowDurationMins` is the quota window length.
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
-
-### Dev notes
-
-- `codex app-server generate-ts --out <dir>` emits v2 types under `v2/`.
-- `codex app-server generate-json-schema --out <dir>` outputs `codex_app_server_protocol.schemas.json`.
-- See [“Authentication and authorization” in the config docs](../../docs/config.md#authentication-and-authorization) for configuration knobs.

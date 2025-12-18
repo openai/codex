@@ -1,9 +1,10 @@
 use base64::Engine as _;
+use chrono::DateTime;
+use chrono::Local;
 use chrono::Utc;
 use reqwest::header::HeaderMap;
 
 use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
 use codex_login::AuthManager;
 
 pub fn set_user_agent_suffix(suffix: &str) {
@@ -60,9 +61,7 @@ pub fn extract_chatgpt_account_id(token: &str) -> Option<String> {
 
 pub async fn load_auth_manager() -> Option<AuthManager> {
     // TODO: pass in cli overrides once cloud tasks properly support them.
-    let config = Config::load_with_cli_overrides(Vec::new(), ConfigOverrides::default())
-        .await
-        .ok()?;
+    let config = Config::load_with_cli_overrides(Vec::new()).await.ok()?;
     Some(AuthManager::new(
         config.codex_home,
         false,
@@ -119,4 +118,28 @@ pub fn task_url(base_url: &str, task_id: &str) -> String {
         return format!("{normalized}/tasks/{task_id}");
     }
     format!("{normalized}/codex/tasks/{task_id}")
+}
+
+pub fn format_relative_time(reference: DateTime<Utc>, ts: DateTime<Utc>) -> String {
+    let mut secs = (reference - ts).num_seconds();
+    if secs < 0 {
+        secs = 0;
+    }
+    if secs < 60 {
+        return format!("{secs}s ago");
+    }
+    let mins = secs / 60;
+    if mins < 60 {
+        return format!("{mins}m ago");
+    }
+    let hours = mins / 60;
+    if hours < 24 {
+        return format!("{hours}h ago");
+    }
+    let local = ts.with_timezone(&Local);
+    local.format("%b %e %H:%M").to_string()
+}
+
+pub fn format_relative_time_now(ts: DateTime<Utc>) -> String {
+    format_relative_time(Utc::now(), ts)
 }

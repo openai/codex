@@ -79,6 +79,7 @@ pub(crate) struct UnifiedExecSession {
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
     cancellation_token: CancellationToken,
+    output_drained: Arc<Notify>,
     output_task: JoinHandle<()>,
     sandbox_type: SandboxType,
 }
@@ -92,10 +93,10 @@ impl UnifiedExecSession {
         let output_buffer = Arc::new(Mutex::new(OutputBufferState::default()));
         let output_notify = Arc::new(Notify::new());
         let cancellation_token = CancellationToken::new();
+        let output_drained = Arc::new(Notify::new());
         let mut receiver = initial_output_rx;
         let buffer_clone = Arc::clone(&output_buffer);
         let notify_clone = Arc::clone(&output_notify);
-        let cancellation_token_clone = cancellation_token.clone();
         let output_task = tokio::spawn(async move {
             loop {
                 match receiver.recv().await {
@@ -106,11 +107,8 @@ impl UnifiedExecSession {
                         notify_clone.notify_waiters();
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        cancellation_token_clone.cancel();
-                        break;
-                    }
-                }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
             }
         });
 
@@ -119,6 +117,7 @@ impl UnifiedExecSession {
             output_buffer,
             output_notify,
             cancellation_token,
+            output_drained,
             output_task,
             sandbox_type,
         }
@@ -136,6 +135,18 @@ impl UnifiedExecSession {
         }
     }
 
+    pub(super) fn output_receiver(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
+        self.session.output_receiver()
+    }
+
+    pub(super) fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation_token.clone()
+    }
+
+    pub(super) fn output_drained_notify(&self) -> Arc<Notify> {
+        Arc::clone(&self.output_drained)
+    }
+
     pub(super) fn has_exited(&self) -> bool {
         self.session.has_exited()
     }
@@ -144,20 +155,22 @@ impl UnifiedExecSession {
         self.session.exit_code()
     }
 
+    pub(super) fn terminate(&self) {
+        self.session.terminate();
+        self.cancellation_token.cancel();
+        self.output_task.abort();
+    }
+
     async fn snapshot_output(&self) -> Vec<Vec<u8>> {
         let guard = self.output_buffer.lock().await;
         guard.snapshot()
     }
 
-    fn sandbox_type(&self) -> SandboxType {
+    pub(crate) fn sandbox_type(&self) -> SandboxType {
         self.sandbox_type
     }
 
     pub(super) async fn check_for_sandbox_denial(&self) -> Result<(), UnifiedExecError> {
-        if self.sandbox_type() == SandboxType::None || !self.has_exited() {
-            return Ok(());
-        }
-
         let _ =
             tokio::time::timeout(Duration::from_millis(20), self.output_notify.notified()).await;
 
@@ -167,30 +180,40 @@ impl UnifiedExecSession {
             aggregated.extend_from_slice(&chunk);
         }
         let aggregated_text = String::from_utf8_lossy(&aggregated).to_string();
-        let exit_code = self.exit_code().unwrap_or(-1);
+        self.check_for_sandbox_denial_with_text(&aggregated_text)
+            .await?;
 
+        Ok(())
+    }
+
+    pub(super) async fn check_for_sandbox_denial_with_text(
+        &self,
+        text: &str,
+    ) -> Result<(), UnifiedExecError> {
+        let sandbox_type = self.sandbox_type();
+        if sandbox_type == SandboxType::None || !self.has_exited() {
+            return Ok(());
+        }
+
+        let exit_code = self.exit_code().unwrap_or(-1);
         let exec_output = ExecToolCallOutput {
             exit_code,
-            stdout: StreamOutput::new(aggregated_text.clone()),
-            stderr: StreamOutput::new(String::new()),
-            aggregated_output: StreamOutput::new(aggregated_text.clone()),
-            duration: Duration::ZERO,
-            timed_out: false,
+            stderr: StreamOutput::new(text.to_string()),
+            aggregated_output: StreamOutput::new(text.to_string()),
+            ..Default::default()
         };
-
-        if is_likely_sandbox_denied(self.sandbox_type(), &exec_output) {
+        if is_likely_sandbox_denied(sandbox_type, &exec_output) {
             let snippet = formatted_truncate_text(
-                &aggregated_text,
+                text,
                 TruncationPolicy::Tokens(UNIFIED_EXEC_OUTPUT_MAX_TOKENS),
             );
             let message = if snippet.is_empty() {
-                format!("exit code {exit_code}")
+                format!("Session exited with code {exit_code}")
             } else {
                 snippet
             };
             return Err(UnifiedExecError::sandbox_denied(message, exec_output));
         }
-
         Ok(())
     }
 
@@ -205,10 +228,7 @@ impl UnifiedExecSession {
         } = spawned;
         let managed = Self::new(session, output_rx, sandbox_type);
 
-        let exit_ready = match exit_rx.try_recv() {
-            Ok(_) | Err(TryRecvError::Closed) => true,
-            Err(TryRecvError::Empty) => false,
-        };
+        let exit_ready = matches!(exit_rx.try_recv(), Ok(_) | Err(TryRecvError::Closed));
 
         if exit_ready {
             managed.signal_exit();
@@ -216,7 +236,7 @@ impl UnifiedExecSession {
             return Ok(managed);
         }
 
-        if tokio::time::timeout(Duration::from_millis(50), &mut exit_rx)
+        if tokio::time::timeout(Duration::from_millis(150), &mut exit_rx)
             .await
             .is_ok()
         {
@@ -243,6 +263,6 @@ impl UnifiedExecSession {
 
 impl Drop for UnifiedExecSession {
     fn drop(&mut self) {
-        self.output_task.abort();
+        self.terminate();
     }
 }

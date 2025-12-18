@@ -18,6 +18,7 @@ use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
+use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -30,12 +31,13 @@ use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
+use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
-use codex_app_server_protocol::SandboxCommandAssessment as V2SandboxCommandAssessment;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -62,6 +64,7 @@ use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::TokenCountEvent;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
+use codex_core::review_prompts;
 use codex_protocol::ConversationId;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
@@ -177,7 +180,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             command,
             cwd,
             reason,
-            risk,
+            proposed_execpolicy_amendment,
             parsed_cmd,
         }) => match api_version {
             ApiVersion::V1 => {
@@ -187,7 +190,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                     command,
                     cwd,
                     reason,
-                    risk,
                     parsed_cmd,
                 };
                 let rx = outgoing
@@ -205,6 +207,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .map(V2ParsedCommand::from)
                     .collect::<Vec<_>>();
                 let command_string = shlex_join(&command);
+                let proposed_execpolicy_amendment_v2 =
+                    proposed_execpolicy_amendment.map(V2ExecPolicyAmendment::from);
 
                 let params = CommandExecutionRequestApprovalParams {
                     thread_id: conversation_id.to_string(),
@@ -213,7 +217,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                     item_id: item_id.clone(),
                     reason,
-                    risk: risk.map(V2SandboxCommandAssessment::from),
+                    proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                 };
                 let rx = outgoing
                     .send_request(ServerRequestPayload::CommandExecutionRequestApproval(
@@ -331,6 +335,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
                     error: turn_error,
+                    will_retry: false,
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
                 }))
@@ -346,6 +351,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::Error(ErrorNotification {
                     error: turn_error,
+                    will_retry: true,
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
                 }))
@@ -374,7 +380,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::EnteredReviewMode(review_request) => {
-            let review = review_request.user_facing_hint;
+            let review = review_request
+                .user_facing_hint
+                .unwrap_or_else(|| review_prompts::user_facing_hint(&review_request.target));
             let item = ThreadItem::EnteredReviewMode {
                 id: event_turn_id.clone(),
                 review,
@@ -443,6 +451,16 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(completed))
                 .await;
+        }
+        EventMsg::RawResponseItem(raw_response_item_event) => {
+            maybe_emit_raw_response_item_completed(
+                api_version,
+                conversation_id,
+                &event_turn_id,
+                raw_response_item_event.item,
+                outgoing.as_ref(),
+            )
+            .await;
         }
         EventMsg::PatchApplyBegin(patch_begin_event) => {
             // Until we migrate the core to be aware of a first class FileChangeItem
@@ -563,6 +581,20 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
             }
         }
+        EventMsg::TerminalInteraction(terminal_event) => {
+            let item_id = terminal_event.call_id.clone();
+
+            let notification = TerminalInteractionNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item_id,
+                process_id: terminal_event.process_id,
+                stdin: terminal_event.stdin,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::TerminalInteraction(notification))
+                .await;
+        }
         EventMsg::ExecCommandEnd(exec_command_end_event) => {
             let ExecCommandEndEvent {
                 call_id,
@@ -658,6 +690,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::PlanUpdate(plan_update_event) => {
             handle_turn_plan_update(
+                conversation_id,
                 &event_turn_id,
                 plan_update_event,
                 api_version,
@@ -690,6 +723,7 @@ async fn handle_turn_diff(
 }
 
 async fn handle_turn_plan_update(
+    conversation_id: ConversationId,
     event_turn_id: &str,
     plan_update_event: UpdatePlanArgs,
     api_version: ApiVersion,
@@ -697,6 +731,7 @@ async fn handle_turn_plan_update(
 ) {
     if let ApiVersion::V2 = api_version {
         let notification = TurnPlanUpdatedNotification {
+            thread_id: conversation_id.to_string(),
             turn_id: event_turn_id.to_string(),
             explanation: plan_update_event.explanation,
             plan: plan_update_event
@@ -715,6 +750,7 @@ async fn emit_turn_completed_with_status(
     conversation_id: ConversationId,
     event_turn_id: String,
     status: TurnStatus,
+    error: Option<TurnError>,
     outgoing: &OutgoingMessageSender,
 ) {
     let notification = TurnCompletedNotification {
@@ -722,6 +758,7 @@ async fn emit_turn_completed_with_status(
         turn: Turn {
             id: event_turn_id,
             items: vec![],
+            error,
             status,
         },
     };
@@ -794,6 +831,27 @@ async fn complete_command_execution_item(
         .await;
 }
 
+async fn maybe_emit_raw_response_item_completed(
+    api_version: ApiVersion,
+    conversation_id: ConversationId,
+    turn_id: &str,
+    item: codex_protocol::models::ResponseItem,
+    outgoing: &OutgoingMessageSender,
+) {
+    let ApiVersion::V2 = api_version else {
+        return;
+    };
+
+    let notification = RawResponseItemCompletedNotification {
+        thread_id: conversation_id.to_string(),
+        turn_id: turn_id.to_string(),
+        item,
+    };
+    outgoing
+        .send_server_notification(ServerNotification::RawResponseItemCompleted(notification))
+        .await;
+}
+
 async fn find_and_remove_turn_summary(
     conversation_id: ConversationId,
     turn_summary_store: &TurnSummaryStore,
@@ -810,13 +868,12 @@ async fn handle_turn_complete(
 ) {
     let turn_summary = find_and_remove_turn_summary(conversation_id, turn_summary_store).await;
 
-    let status = if let Some(error) = turn_summary.last_error {
-        TurnStatus::Failed { error }
-    } else {
-        TurnStatus::Completed
+    let (status, error) = match turn_summary.last_error {
+        Some(error) => (TurnStatus::Failed, Some(error)),
+        None => (TurnStatus::Completed, None),
     };
 
-    emit_turn_completed_with_status(conversation_id, event_turn_id, status, outgoing).await;
+    emit_turn_completed_with_status(conversation_id, event_turn_id, status, error, outgoing).await;
 }
 
 async fn handle_turn_interrupted(
@@ -831,6 +888,7 @@ async fn handle_turn_interrupted(
         conversation_id,
         event_turn_id,
         TurnStatus::Interrupted,
+        None,
         outgoing,
     )
     .await;
@@ -1036,7 +1094,11 @@ async fn on_file_change_request_approval_response(
                 });
 
             let (decision, completion_status) = match response.decision {
-                ApprovalDecision::Accept => (ReviewDecision::Approved, None),
+                ApprovalDecision::Accept
+                | ApprovalDecision::AcceptForSession
+                | ApprovalDecision::AcceptWithExecpolicyAmendment { .. } => {
+                    (ReviewDecision::Approved, None)
+                }
                 ApprovalDecision::Decline => {
                     (ReviewDecision::Denied, Some(PatchApplyStatus::Declined))
                 }
@@ -1098,25 +1160,27 @@ async fn on_command_execution_request_approval_response(
                     error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
                     CommandExecutionRequestApprovalResponse {
                         decision: ApprovalDecision::Decline,
-                        accept_settings: None,
                     }
                 });
 
-            let CommandExecutionRequestApprovalResponse {
-                decision,
-                accept_settings,
-            } = response;
+            let decision = response.decision;
 
-            let (decision, completion_status) = match (decision, accept_settings) {
-                (ApprovalDecision::Accept, Some(settings)) if settings.for_session => {
-                    (ReviewDecision::ApprovedForSession, None)
-                }
-                (ApprovalDecision::Accept, _) => (ReviewDecision::Approved, None),
-                (ApprovalDecision::Decline, _) => (
+            let (decision, completion_status) = match decision {
+                ApprovalDecision::Accept => (ReviewDecision::Approved, None),
+                ApprovalDecision::AcceptForSession => (ReviewDecision::ApprovedForSession, None),
+                ApprovalDecision::AcceptWithExecpolicyAmendment {
+                    execpolicy_amendment,
+                } => (
+                    ReviewDecision::ApprovedExecpolicyAmendment {
+                        proposed_execpolicy_amendment: execpolicy_amendment.into_core(),
+                    },
+                    None,
+                ),
+                ApprovalDecision::Decline => (
                     ReviewDecision::Denied,
                     Some(CommandExecutionStatus::Declined),
                 ),
-                (ApprovalDecision::Cancel, _) => (
+                ApprovalDecision::Cancel => (
                     ReviewDecision::Abort,
                     Some(CommandExecutionStatus::Declined),
                 ),
@@ -1169,6 +1233,7 @@ async fn construct_mcp_tool_call_notification(
         arguments: begin_event.invocation.arguments.unwrap_or(JsonValue::Null),
         result: None,
         error: None,
+        duration_ms: None,
     };
     ItemStartedNotification {
         thread_id,
@@ -1177,7 +1242,7 @@ async fn construct_mcp_tool_call_notification(
     }
 }
 
-/// simiilar to handle_mcp_tool_call_end in exec
+/// similar to handle_mcp_tool_call_end in exec
 async fn construct_mcp_tool_call_end_notification(
     end_event: McpToolCallEndEvent,
     thread_id: String,
@@ -1188,6 +1253,7 @@ async fn construct_mcp_tool_call_end_notification(
     } else {
         McpToolCallStatus::Failed
     };
+    let duration_ms = i64::try_from(end_event.duration.as_millis()).ok();
 
     let (result, error) = match &end_event.result {
         Ok(value) => (
@@ -1213,6 +1279,7 @@ async fn construct_mcp_tool_call_end_notification(
         arguments: end_event.invocation.arguments.unwrap_or(JsonValue::Null),
         result,
         error,
+        duration_ms,
     };
     ItemCompletedNotification {
         thread_id,
@@ -1303,6 +1370,7 @@ mod tests {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
                 assert_eq!(n.turn.status, TurnStatus::Completed);
+                assert_eq!(n.turn.error, None);
             }
             other => bail!("unexpected message: {other:?}"),
         }
@@ -1343,6 +1411,7 @@ mod tests {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
                 assert_eq!(n.turn.status, TurnStatus::Interrupted);
+                assert_eq!(n.turn.error, None);
             }
             other => bail!("unexpected message: {other:?}"),
         }
@@ -1382,14 +1451,13 @@ mod tests {
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
+                assert_eq!(n.turn.status, TurnStatus::Failed);
                 assert_eq!(
-                    n.turn.status,
-                    TurnStatus::Failed {
-                        error: TurnError {
-                            message: "bad".to_string(),
-                            codex_error_info: Some(V2CodexErrorInfo::Other),
-                        }
-                    }
+                    n.turn.error,
+                    Some(TurnError {
+                        message: "bad".to_string(),
+                        codex_error_info: Some(V2CodexErrorInfo::Other),
+                    })
                 );
             }
             other => bail!("unexpected message: {other:?}"),
@@ -1416,7 +1484,16 @@ mod tests {
             ],
         };
 
-        handle_turn_plan_update("turn-123", update, ApiVersion::V2, &outgoing).await;
+        let conversation_id = ConversationId::new();
+
+        handle_turn_plan_update(
+            conversation_id,
+            "turn-123",
+            update,
+            ApiVersion::V2,
+            &outgoing,
+        )
+        .await;
 
         let msg = rx
             .recv()
@@ -1424,6 +1501,7 @@ mod tests {
             .ok_or_else(|| anyhow!("should send one notification"))?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnPlanUpdated(n)) => {
+                assert_eq!(n.thread_id, conversation_id.to_string());
                 assert_eq!(n.turn_id, "turn-123");
                 assert_eq!(n.explanation.as_deref(), Some("need plan"));
                 assert_eq!(n.plan.len(), 2);
@@ -1474,6 +1552,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("5".to_string()),
             }),
+            plan_type: None,
         };
 
         handle_token_count_event(
@@ -1578,6 +1657,7 @@ mod tests {
                 arguments: serde_json::json!({"server": ""}),
                 result: None,
                 error: None,
+                duration_ms: None,
             },
         };
 
@@ -1650,14 +1730,13 @@ mod tests {
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, a_turn1);
+                assert_eq!(n.turn.status, TurnStatus::Failed);
                 assert_eq!(
-                    n.turn.status,
-                    TurnStatus::Failed {
-                        error: TurnError {
-                            message: "a1".to_string(),
-                            codex_error_info: Some(V2CodexErrorInfo::BadRequest),
-                        }
-                    }
+                    n.turn.error,
+                    Some(TurnError {
+                        message: "a1".to_string(),
+                        codex_error_info: Some(V2CodexErrorInfo::BadRequest),
+                    })
                 );
             }
             other => bail!("unexpected message: {other:?}"),
@@ -1671,14 +1750,13 @@ mod tests {
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, b_turn1);
+                assert_eq!(n.turn.status, TurnStatus::Failed);
                 assert_eq!(
-                    n.turn.status,
-                    TurnStatus::Failed {
-                        error: TurnError {
-                            message: "b1".to_string(),
-                            codex_error_info: None,
-                        }
-                    }
+                    n.turn.error,
+                    Some(TurnError {
+                        message: "b1".to_string(),
+                        codex_error_info: None,
+                    })
                 );
             }
             other => bail!("unexpected message: {other:?}"),
@@ -1693,6 +1771,7 @@ mod tests {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, a_turn2);
                 assert_eq!(n.turn.status, TurnStatus::Completed);
+                assert_eq!(n.turn.error, None);
             }
             other => bail!("unexpected message: {other:?}"),
         }
@@ -1732,6 +1811,7 @@ mod tests {
                 arguments: JsonValue::Null,
                 result: None,
                 error: None,
+                duration_ms: None,
             },
         };
 
@@ -1785,6 +1865,7 @@ mod tests {
                     structured_content: None,
                 }),
                 error: None,
+                duration_ms: Some(0),
             },
         };
 
@@ -1826,6 +1907,7 @@ mod tests {
                 error: Some(McpToolCallError {
                     message: "boom".to_string(),
                 }),
+                duration_ms: Some(1),
             },
         };
 

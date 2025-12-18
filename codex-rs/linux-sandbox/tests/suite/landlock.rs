@@ -6,6 +6,8 @@ use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::exec_env::create_env;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::sandboxing::SandboxPermissions;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -41,13 +43,16 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
         cwd,
         expiration: timeout_ms.into(),
         env: create_env_from_core_vars(),
-        with_escalated_permissions: None,
+        sandbox_permissions: SandboxPermissions::UseDefault,
         justification: None,
         arg0: None,
     };
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: writable_roots.to_vec(),
+        writable_roots: writable_roots
+            .iter()
+            .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
+            .collect(),
         network_access: false,
         // Exclude tmp-related folders from writable roots because we need a
         // folder that is writable by tests but that we intentionally disallow
@@ -143,7 +148,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
         // do not stall the suite.
         expiration: NETWORK_TIMEOUT_MS.into(),
         env: create_env_from_core_vars(),
-        with_escalated_permissions: None,
+        sandbox_permissions: SandboxPermissions::UseDefault,
         justification: None,
         arg0: None,
     };

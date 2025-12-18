@@ -1,0 +1,9 @@
+*** Begin Patch
+*** Update File: multi.txt
+@@
+-line2
++changed2
+@@
+-line4
++changed4
+*** End Patch

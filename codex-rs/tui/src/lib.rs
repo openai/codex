@@ -16,7 +16,6 @@ use codex_core::RolloutRecorder;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::config::MIN_PROGRESS_INTERVAL_SECONDS;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
@@ -24,7 +23,6 @@ use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
 use codex_protocol::config_types::SandboxMode;
-use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use tracing::error;
@@ -59,6 +57,7 @@ mod markdown;
 mod markdown_render;
 mod markdown_stream;
 mod model_migration;
+mod notifications;
 pub mod onboarding;
 mod oss_selection;
 mod pager_overlay;
@@ -68,7 +67,6 @@ mod resume_picker;
 mod selection_list;
 mod session_log;
 mod shimmer;
-mod skill_error_prompt;
 mod slash_command;
 mod status;
 mod status_indicator_widget;
@@ -76,6 +74,7 @@ mod streaming;
 mod style;
 mod terminal_palette;
 mod text_formatting;
+mod tooltips;
 mod tui;
 mod ui_consts;
 pub mod update_action;
@@ -199,45 +198,21 @@ pub async fn run_main(
         None // No model specified, will use the default.
     };
 
-    if let Some(interval) = cli.progress_interval
-        && interval != 0
-        && interval < MIN_PROGRESS_INTERVAL_SECONDS
-    {
-        #[allow(clippy::print_stderr)]
-        {
-            eprintln!(
-                "--progress-interval must be 0 or at least {MIN_PROGRESS_INTERVAL_SECONDS} seconds (got {interval})."
-            );
-        }
-        std::process::exit(1);
-    }
     // canonicalize the cwd
     let cwd = cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p));
     let additional_dirs = cli.add_dir.clone();
 
     let overrides = ConfigOverrides {
         model,
-        review_model: None,
         approval_policy,
         sandbox_mode,
         cwd,
         model_provider: model_provider_override.clone(),
         config_profile: cli.config_profile.clone(),
         codex_linux_sandbox_exe,
-        base_instructions: None,
-        developer_instructions: None,
-        compact_prompt: None,
-        include_apply_patch_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
-        tools_web_search_request: None,
-        experimental_sandbox_command_assessment: None,
-        progress_no_progress: cli.no_progress,
-        progress_interval_seconds: cli.progress_interval,
-        auto_continue_enabled: cli.auto_continue,
-        auto_continue_prompt: cli.auto_continue_prompt.clone(),
-        auto_continue_max_turns: cli.auto_continue_max_turns,
-        auto_continue_max_duration_seconds: cli.auto_continue_max_duration,
         additional_writable_roots: additional_dirs,
+        ..Default::default()
     };
 
     let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
@@ -288,7 +263,8 @@ pub async fn run_main(
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_target(false)
-        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        .with_ansi(false)
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
         .with_filter(env_filter());
 
     let feedback = codex_feedback::CodexFeedback::new();
@@ -326,22 +302,16 @@ pub async fn run_main(
         }
     };
 
-    if let Some(provider) = otel.as_ref() {
-        let otel_layer = OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
-            tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
-        );
+    let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
 
-        let _ = tracing_subscriber::registry()
-            .with(file_layer)
-            .with(feedback_layer)
-            .with(otel_layer)
-            .try_init();
-    } else {
-        let _ = tracing_subscriber::registry()
-            .with(file_layer)
-            .with(feedback_layer)
-            .try_init();
-    };
+    let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
+
+    let _ = tracing_subscriber::registry()
+        .with(file_layer)
+        .with(feedback_layer)
+        .with(otel_logger_layer)
+        .with(otel_tracing_layer)
+        .try_init();
 
     run_ratatui_app(
         cli,
@@ -524,6 +494,7 @@ async fn run_ratatui_app(
         images,
         resume_selection,
         feedback,
+        should_show_trust_screen, // Proxy to: is it a first run in this directory?
     )
     .await;
 
@@ -575,7 +546,7 @@ async fn load_config_or_exit(
     overrides: ConfigOverrides,
 ) -> Config {
     #[allow(clippy::print_stderr)]
-    match Config::load_with_cli_overrides(cli_kv_overrides, overrides).await {
+    match Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await {
         Ok(config) => config,
         Err(err) => {
             eprintln!("Error loading configuration: {err}");

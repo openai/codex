@@ -19,6 +19,7 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::openai_models::models_manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnAbortReason;
@@ -54,6 +55,10 @@ impl SessionTaskContext {
 
     pub(crate) fn auth_manager(&self) -> Arc<AuthManager> {
         Arc::clone(&self.session.services.auth_manager)
+    }
+
+    pub(crate) fn models_manager(&self) -> Arc<ModelsManager> {
+        Arc::clone(&self.session.services.models_manager)
     }
 }
 
@@ -154,6 +159,7 @@ impl Session {
         for task in self.take_all_running_tasks().await {
             self.handle_task_abort(task, reason.clone()).await;
         }
+        self.close_unified_exec_sessions().await;
     }
 
     pub async fn on_task_finished(
@@ -162,18 +168,20 @@ impl Session {
         last_agent_message: Option<String>,
     ) {
         let mut active = self.active_turn.lock().await;
-        if let Some(at) = active.as_mut()
+        let should_close_sessions = if let Some(at) = active.as_mut()
             && at.remove_task(&turn_context.sub_id)
         {
             *active = None;
-        }
+            true
+        } else {
+            false
+        };
         drop(active);
-        let event = EventMsg::TaskComplete(TaskCompleteEvent {
-            last_agent_message: last_agent_message.clone(),
-        });
+        if should_close_sessions {
+            self.close_unified_exec_sessions().await;
+        }
+        let event = EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
-        self.maybe_auto_continue(Arc::clone(&turn_context), last_agent_message.as_deref())
-            .await;
     }
 
     async fn register_new_active_task(&self, task: RunningTask) {
@@ -193,6 +201,13 @@ impl Session {
             }
             None => Vec::new(),
         }
+    }
+
+    async fn close_unified_exec_sessions(&self) {
+        self.services
+            .unified_exec_manager
+            .terminate_all_sessions()
+            .await;
     }
 
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
@@ -220,12 +235,8 @@ impl Session {
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
 
-        let should_disable_auto = matches!(reason, TurnAbortReason::Interrupted);
         let event = EventMsg::TurnAborted(TurnAbortedEvent { reason });
         self.send_event(task.turn_context.as_ref(), event).await;
-        if should_disable_auto {
-            self.pause_auto_continue_after_interrupt().await;
-        }
     }
 }
 

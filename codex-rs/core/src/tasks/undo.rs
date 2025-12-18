@@ -8,7 +8,8 @@ use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use async_trait::async_trait;
-use codex_git::restore_ghost_commit;
+use codex_git::RestoreGhostCommitOptions;
+use codex_git::restore_ghost_commit_with_options;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
@@ -85,9 +86,12 @@ impl SessionTask for UndoTask {
 
         let commit_id = ghost_commit.id().to_string();
         let repo_path = ctx.cwd.clone();
-        let restore_result =
-            tokio::task::spawn_blocking(move || restore_ghost_commit(&repo_path, &ghost_commit))
-                .await;
+        let ghost_snapshot = ctx.ghost_snapshot.clone();
+        let restore_result = tokio::task::spawn_blocking(move || {
+            let options = RestoreGhostCommitOptions::new(&repo_path).ghost_snapshot(ghost_snapshot);
+            restore_ghost_commit_with_options(&options, &ghost_commit)
+        })
+        .await;
 
         match restore_result {
             Ok(Ok(())) => {

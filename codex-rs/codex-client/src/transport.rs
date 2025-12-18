@@ -1,3 +1,5 @@
+use crate::default_client::CodexHttpClient;
+use crate::default_client::CodexRequestBuilder;
 use crate::error::TransportError;
 use crate::request::Request;
 use crate::request::Response;
@@ -8,6 +10,9 @@ use futures::stream::BoxStream;
 use http::HeaderMap;
 use http::Method;
 use http::StatusCode;
+use tracing::Level;
+use tracing::enabled;
+use tracing::trace;
 
 pub type ByteStream = BoxStream<'static, Result<Bytes, TransportError>>;
 
@@ -25,15 +30,17 @@ pub trait HttpTransport: Send + Sync {
 
 #[derive(Clone, Debug)]
 pub struct ReqwestTransport {
-    client: reqwest::Client,
+    client: CodexHttpClient,
 }
 
 impl ReqwestTransport {
     pub fn new(client: reqwest::Client) -> Self {
-        Self { client }
+        Self {
+            client: CodexHttpClient::new(client),
+        }
     }
 
-    fn build(&self, req: Request) -> Result<reqwest::RequestBuilder, TransportError> {
+    fn build(&self, req: Request) -> Result<CodexRequestBuilder, TransportError> {
         let mut builder = self
             .client
             .request(
@@ -83,6 +90,15 @@ impl HttpTransport for ReqwestTransport {
     }
 
     async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError> {
+        if enabled!(Level::TRACE) {
+            trace!(
+                "{} to {}: {}",
+                req.method,
+                req.url,
+                req.body.as_ref().unwrap_or_default()
+            );
+        }
+
         let builder = self.build(req)?;
         let resp = builder.send().await.map_err(Self::map_error)?;
         let status = resp.status();

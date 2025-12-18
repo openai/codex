@@ -55,7 +55,10 @@ async fn fork_conversation_twice_drops_to_first_message() {
     config.model_provider = model_provider.clone();
     let config_for_fork = config.clone();
 
-    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let conversation_manager = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
     let NewConversation {
         conversation: codex,
         ..

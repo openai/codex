@@ -1,0 +1,15 @@
+---
+source: tui/src/diff_render.rs
+expression: text
+---
+• Edited wrap_demo.txt (+2 -2)
+    1  1
+    2 -2
+    2 +added long line which
+        wraps and_if_there_i
+       s_a_long_token_it_wil
+       l_be_broken
+    3  3
+    4 -4
+    4 +4 context line which
+       also wraps across

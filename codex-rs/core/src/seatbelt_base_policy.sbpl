@@ -53,6 +53,7 @@
   (sysctl-name "hw.physicalcpu_max")
   (sysctl-name "hw.tbfrequency_compat")
   (sysctl-name "hw.vectorunit")
+  (sysctl-name "kern.argmax")
   (sysctl-name "kern.hostname")
   (sysctl-name "kern.maxfilesperproc")
   (sysctl-name "kern.maxproc")
@@ -72,7 +73,8 @@
   (sysctl-name-prefix "net.routetable.")
 )
 
-; Allow Java to set CPU type grade when required
+; Allow Java to read some CPU info. This is misclassified as a "write" because
+; userspace passes a memory buffer to the sysctl, but conceptually it is a read.
 (allow sysctl-write
   (sysctl-name "kern.grade_cputype"))
 
@@ -86,10 +88,20 @@
   (global-name "com.apple.system.opendirectoryd.libinfo")
 )
 
-; Added on top of Chrome profile
 ; Needed for python multiprocessing on MacOS for the SemLock
 (allow ipc-posix-sem)
 
 (allow mach-lookup
   (global-name "com.apple.PowerManagement.control")
 )
+
+; allow openpty()
+(allow pseudo-tty)
+(allow file-read* file-write* file-ioctl (literal "/dev/ptmx"))
+(allow file-read* file-write*
+  (require-all
+    (regex #"^/dev/ttys[0-9]+")
+    (extension "com.apple.sandbox.pty")))
+; PTYs created before entering seatbelt may lack the extension; allow ioctl
+; on those slave ttys so interactive shells detect a TTY and remain functional.
+(allow file-ioctl (regex #"^/dev/ttys[0-9]+"))

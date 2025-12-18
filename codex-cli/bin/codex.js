@@ -95,10 +95,10 @@ function detectPackageManager() {
     return "bun";
   }
 
+
   if (
-    process.env.BUN_INSTALL ||
-    process.env.BUN_INSTALL_GLOBAL_DIR ||
-    process.env.BUN_INSTALL_BIN_DIR
+    __dirname.includes(".bun/install/global") ||
+    __dirname.includes(".bun\\install\\global")
   ) {
     return "bun";
   }

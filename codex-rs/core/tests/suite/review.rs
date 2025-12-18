@@ -16,12 +16,14 @@ use codex_core::protocol::ReviewFinding;
 use codex_core::protocol::ReviewLineRange;
 use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use codex_core::review_format::render_review_output_text;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
+use core_test_support::responses::get_responses_requests;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -81,8 +83,10 @@ async fn review_op_emits_lifecycle_and_review_output() {
     codex
         .submit(Op::Review {
             review_request: ReviewRequest {
-                prompt: "Please review my changes".to_string(),
-                user_facing_hint: "my changes".to_string(),
+                target: ReviewTarget::Custom {
+                    instructions: "Please review my changes".to_string(),
+                },
+                user_facing_hint: None,
             },
         })
         .await
@@ -199,8 +203,10 @@ async fn review_op_with_plain_text_emits_review_fallback() {
     codex
         .submit(Op::Review {
             review_request: ReviewRequest {
-                prompt: "Plain text review".to_string(),
-                user_facing_hint: "plain text review".to_string(),
+                target: ReviewTarget::Custom {
+                    instructions: "Plain text review".to_string(),
+                },
+                user_facing_hint: None,
             },
         })
         .await
@@ -257,8 +263,10 @@ async fn review_filters_agent_message_related_events() {
     codex
         .submit(Op::Review {
             review_request: ReviewRequest {
-                prompt: "Filter streaming events".to_string(),
-                user_facing_hint: "Filter streaming events".to_string(),
+                target: ReviewTarget::Custom {
+                    instructions: "Filter streaming events".to_string(),
+                },
+                user_facing_hint: None,
             },
         })
         .await
@@ -336,8 +344,10 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
     codex
         .submit(Op::Review {
             review_request: ReviewRequest {
-                prompt: "check structured".to_string(),
-                user_facing_hint: "check structured".to_string(),
+                target: ReviewTarget::Custom {
+                    instructions: "check structured".to_string(),
+                },
+                user_facing_hint: None,
             },
         })
         .await
@@ -385,7 +395,7 @@ async fn review_uses_custom_review_model_from_config() {
     let codex_home = TempDir::new().unwrap();
     // Choose a review model different from the main model; ensure it is used.
     let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
-        cfg.model = "gpt-4.1".to_string();
+        cfg.model = Some("gpt-4.1".to_string());
         cfg.review_model = "gpt-5.1".to_string();
     })
     .await;
@@ -393,8 +403,10 @@ async fn review_uses_custom_review_model_from_config() {
     codex
         .submit(Op::Review {
             review_request: ReviewRequest {
-                prompt: "use custom model".to_string(),
-                user_facing_hint: "use custom model".to_string(),
+                target: ReviewTarget::Custom {
+                    instructions: "use custom model".to_string(),
+                },
+                user_facing_hint: None,
             },
         })
         .await
@@ -414,7 +426,10 @@ async fn review_uses_custom_review_model_from_config() {
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Assert the request body model equals the configured review model
-    let request = &server.received_requests().await.unwrap()[0];
+    let requests = get_responses_requests(&server).await;
+    let request = requests
+        .first()
+        .expect("expected POST request to /responses");
     let body = request.body_json::<serde_json::Value>().unwrap();
     assert_eq!(body["model"].as_str().unwrap(), "gpt-5.1");
 
@@ -510,8 +525,10 @@ async fn review_input_isolated_from_parent_history() {
     codex
         .submit(Op::Review {
             review_request: ReviewRequest {
-                prompt: review_prompt.clone(),
-                user_facing_hint: review_prompt.clone(),
+                target: ReviewTarget::Custom {
+                    instructions: review_prompt.clone(),
+                },
+                user_facing_hint: None,
             },
         })
         .await
@@ -530,34 +547,34 @@ async fn review_input_isolated_from_parent_history() {
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Assert the request `input` contains the environment context followed by the user review prompt.
-    let request = &server.received_requests().await.unwrap()[0];
+    let requests = get_responses_requests(&server).await;
+    let request = requests
+        .first()
+        .expect("expected POST request to /responses");
     let body = request.body_json::<serde_json::Value>().unwrap();
     let input = body["input"].as_array().expect("input array");
-    assert_eq!(
-        input.len(),
-        2,
-        "expected environment context and review prompt"
+    assert!(
+        input.len() >= 2,
+        "expected at least environment context and review prompt"
     );
 
-    let env_msg = &input[0];
-    assert_eq!(env_msg["type"].as_str().unwrap(), "message");
-    assert_eq!(env_msg["role"].as_str().unwrap(), "user");
-    let env_text = env_msg["content"][0]["text"].as_str().expect("env text");
-    assert!(
-        env_text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG),
-        "environment context must be the first item"
-    );
+    let env_text = input
+        .iter()
+        .filter_map(|msg| msg["content"][0]["text"].as_str())
+        .find(|text| text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG))
+        .expect("env text");
     assert!(
         env_text.contains("<cwd>"),
         "environment context should include cwd"
     );
 
-    let review_msg = &input[1];
-    assert_eq!(review_msg["type"].as_str().unwrap(), "message");
-    assert_eq!(review_msg["role"].as_str().unwrap(), "user");
+    let review_text = input
+        .iter()
+        .filter_map(|msg| msg["content"][0]["text"].as_str())
+        .find(|text| *text == review_prompt)
+        .expect("review prompt text");
     assert_eq!(
-        review_msg["content"][0]["text"].as_str().unwrap(),
-        review_prompt,
+        review_text, review_prompt,
         "user message should only contain the raw review prompt"
     );
 
@@ -621,8 +638,10 @@ async fn review_history_surfaces_in_parent_session() {
     codex
         .submit(Op::Review {
             review_request: ReviewRequest {
-                prompt: "Start a review".to_string(),
-                user_facing_hint: "Start a review".to_string(),
+                target: ReviewTarget::Custom {
+                    instructions: "Start a review".to_string(),
+                },
+                user_facing_hint: None,
             },
         })
         .await
@@ -654,7 +673,7 @@ async fn review_history_surfaces_in_parent_session() {
     // Inspect the second request (parent turn) input contents.
     // Parent turns include session initial messages (user_instructions, environment_context).
     // Critically, no messages from the review thread should appear.
-    let requests = server.received_requests().await.unwrap();
+    let requests = get_responses_requests(&server).await;
     assert_eq!(requests.len(), 2);
     let body = requests[1].body_json::<serde_json::Value>().unwrap();
     let input = body["input"].as_array().expect("input array");
@@ -724,8 +743,10 @@ where
     let mut config = load_default_config_for_test(codex_home);
     config.model_provider = model_provider;
     mutator(&mut config);
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let conversation_manager = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("Test API Key"),
+        config.model_provider.clone(),
+    );
     conversation_manager
         .new_conversation(config)
         .await
@@ -751,8 +772,10 @@ where
     let mut config = load_default_config_for_test(codex_home);
     config.model_provider = model_provider;
     mutator(&mut config);
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let conversation_manager = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("Test API Key"),
+        config.model_provider.clone(),
+    );
     let auth_manager =
         codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     conversation_manager

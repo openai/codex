@@ -34,6 +34,8 @@ members = [
     "stdio-to-uds",
     "otel",
     "tui",
+    "tui2",
+    "utils/absolute-path",
     "utils/git",
     "utils/cache",
     "utils/image",
@@ -88,6 +90,8 @@ codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
+codex-tui2 = { path = "tui2" }
+codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-cache = { path = "utils/cache" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
@@ -96,6 +100,7 @@ codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
+exec_server_test_support = { path = "exec-server/tests/common" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
@@ -104,7 +109,6 @@ allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
-askama = "0.14"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
@@ -137,15 +141,16 @@ icu_locale_core = "2.1"
 icu_provider = { version = "2.1", features = ["sync"] }
 ignore = "0.4.23"
 image = { version = "^0.25.9", default-features = false }
+include_dir = "0.7.4"
 indexmap = "2.12.0"
-insta = "1.43.2"
+insta = "1.44.3"
 itertools = "0.14.0"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.1"
 lazy_static = "1"
 libc = "0.2.177"
 log = "0.4"
-lru = "0.12.5"
+lru = "0.16.2"
 maplit = "1.0.2"
 mime_guess = "2.0.5"
 multimap = "0.10.0"
@@ -158,6 +163,7 @@ opentelemetry-appender-tracing = "0.30.0"
 opentelemetry-otlp = "0.30.0"
 opentelemetry-semantic-conventions = "0.30.0"
 opentelemetry_sdk = "0.30.0"
+tracing-opentelemetry = "0.31.0"
 os_info = "3.12.0"
 owo-colors = "4.2.0"
 path-absolutize = "3.1.1"
@@ -175,17 +181,17 @@ reqwest = "0.12"
 rmcp = { version = "0.10.0", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
-sentry = "0.34.0"
+sentry = "0.46.0"
 serde = "1"
 serde_json = "1"
-serde_yaml = "0.9"
 serde_with = "3.16"
+serde_yaml = "0.9"
 serial_test = "3.2.0"
 sha1 = "0.10.6"
 sha2 = "0.10"
 shlex = "1.3.0"
 similar = "2.7.0"
-socket2 = "0.6.0"
+socket2 = "0.6.1"
 starlark = "0.13.0"
 strum = "0.27.2"
 strum_macros = "0.27.2"
@@ -222,7 +228,7 @@ vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "6"
-wildmatch = "2.5.0"
+wildmatch = "2.6.1"
 
 wiremock = "0.6"
 zeroize = "1.8.2"

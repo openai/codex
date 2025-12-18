@@ -1,0 +1,22 @@
+
+[package]
+name = "codex-utils-absolute-path"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+path-absolutize = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+ts-rs = { workspace = true, features = [
+    "serde-json-impl",
+    "no-serde-warnings",
+] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }

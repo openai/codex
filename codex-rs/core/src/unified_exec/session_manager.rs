@@ -10,21 +10,15 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::bash::extract_bash_command;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::exec::ExecToolCallOutput;
-use crate::exec::StreamOutput;
 use crate::exec_env::create_env;
-use crate::exec_policy::create_approval_requirement_for_command;
+use crate::exec_policy::create_exec_approval_requirement_for_command;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecEnv;
 use crate::sandboxing::SandboxPermissions;
-use crate::tools::events::ToolEmitter;
-use crate::tools::events::ToolEventCtx;
-use crate::tools::events::ToolEventFailure;
-use crate::tools::events::ToolEventStage;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
@@ -33,6 +27,7 @@ use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::formatted_truncate_text;
 
+use super::CommandTranscript;
 use super::ExecCommandRequest;
 use super::MAX_UNIFIED_EXEC_SESSIONS;
 use super::SessionEntry;
@@ -41,7 +36,11 @@ use super::UnifiedExecContext;
 use super::UnifiedExecError;
 use super::UnifiedExecResponse;
 use super::UnifiedExecSessionManager;
+use super::WARNING_UNIFIED_EXEC_SESSIONS;
 use super::WriteStdinRequest;
+use super::async_watcher::emit_exec_end_for_unified_exec;
+use super::async_watcher::spawn_exit_watcher;
+use super::async_watcher::start_streaming_output;
 use super::clamp_yield_time;
 use super::generate_chunk_id;
 use super::resolve_max_tokens;
@@ -75,7 +74,6 @@ struct PreparedSessionHandles {
     session_ref: Arc<Session>,
     turn_ref: Arc<TurnContext>,
     command: Vec<String>,
-    cwd: PathBuf,
     process_id: String,
 }
 
@@ -109,6 +107,11 @@ impl UnifiedExecSessionManager {
         }
     }
 
+    pub(crate) async fn release_process_id(&self, process_id: &str) {
+        let mut store = self.session_store.lock().await;
+        store.remove(process_id);
+    }
+
     pub(crate) async fn exec_command(
         &self,
         request: ExecCommandRequest,
@@ -123,16 +126,30 @@ impl UnifiedExecSessionManager {
             .open_session_with_sandbox(
                 &request.command,
                 cwd.clone(),
-                request.with_escalated_permissions,
+                request.sandbox_permissions,
                 request.justification,
                 context,
             )
-            .await?;
+            .await;
+
+        let session = match session {
+            Ok(session) => Arc::new(session),
+            Err(err) => {
+                self.release_process_id(&request.process_id).await;
+                return Err(err);
+            }
+        };
+
+        let transcript = Arc::new(tokio::sync::Mutex::new(CommandTranscript::default()));
+        start_streaming_output(&session, context, Arc::clone(&transcript));
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
 
         let start = Instant::now();
+        // For the initial exec_command call, we both stream output to events
+        // (via start_streaming_output above) and collect a snapshot here for
+        // the tool response body.
         let OutputHandles {
             output_buffer,
             output_notify,
@@ -150,57 +167,66 @@ impl UnifiedExecSessionManager {
 
         let text = String::from_utf8_lossy(&collected).to_string();
         let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
-        let has_exited = session.has_exited();
         let exit_code = session.exit_code();
+        let has_exited = session.has_exited() || exit_code.is_some();
         let chunk_id = generate_chunk_id();
-        let process_id = if has_exited {
-            None
+        let process_id = request.process_id.clone();
+        if has_exited {
+            // Short‑lived command: emit ExecCommandEnd immediately using the
+            // same helper as the background watcher, so all end events share
+            // one implementation.
+            let exit = exit_code.unwrap_or(-1);
+            emit_exec_end_for_unified_exec(
+                Arc::clone(&context.session),
+                Arc::clone(&context.turn),
+                context.call_id.clone(),
+                request.command.clone(),
+                cwd,
+                Some(process_id),
+                Arc::clone(&transcript),
+                output.clone(),
+                exit,
+                wall_time,
+            )
+            .await;
+
+            self.release_process_id(&request.process_id).await;
+            session.check_for_sandbox_denial_with_text(&text).await?;
         } else {
-            // Only store session if not exited.
+            // Long‑lived command: persist the session so write_stdin can reuse
+            // it, and register a background watcher that will emit
+            // ExecCommandEnd when the PTY eventually exits (even if no further
+            // tool calls are made).
             self.store_session(
-                session,
+                Arc::clone(&session),
                 context,
                 &request.command,
                 cwd.clone(),
                 start,
-                request.process_id.clone(),
+                process_id,
+                Arc::clone(&transcript),
             )
             .await;
-            Some(request.process_id.clone())
-        };
-        let original_token_count = approx_token_count(&text);
 
+            Self::emit_waiting_status(&context.session, &context.turn, &request.command).await;
+        };
+
+        let original_token_count = approx_token_count(&text);
         let response = UnifiedExecResponse {
             event_call_id: context.call_id.clone(),
             chunk_id,
             wall_time,
             output,
-            process_id: process_id.clone(),
+            raw_output: collected,
+            process_id: if has_exited {
+                None
+            } else {
+                Some(request.process_id.clone())
+            },
             exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
         };
-
-        if !has_exited {
-            Self::emit_waiting_status(&context.session, &context.turn, &request.command).await;
-        }
-
-        // If the command completed during this call, emit an ExecCommandEnd via the emitter.
-        if has_exited {
-            let exit = response.exit_code.unwrap_or(-1);
-            Self::emit_exec_end_from_context(
-                context,
-                &request.command,
-                cwd,
-                response.output.clone(),
-                exit,
-                response.wall_time,
-                // We always emit the process ID in order to keep consistency between the Begin
-                // event and the End event.
-                Some(request.process_id),
-            )
-            .await;
-        }
 
         Ok(response)
     }
@@ -219,41 +245,14 @@ impl UnifiedExecSessionManager {
             session_ref,
             turn_ref,
             command: session_command,
-            cwd: session_cwd,
             process_id,
+            ..
         } = self.prepare_session_handles(process_id.as_str()).await?;
 
-        let interaction_emitter = ToolEmitter::unified_exec(
-            &session_command,
-            session_cwd.clone(),
-            ExecCommandSource::UnifiedExecInteraction,
-            (!request.input.is_empty()).then(|| request.input.to_string()),
-            Some(process_id.clone()),
-        );
-        let make_event_ctx = || {
-            ToolEventCtx::new(
-                session_ref.as_ref(),
-                turn_ref.as_ref(),
-                request.call_id,
-                None,
-            )
-        };
-        interaction_emitter
-            .emit(make_event_ctx(), ToolEventStage::Begin)
-            .await;
-
         if !request.input.is_empty() {
-            if let Err(err) = Self::send_input(&writer_tx, request.input.as_bytes()).await {
-                interaction_emitter
-                    .emit(
-                        make_event_ctx(),
-                        ToolEventStage::Failure(ToolEventFailure::Message(format!(
-                            "write_stdin failed: {err:?}"
-                        ))),
-                    )
-                    .await;
-                return Err(err);
-            }
+            Self::send_input(&writer_tx, request.input.as_bytes()).await?;
+            // Give the remote process a brief window to react so that we are
+            // more likely to capture its output in the poll below.
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
@@ -275,16 +274,20 @@ impl UnifiedExecSessionManager {
         let original_token_count = approx_token_count(&text);
         let chunk_id = generate_chunk_id();
 
+        // After polling, refresh_session_state tells us whether the PTY is
+        // still alive or has exited and been removed from the store; we thread
+        // that through so the handler can tag TerminalInteraction with an
+        // appropriate process_id and exit_code.
         let status = self.refresh_session_state(process_id.as_str()).await;
-        let (process_id, exit_code, completion_entry, event_call_id) = match status {
+        let (process_id, exit_code, event_call_id) = match status {
             SessionStatus::Alive {
                 exit_code,
                 call_id,
                 process_id,
-            } => (Some(process_id), exit_code, None, call_id),
+            } => (Some(process_id), exit_code, call_id),
             SessionStatus::Exited { exit_code, entry } => {
                 let call_id = entry.call_id.clone();
-                (None, exit_code, Some(*entry), call_id)
+                (None, exit_code, call_id)
             }
             SessionStatus::Unknown => {
                 return Err(UnifiedExecError::UnknownSessionId {
@@ -298,35 +301,15 @@ impl UnifiedExecSessionManager {
             chunk_id,
             wall_time,
             output,
+            raw_output: collected,
             process_id,
             exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(session_command.clone()),
         };
 
-        let interaction_output = ExecToolCallOutput {
-            exit_code: response.exit_code.unwrap_or(0),
-            stdout: StreamOutput::new(response.output.clone()),
-            stderr: StreamOutput::new(String::new()),
-            aggregated_output: StreamOutput::new(response.output.clone()),
-            duration: response.wall_time,
-            timed_out: false,
-        };
-        interaction_emitter
-            .emit(
-                make_event_ctx(),
-                ToolEventStage::Success(interaction_output),
-            )
-            .await;
-
         if response.process_id.is_some() {
             Self::emit_waiting_status(&session_ref, &turn_ref, &session_command).await;
-        }
-
-        if let (Some(exit), Some(entry)) = (response.exit_code, completion_entry) {
-            let total_duration = Instant::now().saturating_duration_since(entry.started_at);
-            Self::emit_exec_end_from_entry(entry, response.output.clone(), exit, total_duration)
-                .await;
         }
 
         Ok(response)
@@ -385,7 +368,6 @@ impl UnifiedExecSessionManager {
             session_ref: Arc::clone(&entry.session_ref),
             turn_ref: Arc::clone(&entry.turn_ref),
             command: entry.command.clone(),
-            cwd: entry.cwd.clone(),
             process_id: entry.process_id.clone(),
         })
     }
@@ -403,94 +385,51 @@ impl UnifiedExecSessionManager {
     #[allow(clippy::too_many_arguments)]
     async fn store_session(
         &self,
-        session: UnifiedExecSession,
+        session: Arc<UnifiedExecSession>,
         context: &UnifiedExecContext,
         command: &[String],
         cwd: PathBuf,
         started_at: Instant,
         process_id: String,
+        transcript: Arc<tokio::sync::Mutex<CommandTranscript>>,
     ) {
         let entry = SessionEntry {
-            session,
+            session: Arc::clone(&session),
             session_ref: Arc::clone(&context.session),
             turn_ref: Arc::clone(&context.turn),
             call_id: context.call_id.clone(),
             process_id: process_id.clone(),
             command: command.to_vec(),
-            cwd,
-            started_at,
             last_used: started_at,
         };
-        let mut store = self.session_store.lock().await;
-        Self::prune_sessions_if_needed(&mut store);
-        store.sessions.insert(process_id, entry);
-    }
-
-    async fn emit_exec_end_from_entry(
-        entry: SessionEntry,
-        aggregated_output: String,
-        exit_code: i32,
-        duration: Duration,
-    ) {
-        let output = ExecToolCallOutput {
-            exit_code,
-            stdout: StreamOutput::new(aggregated_output.clone()),
-            stderr: StreamOutput::new(String::new()),
-            aggregated_output: StreamOutput::new(aggregated_output),
-            duration,
-            timed_out: false,
+        let number_sessions = {
+            let mut store = self.session_store.lock().await;
+            Self::prune_sessions_if_needed(&mut store);
+            store.sessions.insert(process_id.clone(), entry);
+            store.sessions.len()
         };
-        let event_ctx = ToolEventCtx::new(
-            entry.session_ref.as_ref(),
-            entry.turn_ref.as_ref(),
-            &entry.call_id,
-            None,
-        );
-        let emitter = ToolEmitter::unified_exec(
-            &entry.command,
-            entry.cwd,
-            ExecCommandSource::UnifiedExecStartup,
-            None,
-            Some(entry.process_id.clone()),
-        );
-        emitter
-            .emit(event_ctx, ToolEventStage::Success(output))
-            .await;
-    }
 
-    async fn emit_exec_end_from_context(
-        context: &UnifiedExecContext,
-        command: &[String],
-        cwd: PathBuf,
-        aggregated_output: String,
-        exit_code: i32,
-        duration: Duration,
-        process_id: Option<String>,
-    ) {
-        let output = ExecToolCallOutput {
-            exit_code,
-            stdout: StreamOutput::new(aggregated_output.clone()),
-            stderr: StreamOutput::new(String::new()),
-            aggregated_output: StreamOutput::new(aggregated_output),
-            duration,
-            timed_out: false,
+        if number_sessions >= WARNING_UNIFIED_EXEC_SESSIONS {
+            context
+                .session
+                .record_model_warning(
+                    format!("The maximum number of unified exec sessions you can keep open is {WARNING_UNIFIED_EXEC_SESSIONS} and you currently have {number_sessions} sessions open. Reuse older sessions or close them to prevent automatic pruning of old session"),
+                    &context.turn
+                )
+                .await;
         };
-        let event_ctx = ToolEventCtx::new(
-            context.session.as_ref(),
-            context.turn.as_ref(),
-            &context.call_id,
-            None,
-        );
-        let emitter = ToolEmitter::unified_exec(
-            command,
+
+        spawn_exit_watcher(
+            Arc::clone(&session),
+            Arc::clone(&context.session),
+            Arc::clone(&context.turn),
+            context.call_id.clone(),
+            command.to_vec(),
             cwd,
-            ExecCommandSource::UnifiedExecStartup,
-            None,
             process_id,
+            transcript,
+            started_at,
         );
-        emitter
-            .emit(event_ctx, ToolEventStage::Success(output))
-            .await;
     }
 
     async fn emit_waiting_status(
@@ -498,7 +437,11 @@ impl UnifiedExecSessionManager {
         turn: &Arc<TurnContext>,
         command: &[String],
     ) {
-        let command_display = command.join(" ");
+        let command_display = if let Some((_, script)) = extract_bash_command(command) {
+            script.to_string()
+        } else {
+            command.join(" ")
+        };
         let message = format!("Waiting for `{command_display}`");
         session
             .send_event(
@@ -533,26 +476,30 @@ impl UnifiedExecSessionManager {
         &self,
         command: &[String],
         cwd: PathBuf,
-        with_escalated_permissions: Option<bool>,
+        sandbox_permissions: SandboxPermissions,
         justification: Option<String>,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
+        let features = context.session.features();
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
+        let exec_approval_requirement = create_exec_approval_requirement_for_command(
+            &context.turn.exec_policy,
+            &features,
+            command,
+            context.turn.approval_policy,
+            &context.turn.sandbox_policy,
+            sandbox_permissions,
+        )
+        .await;
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,
             env,
-            with_escalated_permissions,
+            sandbox_permissions,
             justification,
-            create_approval_requirement_for_command(
-                &context.turn.exec_policy,
-                command,
-                context.turn.approval_policy,
-                &context.turn.sandbox_policy,
-                SandboxPermissions::from(with_escalated_permissions.unwrap_or(false)),
-            ),
+            exec_approval_requirement,
         );
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),
@@ -578,7 +525,7 @@ impl UnifiedExecSessionManager {
         cancellation_token: &CancellationToken,
         deadline: Instant,
     ) -> Vec<u8> {
-        const POST_EXIT_OUTPUT_GRACE: Duration = Duration::from_millis(25);
+        const POST_EXIT_OUTPUT_GRACE: Duration = Duration::from_millis(50);
 
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
         let mut exit_signal_received = cancellation_token.is_cancelled();
@@ -633,9 +580,9 @@ impl UnifiedExecSessionManager {
         collected
     }
 
-    fn prune_sessions_if_needed(store: &mut SessionStore) {
+    fn prune_sessions_if_needed(store: &mut SessionStore) -> bool {
         if store.sessions.len() < MAX_UNIFIED_EXEC_SESSIONS {
-            return;
+            return false;
         }
 
         let meta: Vec<(String, Instant, bool)> = store
@@ -645,8 +592,13 @@ impl UnifiedExecSessionManager {
             .collect();
 
         if let Some(session_id) = Self::session_id_to_prune_from_meta(&meta) {
-            store.remove(&session_id);
+            if let Some(entry) = store.remove(&session_id) {
+                entry.session.terminate();
+            }
+            return true;
         }
+
+        false
     }
 
     // Centralized pruning policy so we can easily swap strategies later.
@@ -679,8 +631,17 @@ impl UnifiedExecSessionManager {
     }
 
     pub(crate) async fn terminate_all_sessions(&self) {
-        let mut sessions = self.session_store.lock().await;
-        sessions.clear();
+        let entries: Vec<SessionEntry> = {
+            let mut sessions = self.session_store.lock().await;
+            let entries: Vec<SessionEntry> =
+                sessions.sessions.drain().map(|(_, entry)| entry).collect();
+            sessions.reserved_sessions_id.clear();
+            entries
+        };
+
+        for entry in entries {
+            entry.session.terminate();
+        }
     }
 }
 
