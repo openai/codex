@@ -182,14 +182,17 @@ async fn forward_events(
                     // ignore all legacy delta events
                     Event {
                         id: _,
+                        agent_id: _,
                         msg: EventMsg::AgentMessageDelta(_) | EventMsg::AgentReasoningDelta(_),
                     } => {}
                     Event {
                         id: _,
+                        agent_id: _,
                         msg: EventMsg::SessionConfigured(_),
                     } => {}
                     Event {
                         id,
+                        agent_id: _,
                         msg: EventMsg::ExecApprovalRequest(event),
                     } => {
                         // Initiate approval via parent session; do not surface to consumer.
@@ -205,6 +208,7 @@ async fn forward_events(
                     }
                     Event {
                         id,
+                        agent_id: _,
                         msg: EventMsg::ApplyPatchApprovalRequest(event),
                     } => {
                         handle_patch_approval(
@@ -372,6 +376,7 @@ mod tests {
         tx_out
             .send(Event {
                 id: "full".to_string(),
+                agent_id: None,
                 msg: EventMsg::TurnAborted(TurnAbortedEvent {
                     reason: TurnAbortReason::Interrupted,
                 }),
@@ -391,6 +396,7 @@ mod tests {
         tx_events
             .send(Event {
                 id: "evt".to_string(),
+                agent_id: None,
                 msg: EventMsg::RawResponseItem(RawResponseItemEvent {
                     item: ResponseItem::CustomToolCall {
                         id: None,

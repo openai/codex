@@ -159,6 +159,7 @@ impl ElicitationRequestManager {
                 let _ = tx_event
                     .send(Event {
                         id: "mcp_elicitation_request".to_string(),
+                        agent_id: None,
                         msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
                             server_name,
                             id,
@@ -370,6 +371,7 @@ impl McpConnectionManager {
             let _ = tx_event
                 .send(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
+                    agent_id: None,
                     msg: EventMsg::McpStartupComplete(summary),
                 })
                 .await;
@@ -661,6 +663,7 @@ async fn emit_update(
     tx_event
         .send(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
+            agent_id: None,
             msg: EventMsg::McpStartupUpdate(update),
         })
         .await

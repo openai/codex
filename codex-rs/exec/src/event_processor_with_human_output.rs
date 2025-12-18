@@ -160,7 +160,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     }
 
     fn process_event(&mut self, event: Event) -> CodexStatus {
-        let Event { id: _, msg } = event;
+        let Event { id: _, msg, .. } = event;
         match msg {
             EventMsg::Error(ErrorEvent { message, .. }) => {
                 let prefix = "ERROR:".style(self.red);

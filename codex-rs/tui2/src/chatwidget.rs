@@ -23,6 +23,7 @@ use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::CreditsSnapshot;
+use codex_core::protocol::DEFAULT_AGENT_ID;
 use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
@@ -1634,6 +1635,7 @@ impl ChatWidget {
 
                 self.app_event_tx.send(AppEvent::CodexEvent(Event {
                     id: "1".to_string(),
+                    agent_id: None,
                     // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                     //     call_id: "1".to_string(),
                     //     command: vec!["git".into(), "apply".into()],
@@ -1799,8 +1801,23 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
-        let Event { id, msg } = event;
+        let Event { id, msg, agent_id } = event;
+        if !self.should_handle_agent_event(agent_id.as_deref(), &msg) {
+            return;
+        }
         self.dispatch_event_msg(Some(id), msg, false);
+    }
+
+    fn should_handle_agent_event(&self, agent_id: Option<&str>, msg: &EventMsg) -> bool {
+        let agent_id = agent_id.unwrap_or(DEFAULT_AGENT_ID);
+        if agent_id == DEFAULT_AGENT_ID {
+            return true;
+        }
+
+        matches!(
+            msg,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_)
+        )
     }
 
     /// Dispatch a protocol `EventMsg` to the appropriate handler.

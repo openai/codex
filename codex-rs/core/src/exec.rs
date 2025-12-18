@@ -20,6 +20,7 @@ use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
 use crate::get_platform_sandbox;
+use crate::protocol::AgentId;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
@@ -123,6 +124,7 @@ pub enum SandboxType {
 #[derive(Clone)]
 pub struct StdoutStream {
     pub sub_id: String,
+    pub agent_id: AgentId,
     pub call_id: String,
     pub tx_event: Sender<Event>,
 }
@@ -710,6 +712,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
             });
             let event = Event {
                 id: stream.sub_id.clone(),
+                agent_id: Some(stream.agent_id.clone()),
                 msg,
             };
             #[allow(clippy::let_unit_value)]

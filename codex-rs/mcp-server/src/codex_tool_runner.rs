@@ -68,6 +68,7 @@ pub async fn run_codex_tool_session(
     let session_configured_event = Event {
         // Use a fake id value for now.
         id: "".to_string(),
+        agent_id: None,
         msg: EventMsg::SessionConfigured(session_configured.clone()),
     };
     outgoing

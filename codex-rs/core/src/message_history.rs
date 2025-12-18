@@ -5,7 +5,7 @@
 //! JSON-Lines tooling. Each record has the following schema:
 //!
 //! ````text
-//! {"conversation_id":"<uuid>","ts":<unix_seconds>,"text":"<message>"}
+//! {"conversation_id":"<uuid>","agent_id":"<agent>","ts":<unix_seconds>,"text":"<message>"}
 //! ````
 //!
 //! To minimise the chance of interleaved writes when multiple processes are
@@ -54,6 +54,8 @@ const RETRY_SLEEP: Duration = Duration::from_millis(100);
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct HistoryEntry {
     pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     pub ts: u64,
     pub text: String,
 }
@@ -69,6 +71,7 @@ fn history_filepath(config: &Config) -> PathBuf {
 /// which entails a small amount of blocking I/O internally.
 pub(crate) async fn append_entry(
     text: &str,
+    agent_id: Option<&str>,
     conversation_id: &ConversationId,
     config: &Config,
 ) -> Result<()> {
@@ -99,6 +102,7 @@ pub(crate) async fn append_entry(
     // Construct the JSON line first so we can write it in a single syscall.
     let entry = HistoryEntry {
         session_id: conversation_id.to_string(),
+        agent_id: agent_id.map(str::to_string),
         ts,
         text: text.to_string(),
     };
@@ -418,11 +422,13 @@ mod tests {
         let entries = vec![
             HistoryEntry {
                 session_id: "first-session".to_string(),
+                agent_id: None,
                 ts: 1,
                 text: "first".to_string(),
             },
             HistoryEntry {
                 session_id: "second-session".to_string(),
+                agent_id: None,
                 ts: 2,
                 text: "second".to_string(),
             },
@@ -453,11 +459,13 @@ mod tests {
 
         let initial = HistoryEntry {
             session_id: "first-session".to_string(),
+            agent_id: None,
             ts: 1,
             text: "first".to_string(),
         };
         let appended = HistoryEntry {
             session_id: "second-session".to_string(),
+            agent_id: None,
             ts: 2,
             text: "second".to_string(),
         };
@@ -507,7 +515,7 @@ mod tests {
 
         let history_path = codex_home.path().join("history.jsonl");
 
-        append_entry(&entry_one, &conversation_id, &config)
+        append_entry(&entry_one, None, &conversation_id, &config)
             .await
             .expect("write first entry");
 
@@ -517,7 +525,7 @@ mod tests {
         config.history.max_bytes =
             Some(usize::try_from(limit_bytes).expect("limit should fit into usize"));
 
-        append_entry(&entry_two, &conversation_id, &config)
+        append_entry(&entry_two, None, &conversation_id, &config)
             .await
             .expect("write second entry");
 
@@ -555,13 +563,13 @@ mod tests {
 
         let history_path = codex_home.path().join("history.jsonl");
 
-        append_entry(&short_entry, &conversation_id, &config)
+        append_entry(&short_entry, None, &conversation_id, &config)
             .await
             .expect("write first entry");
 
         let short_entry_len = std::fs::metadata(&history_path).expect("metadata").len();
 
-        append_entry(&long_entry, &conversation_id, &config)
+        append_entry(&long_entry, None, &conversation_id, &config)
             .await
             .expect("write second entry");
 
@@ -576,7 +584,7 @@ mod tests {
                 .expect("max bytes should fit into usize"),
         );
 
-        append_entry(&long_entry, &conversation_id, &config)
+        append_entry(&long_entry, None, &conversation_id, &config)
             .await
             .expect("write third entry");
 

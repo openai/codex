@@ -108,6 +108,7 @@ impl SessionTask for UserShellCommandTask {
 
         let stdout_stream = Some(StdoutStream {
             sub_id: turn_context.sub_id.clone(),
+            agent_id: turn_context.agent_id.clone(),
             call_id: call_id.clone(),
             tx_event: session.get_tx_event(),
         });

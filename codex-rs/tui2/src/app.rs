@@ -2446,6 +2446,7 @@ mod tests {
 
         app.chat_widget.handle_codex_event(Event {
             id: String::new(),
+            agent_id: None,
             msg: EventMsg::SessionConfigured(event),
         });
 

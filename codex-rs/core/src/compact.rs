@@ -68,7 +68,7 @@ async fn run_compact_task_inner(
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
-    let mut history = sess.clone_history().await;
+    let mut history = sess.clone_history(&turn_context.agent_id).await;
     history.record_items(
         &[initial_input_for_turn.into()],
         turn_context.truncation_policy,
@@ -87,7 +87,8 @@ async fn run_compact_task_inner(
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
     });
-    sess.persist_rollout_items(&[rollout_item]).await;
+    sess.persist_rollout_items(&turn_context.agent_id, &[rollout_item])
+        .await;
 
     loop {
         let turn_input = history.get_history_for_prompt();
@@ -150,7 +151,10 @@ async fn run_compact_task_inner(
         }
     }
 
-    let history_snapshot = sess.clone_history().await.get_history();
+    let history_snapshot = sess
+        .clone_history(&turn_context.agent_id)
+        .await
+        .get_history();
     let summary_suffix =
         get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
@@ -164,14 +168,16 @@ async fn run_compact_task_inner(
         .cloned()
         .collect();
     new_history.extend(ghost_snapshots);
-    sess.replace_history(new_history).await;
+    sess.replace_history(&turn_context.agent_id, new_history)
+        .await;
     sess.recompute_token_usage(&turn_context).await;
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),
         replacement_history: None,
     });
-    sess.persist_rollout_items(&[rollout_item]).await;
+    sess.persist_rollout_items(&turn_context.agent_id, &[rollout_item])
+        .await;
 
     let event = EventMsg::ContextCompacted(ContextCompactedEvent {});
     sess.send_event(&turn_context, event).await;

@@ -9,6 +9,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::InitialHistory;
 use codex_core::protocol::ResumedHistory;
 use codex_core::protocol::RolloutItem;
+use codex_core::protocol::RolloutLine;
 use codex_core::protocol::TurnContextItem;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::ConversationId;
@@ -33,7 +34,11 @@ fn resume_history(
 
     InitialHistory::Resumed(ResumedHistory {
         conversation_id: ConversationId::default(),
-        history: vec![RolloutItem::TurnContext(turn_ctx)],
+        history: vec![RolloutLine {
+            timestamp: String::new(),
+            agent_id: None,
+            item: RolloutItem::TurnContext(turn_ctx),
+        }],
         rollout_path: rollout_path.to_path_buf(),
     })
 }

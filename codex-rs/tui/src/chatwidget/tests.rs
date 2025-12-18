@@ -128,6 +128,7 @@ fn resumed_initial_messages_render_history() {
 
     chat.handle_codex_event(Event {
         id: "initial".into(),
+        agent_id: None,
         msg: EventMsg::SessionConfigured(configured),
     });
 
@@ -160,6 +161,7 @@ fn entered_review_mode_uses_request_hint() {
 
     chat.handle_codex_event(Event {
         id: "review-start".into(),
+        agent_id: None,
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::BaseBranch {
                 branch: "feature".to_string(),
@@ -181,6 +183,7 @@ fn entered_review_mode_defaults_to_current_changes_banner() {
 
     chat.handle_codex_event(Event {
         id: "review-start".into(),
+        agent_id: None,
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
             user_facing_hint: None,
@@ -204,6 +207,7 @@ fn review_restores_context_window_indicator() {
 
     chat.handle_codex_event(Event {
         id: "token-before".into(),
+        agent_id: None,
         msg: EventMsg::TokenCount(TokenCountEvent {
             info: Some(make_token_info(pre_review_tokens, context_window)),
             rate_limits: None,
@@ -213,6 +217,7 @@ fn review_restores_context_window_indicator() {
 
     chat.handle_codex_event(Event {
         id: "review-start".into(),
+        agent_id: None,
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::BaseBranch {
                 branch: "feature".to_string(),
@@ -223,6 +228,7 @@ fn review_restores_context_window_indicator() {
 
     chat.handle_codex_event(Event {
         id: "token-review".into(),
+        agent_id: None,
         msg: EventMsg::TokenCount(TokenCountEvent {
             info: Some(make_token_info(review_tokens, context_window)),
             rate_limits: None,
@@ -232,6 +238,7 @@ fn review_restores_context_window_indicator() {
 
     chat.handle_codex_event(Event {
         id: "review-end".into(),
+        agent_id: None,
         msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
             review_output: None,
         }),
@@ -252,6 +259,7 @@ fn token_count_none_resets_context_indicator() {
 
     chat.handle_codex_event(Event {
         id: "token-before".into(),
+        agent_id: None,
         msg: EventMsg::TokenCount(TokenCountEvent {
             info: Some(make_token_info(pre_compact_tokens, context_window)),
             rate_limits: None,
@@ -261,6 +269,7 @@ fn token_count_none_resets_context_indicator() {
 
     chat.handle_codex_event(Event {
         id: "token-cleared".into(),
+        agent_id: None,
         msg: EventMsg::TokenCount(TokenCountEvent {
             info: None,
             rate_limits: None,
@@ -291,6 +300,7 @@ fn context_indicator_shows_used_tokens_when_window_unknown() {
 
     chat.handle_codex_event(Event {
         id: "token-usage".into(),
+        agent_id: None,
         msg: EventMsg::TokenCount(TokenCountEvent {
             info: Some(token_info),
             rate_limits: None,
@@ -727,6 +737,7 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
     };
     chat.handle_codex_event(Event {
         id: "sub-short".into(),
+        agent_id: None,
         msg: EventMsg::ExecApprovalRequest(ev),
     });
 
@@ -771,6 +782,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
     };
     chat.handle_codex_event(Event {
         id: "sub-multi".into(),
+        agent_id: None,
         msg: EventMsg::ExecApprovalRequest(ev_multi),
     });
     let proposed_multi = drain_insert_history(&mut rx);
@@ -821,6 +833,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
     };
     chat.handle_codex_event(Event {
         id: "sub-long".into(),
+        agent_id: None,
         msg: EventMsg::ExecApprovalRequest(ev_long),
     });
     let proposed_long = drain_insert_history(&mut rx);
@@ -863,6 +876,7 @@ fn begin_exec_with_source(
     };
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
+        agent_id: None,
         msg: EventMsg::ExecCommandBegin(event.clone()),
     });
     event
@@ -896,6 +910,7 @@ fn end_exec(
     } = begin_event;
     chat.handle_codex_event(Event {
         id: call_id.clone(),
+        agent_id: None,
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id,
             process_id,
@@ -1151,6 +1166,7 @@ fn exec_end_without_begin_uses_event_command() {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     chat.handle_codex_event(Event {
         id: "call-orphan".to_string(),
+        agent_id: None,
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "call-orphan".to_string(),
             process_id: None,
@@ -1389,6 +1405,7 @@ fn undo_success_events_render_info_messages() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".to_string(),
+        agent_id: None,
         msg: EventMsg::UndoStarted(UndoStartedEvent {
             message: Some("Undo requested for the last turn...".to_string()),
         }),
@@ -1400,6 +1417,7 @@ fn undo_success_events_render_info_messages() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".to_string(),
+        agent_id: None,
         msg: EventMsg::UndoCompleted(UndoCompletedEvent {
             success: true,
             message: None,
@@ -1426,6 +1444,7 @@ fn undo_failure_events_render_error_message() {
 
     chat.handle_codex_event(Event {
         id: "turn-2".to_string(),
+        agent_id: None,
         msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
     });
     assert!(
@@ -1435,6 +1454,7 @@ fn undo_failure_events_render_error_message() {
 
     chat.handle_codex_event(Event {
         id: "turn-2".to_string(),
+        agent_id: None,
         msg: EventMsg::UndoCompleted(UndoCompletedEvent {
             success: false,
             message: Some("Failed to restore workspace state.".to_string()),
@@ -1461,6 +1481,7 @@ fn undo_started_hides_interrupt_hint() {
 
     chat.handle_codex_event(Event {
         id: "turn-hint".to_string(),
+        agent_id: None,
         msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
     });
 
@@ -1584,6 +1605,7 @@ fn view_image_tool_call_adds_history_cell() {
 
     chat.handle_codex_event(Event {
         id: "sub-image".into(),
+        agent_id: None,
         msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
             call_id: "call-image".into(),
             path: image_path,
@@ -1609,6 +1631,7 @@ fn interrupt_exec_marks_failed_snapshot() {
     // cause the active exec cell to be finalized as failed and flushed.
     chat.handle_codex_event(Event {
         id: "call-int".into(),
+        agent_id: None,
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
@@ -1634,6 +1657,7 @@ fn interrupted_turn_error_message_snapshot() {
     // Simulate an in-progress task so the widget is in a running state.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
+        agent_id: None,
         msg: EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window: None,
         }),
@@ -1642,6 +1666,7 @@ fn interrupted_turn_error_message_snapshot() {
     // Abort the turn (like pressing Esc) and drain inserted history.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
+        agent_id: None,
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
@@ -2286,6 +2311,7 @@ fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
     };
     chat.handle_codex_event(Event {
         id: "sub-approve".into(),
+        agent_id: None,
         msg: EventMsg::ExecApprovalRequest(ev),
     });
     // Render to a fixed-size test terminal and snapshot.
@@ -2339,6 +2365,7 @@ fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
     };
     chat.handle_codex_event(Event {
         id: "sub-approve-noreason".into(),
+        agent_id: None,
         msg: EventMsg::ExecApprovalRequest(ev),
     });
 
@@ -2381,6 +2408,7 @@ fn approval_modal_patch_snapshot() -> anyhow::Result<()> {
     };
     chat.handle_codex_event(Event {
         id: "sub-approve-patch".into(),
+        agent_id: None,
         msg: EventMsg::ApplyPatchApprovalRequest(ev),
     });
 
@@ -2417,6 +2445,7 @@ fn interrupt_restores_queued_messages_into_composer() {
     // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
+        agent_id: None,
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
@@ -2455,6 +2484,7 @@ fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
+        agent_id: None,
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),
@@ -2500,12 +2530,14 @@ fn ui_snapshots_small_heights_task_running() {
     // Activate status line
     chat.handle_codex_event(Event {
         id: "task-1".into(),
+        agent_id: None,
         msg: EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window: None,
         }),
     });
     chat.handle_codex_event(Event {
         id: "task-1".into(),
+        agent_id: None,
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "**Thinking**".into(),
         }),
@@ -2531,6 +2563,7 @@ fn status_widget_and_approval_modal_snapshot() {
     // Begin a running task so the status indicator would be active.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
+        agent_id: None,
         msg: EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window: None,
         }),
@@ -2538,6 +2571,7 @@ fn status_widget_and_approval_modal_snapshot() {
     // Provide a deterministic header for the status line.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
+        agent_id: None,
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "**Analyzing**".into(),
         }),
@@ -2560,6 +2594,7 @@ fn status_widget_and_approval_modal_snapshot() {
     };
     chat.handle_codex_event(Event {
         id: "sub-approve-exec".into(),
+        agent_id: None,
         msg: EventMsg::ExecApprovalRequest(ev),
     });
 
@@ -2583,6 +2618,7 @@ fn status_widget_active_snapshot() {
     // Activate the status indicator by simulating a task start.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
+        agent_id: None,
         msg: EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window: None,
         }),
@@ -2590,6 +2626,7 @@ fn status_widget_active_snapshot() {
     // Provide a deterministic header via a bold reasoning chunk.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
+        agent_id: None,
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "**Analyzing**".into(),
         }),
@@ -2611,6 +2648,7 @@ fn mcp_startup_header_booting_snapshot() {
 
     chat.handle_codex_event(Event {
         id: "mcp-1".into(),
+        agent_id: None,
         msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
             server: "alpha".into(),
             status: McpStartupStatus::Starting,
@@ -2632,6 +2670,7 @@ fn background_event_updates_status_header() {
 
     chat.handle_codex_event(Event {
         id: "bg-1".into(),
+        agent_id: None,
         msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
             message: "Waiting for `vim`".to_string(),
         }),
@@ -2663,6 +2702,7 @@ fn apply_patch_events_emit_history_cells() {
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::ApplyPatchApprovalRequest(ev),
     });
     let cells = drain_insert_history(&mut rx);
@@ -2703,6 +2743,7 @@ fn apply_patch_events_emit_history_cells() {
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::PatchApplyBegin(begin),
     });
     let cells = drain_insert_history(&mut rx);
@@ -2731,6 +2772,7 @@ fn apply_patch_events_emit_history_cells() {
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::PatchApplyEnd(end),
     });
     let cells = drain_insert_history(&mut rx);
@@ -2753,6 +2795,7 @@ fn apply_patch_manual_approval_adjusts_header() {
     );
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "c1".into(),
             turn_id: "turn-c1".into(),
@@ -2772,6 +2815,7 @@ fn apply_patch_manual_approval_adjusts_header() {
     );
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
             call_id: "c1".into(),
             turn_id: "turn-c1".into(),
@@ -2802,6 +2846,7 @@ fn apply_patch_manual_flow_snapshot() {
     );
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "c1".into(),
             turn_id: "turn-c1".into(),
@@ -2825,6 +2870,7 @@ fn apply_patch_manual_flow_snapshot() {
     );
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
             call_id: "c1".into(),
             turn_id: "turn-c1".into(),
@@ -2862,6 +2908,7 @@ fn apply_patch_approval_sends_op_with_submission_id() {
     };
     chat.handle_codex_event(Event {
         id: "sub-123".into(),
+        agent_id: None,
         msg: EventMsg::ApplyPatchApprovalRequest(ev),
     });
 
@@ -2893,6 +2940,7 @@ fn apply_patch_full_flow_integration_like() {
     );
     chat.handle_codex_event(Event {
         id: "sub-xyz".into(),
+        agent_id: None,
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "call-1".into(),
             turn_id: "turn-call-1".into(),
@@ -2934,6 +2982,7 @@ fn apply_patch_full_flow_integration_like() {
     );
     chat.handle_codex_event(Event {
         id: "sub-xyz".into(),
+        agent_id: None,
         msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
             call_id: "call-1".into(),
             turn_id: "turn-call-1".into(),
@@ -2948,6 +2997,7 @@ fn apply_patch_full_flow_integration_like() {
     );
     chat.handle_codex_event(Event {
         id: "sub-xyz".into(),
+        agent_id: None,
         msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
             call_id: "call-1".into(),
             turn_id: "turn-call-1".into(),
@@ -2973,6 +3023,7 @@ fn apply_patch_untrusted_shows_approval_modal() -> anyhow::Result<()> {
     );
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
+        agent_id: None,
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "call-1".into(),
             turn_id: "turn-call-1".into(),
@@ -3024,6 +3075,7 @@ fn apply_patch_request_shows_diff_summary() -> anyhow::Result<()> {
     );
     chat.handle_codex_event(Event {
         id: "sub-apply".into(),
+        agent_id: None,
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "call-apply".into(),
             turn_id: "turn-apply".into(),
@@ -3096,6 +3148,7 @@ fn plan_update_renders_history_cell() {
     };
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
+        agent_id: None,
         msg: EventMsg::PlanUpdate(update),
     });
     let cells = drain_insert_history(&mut rx);
@@ -3117,6 +3170,7 @@ fn stream_error_updates_status_indicator() {
     let msg = "Reconnecting... 2/5";
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
+        agent_id: None,
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: msg.to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
@@ -3140,6 +3194,7 @@ fn warning_event_adds_warning_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
+        agent_id: None,
         msg: EventMsg::Warning(WarningEvent {
             message: "test warning message".to_string(),
         }),
@@ -3159,6 +3214,7 @@ fn stream_recovery_restores_previous_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
     chat.handle_codex_event(Event {
         id: "task".into(),
+        agent_id: None,
         msg: EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window: None,
         }),
@@ -3166,6 +3222,7 @@ fn stream_recovery_restores_previous_status_header() {
     drain_insert_history(&mut rx);
     chat.handle_codex_event(Event {
         id: "retry".into(),
+        agent_id: None,
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: "Reconnecting... 1/5".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
@@ -3174,6 +3231,7 @@ fn stream_recovery_restores_previous_status_header() {
     drain_insert_history(&mut rx);
     chat.handle_codex_event(Event {
         id: "delta".into(),
+        agent_id: None,
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
             delta: "hello".to_string(),
         }),
@@ -3194,6 +3252,7 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     // Begin turn
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window: None,
         }),
@@ -3202,6 +3261,7 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     // First finalized assistant message
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "First message".into(),
         }),
@@ -3210,6 +3270,7 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     // Second finalized assistant message in the same turn
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Second message".into(),
         }),
@@ -3218,6 +3279,7 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     // End turn
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::TaskComplete(TaskCompleteEvent {
             last_agent_message: None,
         }),
@@ -3248,12 +3310,14 @@ fn final_reasoning_then_message_without_deltas_are_rendered() {
     // No deltas; only final reasoning followed by final message.
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
             text: "I will first analyze the request.".into(),
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
         }),
@@ -3275,24 +3339,28 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
     // Stream some reasoning deltas first.
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "I will ".into(),
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "first analyze the ".into(),
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "request.".into(),
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
             text: "request.".into(),
         }),
@@ -3301,12 +3369,14 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
     // Then stream answer deltas, followed by the exact same final message.
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
             delta: "Here is the ".into(),
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
             delta: "result.".into(),
         }),
@@ -3314,6 +3384,7 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
 
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        agent_id: None,
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
         }),
@@ -3337,6 +3408,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
     chat.handle_codex_event(Event {
         id: "t1".into(),
+        agent_id: None,
         msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
     });
 
@@ -3356,6 +3428,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     chat.handle_codex_event(Event {
         id: "c1".into(),
+        agent_id: None,
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "c1".into(),
             process_id: None,
@@ -3369,6 +3442,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     });
     chat.handle_codex_event(Event {
         id: "c1".into(),
+        agent_id: None,
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "c1".into(),
             process_id: None,
@@ -3388,12 +3462,14 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     });
     chat.handle_codex_event(Event {
         id: "t1".into(),
+        agent_id: None,
         msg: EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window: None,
         }),
     });
     chat.handle_codex_event(Event {
         id: "t1".into(),
+        agent_id: None,
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "**Investigating rendering code**".into(),
         }),
@@ -3432,6 +3508,7 @@ fn chatwidget_markdown_code_blocks_vt100_snapshot() {
 
     chat.handle_codex_event(Event {
         id: "t1".into(),
+        agent_id: None,
         msg: EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window: None,
         }),
@@ -3480,6 +3557,7 @@ printf 'fenced within fenced\n'
 
         chat.handle_codex_event(Event {
             id: "t1".into(),
+            agent_id: None,
             msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
         });
         // Drive commit ticks and drain emitted history lines into the vt100 buffer.
@@ -3503,6 +3581,7 @@ printf 'fenced within fenced\n'
     // Finalize the stream without sending a final AgentMessage, to flush any tail.
     chat.handle_codex_event(Event {
         id: "t1".into(),
+        agent_id: None,
         msg: EventMsg::TaskComplete(TaskCompleteEvent {
             last_agent_message: None,
         }),
@@ -3520,6 +3599,7 @@ fn chatwidget_tall() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None);
     chat.handle_codex_event(Event {
         id: "t1".into(),
+        agent_id: None,
         msg: EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window: None,
         }),
