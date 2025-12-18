@@ -1,4 +1,4 @@
-use codex_core::MCP_SANDBOX_STATE_NOTIFICATION;
+use codex_core::MCP_SANDBOX_STATE_METHOD;
 use codex_core::SandboxState;
 use codex_core::protocol::SandboxPolicy;
 use rmcp::ClientHandler;
@@ -7,9 +7,10 @@ use rmcp::RoleClient;
 use rmcp::Service;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::ClientInfo;
+use rmcp::model::ClientRequest;
 use rmcp::model::CreateElicitationRequestParam;
 use rmcp::model::CreateElicitationResult;
-use rmcp::model::CustomNotification;
+use rmcp::model::CustomRequest;
 use rmcp::model::ElicitationAction;
 use rmcp::service::RunningService;
 use rmcp::transport::ConfigureCommandExt;
@@ -92,7 +93,7 @@ where
         codex_linux_sandbox_exe,
         sandbox_cwd: sandbox_cwd.as_ref().to_path_buf(),
     };
-    send_sandbox_notification(sandbox_state, service).await
+    send_sandbox_state_update(sandbox_state, service).await
 }
 
 pub async fn notify_writable_sandbox_only_one_folder<P, S>(
@@ -119,22 +120,21 @@ where
         codex_linux_sandbox_exe,
         sandbox_cwd: writable_folder.as_ref().to_path_buf(),
     };
-    send_sandbox_notification(sandbox_state, service).await
+    send_sandbox_state_update(sandbox_state, service).await
 }
 
-async fn send_sandbox_notification<S>(
+async fn send_sandbox_state_update<S>(
     sandbox_state: SandboxState,
     service: &RunningService<RoleClient, S>,
 ) -> anyhow::Result<()>
 where
     S: Service<RoleClient> + ClientHandler,
 {
-    let sandbox_state_notification = CustomNotification::new(
-        MCP_SANDBOX_STATE_NOTIFICATION,
-        Some(serde_json::to_value(sandbox_state)?),
-    );
     service
-        .send_notification(sandbox_state_notification.into())
+        .send_request(ClientRequest::CustomRequest(CustomRequest::new(
+            MCP_SANDBOX_STATE_METHOD,
+            Some(serde_json::to_value(sandbox_state)?),
+        )))
         .await?;
     Ok(())
 }
