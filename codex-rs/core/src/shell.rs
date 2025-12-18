@@ -3,7 +3,6 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::powershell::prefix_utf8_output;
 use crate::shell_snapshot::ShellSnapshot;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -53,7 +52,7 @@ impl Shell {
                 }
 
                 args.push("-Command".to_string());
-                args.push(prefix_utf8_output(command));
+                args.push(command.to_string());
                 args
             }
             ShellType::Cmd => {

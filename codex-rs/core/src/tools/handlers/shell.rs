@@ -7,10 +7,13 @@ use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::exec_policy::create_exec_approval_requirement_for_command;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
+use crate::powershell::prefix_utf8_output;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -54,7 +57,14 @@ impl ShellCommandHandler {
         turn_context: &TurnContext,
     ) -> ExecParams {
         let shell = session.user_shell();
-        let command = Self::base_command(shell.as_ref(), &params.command, params.login);
+        let command_str = if matches!(shell.shell_type, ShellType::PowerShell)
+            && session.features().enabled(Feature::PowershellUtf8)
+        {
+            prefix_utf8_output(&params.command)
+        } else {
+            params.command.to_string()
+        };
+        let command = Self::base_command(shell.as_ref(), &command_str, params.login);
 
         ExecParams {
             command,

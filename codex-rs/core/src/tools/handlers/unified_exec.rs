@@ -1,10 +1,13 @@
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
+use crate::powershell::prefix_utf8_output;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandSource;
 use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -23,7 +26,6 @@ use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 pub struct UnifiedExecHandler;
 
@@ -92,7 +94,14 @@ impl ToolHandler for UnifiedExecHandler {
         let Ok(params) = serde_json::from_str::<ExecCommandArgs>(arguments) else {
             return true;
         };
-        let command = get_command(&params, invocation.session.user_shell());
+        let command = get_command(
+            &params,
+            invocation.session.user_shell().as_ref(),
+            invocation
+                .session
+                .features()
+                .enabled(Feature::PowershellUtf8),
+        );
         !is_known_safe_command(&command)
     }
 
@@ -127,7 +136,11 @@ impl ToolHandler for UnifiedExecHandler {
                     ))
                 })?;
                 let process_id = manager.allocate_process_id().await;
-                let command = get_command(&args, session.user_shell());
+                let command = get_command(
+                    &args,
+                    session.user_shell().as_ref(),
+                    session.features().enabled(Feature::PowershellUtf8),
+                );
 
                 let ExecCommandArgs {
                     workdir,
@@ -250,16 +263,26 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
-fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String> {
+fn get_command(
+    args: &ExecCommandArgs,
+    session_shell: &Shell,
+    powershell_utf8_enabled: bool,
+) -> Vec<String> {
     let model_shell = args.shell.as_ref().map(|shell_str| {
         let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
         shell.shell_snapshot = None;
         shell
     });
+    let shell = model_shell.as_ref().unwrap_or(session_shell);
 
-    let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
+    let command_str =
+        if matches!(shell.shell_type, ShellType::PowerShell) && powershell_utf8_enabled {
+            prefix_utf8_output(&args.cmd)
+        } else {
+            args.cmd.to_string()
+        };
 
-    shell.derive_exec_args(&args.cmd, args.login)
+    shell.derive_exec_args(&command_str, args.login)
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {
@@ -297,7 +320,6 @@ mod tests {
     use crate::powershell::prefix_utf8_output;
     use crate::shell::ShellType;
     use crate::shell::default_user_shell;
-    use std::sync::Arc;
 
     #[test]
     fn test_get_command_uses_default_shell_when_unspecified() {
@@ -308,14 +330,16 @@ mod tests {
 
         assert!(args.shell.is_none());
 
-        let session_shell = Arc::new(default_user_shell());
-        let expected_script = if session_shell.shell_type == ShellType::PowerShell {
-            prefix_utf8_output("echo hello")
-        } else {
-            "echo hello".to_string()
-        };
+        let session_shell = default_user_shell();
+        let powershell_utf8_enabled = false;
+        let expected_script =
+            if session_shell.shell_type == ShellType::PowerShell && powershell_utf8_enabled {
+                prefix_utf8_output("echo hello")
+            } else {
+                "echo hello".to_string()
+            };
 
-        let command = get_command(&args, session_shell);
+        let command = get_command(&args, &session_shell, powershell_utf8_enabled);
 
         assert_eq!(command.len(), 3);
         assert_eq!(command.last(), Some(&expected_script));
@@ -330,7 +354,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, &default_user_shell(), false);
 
         assert_eq!(command.last(), Some(&"echo hello".to_string()));
         if command
@@ -350,9 +374,17 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("powershell"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let expected_shell = get_shell_by_model_provided_path(&PathBuf::from("powershell"));
+        let powershell_utf8_enabled = true;
+        let command = get_command(&args, &default_user_shell(), powershell_utf8_enabled);
+        let expected_script =
+            if expected_shell.shell_type == ShellType::PowerShell && powershell_utf8_enabled {
+                prefix_utf8_output("echo hello")
+            } else {
+                "echo hello".to_string()
+            };
 
-        assert_eq!(command[2], prefix_utf8_output("echo hello"));
+        assert_eq!(command[2], expected_script);
     }
 
     #[test]
@@ -364,7 +396,7 @@ mod tests {
 
         assert_eq!(args.shell.as_deref(), Some("cmd"));
 
-        let command = get_command(&args, Arc::new(default_user_shell()));
+        let command = get_command(&args, &default_user_shell(), false);
 
         assert_eq!(command[2], "echo hello");
     }

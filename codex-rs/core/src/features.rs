@@ -91,6 +91,8 @@ pub enum Feature {
     Tui2,
     /// Enable discovery and injection of skills.
     Skills,
+    /// Enforce UTF8 output in Powershell.
+    PowershellUtf8,
 }
 
 impl Feature {
@@ -385,6 +387,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "skills",
         stage: Stage::Experimental,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::PowershellUtf8,
+        key: "powershell_utf8",
+        stage: Stage::Experimental,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Tui2,
