@@ -2061,10 +2061,10 @@ fn feedback_upload_consent_popup_snapshot() {
 
 #[test]
 fn reasoning_popup_escape_returns_to_model_popup() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1"));
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max"));
     chat.open_model_popup();
 
-    let preset = get_available_model(&chat, "gpt-5.1-codex");
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
     chat.open_reasoning_popup(preset);
 
     let before_escape = render_bottom_popup(&chat, 80);

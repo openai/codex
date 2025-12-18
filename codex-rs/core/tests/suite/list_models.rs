@@ -42,13 +42,7 @@ async fn list_models_returns_chatgpt_models() -> Result<()> {
 }
 
 fn expected_models_for_api_key() -> Vec<ModelPreset> {
-    vec![
-        gpt_5_1_codex_max(),
-        gpt_5_1_codex(),
-        gpt_5_1_codex_mini(),
-        gpt_5_2(),
-        gpt_5_1(),
-    ]
+    vec![gpt_5_1_codex_max(), gpt_5_1_codex_mini(), gpt_5_2()]
 }
 
 fn expected_models_for_chatgpt() -> Vec<ModelPreset> {
@@ -57,10 +51,8 @@ fn expected_models_for_chatgpt() -> Vec<ModelPreset> {
     vec![
         caribou(),
         gpt_5_1_codex_max,
-        gpt_5_1_codex(),
         gpt_5_1_codex_mini(),
         gpt_5_2(),
-        gpt_5_1(),
     ]
 }
 
@@ -128,34 +120,6 @@ fn gpt_5_1_codex_max() -> ModelPreset {
     }
 }
 
-fn gpt_5_1_codex() -> ModelPreset {
-    ModelPreset {
-        id: "gpt-5.1-codex".to_string(),
-        model: "gpt-5.1-codex".to_string(),
-        display_name: "gpt-5.1-codex".to_string(),
-        description: "Optimized for codex.".to_string(),
-        default_reasoning_effort: ReasoningEffort::Medium,
-        supported_reasoning_efforts: vec![
-            effort(
-                ReasoningEffort::Low,
-                "Fastest responses with limited reasoning",
-            ),
-            effort(
-                ReasoningEffort::Medium,
-                "Dynamically adjusts reasoning based on the task",
-            ),
-            effort(
-                ReasoningEffort::High,
-                "Maximizes reasoning depth for complex or ambiguous problems",
-            ),
-        ],
-        is_default: false,
-        upgrade: Some(caribou_upgrade()),
-        show_in_picker: true,
-        supported_in_api: true,
-    }
-}
-
 fn gpt_5_1_codex_mini() -> ModelPreset {
     ModelPreset {
         id: "gpt-5.1-codex-mini".to_string(),
@@ -205,34 +169,6 @@ fn gpt_5_2() -> ModelPreset {
             effort(
                 ReasoningEffort::XHigh,
                 "Extra high reasoning for complex problems",
-            ),
-        ],
-        is_default: false,
-        upgrade: Some(caribou_upgrade()),
-        show_in_picker: true,
-        supported_in_api: true,
-    }
-}
-
-fn gpt_5_1() -> ModelPreset {
-    ModelPreset {
-        id: "gpt-5.1".to_string(),
-        model: "gpt-5.1".to_string(),
-        display_name: "gpt-5.1".to_string(),
-        description: "Broad world knowledge with strong general reasoning.".to_string(),
-        default_reasoning_effort: ReasoningEffort::Medium,
-        supported_reasoning_efforts: vec![
-            effort(
-                ReasoningEffort::Low,
-                "Balances speed with some reasoning; useful for straightforward queries and short explanations",
-            ),
-            effort(
-                ReasoningEffort::Medium,
-                "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
-            ),
-            effort(
-                ReasoningEffort::High,
-                "Maximizes reasoning depth for complex or ambiguous problems",
             ),
         ],
         is_default: false,
