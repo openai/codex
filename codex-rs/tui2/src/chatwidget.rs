@@ -377,6 +377,19 @@ impl PlanVariantsProgress {
         }
     }
 
+    fn variant_label(&self, idx: usize) -> String {
+        if self.total == 3 {
+            match idx {
+                0 => "Minimal".to_string(),
+                1 => "Correctness".to_string(),
+                2 => "DX".to_string(),
+                _ => format!("Variant {}/{}", idx + 1, self.total),
+            }
+        } else {
+            format!("Variant {}/{}", idx + 1, self.total)
+        }
+    }
+
     fn set_in_progress(&mut self, idx: usize) {
         if idx < self.steps.len() {
             self.steps[idx] = ProgressStatus::InProgress;
@@ -411,7 +424,7 @@ impl PlanVariantsProgress {
         use ratatui::style::Stylize;
         let mut lines = Vec::with_capacity(self.total);
         for (idx, status) in self.steps.iter().copied().enumerate() {
-            let label = format!("Variant {}/{}", idx + 1, self.total);
+            let label = self.variant_label(idx);
             let status_span = match status {
                 ProgressStatus::Pending => "○".dim(),
                 ProgressStatus::InProgress => "●".cyan(),
@@ -438,11 +451,19 @@ impl PlanVariantsProgress {
                 spans.push(" ".into());
                 spans.push(meta.dim());
             }
-            if let Some(activity) = self.last_activity.get(idx).and_then(|a| a.as_deref()) {
+            if status == ProgressStatus::Completed {
                 spans.push(" ".into());
                 spans.push("—".dim());
                 spans.push(" ".into());
-                spans.push(activity.to_string().dim());
+                spans.push("done".dim());
+            } else if let Some(activity) = self.last_activity.get(idx).and_then(|a| a.as_deref()) {
+                let activity = activity.strip_prefix("shell ").unwrap_or(activity).trim();
+                if !activity.is_empty() {
+                    spans.push(" ".into());
+                    spans.push("—".dim());
+                    spans.push(" ".into());
+                    spans.push(activity.to_string().dim());
+                }
             }
             lines.push(spans.into());
         }
@@ -1156,6 +1177,7 @@ impl ChatWidget {
                 "finished" => {
                     progress.set_completed(idx);
                     progress.set_duration(idx, duration);
+                    progress.set_activity(idx, None);
                 }
                 _ => return None,
             }
@@ -1165,7 +1187,8 @@ impl ChatWidget {
 
         if let Some(rest) = message.strip_prefix("Plan variant ") {
             // Expected shape:
-            // - "Plan variant 2/3: shell rg -n ..."
+            // - "Plan variant 2/3: rg -n ..."
+            // - "Plan variant 2/3: shell rg -n ..." (legacy)
             let (fraction, activity) = rest.split_once(':')?;
             let fraction = fraction.trim();
             let (idx_str, total_str) = fraction.split_once('/')?;
@@ -1189,7 +1212,12 @@ impl ChatWidget {
             if let Some(tokens) = activity.strip_prefix("tokens ") {
                 progress.set_tokens(idx, Some(tokens.trim().to_string()));
             } else {
-                progress.set_activity(idx, Some(activity.to_string()));
+                let activity = activity.strip_prefix("shell ").unwrap_or(activity).trim();
+                if activity.is_empty() {
+                    progress.set_activity(idx, None);
+                } else {
+                    progress.set_activity(idx, Some(activity.to_string()));
+                }
             }
             return Some(progress);
         }

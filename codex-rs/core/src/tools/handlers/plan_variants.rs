@@ -57,16 +57,41 @@ Quality bar:
 - Make this variant meaningfully different from other plausible variants (trade-offs, sequencing, scope, risk posture).
 "#;
 
+fn variant_name(idx: usize, total: usize) -> Option<&'static str> {
+    if total == 3 {
+        match idx {
+            1 => Some("Minimal"),
+            2 => Some("Correctness"),
+            3 => Some("DX"),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
+fn variant_title(idx: usize, total: usize) -> String {
+    variant_name(idx, total)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if total > 0 {
+                format!("Variant {idx}/{total}")
+            } else {
+                format!("Variant {idx}")
+            }
+        })
+}
+
 fn plan_variant_focus(idx: usize) -> &'static str {
     match idx {
         1 => {
-            "Variant 1: minimal-risk, minimal-diff path (pragmatic, incremental; avoid refactors)."
+            "Variant 1 (Minimal): minimal-risk, minimal-diff path (pragmatic, incremental; avoid refactors). Title MUST be \"Minimal\"."
         }
         2 => {
-            "Variant 2: correctness-first path (tests, invariants, edge cases, careful validation/rollback)."
+            "Variant 2 (Correctness): correctness-first path (tests, invariants, edge cases, careful validation/rollback). Title MUST be \"Correctness\"."
         }
         3 => {
-            "Variant 3: architecture/DX-first path (refactors that pay down tech debt, clearer abstractions, better ergonomics)."
+            "Variant 3 (DX): architecture/DX-first path (refactors that pay down tech debt, clearer abstractions, better ergonomics). Title MUST be \"DX\"."
         }
         _ => "Use a distinct angle and trade-offs.",
     }
@@ -200,7 +225,7 @@ impl ToolHandler for PlanVariantsHandler {
             .enumerate()
             .map(|(idx, out)| {
                 out.unwrap_or_else(|| PlanOutputEvent {
-                    title: format!("Variant {}", idx + 1),
+                    title: variant_title(idx + 1, TOTAL),
                     summary: "Variant task did not return output.".to_string(),
                     plan: UpdatePlanArgs {
                         explanation: None,
@@ -240,7 +265,14 @@ fn activity_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::AgentReasoningRawContentDelta(_)
         | EventMsg::AgentReasoningSectionBreak(_) => Some("thinking".to_string()),
         EventMsg::AgentMessage(_) | EventMsg::AgentMessageDelta(_) => Some("writing".to_string()),
-        EventMsg::ExecCommandBegin(ev) => Some(format!("shell {}", ev.command.join(" "))),
+        EventMsg::ExecCommandBegin(ev) => {
+            let command = ev.command.join(" ");
+            if command.is_empty() {
+                Some("shell".to_string())
+            } else {
+                Some(command)
+            }
+        }
         EventMsg::McpToolCallBegin(ev) => Some(format!(
             "mcp {}/{}",
             ev.invocation.server.trim(),
@@ -328,7 +360,7 @@ async fn run_one_variant(
         Ok(io) => io,
         Err(err) => {
             return PlanOutputEvent {
-                title: format!("Variant {idx}"),
+                title: variant_title(idx, total),
                 summary: format!("Failed to start subagent: {err}"),
                 plan: UpdatePlanArgs {
                     explanation: None,
@@ -392,22 +424,24 @@ async fn run_one_variant(
     }
 
     let text = last_agent_message.unwrap_or_default();
-    parse_plan_output_event(idx, text.as_str())
+    parse_plan_output_event(idx, total, text.as_str())
 }
 
-fn parse_plan_output_event(idx: usize, text: &str) -> PlanOutputEvent {
-    if let Ok(ev) = serde_json::from_str::<PlanOutputEvent>(text) {
+fn parse_plan_output_event(idx: usize, total: usize, text: &str) -> PlanOutputEvent {
+    if let Ok(mut ev) = serde_json::from_str::<PlanOutputEvent>(text) {
+        ev.title = variant_title(idx, total);
         return ev;
     }
     if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}'))
         && start < end
         && let Some(slice) = text.get(start..=end)
-        && let Ok(ev) = serde_json::from_str::<PlanOutputEvent>(slice)
+        && let Ok(mut ev) = serde_json::from_str::<PlanOutputEvent>(slice)
     {
+        ev.title = variant_title(idx, total);
         return ev;
     }
     PlanOutputEvent {
-        title: format!("Variant {idx}"),
+        title: variant_title(idx, total),
         summary: "Subagent did not return valid JSON.".to_string(),
         plan: UpdatePlanArgs {
             explanation: Some(text.to_string()),
@@ -419,6 +453,25 @@ fn parse_plan_output_event(idx: usize, text: &str) -> PlanOutputEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plan_variant_titles_are_stable() {
+        assert_eq!(variant_title(1, 3), "Minimal");
+        assert_eq!(variant_title(2, 3), "Correctness");
+        assert_eq!(variant_title(3, 3), "DX");
+        assert_eq!(variant_title(4, 3), "Variant 4/3");
+        assert_eq!(variant_title(1, 2), "Variant 1/2");
+    }
+
+    #[test]
+    fn plan_variant_output_titles_are_normalized() {
+        let ev = parse_plan_output_event(
+            2,
+            3,
+            r#"{ "title": "Something else", "summary": "ok", "plan": { "explanation": null, "plan": [] } }"#,
+        );
+        assert_eq!(ev.title, "Correctness");
+    }
 
     #[test]
     fn plan_variants_do_not_override_base_instructions() {
