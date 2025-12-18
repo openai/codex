@@ -1580,10 +1580,10 @@ mod tests {
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
     use codex_core::config::Config;
-    use codex_core::config::ConfigOverrides;
-    use codex_core::config::ConfigToml;
+    use codex_core::config::ConfigBuilder;
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
+    use codex_core::config_loader::LoaderOverrides;
     use codex_core::openai_models::models_manager::ModelsManager;
     use codex_core::protocol::McpAuthStatus;
     use codex_protocol::parse_command::ParsedCommand;
@@ -1598,14 +1598,30 @@ mod tests {
     use mcp_types::TextContent;
     use mcp_types::Tool;
     use mcp_types::ToolInputSchema;
+    use std::path::Path;
 
     fn test_config() -> Config {
-        Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            std::env::temp_dir(),
-        )
-        .expect("config")
+        let codex_home = std::env::temp_dir();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        runtime
+            .block_on(
+                ConfigBuilder::default()
+                    .codex_home(codex_home.clone())
+                    .loader_overrides(test_loader_overrides(codex_home.as_path()))
+                    .build(),
+            )
+            .expect("config")
+    }
+
+    fn test_loader_overrides(codex_home: &Path) -> LoaderOverrides {
+        LoaderOverrides {
+            managed_config_path: Some(codex_home.join("managed_config.toml")),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: Some(String::new()),
+        }
     }
 
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {

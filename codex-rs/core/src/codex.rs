@@ -2749,8 +2749,8 @@ pub(crate) use tests::make_session_and_context_with_rx;
 mod tests {
     use super::*;
     use crate::CodexAuth;
-    use crate::config::ConfigOverrides;
-    use crate::config::ConfigToml;
+    use crate::config::ConfigBuilder;
+    use crate::config_loader::LoaderOverrides;
     use crate::exec::ExecToolCallOutput;
     use crate::function_tool::FunctionCallError;
     use crate::shell::default_user_shell;
@@ -2777,6 +2777,7 @@ mod tests {
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
+    use std::path::Path;
     use std::time::Duration;
     use tokio::time::sleep;
 
@@ -2789,9 +2790,9 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
 
-    #[test]
-    fn reconstruct_history_matches_live_compactions() {
-        let (session, turn_context) = make_session_and_context();
+    #[tokio::test]
+    async fn reconstruct_history_matches_live_compactions() {
+        let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, expected) = sample_rollout(&session, &turn_context);
 
         let reconstructed = session.reconstruct_history_from_rollout(&turn_context, &rollout_items);
@@ -2799,47 +2800,40 @@ mod tests {
         assert_eq!(expected, reconstructed);
     }
 
-    #[test]
-    fn record_initial_history_reconstructs_resumed_transcript() {
-        let (session, turn_context) = make_session_and_context();
+    #[tokio::test]
+    async fn record_initial_history_reconstructs_resumed_transcript() {
+        let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, expected) = sample_rollout(&session, &turn_context);
 
-        tokio_test::block_on(session.record_initial_history(InitialHistory::Resumed(
-            ResumedHistory {
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
                 conversation_id: ConversationId::default(),
                 history: rollout_items,
                 rollout_path: PathBuf::from("/tmp/resume.jsonl"),
-            },
-        )));
+            }))
+            .await;
 
-        let actual = tokio_test::block_on(async {
-            session.state.lock().await.clone_history().get_history()
-        });
+        let actual = session.state.lock().await.clone_history().get_history();
         assert_eq!(expected, actual);
     }
 
-    #[test]
-    fn record_initial_history_reconstructs_forked_transcript() {
-        let (session, turn_context) = make_session_and_context();
+    #[tokio::test]
+    async fn record_initial_history_reconstructs_forked_transcript() {
+        let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, expected) = sample_rollout(&session, &turn_context);
 
-        tokio_test::block_on(session.record_initial_history(InitialHistory::Forked(rollout_items)));
+        session
+            .record_initial_history(InitialHistory::Forked(rollout_items))
+            .await;
 
-        let actual = tokio_test::block_on(async {
-            session.state.lock().await.clone_history().get_history()
-        });
+        let actual = session.state.lock().await.clone_history().get_history();
         assert_eq!(expected, actual);
     }
 
-    #[test]
-    fn set_rate_limits_retains_previous_credits() {
+    #[tokio::test]
+    async fn set_rate_limits_retains_previous_credits() {
         let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
@@ -2903,15 +2897,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn set_rate_limits_updates_plan_type_when_present() {
+    #[tokio::test]
+    async fn set_rate_limits_updates_plan_type_when_present() {
         let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
@@ -3001,8 +2990,8 @@ mod tests {
         assert_eq!(expected, got);
     }
 
-    #[test]
-    fn includes_timed_out_message() {
+    #[tokio::test]
+    async fn includes_timed_out_message() {
         let exec = ExecToolCallOutput {
             exit_code: 0,
             stdout: StreamOutput::new(String::new()),
@@ -3011,7 +3000,7 @@ mod tests {
             duration: StdDuration::from_secs(1),
             timed_out: true,
         };
-        let (_, turn_context) = make_session_and_context();
+        let (_, turn_context) = make_session_and_context().await;
 
         let out = format_exec_output_str(&exec, turn_context.truncation_policy);
 
@@ -3084,6 +3073,23 @@ mod tests {
         })
     }
 
+    async fn build_test_config(codex_home: &Path) -> Config {
+        ConfigBuilder::default()
+            .codex_home(codex_home.to_path_buf())
+            .loader_overrides(test_loader_overrides(codex_home))
+            .build()
+            .await
+            .expect("load default test config")
+    }
+
+    fn test_loader_overrides(codex_home: &Path) -> LoaderOverrides {
+        LoaderOverrides {
+            managed_config_path: Some(codex_home.join("managed_config.toml")),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: Some(String::new()),
+        }
+    }
+
     fn otel_manager(
         conversation_id: ConversationId,
         config: &Config,
@@ -3103,15 +3109,10 @@ mod tests {
         )
     }
 
-    pub(crate) fn make_session_and_context() -> (Session, TurnContext) {
+    pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         let (tx_event, _rx_event) = async_channel::unbounded();
         let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
         let auth_manager =
@@ -3190,19 +3191,14 @@ mod tests {
 
     // Like make_session_and_context, but returns Arc<Session> and the event receiver
     // so tests can assert on emitted events.
-    pub(crate) fn make_session_and_context_with_rx() -> (
+    pub(crate) async fn make_session_and_context_with_rx() -> (
         Arc<Session>,
         Arc<TurnContext>,
         async_channel::Receiver<Event>,
     ) {
         let (tx_event, rx_event) = async_channel::unbounded();
         let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
         let auth_manager =
@@ -3281,7 +3277,7 @@ mod tests {
 
     #[tokio::test]
     async fn record_model_warning_appends_user_message() {
-        let (mut session, turn_context) = make_session_and_context();
+        let (mut session, turn_context) = make_session_and_context().await;
         let mut features = Features::with_defaults();
         features.enable(Feature::ModelWarnings);
         session.features = features;
@@ -3340,7 +3336,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[test_log::test]
     async fn abort_regular_task_emits_turn_aborted_only() {
-        let (sess, tc, rx) = make_session_and_context_with_rx();
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
         let input = vec![UserInput::Text {
             text: "hello".to_string(),
         }];
@@ -3369,7 +3365,7 @@ mod tests {
 
     #[tokio::test]
     async fn abort_gracefuly_emits_turn_aborted_only() {
-        let (sess, tc, rx) = make_session_and_context_with_rx();
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
         let input = vec![UserInput::Text {
             text: "hello".to_string(),
         }];
@@ -3395,7 +3391,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
-        let (sess, tc, rx) = make_session_and_context_with_rx();
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
         let input = vec![UserInput::Text {
             text: "start review".to_string(),
         }];
@@ -3443,7 +3439,7 @@ mod tests {
 
     #[tokio::test]
     async fn fatal_tool_error_stops_turn_and_reports_error() {
-        let (session, turn_context, _rx) = make_session_and_context_with_rx();
+        let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
         let tools = {
             session
                 .services
@@ -3606,7 +3602,7 @@ mod tests {
         use crate::turn_diff_tracker::TurnDiffTracker;
         use std::collections::HashMap;
 
-        let (session, mut turn_context_raw) = make_session_and_context();
+        let (session, mut turn_context_raw) = make_session_and_context().await;
         // Ensure policy is NOT OnRequest so the early rejection path triggers
         turn_context_raw.approval_policy = AskForApproval::OnFailure;
         let session = Arc::new(session);
@@ -3737,7 +3733,7 @@ mod tests {
         use crate::sandboxing::SandboxPermissions;
         use crate::turn_diff_tracker::TurnDiffTracker;
 
-        let (session, mut turn_context_raw) = make_session_and_context();
+        let (session, mut turn_context_raw) = make_session_and_context().await;
         turn_context_raw.approval_policy = AskForApproval::OnFailure;
         let session = Arc::new(session);
         let turn_context = Arc::new(turn_context_raw);

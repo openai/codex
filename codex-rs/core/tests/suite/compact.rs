@@ -137,7 +137,7 @@ async fn summarize_context_three_requests_and_instructions() {
     // Build config pointing to the mock server and spawn Codex.
     let model_provider = non_openai_model_provider(&server);
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
@@ -331,7 +331,7 @@ async fn manual_compact_uses_custom_prompt() {
 
     let model_provider = non_openai_model_provider(&server);
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     config.compact_prompt = Some(custom_prompt.to_string());
 
@@ -411,7 +411,7 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
 
     let model_provider = non_openai_model_provider(&server);
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
 
@@ -1062,7 +1062,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
@@ -1285,7 +1285,7 @@ async fn auto_compact_persists_rollout_entries() {
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
@@ -1397,7 +1397,7 @@ async fn manual_compact_retries_after_context_window_error() {
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
@@ -1530,7 +1530,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     let codex = ConversationManager::with_models_provider(
@@ -1733,7 +1733,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200);
@@ -1844,7 +1844,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_context_window = Some(context_window);

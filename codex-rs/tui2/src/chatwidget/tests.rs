@@ -8,9 +8,9 @@ use codex_common::approval_presets::builtin_approval_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
+use codex_core::config_loader::LoaderOverrides;
 use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -62,6 +62,8 @@ use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
+use std::future::Future;
+use std::path::Path;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
@@ -75,13 +77,57 @@ fn set_windows_sandbox_enabled(enabled: bool) {
 
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
-
-    Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides::default(),
-        std::env::temp_dir(),
+    let codex_home = std::env::temp_dir();
+    block_on(
+        ConfigBuilder::default()
+            .codex_home(codex_home.clone())
+            .loader_overrides(test_loader_overrides(codex_home.as_path()))
+            .build(),
     )
     .expect("config")
+}
+
+fn test_loader_overrides(codex_home: &Path) -> LoaderOverrides {
+    LoaderOverrides {
+        managed_config_path: Some(codex_home.join("managed_config.toml")),
+        #[cfg(target_os = "macos")]
+        managed_preferences_base64: Some(String::new()),
+    }
+}
+
+fn block_on<F>(future: F) -> F::Output
+where
+    F: Future + Send,
+    F::Output: Send,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            if matches!(
+                handle.runtime_flavor(),
+                tokio::runtime::RuntimeFlavor::CurrentThread
+            ) {
+                std::thread::scope(|scope| {
+                    scope
+                        .spawn(|| {
+                            tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .expect("build tokio runtime")
+                                .block_on(future)
+                        })
+                        .join()
+                        .expect("join tokio thread")
+                })
+            } else {
+                tokio::task::block_in_place(|| handle.block_on(future))
+            }
+        }
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime")
+            .block_on(future),
+    }
 }
 
 fn snapshot(percent: f64) -> RateLimitSnapshot {
