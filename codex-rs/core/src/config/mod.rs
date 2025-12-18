@@ -12,6 +12,7 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
+use crate::config_loader::ConfigRequirements;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
 use crate::features::Feature;
@@ -356,7 +357,12 @@ impl ConfigBuilder {
         let config_toml: ConfigToml = merged_toml
             .try_into()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        Config::load_from_base_config_with_overrides(config_toml, harness_overrides, codex_home)
+        Config::load_config_with_requirements(
+            config_toml,
+            harness_overrides,
+            codex_home,
+            config_layer_stack.requirements().clone(),
+        )
     }
 }
 
@@ -390,34 +396,23 @@ impl Config {
     }
 }
 
-/// DEPRECATED: Use [Config::load_with_cli_overrides()] instead because this
-/// codepath is not guaranteed to honor [ConfigRequirements].
+/// DEPRECATED: Use [Config::load_with_cli_overrides()] instead because working
+/// with [ConfigToml] directly means that [ConfigRequirements] have not been
+/// applied yet, which risks failing to enforce required constraints.
 pub async fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
-    let root_value = load_resolved_config(
-        codex_home,
-        cli_overrides,
-        crate::config_loader::LoaderOverrides::default(),
-    )
-    .await?;
+    let config_layer_stack =
+        load_config_layers_state(codex_home, &cli_overrides, LoaderOverrides::default()).await?;
 
-    let cfg = deserialize_config_toml_with_base(root_value, codex_home).map_err(|e| {
+    let merged_toml = config_layer_stack.effective_config();
+    let cfg = deserialize_config_toml_with_base(merged_toml, codex_home).map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
         e
     })?;
 
     Ok(cfg)
-}
-
-async fn load_resolved_config(
-    codex_home: &Path,
-    cli_overrides: Vec<(String, TomlValue)>,
-    overrides: crate::config_loader::LoaderOverrides,
-) -> std::io::Result<TomlValue> {
-    let layers = load_config_layers_state(codex_home, &cli_overrides, overrides).await?;
-    Ok(layers.effective_config())
 }
 
 fn deserialize_config_toml_with_base(
@@ -435,13 +430,18 @@ fn deserialize_config_toml_with_base(
 pub async fn load_global_mcp_servers(
     codex_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
-    let root_value = load_resolved_config(
-        codex_home,
-        Vec::new(),
-        crate::config_loader::LoaderOverrides::default(),
-    )
-    .await?;
-    let Some(servers_value) = root_value.get("mcp_servers") else {
+    // In general, Config::load_with_cli_overrides() should be used to load the
+    // full config with requirements.toml applied, but in this case, we need
+    // access to the raw TOML in order to warn the user about deprecated fields.
+    //
+    // Note that a more precise way to do this would be to audit the individual
+    // config layers for deprecated fields rather than reporting on the merged
+    // result.
+    let cli_overrides = Vec::<(String, TomlValue)>::new();
+    let config_layer_stack =
+        load_config_layers_state(codex_home, &cli_overrides, LoaderOverrides::default()).await?;
+    let merged_toml = config_layer_stack.effective_config();
+    let Some(servers_value) = merged_toml.get("mcp_servers") else {
         return Ok(BTreeMap::new());
     };
 
@@ -1000,6 +1000,16 @@ impl Config {
         overrides: ConfigOverrides,
         codex_home: PathBuf,
     ) -> std::io::Result<Self> {
+        let requirements = ConfigRequirements::default();
+        Self::load_config_with_requirements(cfg, overrides, codex_home, requirements)
+    }
+
+    fn load_config_with_requirements(
+        cfg: ConfigToml,
+        overrides: ConfigOverrides,
+        codex_home: PathBuf,
+        requirements: ConfigRequirements,
+    ) -> std::io::Result<Self> {
         let user_instructions = Self::load_instructions(Some(&codex_home));
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
@@ -1104,7 +1114,8 @@ impl Config {
                     AskForApproval::default()
                 }
             });
-        let approval_policy = Constrained::allow_any(approval_policy);
+        // TODO(dylan): We should be able to leverage ConfigLayerStack so that
+        // we can reliably check this at every config level.
         let did_user_set_custom_approval_policy_or_sandbox_mode = approval_policy_override
             .is_some()
             || config_profile.approval_policy.is_some()
@@ -1221,6 +1232,16 @@ impl Config {
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
 
+        // Ensure that every field of ConfigRequirements is applied to the final
+        // Config.
+        let ConfigRequirements {
+            approval_policy: mut constrained_approval_policy,
+        } = requirements;
+
+        constrained_approval_policy
+            .set(approval_policy)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
+
         let config = Self {
             model,
             review_model,
@@ -1229,7 +1250,7 @@ impl Config {
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
-            approval_policy,
+            approval_policy: constrained_approval_policy,
             sandbox_policy,
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
@@ -1920,18 +1941,22 @@ trust_level = "trusted"
         std::fs::write(&config_path, "mcp_oauth_credentials_store = \"file\"\n")?;
         std::fs::write(&managed_path, "mcp_oauth_credentials_store = \"keyring\"\n")?;
 
-        let overrides = crate::config_loader::LoaderOverrides {
+        let overrides = LoaderOverrides {
             managed_config_path: Some(managed_path.clone()),
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
         };
 
-        let root_value = load_resolved_config(codex_home.path(), Vec::new(), overrides).await?;
-        let cfg =
-            deserialize_config_toml_with_base(root_value, codex_home.path()).map_err(|e| {
-                tracing::error!("Failed to deserialize overridden config: {e}");
-                e
-            })?;
+        let config_layer_stack =
+            load_config_layers_state(codex_home.path(), &Vec::new(), overrides).await?;
+        let cfg = deserialize_config_toml_with_base(
+            config_layer_stack.effective_config(),
+            codex_home.path(),
+        )
+        .map_err(|e| {
+            tracing::error!("Failed to deserialize overridden config: {e}");
+            e
+        })?;
         assert_eq!(
             cfg.mcp_oauth_credentials_store,
             Some(OAuthCredentialsStoreMode::Keyring),
@@ -2035,24 +2060,27 @@ trust_level = "trusted"
         )?;
         std::fs::write(&managed_path, "model = \"managed_config\"\n")?;
 
-        let overrides = crate::config_loader::LoaderOverrides {
+        let overrides = LoaderOverrides {
             managed_config_path: Some(managed_path),
             #[cfg(target_os = "macos")]
             managed_preferences_base64: None,
         };
 
-        let root_value = load_resolved_config(
+        let config_layer_stack = load_config_layers_state(
             codex_home.path(),
-            vec![("model".to_string(), TomlValue::String("cli".to_string()))],
+            &[("model".to_string(), TomlValue::String("cli".to_string()))],
             overrides,
         )
         .await?;
 
-        let cfg =
-            deserialize_config_toml_with_base(root_value, codex_home.path()).map_err(|e| {
-                tracing::error!("Failed to deserialize overridden config: {e}");
-                e
-            })?;
+        let cfg = deserialize_config_toml_with_base(
+            config_layer_stack.effective_config(),
+            codex_home.path(),
+        )
+        .map_err(|e| {
+            tracing::error!("Failed to deserialize overridden config: {e}");
+            e
+        })?;
 
         assert_eq!(cfg.model.as_deref(), Some("managed_config"));
         Ok(())
