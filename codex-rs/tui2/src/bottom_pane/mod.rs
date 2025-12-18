@@ -276,6 +276,13 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn update_status_details(&mut self, details: Option<String>) {
+        if let Some(status) = self.status.as_mut() {
+            status.update_details(details);
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn show_ctrl_c_quit_hint(&mut self) {
         self.ctrl_c_quit_hint = true;
         self.composer
