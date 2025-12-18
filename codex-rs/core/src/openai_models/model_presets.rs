@@ -124,7 +124,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             id: "bengalfox".to_string(),
             model: "bengalfox".to_string(),
             display_name: "bengalfox".to_string(),
-            description: "Alias for gpt-5.2-codex.".to_string(),
+            description: "bengalfox".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
@@ -147,13 +147,13 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             is_default: false,
             upgrade: None,
             show_in_picker: false,
-            supported_in_api: false,
+            supported_in_api: true,
         },
         ModelPreset {
             id: "boomslang".to_string(),
             model: "boomslang".to_string(),
             display_name: "boomslang".to_string(),
-            description: "Alias for gpt-5.2.".to_string(),
+            description: "boomslang".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
@@ -174,7 +174,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(gpt_52_codex_upgrade()),
+            upgrade: None,
             show_in_picker: false,
             supported_in_api: true,
         },
