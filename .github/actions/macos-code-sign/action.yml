@@ -159,37 +159,7 @@ runs:
         }
         trap cleanup_notary EXIT
 
-        notarize_submission() {
-          local label="$1"
-          local path="$2"
-
-          if [[ ! -f "$path" ]]; then
-            echo "Notarization payload $path not found"
-            exit 1
-          fi
-
-          submission_json=$(xcrun notarytool submit "$path" \
-            --key "$notary_key_path" \
-            --key-id "$APPLE_NOTARIZATION_KEY_ID" \
-            --issuer "$APPLE_NOTARIZATION_ISSUER_ID" \
-            --output-format json \
-            --wait)
-
-          status=$(printf '%s\n' "$submission_json" | jq -r '.status // "Unknown"')
-          submission_id=$(printf '%s\n' "$submission_json" | jq -r '.id // ""')
-
-          if [[ -z "$submission_id" ]]; then
-            echo "Failed to retrieve submission ID for $label"
-            exit 1
-          fi
-
-          echo "::notice title=Notarization::$label submission ${submission_id} completed with status ${status}"
-
-          if [[ "$status" != "Accepted" ]]; then
-            echo "Notarization failed for ${label} (submission ${submission_id}, status ${status})"
-            exit 1
-          fi
-        }
+        source "$GITHUB_ACTION_PATH/notary_helpers.sh"
 
         notarize_binary() {
           local binary="$1"
@@ -204,7 +174,7 @@ runs:
           rm -f "$archive_path"
           ditto -c -k --keepParent "$source_path" "$archive_path"
 
-          notarize_submission "$binary" "$archive_path"
+          notarize_submission "$binary" "$archive_path" "$notary_key_path"
         }
 
         notarize_binary "codex"
@@ -234,37 +204,7 @@ runs:
         }
         trap cleanup_notary EXIT
 
-        notarize_submission() {
-          local label="$1"
-          local path="$2"
-
-          if [[ ! -f "$path" ]]; then
-            echo "Notarization payload $path not found"
-            exit 1
-          fi
-
-          submission_json=$(xcrun notarytool submit "$path" \
-            --key "$notary_key_path" \
-            --key-id "$APPLE_NOTARIZATION_KEY_ID" \
-            --issuer "$APPLE_NOTARIZATION_ISSUER_ID" \
-            --output-format json \
-            --wait)
-
-          status=$(printf '%s\n' "$submission_json" | jq -r '.status // "Unknown"')
-          submission_id=$(printf '%s\n' "$submission_json" | jq -r '.id // ""')
-
-          if [[ -z "$submission_id" ]]; then
-            echo "Failed to retrieve submission ID for $label"
-            exit 1
-          fi
-
-          echo "::notice title=Notarization::$label submission ${submission_id} completed with status ${status}"
-
-          if [[ "$status" != "Accepted" ]]; then
-            echo "Notarization failed for ${label} (submission ${submission_id}, status ${status})"
-            exit 1
-          fi
-        }
+        source "$GITHUB_ACTION_PATH/notary_helpers.sh"
 
         dmg_path="codex-rs/target/${{ inputs.target }}/release/codex-${{ inputs.target }}.dmg"
 
@@ -279,7 +219,7 @@ runs:
         fi
 
         codesign --force --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$dmg_path"
-        notarize_submission "codex-${{ inputs.target }}.dmg" "$dmg_path"
+        notarize_submission "codex-${{ inputs.target }}.dmg" "$dmg_path" "$notary_key_path"
         xcrun stapler staple "$dmg_path"
 
     - name: Remove signing keychain
