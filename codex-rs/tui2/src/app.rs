@@ -214,7 +214,7 @@ async fn handle_model_migration_prompt_if_needed(
         id: target_model,
         reasoning_effort_mapping,
         migration_config_key,
-        model_link: _,
+        ..
     }) = upgrade
     {
         if migration_prompt_hidden(config, migration_config_key.as_str()) {
