@@ -31,6 +31,13 @@ app-server-test-client *args:
 fmt:
     cargo fmt -- --config imports_granularity=Item
 
+# Changelog (run from repo root)
+changelog:
+    ../scripts/gen-changelog.sh
+
+changelog-check:
+    ../scripts/gen-changelog.sh --check
+
 fix *args:
     cargo clippy --fix --all-features --tests --allow-dirty "$@"
 

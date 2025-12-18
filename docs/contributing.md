@@ -14,6 +14,17 @@ If you want to add a new feature or change the behavior of an existing one, plea
 - Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
 - Ensure your change is free of lint warnings and test failures.
 
+### Changelog (Codexel fork)
+
+- The changelog tracks Codexel-only changes (commits not in `upstream/main`).
+- Refresh generated Details blocks with `scripts/gen-changelog.ps1` (Windows) or
+  `bash scripts/gen-changelog.sh` (macOS/Linux).
+- Use `--check` in CI to ensure the changelog is up to date.
+- When cutting a release, pin the release commit and upstream baseline in
+  `CHANGELOG.md`, then update the generated range for that release section.
+- Rollback is just reverting `CHANGELOG.md`, `cliff.toml`, and the generator
+  scripts if the changelog workflow needs to be removed.
+
 ### Writing high-impact code changes
 
 1. **Start with an issue.** Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
