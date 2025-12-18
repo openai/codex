@@ -5,7 +5,7 @@ expression: "format!(\"{buf:?}\")"
 Buffer {
     area: Rect { x: 0, y: 0, width: 50, height: 2 },
     content: [
-        "Background terminal running: echo hello · rg "foo"",
+        "  Background terminal running: echo hello · rg "foo"",
         "                             src                  ",
     ],
     styles: [
