@@ -1,13 +1,17 @@
 ---
 name: plan
-description: Plan lifecycle management for Codex plans stored in $CODEX_HOME/plans (default ~/.codex/plans). Use when a user asks to create, find, read, update, delete, or manage plan documents for implementation work or overview/reference documentation.
+description: Generate a plan for how an agent should accomplish a complex coding task. Use when a user asks for a plan, and optionally when they want to save, find, read, update, or delete plan files in $CODEX_HOME/plans (default ~/.codex/plans).
 ---
 
 # Plan
 
 ## Overview
 
-Create and manage plan documents on disk. Plans stored on disk are markdown files with YAML frontmatter and free-form content. When drafting in chat, output only the plan body without frontmatter; add frontmatter only when stashing to disk. Support both implementation plans and overview/reference plans. Only write to the plans folder; do not modify the repository codebase.
+Draft structured plans that clarify intent, scope, requirements, action items, testing/validation, and risks.
+
+Optionally, save plans to disk as markdown files with YAML frontmatter and free-form content. When drafting in chat, output only the plan body without frontmatter; add frontmatter only when saving to disk. Only write to the plans folder; do not modify the repository codebase.
+
+This skill can also be used to draft codebase or system overviews.
 
 ## Core rules
 
@@ -36,11 +40,13 @@ Create and manage plan documents on disk. Plans stored on disk are markdown file
 
 ## Plan creation workflow
 
-1. Read relevant docs and entry points (`README.md`, `docs/`, key modules) to scope requirements.
-2. Identify scope, constraints, and data model/API implications (or capture existing behavior for an overview).
-3. Draft either an ordered implementation plan or a structured overview plan with diagrams/notes as needed.
-4. Immediately output the plan body only (no frontmatter), then ask the user if they want to 1. Make changes, 2. Implement it, 3. Stash it as per plan.
-5. If the user wants to stash it, prepend frontmatter and save the plan under the computed plans directory using `scripts/create_plan.py`.
+1. Scan context quickly: read README.md and obvious docs (docs/, CONTRIBUTING.md, ARCHITECTURE.md); skim likely touched files; identify constraints (language, frameworks, CI/test commands, deployment).
+2. Ask follow-ups only if blocked: at most 1-2 questions, prefer multiple-choice. If unsure but not blocked, state assumptions and proceed.
+3. Identify scope, constraints, and data model/API implications (or capture existing behavior for an overview).
+4. Draft either an ordered implementation plan or a structured overview plan with diagrams/notes as needed.
+5. Immediately output the plan body only (no frontmatter), then ask the user if they want to 1. Make changes, 2. Implement it, 3. Save it as per plan.
+6. If the user wants to save it, prepend frontmatter and save the plan under the computed plans directory using `scripts/create_plan.py`.
+
 
 ## Plan update workflow
 
@@ -73,7 +79,7 @@ python ./scripts/list_plans.py --query "rate limit"
 
 ## Plan file format
 
-Use one of the structures below for the plan body. When drafting, output only the body (no frontmatter). When stashing, prepend this frontmatter:
+Use one of the structures below for the plan body. When drafting, output only the body (no frontmatter). When saving, prepend this frontmatter:
 
 ```markdown
 ---
@@ -162,8 +168,11 @@ description: <1-line summary>
 
 ## Writing guidance
 
-- Keep action items ordered and concrete; include file/entry-point hints.
-- For overview plans, keep action items minimal and set sections to "None" when not applicable.
-- Always include testing/validation and risks/edge cases in implementation plans.
+- Start with 1 short paragraph describing intent and approach.
+- Keep action items ordered and atomic (discovery -> changes -> tests -> rollout); use verb-first phrasing.
+- Scale action item count to complexity (simple: 1-2; complex: up to about 10).
+- Include file/entry-point hints and concrete validation steps where useful.
+- Always include testing/validation and risks/edge cases in implementation plans; include safe rollout/rollback when relevant.
 - Use open questions only when necessary (max 3).
-- If a section is not applicable, note "None" briefly rather than removing it.
+- Avoid vague steps, micro-steps, and code snippets; keep the plan implementation-agnostic.
+- For overview plans, keep action items minimal and set non-applicable sections to "None."
