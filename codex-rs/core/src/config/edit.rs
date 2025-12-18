@@ -22,6 +22,11 @@ pub enum ConfigEdit {
         model: Option<String>,
         effort: Option<ReasoningEffort>,
     },
+    /// Update the active (or default) plan model selection and optional reasoning effort.
+    SetPlanModel {
+        model: Option<String>,
+        effort: Option<ReasoningEffort>,
+    },
     /// Toggle the acknowledgement flag under `[notice]`.
     SetNoticeHideFullAccessWarning(bool),
     /// Toggle the Windows world-writable directories warning acknowledgement flag.
@@ -261,6 +266,18 @@ impl ConfigDocument {
                 );
                 mutated |= self.write_profile_value(
                     &["model_reasoning_effort"],
+                    effort.map(|effort| value(effort.to_string())),
+                );
+                mutated
+            }),
+            ConfigEdit::SetPlanModel { model, effort } => Ok({
+                let mut mutated = false;
+                mutated |= self.write_profile_value(
+                    &["plan_model"],
+                    model.as_ref().map(|model_value| value(model_value.clone())),
+                );
+                mutated |= self.write_profile_value(
+                    &["plan_model_reasoning_effort"],
                     effort.map(|effort| value(effort.to_string())),
                 );
                 mutated
@@ -590,6 +607,14 @@ impl ConfigEditsBuilder {
 
     pub fn set_model(mut self, model: Option<&str>, effort: Option<ReasoningEffort>) -> Self {
         self.edits.push(ConfigEdit::SetModel {
+            model: model.map(ToOwned::to_owned),
+            effort,
+        });
+        self
+    }
+
+    pub fn set_plan_model(mut self, model: Option<&str>, effort: Option<ReasoningEffort>) -> Self {
+        self.edits.push(ConfigEdit::SetPlanModel {
             model: model.map(ToOwned::to_owned),
             effort,
         });

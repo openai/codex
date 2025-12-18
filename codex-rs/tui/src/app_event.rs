@@ -15,6 +15,12 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::openai_models::ReasoningEffort;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModelPickerTarget {
+    Chat,
+    Plan,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -64,8 +70,20 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
+    /// Update the current plan model slug in the running app and widget.
+    UpdatePlanModel(String),
+
+    /// Update the current plan reasoning effort in the running app and widget.
+    UpdatePlanReasoningEffort(Option<ReasoningEffort>),
+
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
+        model: String,
+        effort: Option<ReasoningEffort>,
+    },
+
+    /// Persist the selected plan model and reasoning effort to the appropriate config.
+    PersistPlanModelSelection {
         model: String,
         effort: Option<ReasoningEffort>,
     },
@@ -73,11 +91,13 @@ pub(crate) enum AppEvent {
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
+        target: ModelPickerTarget,
     },
 
     /// Open the full model picker (non-auto models).
     OpenAllModelsPopup {
         models: Vec<ModelPreset>,
+        target: ModelPickerTarget,
     },
 
     /// Open the confirmation prompt before enabling full access mode.

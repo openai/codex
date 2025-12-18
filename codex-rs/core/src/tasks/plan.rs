@@ -154,9 +154,16 @@ async fn start_plan_conversation(
     let mut sub_agent_config = config.as_ref().clone();
 
     // Ensure plan mode uses the same model + reasoning settings as the parent turn (e.g. after a
-    // `/model` change). The base config can lag behind session model overrides.
-    sub_agent_config.model = Some(ctx.client.get_model());
-    sub_agent_config.model_reasoning_effort = ctx.client.get_reasoning_effort();
+    // `/model` change), unless a plan-model override is configured. The base config can lag behind
+    // session model overrides.
+    sub_agent_config.model = Some(
+        ctx.plan_model
+            .clone()
+            .unwrap_or_else(|| ctx.client.get_model()),
+    );
+    sub_agent_config.model_reasoning_effort = ctx
+        .plan_reasoning_effort
+        .or(ctx.client.get_reasoning_effort());
     sub_agent_config.model_reasoning_summary = ctx.client.get_reasoning_summary();
 
     let ask = crate::tools::spec::prepend_ask_user_question_developer_instructions(None)

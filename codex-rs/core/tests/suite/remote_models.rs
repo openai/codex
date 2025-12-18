@@ -137,7 +137,9 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             approval_policy: None,
             sandbox_policy: None,
             model: Some(REMOTE_MODEL_SLUG.to_string()),
+            plan_model: None,
             effort: None,
+            plan_effort: None,
             summary: None,
         })
         .await?;
@@ -270,7 +272,9 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             approval_policy: None,
             sandbox_policy: None,
             model: Some(model.to_string()),
+            plan_model: None,
             effort: None,
+            plan_effort: None,
             summary: None,
         })
         .await?;

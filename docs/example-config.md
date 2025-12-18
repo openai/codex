@@ -21,6 +21,9 @@ Use this example configuration as a starting point. For an explanation of each f
 # Primary model used by Codex. Default: "gpt-5.1-codex-max" on all platforms.
 model = "gpt-5.1-codex-max"
 
+# Optional model used for `/plan` (defaults to `model` when unset).
+# plan_model = "gpt-5.1-codex"
+
 # Model used by the /review feature (code reviews). Default: "gpt-5.1-codex-max".
 review_model = "gpt-5.1-codex-max"
 
@@ -39,6 +42,9 @@ model_provider = "openai"
 
 # Reasoning effort: minimal | low | medium | high | xhigh (default: medium; xhigh on gpt-5.1-codex-max and gpt-5.2)
 model_reasoning_effort = "medium"
+
+# Optional reasoning effort for `/plan` (defaults to `model_reasoning_effort` when unset).
+# plan_model_reasoning_effort = "medium"
 
 # Reasoning summary: auto | concise | detailed | none (default: auto)
 model_reasoning_summary = "auto"

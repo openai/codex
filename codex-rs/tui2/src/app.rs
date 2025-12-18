@@ -1605,11 +1605,19 @@ impl App {
                 self.chat_widget.set_model(&model, model_family);
                 self.current_model = model;
             }
-            AppEvent::OpenReasoningPopup { model } => {
-                self.chat_widget.open_reasoning_popup(model);
+            AppEvent::UpdatePlanModel(model) => {
+                self.config.plan_model = Some(model.clone());
+                self.chat_widget.set_plan_model(&model);
             }
-            AppEvent::OpenAllModelsPopup { models } => {
-                self.chat_widget.open_all_models_popup(models);
+            AppEvent::UpdatePlanReasoningEffort(effort) => {
+                self.config.plan_model_reasoning_effort = effort;
+                self.chat_widget.set_plan_reasoning_effort(effort);
+            }
+            AppEvent::OpenReasoningPopup { model, target } => {
+                self.chat_widget.open_reasoning_popup(target, model);
+            }
+            AppEvent::OpenAllModelsPopup { models, target } => {
+                self.chat_widget.open_all_models_popup(target, models);
             }
             AppEvent::OpenFullAccessConfirmation { preset } => {
                 self.chat_widget.open_full_access_confirmation(preset);
@@ -1671,7 +1679,9 @@ impl App {
                                         approval_policy: Some(preset.approval),
                                         sandbox_policy: Some(preset.sandbox.clone()),
                                         model: None,
+                                        plan_model: None,
                                         effort: None,
+                                        plan_effort: None,
                                         summary: None,
                                     },
                                 ));
@@ -1734,6 +1744,45 @@ impl App {
                         } else {
                             self.chat_widget
                                 .add_error_message(format!("Failed to save default model: {err}"));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistPlanModelSelection { model, effort } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_plan_model(Some(model.as_str()), effort)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let mut message = format!("Plan model changed to {model}");
+                        if let Some(label) = Self::reasoning_label_for(&model, effort) {
+                            message.push(' ');
+                            message.push_str(label);
+                        }
+                        message.push_str(" (used for /plan)");
+                        if let Some(profile) = profile {
+                            message.push_str(" for ");
+                            message.push_str(profile);
+                            message.push_str(" profile");
+                        }
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist plan model selection"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save plan model for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save default plan model: {err}"
+                            ));
                         }
                     }
                 }

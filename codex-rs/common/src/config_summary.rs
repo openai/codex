@@ -12,6 +12,9 @@ pub fn create_config_summary_entries(config: &Config, model: &str) -> Vec<(&'sta
         ("approval", config.approval_policy.value().to_string()),
         ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
     ];
+    if let Some(plan_model) = config.plan_model.as_deref() {
+        entries.push(("plan model", plan_model.to_string()));
+    }
     if config.model_provider.wire_api == WireApi::Responses {
         let reasoning_effort = config
             .model_reasoning_effort
@@ -20,6 +23,15 @@ pub fn create_config_summary_entries(config: &Config, model: &str) -> Vec<(&'sta
             "reasoning effort",
             reasoning_effort.unwrap_or_else(|| "none".to_string()),
         ));
+        if config.plan_model.is_some() || config.plan_model_reasoning_effort.is_some() {
+            let plan_effort = config
+                .plan_model_reasoning_effort
+                .map(|effort| effort.to_string());
+            entries.push((
+                "plan reasoning effort",
+                plan_effort.unwrap_or_else(|| "none".to_string()),
+            ));
+        }
         entries.push((
             "reasoning summaries",
             config.model_reasoning_summary.to_string(),

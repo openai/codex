@@ -1849,7 +1849,7 @@ fn model_reasoning_selection_popup_snapshot() {
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(crate::app_event::ModelPickerTarget::Chat, preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup", popup);
@@ -1863,7 +1863,7 @@ fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
     chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::XHigh);
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(crate::app_event::ModelPickerTarget::Chat, preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_reasoning_selection_popup_extra_high_warning", popup);
@@ -1876,7 +1876,7 @@ fn reasoning_popup_shows_extra_high_with_space() {
     set_chatgpt_auth(&mut chat);
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(crate::app_event::ModelPickerTarget::Chat, preset);
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
@@ -1909,7 +1909,7 @@ fn single_reasoning_option_skips_selection() {
         show_in_picker: true,
         supported_in_api: true,
     };
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(crate::app_event::ModelPickerTarget::Chat, preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -1958,7 +1958,7 @@ fn reasoning_popup_escape_returns_to_model_popup() {
     chat.open_model_popup();
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
-    chat.open_reasoning_popup(preset);
+    chat.open_reasoning_popup(crate::app_event::ModelPickerTarget::Chat, preset);
 
     let before_escape = render_bottom_popup(&chat, 80);
     assert!(before_escape.contains("Select Reasoning Level"));

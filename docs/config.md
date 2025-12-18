@@ -66,6 +66,15 @@ The model that Codex should use.
 model = "gpt-5.1"  # overrides the default ("gpt-5.1-codex-max" across platforms)
 ```
 
+### plan_model
+
+Optional model to use for planning flows such as `/plan` (and plan-variant subagents). When unset, planning uses the active `model`.
+
+```toml
+# Use a cheaper/faster model for planning, while keeping a stronger model for coding turns.
+plan_model = "gpt-5.1-codex"
+```
+
 ### model_providers
 
 This option lets you add to the default set of model providers bundled with Codex. The map key becomes the value you use with `model_provider` to select the provider.
@@ -199,6 +208,10 @@ If the selected model is known to support reasoning (for example: `o3`, `o4-mini
 - `"xhigh"` (available on `gpt-5.1-codex-max` and `gpt-5.2`)
 
 Note: to minimize reasoning, choose `"minimal"`.
+
+### plan_model_reasoning_effort
+
+Optional reasoning effort to use for planning flows such as `/plan`. When unset, planning uses `model_reasoning_effort`.
 
 ### model_reasoning_summary
 
@@ -979,6 +992,8 @@ Valid values:
 | `check_for_update_on_startup`                    | boolean                                                           | Check for Codex updates on startup (default: true). Set to `false` only if updates are centrally managed.                       |
 | `show_raw_agent_reasoning`                       | boolean                                                           | Show raw reasoning (when available).                                                                                            |
 | `model_reasoning_effort`                         | `minimal` \| `low` \| `medium` \| `high`\|`xhigh`                 | Responses API reasoning effort.                                                                                                 |
+| `plan_model`                                     | string                                                            | Optional model for planning flows (defaults to `model`).                                                                        |
+| `plan_model_reasoning_effort`                    | `minimal` \| `low` \| `medium` \| `high`\|`xhigh`                 | Optional reasoning effort for planning flows (defaults to `model_reasoning_effort`).                                             |
 | `model_reasoning_summary`                        | `auto` \| `concise` \| `detailed` \| `none`                       | Reasoning summaries.                                                                                                            |
 | `model_verbosity`                                | `low` \| `medium` \| `high`                                       | GPT‑5 text verbosity (Responses API).                                                                                           |
 | `model_supports_reasoning_summaries`             | boolean                                                           | Force‑enable reasoning summaries.                                                                                               |

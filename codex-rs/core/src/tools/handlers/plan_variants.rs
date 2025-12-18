@@ -324,9 +324,17 @@ async fn run_one_variant(
     // prompt and return JSON only.
     cfg.developer_instructions = Some(build_plan_variant_developer_instructions(idx, total, ""));
 
-    // Keep plan variants on the same model + reasoning settings as the parent turn.
-    cfg.model = Some(parent_ctx.client.get_model());
-    cfg.model_reasoning_effort = parent_ctx.client.get_reasoning_effort();
+    // Keep plan variants on the same model + reasoning settings as the parent turn, unless a
+    // plan-model override is configured.
+    cfg.model = Some(
+        parent_ctx
+            .plan_model
+            .clone()
+            .unwrap_or_else(|| parent_ctx.client.get_model()),
+    );
+    cfg.model_reasoning_effort = parent_ctx
+        .plan_reasoning_effort
+        .or(parent_ctx.client.get_reasoning_effort());
     cfg.model_reasoning_summary = parent_ctx.client.get_reasoning_summary();
 
     let mut features = cfg.features.clone();
