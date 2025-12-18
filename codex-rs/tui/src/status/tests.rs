@@ -6,8 +6,7 @@ use chrono::TimeZone;
 use chrono::Utc;
 use codex_core::AuthManager;
 use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
+use codex_core::config::ConfigBuilder;
 use codex_core::openai_models::model_family::ModelFamily;
 use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::CreditsSnapshot;
@@ -22,13 +21,12 @@ use ratatui::prelude::*;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-fn test_config(temp_home: &TempDir) -> Config {
-    Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides::default(),
-        temp_home.path().to_path_buf(),
-    )
-    .expect("load config")
+async fn test_config(temp_home: &TempDir) -> Config {
+    ConfigBuilder::default()
+        .codex_home(temp_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("load config")
 }
 
 fn test_auth_manager(config: &Config) -> AuthManager {
@@ -84,10 +82,10 @@ fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) ->
         .timestamp()
 }
 
-#[test]
-fn status_snapshot_includes_reasoning_details() {
+#[tokio::test]
+async fn status_snapshot_includes_reasoning_details() {
     let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home);
+    let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
     config.model_reasoning_effort = Some(ReasoningEffort::High);
@@ -155,10 +153,10 @@ fn status_snapshot_includes_reasoning_details() {
     assert_snapshot!(sanitized);
 }
 
-#[test]
-fn status_snapshot_includes_monthly_limit() {
+#[tokio::test]
+async fn status_snapshot_includes_monthly_limit() {
     let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home);
+    let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
     config.cwd = PathBuf::from("/workspace/tests");
@@ -212,10 +210,10 @@ fn status_snapshot_includes_monthly_limit() {
     assert_snapshot!(sanitized);
 }
 
-#[test]
-fn status_snapshot_shows_unlimited_credits() {
+#[tokio::test]
+async fn status_snapshot_shows_unlimited_credits() {
     let temp_home = TempDir::new().expect("temp home");
-    let config = test_config(&temp_home);
+    let config = test_config(&temp_home).await;
     let auth_manager = test_auth_manager(&config);
     let usage = TokenUsage::default();
     let captured_at = chrono::Local
@@ -256,10 +254,10 @@ fn status_snapshot_shows_unlimited_credits() {
     );
 }
 
-#[test]
-fn status_snapshot_shows_positive_credits() {
+#[tokio::test]
+async fn status_snapshot_shows_positive_credits() {
     let temp_home = TempDir::new().expect("temp home");
-    let config = test_config(&temp_home);
+    let config = test_config(&temp_home).await;
     let auth_manager = test_auth_manager(&config);
     let usage = TokenUsage::default();
     let captured_at = chrono::Local
@@ -300,10 +298,10 @@ fn status_snapshot_shows_positive_credits() {
     );
 }
 
-#[test]
-fn status_snapshot_hides_zero_credits() {
+#[tokio::test]
+async fn status_snapshot_hides_zero_credits() {
     let temp_home = TempDir::new().expect("temp home");
-    let config = test_config(&temp_home);
+    let config = test_config(&temp_home).await;
     let auth_manager = test_auth_manager(&config);
     let usage = TokenUsage::default();
     let captured_at = chrono::Local
@@ -342,10 +340,10 @@ fn status_snapshot_hides_zero_credits() {
     );
 }
 
-#[test]
-fn status_snapshot_hides_when_has_no_credits_flag() {
+#[tokio::test]
+async fn status_snapshot_hides_when_has_no_credits_flag() {
     let temp_home = TempDir::new().expect("temp home");
-    let config = test_config(&temp_home);
+    let config = test_config(&temp_home).await;
     let auth_manager = test_auth_manager(&config);
     let usage = TokenUsage::default();
     let captured_at = chrono::Local
@@ -384,10 +382,10 @@ fn status_snapshot_hides_when_has_no_credits_flag() {
     );
 }
 
-#[test]
-fn status_card_token_usage_excludes_cached_tokens() {
+#[tokio::test]
+async fn status_card_token_usage_excludes_cached_tokens() {
     let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home);
+    let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.cwd = PathBuf::from("/workspace/tests");
 
@@ -427,10 +425,10 @@ fn status_card_token_usage_excludes_cached_tokens() {
     );
 }
 
-#[test]
-fn status_snapshot_truncates_in_narrow_terminal() {
+#[tokio::test]
+async fn status_snapshot_truncates_in_narrow_terminal() {
     let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home);
+    let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
     config.model_reasoning_effort = Some(ReasoningEffort::High);
@@ -487,10 +485,10 @@ fn status_snapshot_truncates_in_narrow_terminal() {
     assert_snapshot!(sanitized);
 }
 
-#[test]
-fn status_snapshot_shows_missing_limits_message() {
+#[tokio::test]
+async fn status_snapshot_shows_missing_limits_message() {
     let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home);
+    let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.cwd = PathBuf::from("/workspace/tests");
 
@@ -532,10 +530,10 @@ fn status_snapshot_shows_missing_limits_message() {
     assert_snapshot!(sanitized);
 }
 
-#[test]
-fn status_snapshot_includes_credits_and_limits() {
+#[tokio::test]
+async fn status_snapshot_includes_credits_and_limits() {
     let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home);
+    let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex".to_string());
     config.cwd = PathBuf::from("/workspace/tests");
 
@@ -596,10 +594,10 @@ fn status_snapshot_includes_credits_and_limits() {
     assert_snapshot!(sanitized);
 }
 
-#[test]
-fn status_snapshot_shows_empty_limits_message() {
+#[tokio::test]
+async fn status_snapshot_shows_empty_limits_message() {
     let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home);
+    let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.cwd = PathBuf::from("/workspace/tests");
 
@@ -648,10 +646,10 @@ fn status_snapshot_shows_empty_limits_message() {
     assert_snapshot!(sanitized);
 }
 
-#[test]
-fn status_snapshot_shows_stale_limits_message() {
+#[tokio::test]
+async fn status_snapshot_shows_stale_limits_message() {
     let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home);
+    let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.cwd = PathBuf::from("/workspace/tests");
 
@@ -709,10 +707,10 @@ fn status_snapshot_shows_stale_limits_message() {
     assert_snapshot!(sanitized);
 }
 
-#[test]
-fn status_snapshot_cached_limits_hide_credits_without_flag() {
+#[tokio::test]
+async fn status_snapshot_cached_limits_hide_credits_without_flag() {
     let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home);
+    let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex".to_string());
     config.cwd = PathBuf::from("/workspace/tests");
 
@@ -774,10 +772,10 @@ fn status_snapshot_cached_limits_hide_credits_without_flag() {
     assert_snapshot!(sanitized);
 }
 
-#[test]
-fn status_context_window_uses_last_usage() {
+#[tokio::test]
+async fn status_context_window_uses_last_usage() {
     let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home);
+    let mut config = test_config(&temp_home).await;
     config.model_context_window = Some(272_000);
 
     let auth_manager = test_auth_manager(&config);

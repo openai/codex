@@ -1697,6 +1697,9 @@ pub enum SkillScope {
 pub struct SkillMetadata {
     pub name: String,
     pub description: String,
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_description: Option<String>,
     pub path: PathBuf,
     pub scope: SkillScope,
 }
