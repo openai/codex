@@ -992,14 +992,13 @@ pub fn resolve_oss_provider(
 }
 
 impl Config {
-    /// Meant to be used exclusively for tests. For new tests, prefer using
-    /// [ConfigBuilder::build()], if possible, so ultimately we can make this
-    /// method private to this file.
-    pub fn load_from_base_config_with_overrides(
+    #[cfg(test)]
+    fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: PathBuf,
     ) -> std::io::Result<Self> {
+        // Note this ignores requirements.toml enforcement for tests.
         let requirements = ConfigRequirements::default();
         Self::load_config_with_requirements(cfg, overrides, codex_home, requirements)
     }
