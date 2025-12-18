@@ -229,26 +229,34 @@ pub fn terminal_info() -> TerminalInfo {
 /// reporting tmux itself.
 fn detect_terminal_info_from_env(env: &dyn Environment) -> TerminalInfo {
     let multiplexer = detect_multiplexer(env);
-    let tmux_client_info = match multiplexer {
-        Some(Multiplexer::Tmux { .. }) => env.tmux_client_info(),
-        _ => TmuxClientInfo::default(),
+    let tmux_client_info = if matches!(multiplexer, Some(Multiplexer::Tmux { .. })) {
+        env.tmux_client_info()
+    } else {
+        TmuxClientInfo::default()
     };
-    let tmux_termtype = tmux_client_info.termtype.and_then(none_if_whitespace);
-    let tmux_termname = tmux_client_info.termname.and_then(none_if_whitespace);
+    let TmuxClientInfo { termtype, termname } = tmux_client_info;
+    let tmux_termtype = termtype.and_then(none_if_whitespace);
+    let tmux_termname = termname.and_then(none_if_whitespace);
 
-    if let Some(term_program) = env.var("TERM_PROGRAM").and_then(none_if_whitespace) {
-        if is_tmux_term_program(&term_program) {
-            if let Some(terminal) =
-                terminal_from_tmux_client_info(&tmux_termtype, &tmux_termname, multiplexer.clone())
-            {
-                return terminal;
-            }
-        } else {
-            let version = env.var("TERM_PROGRAM_VERSION").and_then(none_if_whitespace);
-            let name =
-                terminal_name_from_term_program(&term_program).unwrap_or(TerminalName::Unknown);
-            return TerminalInfo::from_term_program(name, term_program, version, multiplexer);
-        }
+    let term_program = env.var("TERM_PROGRAM").and_then(none_if_whitespace);
+
+    if term_program
+        .as_ref()
+        .is_some_and(|term_program| !is_tmux_term_program(term_program))
+    {
+        let term_program = term_program.expect("term program checked above");
+        let version = env.var("TERM_PROGRAM_VERSION").and_then(none_if_whitespace);
+        let name = terminal_name_from_term_program(&term_program).unwrap_or(TerminalName::Unknown);
+        return TerminalInfo::from_term_program(name, term_program, version, multiplexer);
+    }
+
+    if term_program
+        .as_ref()
+        .is_some_and(|term_program| is_tmux_term_program(term_program))
+        && let Some(terminal) =
+            terminal_from_tmux_client_info(&tmux_termtype, &tmux_termname, multiplexer.clone())
+    {
+        return terminal;
     }
 
     if let Some(terminal) =
