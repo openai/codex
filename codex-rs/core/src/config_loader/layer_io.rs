@@ -56,27 +56,27 @@ pub(super) async fn load_config_layers_internal(
 }
 
 pub(super) async fn read_config_from_path(
-    path: &Path,
+    path: impl AsRef<Path>,
     log_missing_as_info: bool,
 ) -> io::Result<Option<TomlValue>> {
-    match fs::read_to_string(path).await {
+    match fs::read_to_string(path.as_ref()).await {
         Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
             Ok(value) => Ok(Some(value)),
             Err(err) => {
-                tracing::error!("Failed to parse {}: {err}", path.display());
+                tracing::error!("Failed to parse {}: {err}", path.as_ref().display());
                 Err(io::Error::new(io::ErrorKind::InvalidData, err))
             }
         },
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             if log_missing_as_info {
-                tracing::info!("{} not found, using defaults", path.display());
+                tracing::info!("{} not found, using defaults", path.as_ref().display());
             } else {
-                tracing::debug!("{} not found", path.display());
+                tracing::debug!("{} not found", path.as_ref().display());
             }
             Ok(None)
         }
         Err(err) => {
-            tracing::error!("Failed to read {}: {err}", path.display());
+            tracing::error!("Failed to read {}: {err}", path.as_ref().display());
             Err(err)
         }
     }
