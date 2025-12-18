@@ -26,6 +26,7 @@ use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::default_client::originator;
 use crate::git_info::collect_git_info;
+use codex_protocol::protocol::AgentId;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
@@ -62,7 +63,10 @@ pub enum RolloutRecorderParams {
 }
 
 enum RolloutCmd {
-    AddItems(Vec<RolloutItem>),
+    AddItems {
+        agent_id: String,
+        items: Vec<RolloutItem>,
+    },
     /// Ensure all prior writes are processed; respond when flushed.
     Flush {
         ack: oneshot::Sender<()>,
@@ -177,7 +181,11 @@ impl RolloutRecorder {
         Ok(Self { tx, rollout_path })
     }
 
-    pub(crate) async fn record_items(&self, items: &[RolloutItem]) -> std::io::Result<()> {
+    pub(crate) async fn record_items(
+        &self,
+        agent_id: &AgentId,
+        items: &[RolloutItem],
+    ) -> std::io::Result<()> {
         let mut filtered = Vec::new();
         for item in items {
             // Note that function calls may look a bit strange if they are
@@ -191,7 +199,10 @@ impl RolloutRecorder {
             return Ok(());
         }
         self.tx
-            .send(RolloutCmd::AddItems(filtered))
+            .send(RolloutCmd::AddItems {
+                agent_id: agent_id.to_string(),
+                items: filtered,
+            })
             .await
             .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))
     }
@@ -214,7 +225,7 @@ impl RolloutRecorder {
             return Err(IoError::other("empty session file"));
         }
 
-        let mut items: Vec<RolloutItem> = Vec::new();
+        let mut lines: Vec<RolloutLine> = Vec::new();
         let mut conversation_id: Option<ConversationId> = None;
         for line in text.lines() {
             if line.trim().is_empty() {
@@ -228,30 +239,17 @@ impl RolloutRecorder {
                 }
             };
 
-            // Parse the rollout line structure
             match serde_json::from_value::<RolloutLine>(v.clone()) {
-                Ok(rollout_line) => match rollout_line.item {
-                    RolloutItem::SessionMeta(session_meta_line) => {
+                Ok(rollout_line) => {
+                    if let RolloutItem::SessionMeta(session_meta_line) = &rollout_line.item
+                        && conversation_id.is_none()
+                    {
                         // Use the FIRST SessionMeta encountered in the file as the canonical
                         // conversation id and main session information. Keep all items intact.
-                        if conversation_id.is_none() {
-                            conversation_id = Some(session_meta_line.meta.id);
-                        }
-                        items.push(RolloutItem::SessionMeta(session_meta_line));
+                        conversation_id = Some(session_meta_line.meta.id);
                     }
-                    RolloutItem::ResponseItem(item) => {
-                        items.push(RolloutItem::ResponseItem(item));
-                    }
-                    RolloutItem::Compacted(item) => {
-                        items.push(RolloutItem::Compacted(item));
-                    }
-                    RolloutItem::TurnContext(item) => {
-                        items.push(RolloutItem::TurnContext(item));
-                    }
-                    RolloutItem::EventMsg(_ev) => {
-                        items.push(RolloutItem::EventMsg(_ev));
-                    }
-                },
+                    lines.push(rollout_line);
+                }
                 Err(e) => {
                     warn!("failed to parse rollout line: {v:?}, error: {e}");
                 }
@@ -260,20 +258,20 @@ impl RolloutRecorder {
 
         info!(
             "Resumed rollout with {} items, conversation ID: {:?}",
-            items.len(),
+            lines.len(),
             conversation_id
         );
         let conversation_id = conversation_id
             .ok_or_else(|| IoError::other("failed to parse conversation ID from rollout file"))?;
 
-        if items.is_empty() {
+        if lines.is_empty() {
             return Ok(InitialHistory::New);
         }
 
         info!("Resumed rollout successfully from {path:?}");
         Ok(InitialHistory::Resumed(ResumedHistory {
             conversation_id,
-            history: items,
+            history: lines,
             rollout_path: path.to_path_buf(),
         }))
     }
@@ -364,17 +362,19 @@ async fn rollout_writer(
 
         // Write the SessionMeta as the first item in the file, wrapped in a rollout line
         writer
-            .write_rollout_item(RolloutItem::SessionMeta(session_meta_line))
+            .write_rollout_item(None, RolloutItem::SessionMeta(session_meta_line))
             .await?;
     }
 
     // Process rollout commands
     while let Some(cmd) = rx.recv().await {
         match cmd {
-            RolloutCmd::AddItems(items) => {
+            RolloutCmd::AddItems { agent_id, items } => {
                 for item in items {
                     if is_persisted_response_item(&item) {
-                        writer.write_rollout_item(item).await?;
+                        writer
+                            .write_rollout_item(Some(agent_id.as_str()), item)
+                            .await?;
                     }
                 }
             }
@@ -400,7 +400,11 @@ struct JsonlWriter {
 }
 
 impl JsonlWriter {
-    async fn write_rollout_item(&mut self, rollout_item: RolloutItem) -> std::io::Result<()> {
+    async fn write_rollout_item(
+        &mut self,
+        agent_id: Option<&str>,
+        rollout_item: RolloutItem,
+    ) -> std::io::Result<()> {
         let timestamp_format: &[FormatItem] = format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
         );
@@ -410,6 +414,7 @@ impl JsonlWriter {
 
         let line = RolloutLine {
             timestamp,
+            agent_id: agent_id.map(str::to_string),
             item: rollout_item,
         };
         self.write_line(&line).await

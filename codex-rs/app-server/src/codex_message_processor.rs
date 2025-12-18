@@ -151,6 +151,7 @@ use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
@@ -1580,7 +1581,16 @@ impl CodexMessageProcessor {
                 .await;
                 return;
             }
-            InitialHistory::Forked(history.into_iter().map(RolloutItem::ResponseItem).collect())
+            InitialHistory::Forked(
+                history
+                    .into_iter()
+                    .map(|item| RolloutLine {
+                        timestamp: String::new(),
+                        agent_id: None,
+                        item: RolloutItem::ResponseItem(item),
+                    })
+                    .collect(),
+            )
         } else if let Some(path) = path {
             match RolloutRecorder::get_rollout_history(&path).await {
                 Ok(initial_history) => initial_history,
@@ -2296,7 +2306,14 @@ impl CodexMessageProcessor {
         } else {
             match history {
                 Some(history) if !history.is_empty() => InitialHistory::Forked(
-                    history.into_iter().map(RolloutItem::ResponseItem).collect(),
+                    history
+                        .into_iter()
+                        .map(|item| RolloutLine {
+                            timestamp: String::new(),
+                            agent_id: None,
+                            item: RolloutItem::ResponseItem(item),
+                        })
+                        .collect(),
                 ),
                 Some(_) | None => {
                     self.send_invalid_request_error(
@@ -3591,6 +3608,7 @@ mod tests {
 
         let line = RolloutLine {
             timestamp: timestamp.clone(),
+            agent_id: None,
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: session_meta.clone(),
                 git: None,

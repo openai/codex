@@ -8,6 +8,7 @@ use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use crate::ConversationId;
@@ -50,6 +51,9 @@ pub const USER_INSTRUCTIONS_CLOSE_TAG: &str = "</user_instructions>";
 pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
 pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
+pub type AgentId = String;
+
+pub static DEFAULT_AGENT_ID: LazyLock<AgentId> = LazyLock::new(|| "root".to_string());
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -66,6 +70,13 @@ pub struct Submission {
 #[allow(clippy::large_enum_variant)]
 #[non_exhaustive]
 pub enum Op {
+    /// Route an operation to a specific agent.
+    ForAgent {
+        /// Identifier of the target agent.
+        agent_id: AgentId,
+        /// Operation to route to the agent.
+        op: Box<Op>,
+    },
     /// Abort current task.
     /// This server sends [`EventMsg::TurnAborted`] in response.
     Interrupt,
@@ -487,6 +498,9 @@ impl SandboxPolicy {
 pub struct Event {
     /// Submission `id` that this event is correlated with.
     pub id: String,
+    /// Optional agent identifier associated with this event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<AgentId>,
     /// Payload
     pub msg: EventMsg,
 }
@@ -1128,7 +1142,7 @@ pub struct ConversationPathResponseEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ResumedHistory {
     pub conversation_id: ConversationId,
-    pub history: Vec<RolloutItem>,
+    pub history: Vec<RolloutLine>,
     pub rollout_path: PathBuf,
 }
 
@@ -1136,37 +1150,63 @@ pub struct ResumedHistory {
 pub enum InitialHistory {
     New,
     Resumed(ResumedHistory),
-    Forked(Vec<RolloutItem>),
+    Forked(Vec<RolloutLine>),
 }
 
 impl InitialHistory {
-    pub fn get_rollout_items(&self) -> Vec<RolloutItem> {
+    pub fn get_rollout_lines(&self) -> Vec<RolloutLine> {
         match self {
             InitialHistory::New => Vec::new(),
             InitialHistory::Resumed(resumed) => resumed.history.clone(),
-            InitialHistory::Forked(items) => items.clone(),
+            InitialHistory::Forked(lines) => lines.clone(),
         }
     }
 
+    pub fn get_rollout_items_for_agent(&self, agent_id: &AgentId) -> Vec<RolloutItem> {
+        self.get_rollout_lines()
+            .into_iter()
+            .filter_map(|line| {
+                let line_agent = line.agent_id.as_deref().unwrap_or(&DEFAULT_AGENT_ID);
+                (line_agent == agent_id).then_some(line.item)
+            })
+            .collect()
+    }
+
     pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
+        self.get_event_msgs_for_agent(&DEFAULT_AGENT_ID)
+    }
+
+    pub fn get_event_msgs_for_agent(&self, agent_id: &AgentId) -> Option<Vec<EventMsg>> {
         match self {
             InitialHistory::New => None,
             InitialHistory::Resumed(resumed) => Some(
                 resumed
                     .history
                     .iter()
-                    .filter_map(|ri| match ri {
-                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
-                        _ => None,
+                    .filter_map(|line| {
+                        let line_agent = line.agent_id.as_deref().unwrap_or(&DEFAULT_AGENT_ID);
+                        if line_agent != agent_id {
+                            return None;
+                        }
+                        match &line.item {
+                            RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                            _ => None,
+                        }
                     })
                     .collect(),
             ),
-            InitialHistory::Forked(items) => Some(
-                items
+            InitialHistory::Forked(lines) => Some(
+                lines
                     .iter()
-                    .filter_map(|ri| match ri {
-                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
-                        _ => None,
+                    .filter_map(|line| {
+                        let line_agent = line.agent_id.as_deref().unwrap_or(&DEFAULT_AGENT_ID);
+                        if line_agent != agent_id {
+                            return None;
+                        }
+                        match &line.item {
+                            RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                            _ => None,
+                        }
                     })
                     .collect(),
             ),
@@ -1296,9 +1336,11 @@ pub struct TurnContextItem {
     pub summary: ReasoningSummaryConfig,
 }
 
-#[derive(Serialize, Deserialize, Clone, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, JsonSchema, TS)]
 pub struct RolloutLine {
     pub timestamp: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<AgentId>,
     #[serde(flatten)]
     pub item: RolloutItem,
 }
@@ -1865,6 +1907,7 @@ mod tests {
         let rollout_file = NamedTempFile::new()?;
         let event = Event {
             id: "1234".to_string(),
+            agent_id: None,
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: "codex-mini-latest".to_string(),
@@ -1924,6 +1967,7 @@ mod tests {
     fn serialize_mcp_startup_update_event() -> Result<()> {
         let event = Event {
             id: "init".to_string(),
+            agent_id: None,
             msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
                 server: "srv".to_string(),
                 status: McpStartupStatus::Failed {
@@ -1944,6 +1988,7 @@ mod tests {
     fn serialize_mcp_startup_complete_event() -> Result<()> {
         let event = Event {
             id: "init".to_string(),
+            agent_id: None,
             msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent {
                 ready: vec!["a".to_string()],
                 failed: vec![McpStartupFailure {
