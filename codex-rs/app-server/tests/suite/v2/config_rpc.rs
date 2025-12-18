@@ -73,9 +73,8 @@ sandbox_mode = "workspace-write"
         }
     );
     let layers = layers.expect("layers present");
-    assert_eq!(layers.len(), 2);
-    assert_eq!(layers[0].name, ConfigLayerSource::SessionFlags);
-    assert_eq!(layers[1].name, ConfigLayerSource::User { file: user_file });
+    assert_eq!(layers.len(), 1);
+    assert_eq!(layers[0].name, ConfigLayerSource::User { file: user_file });
 
     Ok(())
 }
@@ -137,9 +136,8 @@ view_image = false
     );
 
     let layers = layers.expect("layers present");
-    assert_eq!(layers.len(), 2);
-    assert_eq!(layers[0].name, ConfigLayerSource::SessionFlags);
-    assert_eq!(layers[1].name, ConfigLayerSource::User { file: user_file });
+    assert_eq!(layers.len(), 1);
+    assert_eq!(layers[0].name, ConfigLayerSource::User { file: user_file });
 
     Ok(())
 }
@@ -211,7 +209,7 @@ writable_roots = [{}]
     assert_eq!(config.model.as_deref(), Some("gpt-system"));
     assert_eq!(
         origins.get("model").expect("origin").name,
-        ConfigLayerSource::System {
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile {
             file: managed_file.clone(),
         }
     );
@@ -219,7 +217,7 @@ writable_roots = [{}]
     assert_eq!(config.approval_policy, Some(AskForApproval::Never));
     assert_eq!(
         origins.get("approval_policy").expect("origin").name,
-        ConfigLayerSource::System {
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile {
             file: managed_file.clone(),
         }
     );
@@ -242,7 +240,7 @@ writable_roots = [{}]
             .get("sandbox_workspace_write.writable_roots.0")
             .expect("origin")
             .name,
-        ConfigLayerSource::System {
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile {
             file: managed_file.clone(),
         }
     );
@@ -259,28 +257,28 @@ writable_roots = [{}]
     );
 
     let layers = layers.expect("layers present");
-    assert_eq!(layers.len(), 3);
+    assert_eq!(layers.len(), 2);
     assert_eq!(
         layers[0].name,
-        ConfigLayerSource::System { file: managed_file }
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
     );
-    assert_eq!(layers[1].name, ConfigLayerSource::SessionFlags);
-    assert_eq!(layers[2].name, ConfigLayerSource::User { file: user_file });
+    assert_eq!(layers[1].name, ConfigLayerSource::User { file: user_file });
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_value_write_replaces_value() -> Result<()> {
-    let codex_home = TempDir::new()?;
+    let temp_dir = TempDir::new()?;
+    let codex_home = temp_dir.path().canonicalize()?;
     write_config(
-        &codex_home,
+        &temp_dir,
         r#"
 model = "gpt-old"
 "#,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_id = mcp
@@ -311,13 +309,7 @@ model = "gpt-old"
     )
     .await??;
     let write: ConfigWriteResponse = to_response(write_resp)?;
-    let expected_file_path = codex_home
-        .path()
-        .join("config.toml")
-        .canonicalize()
-        .unwrap()
-        .display()
-        .to_string();
+    let expected_file_path = AbsolutePathBuf::resolve_path_against_base("config.toml", codex_home)?;
 
     assert_eq!(write.status, WriteStatus::Ok);
     assert_eq!(write.file_path, expected_file_path);
@@ -380,16 +372,17 @@ model = "gpt-old"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_batch_write_applies_multiple_edits() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    write_config(&codex_home, "")?;
+    let tmp_dir = TempDir::new()?;
+    let codex_home = tmp_dir.path().canonicalize()?;
+    write_config(&tmp_dir, "")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let writable_root = test_tmp_path_buf();
     let batch_id = mcp
         .send_config_batch_write_request(ConfigBatchWriteParams {
-            file_path: Some(codex_home.path().join("config.toml").display().to_string()),
+            file_path: Some(codex_home.join("config.toml").display().to_string()),
             edits: vec![
                 ConfigEdit {
                     key_path: "sandbox_mode".to_string(),
@@ -415,13 +408,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     .await??;
     let batch_write: ConfigWriteResponse = to_response(batch_resp)?;
     assert_eq!(batch_write.status, WriteStatus::Ok);
-    let expected_file_path = codex_home
-        .path()
-        .join("config.toml")
-        .canonicalize()
-        .unwrap()
-        .display()
-        .to_string();
+    let expected_file_path = AbsolutePathBuf::resolve_path_against_base("config.toml", codex_home)?;
     assert_eq!(batch_write.file_path, expected_file_path);
 
     let read_id = mcp
