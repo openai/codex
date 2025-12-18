@@ -54,21 +54,21 @@ pub(crate) enum CancellationEvent {
     NotHandled,
 }
 
-pub(crate) use chat_composer::ChatComposer; 
-pub(crate) use chat_composer::InputResult; 
-use codex_protocol::custom_prompts::CustomPrompt; 
- 
-use crate::status_indicator_widget::StatusIndicatorWidget; 
-pub(crate) use ask_user_question_overlay::AskUserQuestionOverlay; 
-pub(crate) use experimental_features_view::BetaFeatureItem; 
-pub(crate) use experimental_features_view::ExperimentalFeaturesView; 
-pub(crate) use list_selection_view::SelectionAction; 
-pub(crate) use list_selection_view::SelectionItem; 
-pub(crate) use plan_approval_overlay::PlanApprovalOverlay; 
-pub(crate) use plan_request_overlay::PlanRequestOverlay; 
- 
-/// Pane displayed in the lower half of the chat UI. 
-pub(crate) struct BottomPane { 
+pub(crate) use chat_composer::ChatComposer;
+pub(crate) use chat_composer::InputResult;
+use codex_protocol::custom_prompts::CustomPrompt;
+
+use crate::status_indicator_widget::StatusIndicatorWidget;
+pub(crate) use ask_user_question_overlay::AskUserQuestionOverlay;
+pub(crate) use experimental_features_view::BetaFeatureItem;
+pub(crate) use experimental_features_view::ExperimentalFeaturesView;
+pub(crate) use list_selection_view::SelectionAction;
+pub(crate) use list_selection_view::SelectionItem;
+pub(crate) use plan_approval_overlay::PlanApprovalOverlay;
+pub(crate) use plan_request_overlay::PlanRequestOverlay;
+
+/// Pane displayed in the lower half of the chat UI.
+pub(crate) struct BottomPane {
     /// Composer is retained even when a BottomPaneView is displayed so the
     /// input state is retained when the view is closed.
     composer: ChatComposer,

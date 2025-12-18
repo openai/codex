@@ -472,6 +472,7 @@ impl AskUserQuestionOverlay {
                 display_shortcut: None,
                 match_indices: None,
                 description: Some(opt.description.clone()),
+                disabled_reason: None,
                 wrap_indent: None,
             });
         }
@@ -480,6 +481,7 @@ impl AskUserQuestionOverlay {
             display_shortcut: None,
             match_indices: None,
             description: Some("Provide custom text input.".to_string()),
+            disabled_reason: None,
             wrap_indent: None,
         });
         rows
@@ -499,6 +501,7 @@ impl AskUserQuestionOverlay {
                 display_shortcut: None,
                 match_indices: None,
                 description: Some(answer),
+                disabled_reason: None,
                 wrap_indent: Some(4),
             });
         }
@@ -508,6 +511,7 @@ impl AskUserQuestionOverlay {
             display_shortcut: None,
             match_indices: None,
             description: Some("Send answers.".to_string()),
+            disabled_reason: None,
             wrap_indent: Some(4),
         });
 
@@ -516,6 +520,7 @@ impl AskUserQuestionOverlay {
             display_shortcut: None,
             match_indices: None,
             description: Some("Cancel without sending.".to_string()),
+            disabled_reason: None,
             wrap_indent: Some(4),
         });
 

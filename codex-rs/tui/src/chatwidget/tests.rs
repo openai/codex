@@ -2096,15 +2096,15 @@ fn feedback_upload_consent_popup_snapshot() {
 }
 
 #[test]
-fn reasoning_popup_escape_returns_to_model_popup() { 
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")); 
-    chat.open_model_popup(); 
- 
-    let preset = get_available_model(&chat, "gpt-5.1-codex-max"); 
-    chat.open_reasoning_popup(crate::app_event::ModelPickerTarget::Chat, preset); 
- 
-    let before_escape = render_bottom_popup(&chat, 80); 
-    assert!(before_escape.contains("Select Reasoning Level")); 
+fn reasoning_popup_escape_returns_to_model_popup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max"));
+    chat.open_model_popup();
+
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
+    chat.open_reasoning_popup(crate::app_event::ModelPickerTarget::Chat, preset);
+
+    let before_escape = render_bottom_popup(&chat, 80);
+    assert!(before_escape.contains("Select Reasoning Level"));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 

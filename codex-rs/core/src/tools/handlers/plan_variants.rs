@@ -364,7 +364,8 @@ async fn run_one_variant(
         .disable(Feature::WebSearchRequest)
         .disable(Feature::ViewImageTool);
     cfg.features = features;
-    cfg.approval_policy = codex_protocol::protocol::AskForApproval::Never;
+    cfg.approval_policy =
+        crate::config::Constrained::allow_any(codex_protocol::protocol::AskForApproval::Never);
     cfg.sandbox_policy = codex_protocol::protocol::SandboxPolicy::ReadOnly;
 
     let input = vec![UserInput::Text {

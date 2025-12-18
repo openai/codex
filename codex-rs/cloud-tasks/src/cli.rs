@@ -30,22 +30,22 @@ pub struct ExecCommand {
     #[arg(value_name = "QUERY")]
     pub query: Option<String>,
 
-    /// Target environment identifier (see `codexel cloud` to browse). 
-    #[arg(long = "env", value_name = "ENV_ID")] 
-    pub environment: String, 
+    /// Target environment identifier (see `codexel cloud` to browse).
+    #[arg(long = "env", value_name = "ENV_ID")]
+    pub environment: String,
 
-    /// Number of assistant attempts (best-of-N). 
-    #[arg( 
-        long = "attempts", 
-        default_value_t = 1usize, 
+    /// Number of assistant attempts (best-of-N).
+    #[arg(
+        long = "attempts",
+        default_value_t = 1usize,
         value_parser = parse_attempts
-    )] 
-    pub attempts: usize, 
+    )]
+    pub attempts: usize,
 
-    /// Git branch to run in Codexel Cloud (defaults to current branch). 
-    #[arg(long = "branch", value_name = "BRANCH")] 
-    pub branch: Option<String>, 
-} 
+    /// Git branch to run in Codexel Cloud (defaults to current branch).
+    #[arg(long = "branch", value_name = "BRANCH")]
+    pub branch: Option<String>,
+}
 
 fn parse_attempts(input: &str) -> Result<usize, String> {
     let value: usize = input

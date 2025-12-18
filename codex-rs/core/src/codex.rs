@@ -887,6 +887,7 @@ impl Session {
         state.set_pending_approved_plan(plan_output);
     }
 
+    #[cfg(test)]
     pub(crate) async fn new_turn(
         &self,
         updates: SessionSettingsUpdate,
@@ -908,7 +909,9 @@ impl Session {
                         state.session_configuration.sandbox_policy != next.sandbox_policy;
                     state.session_configuration = next.clone();
                     let pending_approved_plan = match next.session_source {
-                        SessionSource::Cli | SessionSource::VSCode => state.take_pending_approved_plan(),
+                        SessionSource::Cli | SessionSource::VSCode => {
+                            state.take_pending_approved_plan()
+                        }
                         SessionSource::Exec
                         | SessionSource::Mcp
                         | SessionSource::SubAgent(_)
@@ -945,15 +948,15 @@ impl Session {
             .await)
     }
 
-    async fn new_turn_from_configuration( 
-        &self, 
-        sub_id: String, 
-        session_configuration: SessionConfiguration, 
-        final_output_json_schema: Option<Option<Value>>, 
-        sandbox_policy_changed: bool, 
-        pending_approved_plan: Option<PlanOutputEvent>, 
-    ) -> Arc<TurnContext> { 
-        let per_turn_config = Self::build_per_turn_config(&session_configuration); 
+    async fn new_turn_from_configuration(
+        &self,
+        sub_id: String,
+        session_configuration: SessionConfiguration,
+        final_output_json_schema: Option<Option<Value>>,
+        sandbox_policy_changed: bool,
+        pending_approved_plan: Option<PlanOutputEvent>,
+    ) -> Arc<TurnContext> {
+        let per_turn_config = Self::build_per_turn_config(&session_configuration);
 
         if sandbox_policy_changed {
             let sandbox_state = SandboxState {
@@ -1015,13 +1018,13 @@ impl Session {
     }
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
-        let session_configuration = { 
-            let state = self.state.lock().await; 
-            state.session_configuration.clone() 
-        }; 
-        self.new_turn_from_configuration(sub_id, session_configuration, None, false, None) 
-            .await 
-    } 
+        let session_configuration = {
+            let state = self.state.lock().await;
+            state.session_configuration.clone()
+        };
+        self.new_turn_from_configuration(sub_id, session_configuration, None, false, None)
+            .await
+    }
 
     fn build_environment_update_item(
         &self,
@@ -2337,10 +2340,13 @@ mod handlers {
         sub_id: String,
         plan_request: PlanRequest,
     ) {
-        let turn_context = sess
+        let tc = match sess
             .new_turn_with_sub_id(sub_id.clone(), SessionSettingsUpdate::default())
-            .await;
-        let tc = turn_context.clone();
+            .await
+        {
+            Ok(tc) => tc,
+            Err(_) => return,
+        };
         sess.spawn_task(
             tc.clone(),
             Vec::<UserInput>::new(),
@@ -3581,7 +3587,10 @@ mod tests {
             .set_pending_approved_plan(Some(plan_output.clone()))
             .await;
 
-        let turn = session.new_turn(SessionSettingsUpdate::default()).await;
+        let turn = session
+            .new_turn(SessionSettingsUpdate::default())
+            .await
+            .expect("create turn");
         let developer_instructions = turn.developer_instructions.as_deref().unwrap_or_default();
         assert!(developer_instructions.starts_with("## Approved Plan (Pinned)"));
         assert!(developer_instructions.contains(plan_output.title.as_str()));
@@ -3591,7 +3600,10 @@ mod tests {
             assert!(state.pending_approved_plan.is_none());
         }
 
-        let next_turn = session.new_turn(SessionSettingsUpdate::default()).await;
+        let next_turn = session
+            .new_turn(SessionSettingsUpdate::default())
+            .await
+            .expect("create second turn");
         let developer_instructions = next_turn
             .developer_instructions
             .as_deref()
@@ -3612,7 +3624,10 @@ mod tests {
             .set_pending_approved_plan(Some(sample_plan_output_event()))
             .await;
 
-        let turn = session.new_turn(SessionSettingsUpdate::default()).await;
+        let turn = session
+            .new_turn(SessionSettingsUpdate::default())
+            .await
+            .expect("create turn");
         let developer_instructions = turn.developer_instructions.as_deref().unwrap_or_default();
         assert!(!developer_instructions.contains("## Approved Plan (Pinned)"));
 

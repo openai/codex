@@ -186,7 +186,8 @@ async fn start_plan_conversation(
         .disable(crate::features::Feature::WebSearchRequest)
         .disable(crate::features::Feature::ViewImageTool);
 
-    sub_agent_config.approval_policy = codex_protocol::protocol::AskForApproval::Never;
+    sub_agent_config.approval_policy =
+        crate::config::Constrained::allow_any(codex_protocol::protocol::AskForApproval::Never);
     sub_agent_config.sandbox_policy = codex_protocol::protocol::SandboxPolicy::ReadOnly;
 
     let input: Vec<UserInput> = vec![UserInput::Text {
