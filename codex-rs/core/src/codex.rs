@@ -2749,8 +2749,8 @@ pub(crate) use tests::make_session_and_context_with_rx;
 mod tests {
     use super::*;
     use crate::CodexAuth;
-    use crate::config::ConfigOverrides;
-    use crate::config::ConfigToml;
+    use crate::config::ConfigBuilder;
+    use crate::config_loader::LoaderOverrides;
     use crate::exec::ExecToolCallOutput;
     use crate::function_tool::FunctionCallError;
     use crate::shell::default_user_shell;
@@ -2777,6 +2777,8 @@ mod tests {
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
+    use std::future::Future;
+    use std::path::Path;
     use std::time::Duration;
     use tokio::time::sleep;
 
@@ -2834,12 +2836,7 @@ mod tests {
     #[test]
     fn set_rate_limits_retains_previous_credits() {
         let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let config = build_test_config(codex_home.path());
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
@@ -2906,12 +2903,7 @@ mod tests {
     #[test]
     fn set_rate_limits_updates_plan_type_when_present() {
         let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let config = build_test_config(codex_home.path());
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
@@ -3084,6 +3076,59 @@ mod tests {
         })
     }
 
+    fn build_test_config(codex_home: &Path) -> Config {
+        block_on(
+            ConfigBuilder::default()
+                .codex_home(codex_home.to_path_buf())
+                .loader_overrides(test_loader_overrides(codex_home))
+                .build(),
+        )
+        .expect("load default test config")
+    }
+
+    fn test_loader_overrides(codex_home: &Path) -> LoaderOverrides {
+        LoaderOverrides {
+            managed_config_path: Some(codex_home.join("managed_config.toml")),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: Some(String::new()),
+        }
+    }
+
+    fn block_on<F>(future: F) -> F::Output
+    where
+        F: Future + Send,
+        F::Output: Send,
+    {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                if matches!(
+                    handle.runtime_flavor(),
+                    tokio::runtime::RuntimeFlavor::CurrentThread
+                ) {
+                    std::thread::scope(|scope| {
+                        scope
+                            .spawn(|| {
+                                tokio::runtime::Builder::new_current_thread()
+                                    .enable_all()
+                                    .build()
+                                    .expect("build tokio runtime")
+                                    .block_on(future)
+                            })
+                            .join()
+                            .expect("join tokio thread")
+                    })
+                } else {
+                    tokio::task::block_in_place(|| handle.block_on(future))
+                }
+            }
+            Err(_) => tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio runtime")
+                .block_on(future),
+        }
+    }
+
     fn otel_manager(
         conversation_id: ConversationId,
         config: &Config,
@@ -3106,12 +3151,7 @@ mod tests {
     pub(crate) fn make_session_and_context() -> (Session, TurnContext) {
         let (tx_event, _rx_event) = async_channel::unbounded();
         let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let config = build_test_config(codex_home.path());
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
         let auth_manager =
@@ -3197,12 +3237,7 @@ mod tests {
     ) {
         let (tx_event, rx_event) = async_channel::unbounded();
         let codex_home = tempfile::tempdir().expect("create temp dir");
-        let config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let config = build_test_config(codex_home.path());
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
         let auth_manager =

@@ -401,13 +401,14 @@ fn history_log_id(_metadata: &std::fs::Metadata) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::config::ConfigOverrides;
-    use crate::config::ConfigToml;
+
+    use crate::config::ConfigBuilder;
+    use crate::config_loader::LoaderOverrides;
     use codex_protocol::ConversationId;
     use pretty_assertions::assert_eq;
     use std::fs::File;
     use std::io::Write;
+    use std::path::Path;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -493,12 +494,12 @@ mod tests {
     async fn append_entry_trims_history_when_beyond_max_bytes() {
         let codex_home = TempDir::new().expect("create temp dir");
 
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load config");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .loader_overrides(test_loader_overrides(codex_home.path()))
+            .build()
+            .await
+            .expect("load config");
 
         let conversation_id = ConversationId::new();
 
@@ -541,12 +542,12 @@ mod tests {
     async fn append_entry_trims_history_to_soft_cap() {
         let codex_home = TempDir::new().expect("create temp dir");
 
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load config");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .loader_overrides(test_loader_overrides(codex_home.path()))
+            .build()
+            .await
+            .expect("load config");
 
         let conversation_id = ConversationId::new();
 
@@ -614,5 +615,13 @@ mod tests {
 
         assert_eq!(pruned_len, long_entry_len);
         assert!(pruned_len <= soft_cap_bytes.max(long_entry_len));
+    }
+
+    fn test_loader_overrides(codex_home: &Path) -> LoaderOverrides {
+        LoaderOverrides {
+            managed_config_path: Some(codex_home.join("managed_config.toml")),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: Some(String::new()),
+        }
     }
 }

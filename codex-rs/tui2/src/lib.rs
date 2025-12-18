@@ -622,21 +622,38 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::config::ConfigOverrides;
-    use codex_core::config::ConfigToml;
+    use codex_core::config::ConfigBuilder;
     use codex_core::config::ProjectConfig;
+    use codex_core::config_loader::LoaderOverrides;
     use serial_test::serial;
+    use std::path::Path;
     use tempfile::TempDir;
+
+    fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(
+            ConfigBuilder::default()
+                .codex_home(temp_dir.path().to_path_buf())
+                .loader_overrides(test_loader_overrides(temp_dir.path()))
+                .build(),
+        )
+    }
+
+    fn test_loader_overrides(codex_home: &Path) -> LoaderOverrides {
+        LoaderOverrides {
+            managed_config_path: Some(codex_home.join("managed_config.toml")),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: Some(String::new()),
+        }
+    }
 
     #[test]
     #[serial]
     fn windows_skips_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            temp_dir.path().to_path_buf(),
-        )?;
+        let mut config = build_config(&temp_dir)?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
         config.set_windows_sandbox_globally(false);
@@ -659,11 +676,7 @@ mod tests {
     #[serial]
     fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            temp_dir.path().to_path_buf(),
-        )?;
+        let mut config = build_config(&temp_dir)?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
         config.set_windows_sandbox_globally(true);
@@ -686,11 +699,7 @@ mod tests {
     fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
         use codex_protocol::config_types::TrustLevel;
         let temp_dir = TempDir::new()?;
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            temp_dir.path().to_path_buf(),
-        )?;
+        let mut config = build_config(&temp_dir)?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig {
             trust_level: Some(TrustLevel::Untrusted),

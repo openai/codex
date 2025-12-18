@@ -4,10 +4,12 @@ use tempfile::TempDir;
 
 use codex_core::CodexConversation;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
+use codex_core::config_loader::LoaderOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use regex_lite::Regex;
+use std::future::Future;
 use std::path::PathBuf;
 
 #[cfg(target_os = "linux")]
@@ -76,12 +78,57 @@ pub fn test_tmp_path_buf() -> PathBuf {
 /// temporary directory. Using a per-test directory keeps tests hermetic and
 /// avoids clobbering a developer’s real `~/.codex`.
 pub fn load_default_config_for_test(codex_home: &TempDir) -> Config {
-    Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        default_test_overrides(),
-        codex_home.path().to_path_buf(),
+    block_on(
+        ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(default_test_overrides())
+            .loader_overrides(test_loader_overrides(codex_home))
+            .build(),
     )
     .expect("defaults for test should always succeed")
+}
+
+fn test_loader_overrides(codex_home: &TempDir) -> LoaderOverrides {
+    LoaderOverrides {
+        managed_config_path: Some(codex_home.path().join("managed_config.toml")),
+        #[cfg(target_os = "macos")]
+        managed_preferences_base64: Some(String::new()),
+    }
+}
+
+fn block_on<F>(future: F) -> F::Output
+where
+    F: Future + Send,
+    F::Output: Send,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            if matches!(
+                handle.runtime_flavor(),
+                tokio::runtime::RuntimeFlavor::CurrentThread
+            ) {
+                std::thread::scope(|scope| {
+                    scope
+                        .spawn(|| {
+                            tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .expect("build tokio runtime")
+                                .block_on(future)
+                        })
+                        .join()
+                        .expect("join tokio thread")
+                })
+            } else {
+                tokio::task::block_in_place(|| handle.block_on(future))
+            }
+        }
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime")
+            .block_on(future),
+    }
 }
 
 #[cfg(target_os = "linux")]

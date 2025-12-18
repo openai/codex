@@ -279,8 +279,8 @@ fn extract_frontmatter(contents: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ConfigOverrides;
-    use crate::config::ConfigToml;
+    use crate::config::ConfigBuilder;
+    use crate::config_loader::LoaderOverrides;
     use codex_protocol::protocol::SkillScope;
     use pretty_assertions::assert_eq;
     use std::path::Path;
@@ -288,12 +288,18 @@ mod tests {
     use tempfile::TempDir;
 
     fn make_config(codex_home: &TempDir) -> Config {
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("defaults for test should always succeed");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        let mut config = runtime
+            .block_on(
+                ConfigBuilder::default()
+                    .codex_home(codex_home.path().to_path_buf())
+                    .loader_overrides(test_loader_overrides(codex_home.path()))
+                    .build(),
+            )
+            .expect("defaults for test should always succeed");
 
         config.cwd = codex_home.path().to_path_buf();
         config
@@ -327,6 +333,14 @@ mod tests {
         let path = skill_dir.join(SKILLS_FILENAME);
         fs::write(&path, content).unwrap();
         path
+    }
+
+    fn test_loader_overrides(codex_home: &Path) -> LoaderOverrides {
+        LoaderOverrides {
+            managed_config_path: Some(codex_home.join("managed_config.toml")),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: Some(String::new()),
+        }
     }
 
     #[test]

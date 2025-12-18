@@ -232,10 +232,12 @@ fn merge_project_docs_with_skills(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ConfigOverrides;
-    use crate::config::ConfigToml;
+    use crate::config::ConfigBuilder;
+    use crate::config_loader::LoaderOverrides;
     use crate::skills::load_skills;
     use std::fs;
+    use std::future::Future;
+    use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -246,10 +248,11 @@ mod tests {
     /// been configured.
     fn make_config(root: &TempDir, limit: usize, instructions: Option<&str>) -> Config {
         let codex_home = TempDir::new().unwrap();
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
+        let mut config = block_on(
+            ConfigBuilder::default()
+                .codex_home(codex_home.path().to_path_buf())
+                .loader_overrides(test_loader_overrides(codex_home.path()))
+                .build(),
         )
         .expect("defaults for test should always succeed");
 
@@ -550,5 +553,48 @@ mod tests {
         fs::create_dir_all(&skill_dir).unwrap();
         let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
         fs::write(skill_dir.join("SKILL.md"), content).unwrap();
+    }
+
+    fn test_loader_overrides(codex_home: &Path) -> LoaderOverrides {
+        LoaderOverrides {
+            managed_config_path: Some(codex_home.join("managed_config.toml")),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: Some(String::new()),
+        }
+    }
+
+    fn block_on<F>(future: F) -> F::Output
+    where
+        F: Future + Send,
+        F::Output: Send,
+    {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                if matches!(
+                    handle.runtime_flavor(),
+                    tokio::runtime::RuntimeFlavor::CurrentThread
+                ) {
+                    std::thread::scope(|scope| {
+                        scope
+                            .spawn(|| {
+                                tokio::runtime::Builder::new_current_thread()
+                                    .enable_all()
+                                    .build()
+                                    .expect("build tokio runtime")
+                                    .block_on(future)
+                            })
+                            .join()
+                            .expect("join tokio thread")
+                    })
+                } else {
+                    tokio::task::block_in_place(|| handle.block_on(future))
+                }
+            }
+            Err(_) => tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio runtime")
+                .block_on(future),
+        }
     }
 }
