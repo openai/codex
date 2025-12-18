@@ -273,7 +273,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
         ("openai", P::create_openai_provider()),
         (
             OLLAMA_OSS_PROVIDER_ID,
-            create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Chat),
+            create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),
         ),
         (
             LMSTUDIO_OSS_PROVIDER_ID,
