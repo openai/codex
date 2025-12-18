@@ -340,7 +340,7 @@ mod detect_shell_type_tests {
 #[cfg(unix)]
 mod tests {
     use super::*;
-    use crate::powershell::UTF8_OUTPUT_PREFIX;
+
     use std::path::PathBuf;
     use std::process::Command;
 
@@ -462,7 +462,7 @@ mod tests {
                 "pwsh.exe".to_string(),
                 "-NoProfile".to_string(),
                 "-Command".to_string(),
-                format!("{UTF8_OUTPUT_PREFIX}echo hello"),
+                format!("echo hello"),
             ]
         );
         assert_eq!(
@@ -470,7 +470,7 @@ mod tests {
             vec![
                 "pwsh.exe".to_string(),
                 "-Command".to_string(),
-                format!("{UTF8_OUTPUT_PREFIX}echo hello"),
+                format!("echo hello"),
             ]
         );
     }
