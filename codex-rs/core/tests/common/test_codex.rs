@@ -22,7 +22,6 @@ use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
-use crate::RequestBodyExt;
 use crate::load_default_config_for_test;
 use crate::responses::get_responses_request_bodies;
 use crate::responses::start_mock_server;
