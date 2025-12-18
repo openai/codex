@@ -485,7 +485,7 @@ impl HistoryCell for UnifiedExecWaitCell {
         }
         let wrap_width = width as usize;
 
-        let mut header_spans = vec!["↳ ".dim()];
+        let mut header_spans = vec!["• ".dim()];
         if self.animations_enabled {
             header_spans.extend(shimmer_spans("Waiting for background terminal"));
         } else {
@@ -1829,7 +1829,7 @@ mod tests {
     fn unified_exec_wait_cell_renders_wait() {
         let cell = new_unified_exec_wait_live(None, false);
         let lines = render_transcript(&cell);
-        assert_eq!(lines, vec!["↳ Waiting for background terminal"],);
+        assert_eq!(lines, vec!["• Waiting for background terminal"],);
     }
 
     #[test]
