@@ -1562,6 +1562,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-metrics"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "reqwest",
+ "sentry",
+ "serde_json",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "codex-ollama"
 version = "0.0.0"
 dependencies = [

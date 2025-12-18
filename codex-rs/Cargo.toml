@@ -33,6 +33,7 @@ members = [
     "responses-api-proxy",
     "stdio-to-uds",
     "otel",
+    "metrics",
     "tui",
     "tui2",
     "utils/absolute-path",
@@ -82,6 +83,7 @@ codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-mcp-server = { path = "mcp-server" }
+codex-metrics = { path = "metrics" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
