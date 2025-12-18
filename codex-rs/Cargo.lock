@@ -1318,7 +1318,6 @@ dependencies = [
  "sha2",
  "shlex",
  "similar",
- "strum_macros 0.27.2",
  "tempfile",
  "test-case",
  "test-log",

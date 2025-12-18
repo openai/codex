@@ -14,7 +14,6 @@ use codex_protocol::config_types::SandboxMode;
 pub enum SandboxModeCliArg {
     ReadOnly,
     WorkspaceWrite,
-    ExternalSandbox,
     DangerFullAccess,
 }
 
@@ -23,7 +22,6 @@ impl From<SandboxModeCliArg> for SandboxMode {
         match value {
             SandboxModeCliArg::ReadOnly => SandboxMode::ReadOnly,
             SandboxModeCliArg::WorkspaceWrite => SandboxMode::WorkspaceWrite,
-            SandboxModeCliArg::ExternalSandbox => SandboxMode::ExternalSandbox,
             SandboxModeCliArg::DangerFullAccess => SandboxMode::DangerFullAccess,
         }
     }
@@ -36,10 +34,6 @@ mod tests {
 
     #[test]
     fn maps_cli_args_to_protocol_modes() {
-        assert_eq!(
-            SandboxMode::ExternalSandbox,
-            SandboxModeCliArg::ExternalSandbox.into()
-        );
         assert_eq!(SandboxMode::ReadOnly, SandboxModeCliArg::ReadOnly.into());
         assert_eq!(
             SandboxMode::WorkspaceWrite,

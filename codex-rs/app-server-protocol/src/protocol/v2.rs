@@ -171,7 +171,6 @@ impl From<CoreAskForApproval> for AskForApproval {
 pub enum SandboxMode {
     ReadOnly,
     WorkspaceWrite,
-    ExternalSandbox,
     DangerFullAccess,
 }
 
@@ -180,7 +179,6 @@ impl SandboxMode {
         match self {
             SandboxMode::ReadOnly => CoreSandboxMode::ReadOnly,
             SandboxMode::WorkspaceWrite => CoreSandboxMode::WorkspaceWrite,
-            SandboxMode::ExternalSandbox => CoreSandboxMode::ExternalSandbox,
             SandboxMode::DangerFullAccess => CoreSandboxMode::DangerFullAccess,
         }
     }
@@ -190,8 +188,7 @@ impl From<CoreSandboxMode> for SandboxMode {
     fn from(value: CoreSandboxMode) -> Self {
         match value {
             CoreSandboxMode::ReadOnly => SandboxMode::ReadOnly,
-            CoreSandboxMode::WorkspaceWrite => SandboxMode::WorkspaceWrite, upstream
-            CoreSandboxMode::ExternalSandbox => SandboxMode::ExternalSandbox,
+            CoreSandboxMode::WorkspaceWrite => SandboxMode::WorkspaceWrite,
             CoreSandboxMode::DangerFullAccess => SandboxMode::DangerFullAccess,
         }
     }

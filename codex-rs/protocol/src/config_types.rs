@@ -59,9 +59,6 @@ pub enum SandboxMode {
     #[serde(rename = "workspace-write")]
     WorkspaceWrite,
 
-    #[serde(rename = "external-sandbox")]
-    ExternalSandbox,
-
     #[serde(rename = "danger-full-access")]
     DangerFullAccess,
 }
