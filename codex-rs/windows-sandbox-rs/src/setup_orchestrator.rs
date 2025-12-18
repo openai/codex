@@ -195,6 +195,11 @@ fn canonical_existing(paths: &[PathBuf]) -> Vec<PathBuf> {
 
 pub(crate) fn gather_read_roots(command_cwd: &Path, policy: &SandboxPolicy) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.to_path_buf());
+        }
+    }
     for p in [
         PathBuf::from(r"C:\Windows"),
         PathBuf::from(r"C:\Program Files"),
