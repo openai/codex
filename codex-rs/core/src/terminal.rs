@@ -1,3 +1,8 @@
+//! Terminal detection utilities.
+//!
+//! This module feeds terminal metadata into OpenTelemetry user-agent logging and into
+//! terminal-specific configuration choices in the TUI.
+
 use std::sync::OnceLock;
 
 /// Structured terminal identification data.
@@ -178,6 +183,21 @@ trait Environment {
     /// Returns an environment variable when set.
     fn var(&self, name: &str) -> Option<String>;
 
+    /// Returns whether an environment variable is set.
+    fn has(&self, name: &str) -> bool {
+        self.var(name).is_some()
+    }
+
+    /// Returns a non-empty environment variable.
+    fn var_non_empty(&self, name: &str) -> Option<String> {
+        self.var(name).and_then(none_if_whitespace)
+    }
+
+    /// Returns whether an environment variable is set and non-empty.
+    fn has_non_empty(&self, name: &str) -> bool {
+        self.var_non_empty(name).is_some()
+    }
+
     /// Returns tmux client details when available.
     fn tmux_client_info(&self) -> TmuxClientInfo;
 }
@@ -229,62 +249,35 @@ pub fn terminal_info() -> TerminalInfo {
 /// reporting tmux itself.
 fn detect_terminal_info_from_env(env: &dyn Environment) -> TerminalInfo {
     let multiplexer = detect_multiplexer(env);
-    let tmux_client_info = if matches!(multiplexer, Some(Multiplexer::Tmux { .. })) {
-        env.tmux_client_info()
-    } else {
-        TmuxClientInfo::default()
-    };
-    let TmuxClientInfo { termtype, termname } = tmux_client_info;
-    let tmux_termtype = termtype.and_then(none_if_whitespace);
-    let tmux_termname = termname.and_then(none_if_whitespace);
 
-    let term_program = env.var("TERM_PROGRAM").and_then(none_if_whitespace);
+    if let Some(term_program) = env.var_non_empty("TERM_PROGRAM") {
+        if is_tmux_term_program(&term_program)
+            && matches!(multiplexer, Some(Multiplexer::Tmux { .. }))
+            && let Some(terminal) =
+                terminal_from_tmux_client_info(env.tmux_client_info(), multiplexer.clone())
+        {
+            return terminal;
+        }
 
-    if term_program
-        .as_ref()
-        .is_some_and(|term_program| !is_tmux_term_program(term_program))
-    {
-        let term_program = term_program.expect("term program checked above");
-        let version = env.var("TERM_PROGRAM_VERSION").and_then(none_if_whitespace);
+        let version = env.var_non_empty("TERM_PROGRAM_VERSION");
         let name = terminal_name_from_term_program(&term_program).unwrap_or(TerminalName::Unknown);
         return TerminalInfo::from_term_program(name, term_program, version, multiplexer);
     }
 
-    if term_program
-        .as_ref()
-        .is_some_and(|term_program| is_tmux_term_program(term_program))
-        && let Some(terminal) =
-            terminal_from_tmux_client_info(&tmux_termtype, &tmux_termname, multiplexer.clone())
-    {
-        return terminal;
+    if env.has("WEZTERM_VERSION") {
+        let version = env.var_non_empty("WEZTERM_VERSION");
+        return TerminalInfo::from_name(TerminalName::WezTerm, version, multiplexer);
     }
 
-    if let Some(terminal) =
-        terminal_from_tmux_client_info(&tmux_termtype, &tmux_termname, multiplexer.clone())
-    {
-        return terminal;
-    }
-
-    if let Some(version) = env.var("WEZTERM_VERSION") {
-        return TerminalInfo::from_name(
-            TerminalName::WezTerm,
-            none_if_whitespace(version),
-            multiplexer,
-        );
-    }
-
-    if env.var("ITERM_SESSION_ID").is_some()
-        || env.var("ITERM_PROFILE").is_some()
-        || env.var("ITERM_PROFILE_NAME").is_some()
-    {
+    if env.has("ITERM_SESSION_ID") || env.has("ITERM_PROFILE") || env.has("ITERM_PROFILE_NAME") {
         return TerminalInfo::from_name(TerminalName::Iterm2, None, multiplexer);
     }
 
-    if env.var("TERM_SESSION_ID").is_some() {
+    if env.has("TERM_SESSION_ID") {
         return TerminalInfo::from_name(TerminalName::AppleTerminal, None, multiplexer);
     }
 
-    if env.var("KITTY_WINDOW_ID").is_some()
+    if env.has("KITTY_WINDOW_ID")
         || env
             .var("TERM")
             .map(|term| term.contains("kitty"))
@@ -293,7 +286,7 @@ fn detect_terminal_info_from_env(env: &dyn Environment) -> TerminalInfo {
         return TerminalInfo::from_name(TerminalName::Kitty, None, multiplexer);
     }
 
-    if env.var("ALACRITTY_SOCKET").is_some()
+    if env.has("ALACRITTY_SOCKET")
         || env
             .var("TERM")
             .map(|term| term == "alacritty")
@@ -302,31 +295,25 @@ fn detect_terminal_info_from_env(env: &dyn Environment) -> TerminalInfo {
         return TerminalInfo::from_name(TerminalName::Alacritty, None, multiplexer);
     }
 
-    if let Some(version) = env.var("KONSOLE_VERSION") {
-        return TerminalInfo::from_name(
-            TerminalName::Konsole,
-            none_if_whitespace(version),
-            multiplexer,
-        );
+    if env.has("KONSOLE_VERSION") {
+        let version = env.var_non_empty("KONSOLE_VERSION");
+        return TerminalInfo::from_name(TerminalName::Konsole, version, multiplexer);
     }
 
-    if env.var("GNOME_TERMINAL_SCREEN").is_some() {
+    if env.has("GNOME_TERMINAL_SCREEN") {
         return TerminalInfo::from_name(TerminalName::GnomeTerminal, None, multiplexer);
     }
 
-    if let Some(version) = env.var("VTE_VERSION") {
-        return TerminalInfo::from_name(
-            TerminalName::Vte,
-            none_if_whitespace(version),
-            multiplexer,
-        );
+    if env.has("VTE_VERSION") {
+        let version = env.var_non_empty("VTE_VERSION");
+        return TerminalInfo::from_name(TerminalName::Vte, version, multiplexer);
     }
 
-    if env.var("WT_SESSION").is_some() {
+    if env.has("WT_SESSION") {
         return TerminalInfo::from_name(TerminalName::WindowsTerminal, None, multiplexer);
     }
 
-    if let Some(term) = env.var("TERM").and_then(none_if_whitespace) {
+    if let Some(term) = env.var_non_empty("TERM") {
         return TerminalInfo::from_term(term, multiplexer);
     }
 
@@ -334,15 +321,15 @@ fn detect_terminal_info_from_env(env: &dyn Environment) -> TerminalInfo {
 }
 
 fn detect_multiplexer(env: &dyn Environment) -> Option<Multiplexer> {
-    if env.var("TMUX").is_some() || env.var("TMUX_PANE").is_some() {
+    if env.has_non_empty("TMUX") || env.has_non_empty("TMUX_PANE") {
         return Some(Multiplexer::Tmux {
             version: tmux_version_from_env(env),
         });
     }
 
-    if env.var("ZELLIJ").is_some()
-        || env.var("ZELLIJ_SESSION_NAME").is_some()
-        || env.var("ZELLIJ_VERSION").is_some()
+    if env.has_non_empty("ZELLIJ")
+        || env.has_non_empty("ZELLIJ_SESSION_NAME")
+        || env.has_non_empty("ZELLIJ_VERSION")
     {
         return Some(Multiplexer::Zellij {});
     }
@@ -355,10 +342,12 @@ fn is_tmux_term_program(value: &str) -> bool {
 }
 
 fn terminal_from_tmux_client_info(
-    termtype: &Option<String>,
-    termname: &Option<String>,
+    client_info: TmuxClientInfo,
     multiplexer: Option<Multiplexer>,
 ) -> Option<TerminalInfo> {
+    let termtype = client_info.termtype.and_then(none_if_whitespace);
+    let termname = client_info.termname.and_then(none_if_whitespace);
+
     if let Some(termtype) = termtype.as_ref() {
         let (program, version) = split_term_program_and_version(termtype);
         let name = terminal_name_from_term_program(&program).unwrap_or(TerminalName::Unknown);
@@ -366,7 +355,7 @@ fn terminal_from_tmux_client_info(
             name,
             program,
             version,
-            termname.clone(),
+            termname,
             multiplexer,
         ));
     }
@@ -382,7 +371,7 @@ fn tmux_version_from_env(env: &dyn Environment) -> Option<String> {
         return None;
     }
 
-    env.var("TERM_PROGRAM_VERSION").and_then(none_if_whitespace)
+    env.var_non_empty("TERM_PROGRAM_VERSION")
 }
 
 fn split_term_program_and_version(value: &str) -> (String, Option<String>) {
@@ -694,6 +683,7 @@ mod tests {
     fn detects_tmux_multiplexer() {
         let env = FakeEnvironment::new()
             .with_var("TMUX", "/tmp/tmux-1000/default,123,0")
+            .with_var("TERM_PROGRAM", "tmux")
             .with_tmux_client_info(Some("xterm-256color"), Some("screen-256color"));
         let terminal = detect_terminal_info_from_env(&env);
         assert_eq!(
@@ -735,6 +725,7 @@ mod tests {
     fn detects_tmux_client_termtype() {
         let env = FakeEnvironment::new()
             .with_var("TMUX", "/tmp/tmux-1000/default,123,0")
+            .with_var("TERM_PROGRAM", "tmux")
             .with_tmux_client_info(Some("WezTerm"), None);
         let terminal = detect_terminal_info_from_env(&env);
         assert_eq!(
@@ -759,6 +750,7 @@ mod tests {
     fn detects_tmux_client_termname() {
         let env = FakeEnvironment::new()
             .with_var("TMUX", "/tmp/tmux-1000/default,123,0")
+            .with_var("TERM_PROGRAM", "tmux")
             .with_tmux_client_info(None, Some("xterm-256color"));
         let terminal = detect_terminal_info_from_env(&env);
         assert_eq!(
