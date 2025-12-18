@@ -279,21 +279,21 @@ fn extract_frontmatter(contents: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ConfigOverrides;
-    use crate::config::ConfigToml;
+    use crate::config::ConfigBuilder;
+    use crate::config_loader::LoaderOverrides;
     use codex_protocol::protocol::SkillScope;
     use pretty_assertions::assert_eq;
     use std::path::Path;
     use std::process::Command;
     use tempfile::TempDir;
 
-    fn make_config(codex_home: &TempDir) -> Config {
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("defaults for test should always succeed");
+    async fn make_config(codex_home: &TempDir) -> Config {
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .loader_overrides(test_loader_overrides(codex_home.path()))
+            .build()
+            .await
+            .expect("defaults for test should always succeed");
 
         config.cwd = codex_home.path().to_path_buf();
         config
@@ -329,11 +329,19 @@ mod tests {
         path
     }
 
-    #[test]
-    fn loads_valid_skill() {
+    fn test_loader_overrides(codex_home: &Path) -> LoaderOverrides {
+        LoaderOverrides {
+            managed_config_path: Some(codex_home.join("managed_config.toml")),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: Some(String::new()),
+        }
+    }
+
+    #[tokio::test]
+    async fn loads_valid_skill() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         write_skill(&codex_home, "demo", "demo-skill", "does things\ncarefully");
-        let cfg = make_config(&codex_home);
+        let cfg = make_config(&codex_home).await;
 
         let outcome = load_skills(&cfg);
         assert!(
@@ -352,8 +360,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn skips_hidden_and_invalid() {
+    #[tokio::test]
+    async fn skips_hidden_and_invalid() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let hidden_dir = codex_home.path().join("skills/.hidden");
         fs::create_dir_all(&hidden_dir).unwrap();
@@ -368,7 +376,7 @@ mod tests {
         fs::create_dir_all(&invalid_dir).unwrap();
         fs::write(invalid_dir.join(SKILLS_FILENAME), "---\nname: bad").unwrap();
 
-        let cfg = make_config(&codex_home);
+        let cfg = make_config(&codex_home).await;
         let outcome = load_skills(&cfg);
         assert_eq!(outcome.skills.len(), 0);
         assert_eq!(outcome.errors.len(), 1);
@@ -380,12 +388,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn enforces_length_limits() {
+    #[tokio::test]
+    async fn enforces_length_limits() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let max_desc = "\u{1F4A1}".repeat(MAX_DESCRIPTION_LEN);
         write_skill(&codex_home, "max-len", "max-len", &max_desc);
-        let cfg = make_config(&codex_home);
+        let cfg = make_config(&codex_home).await;
 
         let outcome = load_skills(&cfg);
         assert!(
@@ -406,8 +414,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn loads_skills_from_repo_root() {
+    #[tokio::test]
+    async fn loads_skills_from_repo_root() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
 
@@ -423,7 +431,7 @@ mod tests {
             .join(REPO_ROOT_CONFIG_DIR_NAME)
             .join(SKILLS_DIR_NAME);
         write_skill_at(&skills_root, "repo", "repo-skill", "from repo");
-        let mut cfg = make_config(&codex_home);
+        let mut cfg = make_config(&codex_home).await;
         cfg.cwd = repo_dir.path().to_path_buf();
         let repo_root = normalize_path(&skills_root).unwrap_or_else(|_| skills_root.clone());
 
@@ -439,8 +447,8 @@ mod tests {
         assert!(skill.path.starts_with(&repo_root));
     }
 
-    #[test]
-    fn loads_skills_from_nearest_codex_dir_under_repo_root() {
+    #[tokio::test]
+    async fn loads_skills_from_nearest_codex_dir_under_repo_root() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
 
@@ -474,7 +482,7 @@ mod tests {
             "from nested",
         );
 
-        let mut cfg = make_config(&codex_home);
+        let mut cfg = make_config(&codex_home).await;
         cfg.cwd = nested_dir;
 
         let outcome = load_skills(&cfg);
@@ -487,8 +495,8 @@ mod tests {
         assert_eq!(outcome.skills[0].name, "nested-skill");
     }
 
-    #[test]
-    fn loads_skills_from_codex_dir_when_not_git_repo() {
+    #[tokio::test]
+    async fn loads_skills_from_codex_dir_when_not_git_repo() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let work_dir = tempfile::tempdir().expect("tempdir");
 
@@ -502,7 +510,7 @@ mod tests {
             "from cwd",
         );
 
-        let mut cfg = make_config(&codex_home);
+        let mut cfg = make_config(&codex_home).await;
         cfg.cwd = work_dir.path().to_path_buf();
 
         let outcome = load_skills(&cfg);
@@ -516,8 +524,8 @@ mod tests {
         assert_eq!(outcome.skills[0].scope, SkillScope::Repo);
     }
 
-    #[test]
-    fn deduplicates_by_name_preferring_repo_over_user() {
+    #[tokio::test]
+    async fn deduplicates_by_name_preferring_repo_over_user() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
 
@@ -539,7 +547,7 @@ mod tests {
             "from repo",
         );
 
-        let mut cfg = make_config(&codex_home);
+        let mut cfg = make_config(&codex_home).await;
         cfg.cwd = repo_dir.path().to_path_buf();
 
         let outcome = load_skills(&cfg);
@@ -553,14 +561,14 @@ mod tests {
         assert_eq!(outcome.skills[0].scope, SkillScope::Repo);
     }
 
-    #[test]
-    fn loads_system_skills_with_lowest_priority() {
+    #[tokio::test]
+    async fn loads_system_skills_with_lowest_priority() {
         let codex_home = tempfile::tempdir().expect("tempdir");
 
         write_system_skill(&codex_home, "system", "dupe-skill", "from system");
         write_skill(&codex_home, "user", "dupe-skill", "from user");
 
-        let cfg = make_config(&codex_home);
+        let cfg = make_config(&codex_home).await;
         let outcome = load_skills(&cfg);
         assert!(
             outcome.errors.is_empty(),
@@ -572,8 +580,8 @@ mod tests {
         assert_eq!(outcome.skills[0].scope, SkillScope::User);
     }
 
-    #[test]
-    fn repo_skills_search_does_not_escape_repo_root() {
+    #[tokio::test]
+    async fn repo_skills_search_does_not_escape_repo_root() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let outer_dir = tempfile::tempdir().expect("tempdir");
         let repo_dir = outer_dir.path().join("repo");
@@ -596,7 +604,7 @@ mod tests {
             .expect("git init");
         assert!(status.success(), "git init failed");
 
-        let mut cfg = make_config(&codex_home);
+        let mut cfg = make_config(&codex_home).await;
         cfg.cwd = repo_dir;
 
         let outcome = load_skills(&cfg);
@@ -608,8 +616,8 @@ mod tests {
         assert_eq!(outcome.skills.len(), 0);
     }
 
-    #[test]
-    fn loads_skills_when_cwd_is_file_in_repo() {
+    #[tokio::test]
+    async fn loads_skills_when_cwd_is_file_in_repo() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
 
@@ -632,7 +640,7 @@ mod tests {
         let file_path = repo_dir.path().join("some-file.txt");
         fs::write(&file_path, "contents").unwrap();
 
-        let mut cfg = make_config(&codex_home);
+        let mut cfg = make_config(&codex_home).await;
         cfg.cwd = file_path;
 
         let outcome = load_skills(&cfg);
@@ -646,8 +654,8 @@ mod tests {
         assert_eq!(outcome.skills[0].scope, SkillScope::Repo);
     }
 
-    #[test]
-    fn non_git_repo_skills_search_does_not_walk_parents() {
+    #[tokio::test]
+    async fn non_git_repo_skills_search_does_not_walk_parents() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let outer_dir = tempfile::tempdir().expect("tempdir");
         let nested_dir = outer_dir.path().join("nested/inner");
@@ -663,7 +671,7 @@ mod tests {
             "from outer",
         );
 
-        let mut cfg = make_config(&codex_home);
+        let mut cfg = make_config(&codex_home).await;
         cfg.cwd = nested_dir;
 
         let outcome = load_skills(&cfg);
@@ -675,14 +683,14 @@ mod tests {
         assert_eq!(outcome.skills.len(), 0);
     }
 
-    #[test]
-    fn loads_skills_from_system_cache_when_present() {
+    #[tokio::test]
+    async fn loads_skills_from_system_cache_when_present() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let work_dir = tempfile::tempdir().expect("tempdir");
 
         write_system_skill(&codex_home, "system", "system-skill", "from system");
 
-        let mut cfg = make_config(&codex_home);
+        let mut cfg = make_config(&codex_home).await;
         cfg.cwd = work_dir.path().to_path_buf();
 
         let outcome = load_skills(&cfg);
@@ -696,15 +704,15 @@ mod tests {
         assert_eq!(outcome.skills[0].scope, SkillScope::System);
     }
 
-    #[test]
-    fn deduplicates_by_name_preferring_user_over_system() {
+    #[tokio::test]
+    async fn deduplicates_by_name_preferring_user_over_system() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let work_dir = tempfile::tempdir().expect("tempdir");
 
         write_skill(&codex_home, "user", "dupe-skill", "from user");
         write_system_skill(&codex_home, "system", "dupe-skill", "from system");
 
-        let mut cfg = make_config(&codex_home);
+        let mut cfg = make_config(&codex_home).await;
         cfg.cwd = work_dir.path().to_path_buf();
 
         let outcome = load_skills(&cfg);
@@ -718,8 +726,8 @@ mod tests {
         assert_eq!(outcome.skills[0].scope, SkillScope::User);
     }
 
-    #[test]
-    fn deduplicates_by_name_preferring_repo_over_system() {
+    #[tokio::test]
+    async fn deduplicates_by_name_preferring_repo_over_system() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
 
@@ -741,7 +749,7 @@ mod tests {
         );
         write_system_skill(&codex_home, "system", "dupe-skill", "from system");
 
-        let mut cfg = make_config(&codex_home);
+        let mut cfg = make_config(&codex_home).await;
         cfg.cwd = repo_dir.path().to_path_buf();
 
         let outcome = load_skills(&cfg);

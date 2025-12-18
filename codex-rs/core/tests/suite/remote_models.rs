@@ -316,7 +316,7 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
@@ -374,7 +374,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
@@ -440,7 +440,7 @@ where
     let home = Arc::new(TempDir::new()?);
     let cwd = Arc::new(TempDir::new()?);
 
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.cwd = cwd.path().to_path_buf();
     config.features.enable(Feature::RemoteModels);
 

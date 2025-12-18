@@ -6,8 +6,8 @@ use chrono::TimeZone;
 use chrono::Utc;
 use codex_core::AuthManager;
 use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
+use codex_core::config::ConfigBuilder;
+use codex_core::config_loader::LoaderOverrides;
 use codex_core::openai_models::model_family::ModelFamily;
 use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::CreditsSnapshot;
@@ -19,16 +19,31 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
 use insta::assert_snapshot;
 use ratatui::prelude::*;
+use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn test_config(temp_home: &TempDir) -> Config {
-    Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides::default(),
-        temp_home.path().to_path_buf(),
-    )
-    .expect("load config")
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    runtime
+        .block_on(
+            ConfigBuilder::default()
+                .codex_home(temp_home.path().to_path_buf())
+                .loader_overrides(test_loader_overrides(temp_home.path()))
+                .build(),
+        )
+        .expect("load config")
+}
+
+fn test_loader_overrides(codex_home: &Path) -> LoaderOverrides {
+    LoaderOverrides {
+        managed_config_path: Some(codex_home.join("managed_config.toml")),
+        #[cfg(target_os = "macos")]
+        managed_preferences_base64: Some(String::new()),
+    }
 }
 
 fn test_auth_manager(config: &Config) -> AuthManager {

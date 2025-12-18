@@ -453,7 +453,7 @@ async fn review_input_isolated_from_parent_history() {
 
     // Seed a parent session history via resume file with both user + assistant items.
     let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
@@ -740,7 +740,7 @@ where
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
     };
-    let mut config = load_default_config_for_test(codex_home);
+    let mut config = load_default_config_for_test(codex_home).await;
     config.model_provider = model_provider;
     mutator(&mut config);
     let conversation_manager = ConversationManager::with_models_provider(
@@ -769,7 +769,7 @@ where
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
     };
-    let mut config = load_default_config_for_test(codex_home);
+    let mut config = load_default_config_for_test(codex_home).await;
     config.model_provider = model_provider;
     mutator(&mut config);
     let conversation_manager = ConversationManager::with_models_provider(

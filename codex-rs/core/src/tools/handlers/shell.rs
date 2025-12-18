@@ -358,9 +358,9 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_context() {
-        let (session, turn_context) = make_session_and_context();
+    #[tokio::test]
+    async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_context() {
+        let (session, turn_context) = make_session_and_context().await;
 
         let command = "echo hello".to_string();
         let workdir = Some("subdir".to_string());
