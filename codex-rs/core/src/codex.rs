@@ -2623,18 +2623,6 @@ async fn try_run_turn(
                 // token usage is available to avoid duplicate TokenCount events.
                 sess.update_rate_limits(&turn_context, snapshot).await;
             }
-            ResponseEvent::ModelsEtag(models_etag) => {
-                let models_manager = Arc::clone(&sess.services.models_manager);
-                let config = turn_context.client.config();
-                tokio::spawn(async move {
-                    if let Err(err) = models_manager
-                        .refresh_available_models_if_etag_changed(&config, &models_etag)
-                        .await
-                    {
-                        error!("failed to refresh available models: {err}");
-                    }
-                });
-            }
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
