@@ -26,12 +26,7 @@ struct SkillFrontmatter {
 
 #[derive(Debug, Default, Deserialize)]
 struct SkillFrontmatterMetadata {
-    #[serde(
-        default,
-        rename = "short-description",
-        alias = "shortDescription",
-        alias = "short_description"
-    )]
+    #[serde(default, rename = "short-description")]
     short_description: Option<String>,
 }
 
@@ -40,7 +35,7 @@ const SKILLS_DIR_NAME: &str = "skills";
 const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
 const MAX_NAME_LEN: usize = 64;
 const MAX_DESCRIPTION_LEN: usize = 1024;
-const MAX_SHORT_DESCRIPTION_LEN: usize = 500;
+const MAX_SHORT_DESCRIPTION_LEN: usize = MAX_DESCRIPTION_LEN;
 
 #[derive(Debug)]
 enum SkillParseError {
@@ -387,28 +382,6 @@ mod tests {
         let skill_dir = codex_home.path().join("skills/demo");
         fs::create_dir_all(&skill_dir).unwrap();
         let contents = "---\nname: demo-skill\ndescription: long description\nmetadata:\n  short-description: short summary\n---\n\n# Body\n";
-        fs::write(skill_dir.join(SKILLS_FILENAME), contents).unwrap();
-
-        let cfg = make_config(&codex_home);
-        let outcome = load_skills(&cfg);
-        assert!(
-            outcome.errors.is_empty(),
-            "unexpected errors: {:?}",
-            outcome.errors
-        );
-        assert_eq!(outcome.skills.len(), 1);
-        assert_eq!(
-            outcome.skills[0].short_description,
-            Some("short summary".to_string())
-        );
-    }
-
-    #[test]
-    fn loads_short_description_from_metadata_aliases() {
-        let codex_home = tempfile::tempdir().expect("tempdir");
-        let skill_dir = codex_home.path().join("skills/demo");
-        fs::create_dir_all(&skill_dir).unwrap();
-        let contents = "---\nname: demo-skill\ndescription: long description\nmetadata:\n  shortDescription: short summary\n---\n\n# Body\n";
         fs::write(skill_dir.join(SKILLS_FILENAME), contents).unwrap();
 
         let cfg = make_config(&codex_home);
