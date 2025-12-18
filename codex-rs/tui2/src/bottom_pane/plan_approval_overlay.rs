@@ -46,8 +46,7 @@ enum Mode {
     FeedbackInput,
 }
 
-const MAX_PLAN_APPROVAL_OVERLAY_ROWS: u16 = 22;
-const DEFAULT_PLAN_APPROVAL_VISIBLE_LINES: u16 = 12;
+const MAX_PLAN_APPROVAL_OVERLAY_ROWS: u16 = 44;
 const FEEDBACK_BLOCK_HEIGHT: u16 = 8;
 
 pub(crate) struct PlanApprovalOverlay {
@@ -156,8 +155,16 @@ impl PlanApprovalOverlay {
         let summary = self.proposal.summary.trim();
         if !summary.is_empty() {
             lines.push(Line::from(""));
-            for w in wrap(summary, usable_width) {
-                lines.push(Line::from(vec!["Summary: ".dim(), w.into_owned().into()]));
+            lines.push(Line::from("Summary:".bold()));
+            for raw_line in summary.lines() {
+                let raw_line = raw_line.trim_end();
+                if raw_line.trim().is_empty() {
+                    lines.push(Line::from(""));
+                    continue;
+                }
+                for w in wrap(raw_line, usable_width) {
+                    lines.push(Line::from(vec!["  ".into(), w.into_owned().into()]));
+                }
             }
         }
 
@@ -418,12 +425,12 @@ impl BottomPaneView for PlanApprovalOverlay {
 impl crate::render::renderable::Renderable for PlanApprovalOverlay {
     fn desired_height(&self, width: u16) -> u16 {
         let plan_lines = self.plan_lines(width);
-        let plan_height = (plan_lines.len() as u16).min(DEFAULT_PLAN_APPROVAL_VISIBLE_LINES);
+        let plan_height = u16::try_from(plan_lines.len()).unwrap_or(u16::MAX);
 
-        let mut total = 2 // outer padding
-            + 1 // action bar
-            + 1 // footer hint
-            + plan_height.max(4);
+        let mut total = 2u16; // outer padding
+        total = total.saturating_add(1); // action bar
+        total = total.saturating_add(1); // footer hint
+        total = total.saturating_add(plan_height.max(4));
         if self.mode == Mode::FeedbackInput {
             total = total.saturating_add(FEEDBACK_BLOCK_HEIGHT);
         }
@@ -540,4 +547,76 @@ fn render_step_lines(width: u16, status: &StepStatus, text: &str) -> Vec<Line<'s
         .map(|s| Line::from(Span::from(s.into_owned()).set_style(step_style)))
         .collect();
     prefix_lines(lines, box_str.into(), "    ".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use crate::render::renderable::Renderable;
+    use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn make_proposal(summary: &str, steps: usize) -> PlanProposal {
+        PlanProposal {
+            title: "Plan title".to_string(),
+            summary: summary.to_string(),
+            plan: codex_protocol::plan_tool::UpdatePlanArgs {
+                explanation: None,
+                plan: (0..steps)
+                    .map(|i| PlanItemArg {
+                        step: format!("step {}", i + 1),
+                        status: StepStatus::Pending,
+                    })
+                    .collect(),
+            },
+        }
+    }
+
+    fn render_to_lines(view: &PlanApprovalOverlay, width: u16) -> Vec<String> {
+        let height = view.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        view.render(Rect::new(0, 0, width, height), &mut buf);
+        (0..buf.area.height)
+            .map(|row| {
+                (0..buf.area.width)
+                    .map(|col| buf[(col, row)].symbol().to_string())
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn summary_label_is_only_rendered_once() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let ev = PlanApprovalRequestEvent {
+            call_id: "call-1".to_string(),
+            proposal: make_proposal(
+                "A summary that should wrap across multiple lines but should only show a single label.",
+                1,
+            ),
+        };
+        let view = PlanApprovalOverlay::new("id-1".to_string(), ev, tx);
+
+        let rendered = render_to_lines(&view, 40);
+        let label_count = rendered
+            .iter()
+            .filter(|line| line.contains("Summary:"))
+            .count();
+        assert_eq!(label_count, 1);
+    }
+
+    #[test]
+    fn desired_height_clamps_to_max_rows_for_long_plans() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let ev = PlanApprovalRequestEvent {
+            call_id: "call-1".to_string(),
+            proposal: make_proposal("short summary", 200),
+        };
+        let view = PlanApprovalOverlay::new("id-1".to_string(), ev, tx);
+
+        assert_eq!(view.desired_height(80), MAX_PLAN_APPROVAL_OVERLAY_ROWS);
+    }
 }
