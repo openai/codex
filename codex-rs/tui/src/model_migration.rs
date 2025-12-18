@@ -78,15 +78,17 @@ pub(crate) fn migration_copy_for_models(
             "We recommend switching from {current_model} to {target_model}."
         )),
         Line::from(""),
-        description_line,
-        Line::from(""),
     ];
 
     if let Some(model_link) = model_link {
         content.push(Line::from(vec![
-            format!("Learn more about {target_display_name} at ").into(),
+            format!("{description_line} Learn more about {target_display_name} at ").into(),
             model_link.cyan().underlined(),
         ]));
+        content.push(Line::from(""));
+    } else {
+        content.push(description_line);
+        content.push(Line::from(""));
     }
 
     if can_opt_out {
@@ -361,7 +363,7 @@ mod tests {
             migration_copy_for_models(
                 "gpt-5.1-codex-mini",
                 "gpt-5.1-codex-max",
-                Some("https://www.codex.com/models/gpt-5.1-codex-max".to_string()),
+                None,
                 "gpt-5.1-codex-max".to_string(),
                 Some("Latest Codex-optimized flagship for deep and fast reasoning.".to_string()),
                 true,
