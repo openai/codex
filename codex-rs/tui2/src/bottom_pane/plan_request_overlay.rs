@@ -207,7 +207,7 @@ impl crate::render::renderable::Renderable for PlanRequestOverlay {
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
             Paragraph::new(Line::from(
-                "e.g. \"Implement Plan Mode for Codex CLI\"".dim(),
+                "e.g. \"Add pagination to search results\"".dim(),
             ))
             .render(textarea_rect, buf);
         }
