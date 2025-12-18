@@ -2994,6 +2994,7 @@ pub async fn run_security_review(
                 while let Some(event) = rx.recv().await {
                     match event {
                         AppEvent::SecurityReviewLog(message) => {
+                            eprintln!("{message}");
                             write_log_sink(&log_sink_for_task, message.as_str());
                         }
                         AppEvent::SecurityReviewCommandStatus {
@@ -3008,12 +3009,14 @@ pub async fn run_security_review(
                                 SecurityReviewCommandState::NoMatches => "no matches",
                                 SecurityReviewCommandState::Error => "error",
                             };
+                            eprintln!("Command [{state_label}]: {summary}");
                             write_log_sink(
                                 &log_sink_for_task,
                                 format!("Command [{state_label}]: {summary}").as_str(),
                             );
                             for line in preview {
                                 if !line.trim().is_empty() {
+                                    eprintln!("{line}");
                                     write_log_sink(&log_sink_for_task, line.as_str());
                                 }
                             }
