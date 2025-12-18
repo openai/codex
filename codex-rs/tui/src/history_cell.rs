@@ -1021,9 +1021,9 @@ pub(crate) fn new_active_mcp_tool_call(
     McpToolCallCell::new(call_id, invocation, animations_enabled)
 }
 
-pub(crate) fn new_web_search_call(query: String) -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> = vec![Line::from(vec![padded_emoji("🌐").into(), query.into()])];
-    PlainHistoryCell { lines }
+pub(crate) fn new_web_search_call(query: String) -> PrefixedWrappedHistoryCell {
+    let text: Text<'static> = Line::from(vec!["Searched".bold(), " ".into(), query.into()]).into();
+    PrefixedWrappedHistoryCell::new(text, "• ".dim(), "  ")
 }
 
 /// If the first content is an image, return a new cell with the image.
@@ -1671,6 +1671,50 @@ mod tests {
                 "  time".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn web_search_history_cell_snapshot() {
+        let cell = new_web_search_call(
+            "example search query with several generic words to exercise wrapping".to_string(),
+        );
+        let rendered = render_lines(&cell.display_lines(64)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn web_search_history_cell_wraps_with_indented_continuation() {
+        let cell = new_web_search_call(
+            "example search query with several generic words to exercise wrapping".to_string(),
+        );
+        let rendered = render_lines(&cell.display_lines(64));
+
+        assert_eq!(
+            rendered,
+            vec![
+                "• Searched example search query with several generic words to".to_string(),
+                "  exercise wrapping".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn web_search_history_cell_short_query_does_not_wrap() {
+        let cell = new_web_search_call("short query".to_string());
+        let rendered = render_lines(&cell.display_lines(64));
+
+        assert_eq!(rendered, vec!["• Searched short query".to_string()]);
+    }
+
+    #[test]
+    fn web_search_history_cell_transcript_snapshot() {
+        let cell = new_web_search_call(
+            "example search query with several generic words to exercise wrapping".to_string(),
+        );
+        let rendered = render_lines(&cell.transcript_lines(64)).join("\n");
+
+        insta::assert_snapshot!(rendered);
     }
 
     #[test]
