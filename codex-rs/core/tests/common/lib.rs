@@ -220,7 +220,8 @@ pub fn sandbox_network_env_var() -> &'static str {
 }
 
 pub fn format_with_current_shell(command: &str) -> Vec<String> {
-    codex_core::shell::default_user_shell().derive_exec_args(command, true)
+    // Default to login shell without interactive mode (matches historical behavior)
+    codex_core::shell::default_user_shell().derive_exec_args(command, true, false)
 }
 
 pub fn format_with_current_shell_display(command: &str) -> String {
@@ -229,13 +230,18 @@ pub fn format_with_current_shell_display(command: &str) -> String {
 }
 
 pub fn format_with_current_shell_non_login(command: &str) -> Vec<String> {
-    codex_core::shell::default_user_shell().derive_exec_args(command, false)
+    codex_core::shell::default_user_shell().derive_exec_args(command, false, false)
 }
 
 pub fn format_with_current_shell_display_non_login(command: &str) -> String {
     let args = format_with_current_shell_non_login(command);
     shlex::try_join(args.iter().map(String::as_str))
         .expect("serialize current shell command without login")
+}
+
+pub fn format_with_current_shell_interactive(command: &str) -> Vec<String> {
+    // Login + interactive mode: sources both profile and rc files
+    codex_core::shell::default_user_shell().derive_exec_args(command, true, true)
 }
 
 pub mod fs_wait {

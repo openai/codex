@@ -66,11 +66,13 @@ impl SessionTask for UserShellCommandTask {
 
         // Execute the user's script under their default shell when known; this
         // allows commands that use shell features (pipes, &&, redirects, etc.).
-        // We do not source rc files or otherwise reformat the script.
         let use_login_shell = true;
-        let command = session
-            .user_shell()
-            .derive_exec_args(&self.command, use_login_shell);
+        let use_interactive = turn_context.sandbox_policy.has_full_disk_write_access()
+            || turn_context.shell_environment_policy.use_profile;
+        let command =
+            session
+                .user_shell()
+                .derive_exec_args(&self.command, use_login_shell, use_interactive);
 
         let call_id = Uuid::new_v4().to_string();
         let raw_command = self.command.clone();

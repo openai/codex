@@ -35,10 +35,20 @@ impl Shell {
 
     /// Takes a string of shell and returns the full list of command args to
     /// use with `exec()` to run the shell command.
-    pub fn derive_exec_args(&self, command: &str, use_login_shell: bool) -> Vec<String> {
+    pub fn derive_exec_args(
+        &self,
+        command: &str,
+        use_login_shell: bool,
+        use_interactive: bool,
+    ) -> Vec<String> {
         match self.shell_type {
             ShellType::Zsh | ShellType::Bash | ShellType::Sh => {
-                let arg = if use_login_shell { "-lc" } else { "-c" };
+                let arg = match (use_login_shell, use_interactive) {
+                    (true, true) => "-lic",
+                    (true, false) => "-lc",
+                    (false, true) => "-ic",
+                    (false, false) => "-c",
+                };
                 vec![
                     self.shell_path.to_string_lossy().to_string(),
                     arg.to_string(),
@@ -407,7 +417,7 @@ mod tests {
 
     fn shell_works(shell: Option<Shell>, command: &str, required: bool) -> bool {
         if let Some(shell) = shell {
-            let args = shell.derive_exec_args(command, false);
+            let args = shell.derive_exec_args(command, false, false);
             let output = Command::new(args[0].clone())
                 .args(&args[1..])
                 .output()
@@ -428,12 +438,20 @@ mod tests {
             shell_snapshot: None,
         };
         assert_eq!(
-            test_bash_shell.derive_exec_args("echo hello", false),
+            test_bash_shell.derive_exec_args("echo hello", false, false),
             vec!["/bin/bash", "-c", "echo hello"]
         );
         assert_eq!(
-            test_bash_shell.derive_exec_args("echo hello", true),
+            test_bash_shell.derive_exec_args("echo hello", true, false),
             vec!["/bin/bash", "-lc", "echo hello"]
+        );
+        assert_eq!(
+            test_bash_shell.derive_exec_args("echo hello", false, true),
+            vec!["/bin/bash", "-ic", "echo hello"]
+        );
+        assert_eq!(
+            test_bash_shell.derive_exec_args("echo hello", true, true),
+            vec!["/bin/bash", "-lic", "echo hello"]
         );
 
         let test_zsh_shell = Shell {
@@ -442,12 +460,20 @@ mod tests {
             shell_snapshot: None,
         };
         assert_eq!(
-            test_zsh_shell.derive_exec_args("echo hello", false),
+            test_zsh_shell.derive_exec_args("echo hello", false, false),
             vec!["/bin/zsh", "-c", "echo hello"]
         );
         assert_eq!(
-            test_zsh_shell.derive_exec_args("echo hello", true),
+            test_zsh_shell.derive_exec_args("echo hello", true, false),
             vec!["/bin/zsh", "-lc", "echo hello"]
+        );
+        assert_eq!(
+            test_zsh_shell.derive_exec_args("echo hello", false, true),
+            vec!["/bin/zsh", "-ic", "echo hello"]
+        );
+        assert_eq!(
+            test_zsh_shell.derive_exec_args("echo hello", true, true),
+            vec!["/bin/zsh", "-lic", "echo hello"]
         );
 
         let test_powershell_shell = Shell {
@@ -456,11 +482,15 @@ mod tests {
             shell_snapshot: None,
         };
         assert_eq!(
-            test_powershell_shell.derive_exec_args("echo hello", false),
+            test_powershell_shell.derive_exec_args("echo hello", false, false),
             vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"]
         );
         assert_eq!(
-            test_powershell_shell.derive_exec_args("echo hello", true),
+            test_powershell_shell.derive_exec_args("echo hello", true, false),
+            vec!["pwsh.exe", "-Command", "echo hello"]
+        );
+        assert_eq!(
+            test_powershell_shell.derive_exec_args("echo hello", true, true),
             vec!["pwsh.exe", "-Command", "echo hello"]
         );
     }
