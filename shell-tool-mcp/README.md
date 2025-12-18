@@ -65,10 +65,11 @@ This MCP server is designed to be used with [Codex](https://developers.openai.co
 }
 ```
 
-This capability means the MCP server honors notifications like the following to update the sandbox policy the MCP server uses when spawning Bash:
+This capability means the MCP server honors requests like the following to update the sandbox policy the MCP server uses when spawning Bash:
 
 ```json
 {
+  "id": "req-42",
   "method": "codex/sandbox-state/update",
   "params": {
     "sandboxPolicy": {
@@ -82,7 +83,16 @@ This capability means the MCP server honors notifications like the following to 
 }
 ```
 
-The Codex harness (used by the CLI and the VS Code extension) sends such notifications to MCP servers that declare the `codex/sandbox-state` capability.
+Once the server has processed the update, it sends an empty response to acknowledge the request:
+
+```json
+{
+  "id": "req-42",
+  "result": {}
+}
+```
+
+The Codex harness (used by the CLI and the VS Code extension) sends such requests to MCP servers that declare the `codex/sandbox-state` capability.
 
 ## Package Contents
 
