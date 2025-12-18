@@ -18,6 +18,7 @@ use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
+use codex_network_proxy::Args as NetworkProxyArgs;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
@@ -85,6 +86,9 @@ enum Subcommand {
 
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
+
+    /// Run the Codex network proxy.
+    Proxy(NetworkProxyArgs),
 
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
@@ -422,6 +426,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
+        }
+        Some(Subcommand::Proxy(proxy_args)) => {
+            codex_network_proxy::run_main(proxy_args).await?;
         }
         Some(Subcommand::McpServer) => {
             codex_mcp_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;

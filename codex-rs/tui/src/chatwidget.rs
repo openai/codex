@@ -911,6 +911,17 @@ impl ChatWidget {
         if self.pending_exec_approval.is_none()
             && let Some(mut request) = self.preflight_network_request(&ev.command)
         {
+            if request.reason.trim().eq_ignore_ascii_case("denied") {
+                self.add_error_message(format!(
+                    "Exec canceled because network access to {} is denied by the denylist.",
+                    request.host
+                ));
+                self.submit_op(Op::ExecApproval {
+                    id,
+                    decision: ReviewDecision::Denied,
+                });
+                return;
+            }
             request.call_id = Some(id.clone());
             self.pending_exec_approval = Some(PendingExecApproval {
                 id,

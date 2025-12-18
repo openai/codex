@@ -1,3 +1,4 @@
+use crate::config;
 use crate::config::types::NetworkProxyConfig;
 use crate::config::types::NetworkProxyMode;
 use crate::default_client::CodexHttpClient;
@@ -20,7 +21,8 @@ use toml_edit::Item as TomlItem;
 use toml_edit::Table as TomlTable;
 use wildmatch::WildMatchPattern;
 
-const NETWORK_TABLE: &str = "network";
+const NETWORK_PROXY_TABLE: &str = "network_proxy";
+const NETWORK_PROXY_POLICY_TABLE: &str = "policy";
 const ALLOWED_DOMAINS_KEY: &str = "allowedDomains";
 const DENIED_DOMAINS_KEY: &str = "deniedDomains";
 
@@ -40,11 +42,6 @@ pub struct NetworkProxyBlockedRequest {
 #[derive(Debug, Deserialize)]
 struct BlockedResponse {
     blocked: Vec<NetworkProxyBlockedRequest>,
-}
-
-#[derive(Serialize)]
-struct AllowOnceRequest<'a> {
-    host: &'a str,
 }
 
 #[derive(Serialize)]
@@ -70,25 +67,6 @@ pub async fn fetch_blocked(
         .await
         .context("network proxy /blocked returned invalid JSON")?;
     Ok(payload.blocked)
-}
-
-pub async fn allow_once(client: &CodexHttpClient, admin_url: &str, host: &str) -> Result<()> {
-    let host = host.trim();
-    if host.is_empty() {
-        return Err(anyhow!("host is empty"));
-    }
-    let base = admin_url.trim_end_matches('/');
-    let url = format!("{base}/allow_once");
-    let request = AllowOnceRequest { host };
-    client
-        .post(url)
-        .json(&request)
-        .send()
-        .await
-        .context("network proxy /allow_once request failed")?
-        .error_for_status()
-        .context("network proxy /allow_once returned error")?;
-    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -190,10 +168,10 @@ pub fn set_domain_state(config_path: &Path, host: &str, state: DomainState) -> R
         return Err(anyhow!("host is empty"));
     }
     let mut doc = load_document(config_path)?;
-    let network = ensure_network_table(&mut doc);
+    let policy = ensure_policy_table(&mut doc);
     let mut changed = false;
     {
-        let allowed = ensure_array(network, ALLOWED_DOMAINS_KEY);
+        let allowed = ensure_array(policy, ALLOWED_DOMAINS_KEY);
         if state.allowed {
             changed |= add_domain(allowed, host);
         } else {
@@ -201,7 +179,7 @@ pub fn set_domain_state(config_path: &Path, host: &str, state: DomainState) -> R
         }
     }
     {
-        let denied = ensure_array(network, DENIED_DOMAINS_KEY);
+        let denied = ensure_array(policy, DENIED_DOMAINS_KEY);
         if state.denied {
             changed |= add_domain(denied, host);
         } else {
@@ -237,7 +215,8 @@ pub fn preflight_blocked_host_if_enabled(
     if !should_preflight_network(network_proxy, sandbox_policy) {
         return Ok(None);
     }
-    preflight_blocked_host(&network_proxy.config_path, command)
+    let config_path = config::default_config_path()?;
+    preflight_blocked_host(&config_path, command)
 }
 
 pub fn preflight_blocked_request_if_enabled(
@@ -394,18 +373,18 @@ fn update_domain_list(config_path: &Path, host: &str, list: DomainListKind) -> R
         return Err(anyhow!("host is empty"));
     }
     let mut doc = load_document(config_path)?;
-    let network = ensure_network_table(&mut doc);
+    let policy = ensure_policy_table(&mut doc);
     let (target_key, other_key) = match list {
         DomainListKind::Allow => (ALLOWED_DOMAINS_KEY, DENIED_DOMAINS_KEY),
         DomainListKind::Deny => (DENIED_DOMAINS_KEY, ALLOWED_DOMAINS_KEY),
     };
 
     let mut changed = {
-        let target = ensure_array(network, target_key);
+        let target = ensure_array(policy, target_key);
         add_domain(target, host)
     };
     let removed = {
-        let other = ensure_array(network, other_key);
+        let other = ensure_array(policy, other_key);
         remove_domain(other, host)
     };
     if removed {
@@ -430,8 +409,14 @@ fn load_document(path: &Path) -> Result<DocumentMut> {
 
 #[derive(Default, Deserialize)]
 struct NetworkPolicyConfig {
-    #[serde(default, rename = "network")]
-    network: NetworkPolicy,
+    #[serde(default, rename = "network_proxy")]
+    network_proxy: NetworkProxySection,
+}
+
+#[derive(Default, Deserialize)]
+struct NetworkProxySection {
+    #[serde(default)]
+    policy: NetworkPolicy,
 }
 
 #[derive(Default, Deserialize)]
@@ -458,7 +443,7 @@ fn load_network_policy(config_path: &Path) -> Result<NetworkPolicy> {
             config_path.display()
         )
     })?;
-    Ok(config.network)
+    Ok(config.network_proxy.policy)
 }
 
 fn list_contains(domains: &[String], host: &str) -> bool {
@@ -614,9 +599,19 @@ fn write_document(path: &Path, doc: &DocumentMut) -> Result<()> {
     Ok(())
 }
 
-fn ensure_network_table(doc: &mut DocumentMut) -> &mut TomlTable {
+fn ensure_network_proxy_table(doc: &mut DocumentMut) -> &mut TomlTable {
     let entry = doc
-        .entry(NETWORK_TABLE)
+        .entry(NETWORK_PROXY_TABLE)
+        .or_insert_with(|| TomlItem::Table(TomlTable::new()));
+    let table = ensure_table_for_write(entry);
+    table.set_implicit(false);
+    table
+}
+
+fn ensure_policy_table(doc: &mut DocumentMut) -> &mut TomlTable {
+    let network_proxy = ensure_network_proxy_table(doc);
+    let entry = network_proxy
+        .entry(NETWORK_PROXY_POLICY_TABLE)
         .or_insert_with(|| TomlItem::Table(TomlTable::new()));
     let table = ensure_table_for_write(entry);
     table.set_implicit(false);

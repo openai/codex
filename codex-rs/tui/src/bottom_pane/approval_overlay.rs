@@ -397,16 +397,18 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 {
                     header.push(Line::from(vec!["Method: ".into(), method.into()]));
                 }
-                let protocol = request.protocol.trim().to_string();
-                if !protocol.is_empty() {
-                    header.push(Line::from(vec!["Protocol: ".into(), protocol.into()]));
-                }
-                if let Some(mode) = request.mode {
-                    let label = match mode {
-                        NetworkProxyMode::Limited => "limited",
-                        NetworkProxyMode::Full => "full",
-                    };
-                    header.push(Line::from(vec!["Mode: ".into(), label.into()]));
+                if cfg!(debug_assertions) {
+                    let protocol = request.protocol.trim().to_string();
+                    if !protocol.is_empty() {
+                        header.push(Line::from(vec!["Protocol: ".into(), protocol.into()]));
+                    }
+                    if let Some(mode) = request.mode {
+                        let label = match mode {
+                            NetworkProxyMode::Limited => "limited",
+                            NetworkProxyMode::Full => "full",
+                        };
+                        header.push(Line::from(vec!["Mode: ".into(), label.into()]));
+                    }
                 }
                 if let Some(client) = request
                     .client

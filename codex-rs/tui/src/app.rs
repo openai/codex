@@ -24,6 +24,7 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::NetworkProxyConfig;
+use codex_core::config::{self};
 use codex_core::default_client::create_client;
 use codex_core::model_family::find_family_for_model;
 use codex_core::network_proxy;
@@ -59,6 +60,10 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ConversationId>,
     pub update_action: Option<UpdateAction>,
+}
+
+fn codex_config_path() -> Result<PathBuf> {
+    config::default_config_path().wrap_err("failed to resolve Codex config path")
 }
 
 fn should_show_model_migration_prompt(
@@ -729,18 +734,20 @@ impl App {
                             method.to_string().into(),
                         ]));
                     }
-                    if !request.protocol.trim().is_empty() {
-                        lines.push(Line::from(vec![
-                            "Protocol: ".into(),
-                            request.protocol.clone().into(),
-                        ]));
-                    }
-                    if let Some(mode) = request.mode {
-                        let label = match mode {
-                            codex_core::config::types::NetworkProxyMode::Limited => "limited",
-                            codex_core::config::types::NetworkProxyMode::Full => "full",
-                        };
-                        lines.push(Line::from(vec!["Mode: ".into(), label.into()]));
+                    if cfg!(debug_assertions) {
+                        if !request.protocol.trim().is_empty() {
+                            lines.push(Line::from(vec![
+                                "Protocol: ".into(),
+                                request.protocol.clone().into(),
+                            ]));
+                        }
+                        if let Some(mode) = request.mode {
+                            let label = match mode {
+                                codex_core::config::types::NetworkProxyMode::Limited => "limited",
+                                codex_core::config::types::NetworkProxyMode::Full => "full",
+                            };
+                            lines.push(Line::from(vec!["Mode: ".into(), label.into()]));
+                        }
                     }
                     if let Some(client) = request.client.as_ref().filter(|value| !value.is_empty())
                     {
@@ -759,6 +766,12 @@ impl App {
                 }
                 let host = request.host.trim().to_string();
                 if host.is_empty() || self.network_proxy_pending.contains(&host) {
+                    return Ok(true);
+                }
+                if request.reason.trim().eq_ignore_ascii_case("denied") {
+                    self.chat_widget.add_error_message(format!(
+                        "Network access to {host} is denied by the denylist."
+                    ));
                     return Ok(true);
                 }
                 if self.chat_widget.is_network_session_allowed(&host) {
@@ -780,7 +793,7 @@ impl App {
                 self.network_proxy_pending.remove(&host);
                 let client = create_client();
                 let admin_url = self.config.network_proxy.admin_url.clone();
-                let config_path = self.config.network_proxy.config_path.clone();
+                let config_path = codex_config_path()?;
                 let mut reload_needed = false;
                 let mut should_resume_exec = matches!(
                     decision,
@@ -927,7 +940,7 @@ impl App {
                 let Some(restore) = self.network_proxy_allow_once.remove(&call_id) else {
                     return Ok(true);
                 };
-                let config_path = self.config.network_proxy.config_path.clone();
+                let config_path = codex_config_path()?;
                 let client = create_client();
                 let admin_url = self.config.network_proxy.admin_url.clone();
                 match network_proxy::set_domain_state(&config_path, &restore.host, restore.state) {
@@ -961,7 +974,7 @@ impl App {
         {
             return Ok(());
         }
-        let config_path = self.config.network_proxy.config_path.clone();
+        let config_path = codex_config_path()?;
         let client = create_client();
         let admin_url = self.config.network_proxy.admin_url.clone();
         let mut reload_needed = false;

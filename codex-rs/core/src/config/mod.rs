@@ -75,6 +75,11 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
 
+pub fn default_config_path() -> std::io::Result<PathBuf> {
+    let codex_home = find_codex_home()?;
+    Ok(codex_home.join(CONFIG_TOML_FILE))
+}
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -692,12 +697,11 @@ impl From<ConfigToml> for UserSavedConfig {
     }
 }
 
-fn default_network_proxy_config(codex_home: &Path) -> NetworkProxyConfig {
+fn default_network_proxy_config() -> NetworkProxyConfig {
     NetworkProxyConfig {
         enabled: false,
         proxy_url: "http://127.0.0.1:3128".to_string(),
         admin_url: "http://127.0.0.1:8080".to_string(),
-        config_path: codex_home.join("network_proxy").join(CONFIG_TOML_FILE),
         mode: NetworkProxyMode::Full,
         no_proxy: default_no_proxy_entries()
             .iter()
@@ -710,10 +714,11 @@ fn default_network_proxy_config(codex_home: &Path) -> NetworkProxyConfig {
 }
 
 fn resolve_network_proxy_config(cfg: &ConfigToml, codex_home: &Path) -> NetworkProxyConfig {
-    let mut resolved = default_network_proxy_config(codex_home);
+    let mut resolved = default_network_proxy_config();
     let Some(network_proxy) = cfg.network_proxy.clone() else {
         return resolved;
     };
+    let mitm_ca_cert_path = resolve_network_proxy_mitm_ca_path(&network_proxy, codex_home);
 
     if let Some(enabled) = network_proxy.enabled {
         resolved.enabled = enabled;
@@ -730,9 +735,6 @@ fn resolve_network_proxy_config(cfg: &ConfigToml, codex_home: &Path) -> NetworkP
             resolved.admin_url = trimmed.to_string();
         }
     }
-    if let Some(config_path) = network_proxy.config_path {
-        resolved.config_path = resolve_network_proxy_path(&config_path, codex_home);
-    }
     if let Some(mode) = network_proxy.mode {
         resolved.mode = mode;
     }
@@ -748,61 +750,26 @@ fn resolve_network_proxy_config(cfg: &ConfigToml, codex_home: &Path) -> NetworkP
     {
         resolved.poll_interval_ms = poll_interval_ms;
     }
-    resolved.mitm_ca_cert_path = resolve_network_proxy_mitm_ca_path(&resolved.config_path);
+    resolved.mitm_ca_cert_path = mitm_ca_cert_path;
     resolved
 }
 
-#[derive(Default, Deserialize)]
-struct NetworkProxyFileConfig {
-    #[serde(default, rename = "network")]
-    network: NetworkProxyFileNetwork,
-}
-
-#[derive(Default, Deserialize)]
-struct NetworkProxyFileNetwork {
-    #[serde(default, rename = "mitm")]
-    mitm: NetworkProxyFileMitm,
-}
-
-#[derive(Default, Deserialize)]
-struct NetworkProxyFileMitm {
-    #[serde(default)]
-    enabled: bool,
-    #[serde(default, rename = "ca_cert_path")]
-    ca_cert_path: Option<PathBuf>,
-}
-
-fn resolve_network_proxy_mitm_ca_path(config_path: &Path) -> Option<PathBuf> {
-    if !config_path.exists() {
+fn resolve_network_proxy_mitm_ca_path(
+    network_proxy: &NetworkProxyConfigToml,
+    codex_home: &Path,
+) -> Option<PathBuf> {
+    let mitm = network_proxy.mitm.as_ref()?;
+    if !mitm.enabled.unwrap_or(false) {
         return None;
     }
-    let raw = match std::fs::read_to_string(config_path) {
-        Ok(raw) => raw,
-        Err(err) => {
-            tracing::debug!(error = %err, "failed to read network proxy config");
-            return None;
-        }
-    };
-    let config: NetworkProxyFileConfig = match toml::from_str(&raw) {
-        Ok(config) => config,
-        Err(err) => {
-            tracing::debug!(error = %err, "failed to parse network proxy config");
-            return None;
-        }
-    };
-    if !config.network.mitm.enabled {
-        return None;
-    }
-    let ca_cert_path = config.network.mitm.ca_cert_path?;
+    let ca_cert_path = mitm
+        .ca_cert_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("network_proxy/mitm/ca.pem"));
     if ca_cert_path.as_os_str().is_empty() {
         return None;
     }
-    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
-    if ca_cert_path.is_absolute() {
-        Some(ca_cert_path)
-    } else {
-        Some(base.join(ca_cert_path))
-    }
+    Some(resolve_network_proxy_path(&ca_cert_path, codex_home))
 }
 
 fn resolve_network_proxy_path(path: &Path, codex_home: &Path) -> PathBuf {
@@ -3048,7 +3015,7 @@ model_verbosity = "high"
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
-                network_proxy: default_network_proxy_config(&fixture.codex_home()),
+                network_proxy: default_network_proxy_config(),
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -3120,7 +3087,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
-            network_proxy: default_network_proxy_config(&fixture.codex_home()),
+            network_proxy: default_network_proxy_config(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -3207,7 +3174,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
-            network_proxy: default_network_proxy_config(&fixture.codex_home()),
+            network_proxy: default_network_proxy_config(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -3280,7 +3247,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
-            network_proxy: default_network_proxy_config(&fixture.codex_home()),
+            network_proxy: default_network_proxy_config(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),

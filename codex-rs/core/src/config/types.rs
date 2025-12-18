@@ -408,11 +408,21 @@ pub struct NetworkProxyConfigToml {
     pub enabled: Option<bool>,
     pub proxy_url: Option<String>,
     pub admin_url: Option<String>,
-    pub config_path: Option<PathBuf>,
     pub mode: Option<NetworkProxyMode>,
     pub no_proxy: Option<Vec<String>>,
     pub prompt_on_block: Option<bool>,
     pub poll_interval_ms: Option<i64>,
+    #[serde(default)]
+    pub mitm: Option<NetworkProxyMitmConfigToml>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct NetworkProxyMitmConfigToml {
+    pub enabled: Option<bool>,
+    pub inspect: Option<bool>,
+    pub max_body_bytes: Option<i64>,
+    pub ca_cert_path: Option<PathBuf>,
+    pub ca_key_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -420,7 +430,6 @@ pub struct NetworkProxyConfig {
     pub enabled: bool,
     pub proxy_url: String,
     pub admin_url: String,
-    pub config_path: PathBuf,
     pub mode: NetworkProxyMode,
     pub no_proxy: Vec<String>,
     pub prompt_on_block: bool,

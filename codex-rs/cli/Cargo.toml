@@ -28,6 +28,7 @@ codex-core = { workspace = true }
 codex-exec = { workspace = true }
 codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
+codex-network-proxy = { workspace = true }
 codex-process-hardening = { workspace = true }
 codex-protocol = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
