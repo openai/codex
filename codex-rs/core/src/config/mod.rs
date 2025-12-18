@@ -12,6 +12,7 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
+use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
@@ -304,19 +305,70 @@ pub struct Config {
     pub otel: crate::config::types::OtelConfig,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ConfigBuilder {
+    codex_home: Option<PathBuf>,
+    cli_overrides: Option<Vec<(String, TomlValue)>>,
+    harness_overrides: Option<ConfigOverrides>,
+    loader_overrides: Option<LoaderOverrides>,
+}
+
+impl ConfigBuilder {
+    pub fn codex_home(mut self, codex_home: PathBuf) -> Self {
+        self.codex_home = Some(codex_home);
+        self
+    }
+
+    pub fn cli_overrides(mut self, cli_overrides: Vec<(String, TomlValue)>) -> Self {
+        self.cli_overrides = Some(cli_overrides);
+        self
+    }
+
+    pub fn harness_overrides(mut self, harness_overrides: ConfigOverrides) -> Self {
+        self.harness_overrides = Some(harness_overrides);
+        self
+    }
+
+    pub fn loader_overrides(mut self, loader_overrides: LoaderOverrides) -> Self {
+        self.loader_overrides = Some(loader_overrides);
+        self
+    }
+
+    pub async fn build(self) -> std::io::Result<Config> {
+        let Self {
+            codex_home,
+            cli_overrides,
+            harness_overrides,
+            loader_overrides,
+        } = self;
+        let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
+        let cli_overrides = cli_overrides.unwrap_or_default();
+        let harness_overrides = harness_overrides.unwrap_or_default();
+        let loader_overrides = loader_overrides.unwrap_or_default();
+        let config_layer_stack =
+            load_config_layers_state(&codex_home, &cli_overrides, loader_overrides).await?;
+        let merged_toml = config_layer_stack.effective_config();
+
+        // Note that each layer in ConfigLayerStack should have resolved
+        // relative paths to absolute paths based on the parent folder of the
+        // respective config file, so we should be safe to deserialize without
+        // AbsolutePathBufGuard here.
+        let config_toml: ConfigToml = merged_toml
+            .try_into()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        Config::load_from_base_config_with_overrides(config_toml, harness_overrides, codex_home)
+    }
+}
+
 impl Config {
     /// This is the preferred way to create an instance of [Config].
     pub async fn load_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
     ) -> std::io::Result<Self> {
-        let codex_home = find_codex_home()?;
-        let config_toml =
-            load_config_as_toml_with_cli_overrides(&codex_home, cli_overrides).await?;
-        Self::load_from_base_config_with_overrides(
-            config_toml,
-            ConfigOverrides::default(),
-            codex_home,
-        )
+        ConfigBuilder::default()
+            .cli_overrides(cli_overrides)
+            .build()
+            .await
     }
 
     /// This is a secondary way of creating [Config], which is appropriate when
@@ -330,10 +382,11 @@ impl Config {
         cli_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
     ) -> std::io::Result<Self> {
-        let codex_home = find_codex_home()?;
-        let config_toml =
-            load_config_as_toml_with_cli_overrides(&codex_home, cli_overrides).await?;
-        Self::load_from_base_config_with_overrides(config_toml, harness_overrides, codex_home)
+        ConfigBuilder::default()
+            .cli_overrides(cli_overrides)
+            .harness_overrides(harness_overrides)
+            .build()
+            .await
     }
 }
 
@@ -939,8 +992,9 @@ pub fn resolve_oss_provider(
 }
 
 impl Config {
-    /// Meant to be used exclusively for tests:
-    /// [Config::load_with_cli_overrides()] should be used in all other cases.
+    /// Meant to be used exclusively for tests. For new tests, prefer using
+    /// [ConfigBuilder::build()], if possible, so ultimately we can make this
+    /// method private to this file.
     pub fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
