@@ -8,8 +8,7 @@ expression: terminal.backend()
   We recommend switching from gpt-5.1-codex-mini to
   gpt-5.1-codex-max.
 
-  Latest Codex-optimized flagship for deep and fast
-  reasoning.
+  Codex-optimized flagship for deep and fast reasoning.
 
   You can continue using gpt-5.1-codex-mini if you prefer.
 
