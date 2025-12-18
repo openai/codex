@@ -25,6 +25,26 @@ pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
 }
 
+impl ConfigRequirementsToml {
+    /// For every field in `other` that is `Some`, if the corresponding field in
+    /// `self` is `None`, copy the value from `other` into `self`.
+    pub fn merge_unset_fields(&mut self, mut other: ConfigRequirementsToml) {
+        macro_rules! fill_missing_take {
+            ($base:expr, $other:expr, { $($field:ident),+ $(,)? }) => {
+                $(
+                    if $base.$field.is_none() {
+                        if let Some(value) = $other.$field.take() {
+                            $base.$field = Some(value);
+                        }
+                    }
+                )+
+            };
+        }
+
+        fill_missing_take!(self, other, { allowed_approval_policies });
+    }
+}
+
 impl TryFrom<ConfigRequirementsToml> for ConfigRequirements {
     type Error = ConstraintError;
 
@@ -43,5 +63,45 @@ impl TryFrom<ConfigRequirementsToml> for ConfigRequirements {
             None => Constrained::allow_any_from_default(),
         };
         Ok(ConfigRequirements { approval_policy })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use pretty_assertions::assert_eq;
+    use toml::from_str;
+
+    #[test]
+    fn merge_unset_fields_only_fills_missing_values() -> Result<()> {
+        let source: ConfigRequirementsToml = from_str(
+            r#"
+                allowed_approval_policies = ["on-request"]
+            "#,
+        )?;
+
+        let mut empty_target: ConfigRequirementsToml = from_str(
+            r#"
+                # intentionally left unset
+            "#,
+        )?;
+        empty_target.merge_unset_fields(source.clone());
+        assert_eq!(
+            empty_target.allowed_approval_policies,
+            Some(vec![AskForApproval::OnRequest])
+        );
+
+        let mut populated_target: ConfigRequirementsToml = from_str(
+            r#"
+                allowed_approval_policies = ["never"]
+            "#,
+        )?;
+        populated_target.merge_unset_fields(source);
+        assert_eq!(
+            populated_target.allowed_approval_policies,
+            Some(vec![AskForApproval::Never])
+        );
+        Ok(())
     }
 }

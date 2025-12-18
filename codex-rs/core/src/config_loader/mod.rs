@@ -11,6 +11,7 @@ mod state;
 mod tests;
 
 use crate::config::CONFIG_TOML_FILE;
+use crate::config_loader::config_requirements::ConfigRequirementsToml;
 use crate::config_loader::layer_io::LoadedConfigLayers;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::protocol::AskForApproval;
@@ -25,6 +26,9 @@ pub use merge::merge_toml_values;
 pub use state::ConfigLayerEntry;
 pub use state::ConfigLayerStack;
 pub use state::LoaderOverrides;
+
+/// On Unix systems, load requirements from this file path, if present.
+const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/codex/requirements.toml";
 
 /// To build up the set of admin-enforced constraints, we build up from multiple
 /// configuration layers in the following order, but a constraint defined in an
@@ -55,10 +59,28 @@ pub async fn load_config_layers_state(
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
 ) -> io::Result<ConfigLayerStack> {
-    let loaded_config_layers = layer_io::load_config_layers_internal(codex_home, overrides).await?;
-    let requirements = load_requirements_from_legacy_scheme(loaded_config_layers.clone()).await?;
+    let mut config_requirements_toml = ConfigRequirementsToml::default();
 
-    // TODO(mbolin): Honor /etc/codex/requirements.toml.
+    // TODO(mbolin): Support an entry in MDM for config requirements and use it
+    // with `config_requirements_toml.merge_unset_fields(...)`, if present.
+
+    // Honor /etc/codex/requirements.toml.
+    if cfg!(unix) {
+        load_requirements_toml(
+            &mut config_requirements_toml,
+            DEFAULT_REQUIREMENTS_TOML_FILE_UNIX,
+        )
+        .await?;
+    }
+
+    // Make a best-effort to support the legacy `managed_config.toml` as a
+    // requirements specification.
+    let loaded_config_layers = layer_io::load_config_layers_internal(codex_home, overrides).await?;
+    load_requirements_from_legacy_scheme(
+        &mut config_requirements_toml,
+        loaded_config_layers.clone(),
+    )
+    .await?;
 
     let mut layers = Vec::<ConfigLayerEntry>::new();
 
@@ -133,23 +155,59 @@ pub async fn load_config_layers_state(
         ));
     }
 
-    ConfigLayerStack::new(layers, requirements)
+    ConfigLayerStack::new(layers, config_requirements_toml.try_into()?)
+}
+
+/// If available, apply requirements from `/etc/codex/requirements.toml` to
+/// `config_requirements_toml` by filling in any unset fields.
+async fn load_requirements_toml(
+    config_requirements_toml: &mut ConfigRequirementsToml,
+    requirements_toml_file: impl AsRef<Path>,
+) -> io::Result<()> {
+    match tokio::fs::read_to_string(&requirements_toml_file).await {
+        Ok(contents) => {
+            let requirements_config: ConfigRequirementsToml =
+                toml::from_str(&contents).map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "Error parsing requirements file {}: {e}",
+                            requirements_toml_file.as_ref().display(),
+                        ),
+                    )
+                })?;
+            config_requirements_toml.merge_unset_fields(requirements_config);
+        }
+        Err(e) => {
+            if e.kind() != io::ErrorKind::NotFound {
+                return Err(io::Error::new(
+                    e.kind(),
+                    format!(
+                        "Failed to read requirements file {}: {e}",
+                        requirements_toml_file.as_ref().display(),
+                    ),
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 async fn load_requirements_from_legacy_scheme(
+    config_requirements_toml: &mut ConfigRequirementsToml,
     loaded_config_layers: LoadedConfigLayers,
-) -> io::Result<ConfigRequirements> {
-    let mut config_requirements = ConfigRequirements::default();
-
-    // In this implementation, later layers override earlier layers, so list
-    // managed_config_from_mdm last because it has the highest precedence.
+) -> io::Result<()> {
+    // In this implementation, earlier layers cannot be overwritten by later
+    // layers, so list managed_config_from_mdm first because it has the highest
+    // precedence.
     let LoadedConfigLayers {
         managed_config,
         managed_config_from_mdm,
     } = loaded_config_layers;
     for config in [
-        managed_config.map(|c| c.managed_config),
         managed_config_from_mdm,
+        managed_config.map(|c| c.managed_config),
     ]
     .into_iter()
     .flatten()
@@ -162,14 +220,11 @@ async fn load_requirements_from_legacy_scheme(
                 )
             })?;
 
-        let LegacyManagedConfigToml { approval_policy } = legacy_config;
-        if let Some(approval_policy) = approval_policy {
-            config_requirements.approval_policy =
-                crate::config::Constrained::allow_only(approval_policy);
-        }
+        let new_requirements_toml = ConfigRequirementsToml::from(legacy_config);
+        config_requirements_toml.merge_unset_fields(new_requirements_toml);
     }
 
-    Ok(config_requirements)
+    Ok(())
 }
 
 /// The legacy mechanism for specifying admin-enforced configuration is to read
@@ -183,4 +238,17 @@ async fn load_requirements_from_legacy_scheme(
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 struct LegacyManagedConfigToml {
     approval_policy: Option<AskForApproval>,
+}
+
+impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
+    fn from(legacy: LegacyManagedConfigToml) -> Self {
+        let mut config_requirements_toml = ConfigRequirementsToml::default();
+
+        let LegacyManagedConfigToml { approval_policy } = legacy;
+        if let Some(approval_policy) = approval_policy {
+            config_requirements_toml.allowed_approval_policies = Some(vec![approval_policy]);
+        }
+
+        config_requirements_toml
+    }
 }
