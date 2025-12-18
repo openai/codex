@@ -1,6 +1,7 @@
 //! Session-wide mutable state.
 
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::PlanOutputEvent;
 
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
@@ -14,6 +15,7 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    pub(crate) pending_approved_plan: Option<PlanOutputEvent>,
 }
 
 impl SessionState {
@@ -24,7 +26,16 @@ impl SessionState {
             session_configuration,
             history,
             latest_rate_limits: None,
+            pending_approved_plan: None,
         }
+    }
+
+    pub(crate) fn set_pending_approved_plan(&mut self, plan: Option<PlanOutputEvent>) {
+        self.pending_approved_plan = plan;
+    }
+
+    pub(crate) fn take_pending_approved_plan(&mut self) -> Option<PlanOutputEvent> {
+        self.pending_approved_plan.take()
     }
 
     // History helpers

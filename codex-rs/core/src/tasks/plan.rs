@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 use codex_protocol::protocol::Event;
@@ -17,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_conversation_one_shot;
+use crate::plan_output;
 use crate::state::TaskKind;
 use codex_protocol::user_input::UserInput;
 use std::sync::Arc;
@@ -269,39 +269,17 @@ pub(crate) async fn exit_plan_mode(
     const PLAN_USER_MESSAGE_ID: &str = "plan:rollout:user";
     const PLAN_ASSISTANT_MESSAGE_ID: &str = "plan:rollout:assistant";
 
-    let (user_message, assistant_message) = if let Some(out) = plan_output.clone() {
-        let mut body = String::new();
-        let title = out.title.trim();
-        body.push_str(&format!("Title: {title}\n"));
-        let summary = out.summary.trim();
-        if !summary.is_empty() {
-            body.push_str(&format!("Summary: {summary}\n"));
-        }
-        let explanation = out.plan.explanation.as_deref().unwrap_or_default().trim();
-        if !explanation.is_empty() {
-            body.push_str("Explanation:\n");
-            body.push_str(explanation);
-            body.push('\n');
-        }
-        body.push_str("Steps:\n");
-        if out.plan.plan.is_empty() {
-            body.push_str("- (no steps provided)\n");
-        } else {
-            for item in &out.plan.plan {
-                let status = step_status_label(&item.status);
-                let step = item.step.trim();
-                body.push_str(&format!("- [{status}] {step}\n"));
-            }
-        }
-        (
+    session.set_pending_approved_plan(plan_output.clone()).await;
+
+    let (user_message, assistant_message) = match plan_output.as_ref() {
+        Some(out) => (
             "Plan approved.".to_string(),
-            format!("Approved plan:\n{body}"),
-        )
-    } else {
-        (
+            plan_output::render_approved_plan_transcript(out),
+        ),
+        None => (
             "Plan ended without an approved plan.".to_string(),
             "Plan was rejected or interrupted.".to_string(),
-        )
+        ),
     };
 
     session
@@ -332,14 +310,6 @@ pub(crate) async fn exit_plan_mode(
             },
         )
         .await;
-}
-
-fn step_status_label(status: &StepStatus) -> &'static str {
-    match status {
-        StepStatus::Pending => "pending",
-        StepStatus::InProgress => "in_progress",
-        StepStatus::Completed => "completed",
-    }
 }
 
 #[cfg(test)]
