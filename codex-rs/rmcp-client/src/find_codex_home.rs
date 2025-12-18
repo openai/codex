@@ -5,29 +5,48 @@ use std::path::PathBuf;
 /// TODO: move this to a shared crate lower in the dependency tree.
 ///
 ///
-/// Returns the path to the Codex configuration directory, which can be
-/// specified by the `CODEX_HOME` environment variable. If not set, defaults to
-/// `~/.codex`.
+/// Returns the path to the Codexel configuration directory.
 ///
-/// - If `CODEX_HOME` is set, the value will be canonicalized and this
+/// The directory can be specified by the `CODEXEL_HOME` environment variable.
+/// For compatibility with existing installs, `CODEX_HOME` is also honored. When
+/// neither is set, defaults to `~/.codexel`, falling back to `~/.codex` if that
+/// directory exists and `~/.codexel` does not.
+///
+/// - If `CODEXEL_HOME` (or `CODEX_HOME`) is set, the value will be canonicalized and this
 ///   function will Err if the path does not exist.
-/// - If `CODEX_HOME` is not set, this function does not verify that the
-///   directory exists.
+/// - If neither environment variable is set, this function does not verify
+///   that the directory exists.
 pub(crate) fn find_codex_home() -> std::io::Result<PathBuf> {
-    // Honor the `CODEX_HOME` environment variable when it is set to allow users
-    // (and tests) to override the default location.
+    // Honor `CODEXEL_HOME` (preferred) and `CODEX_HOME` (legacy) when set to
+    // allow users (and tests) to override the default location.
+    if let Ok(val) = std::env::var("CODEXEL_HOME")
+        && !val.is_empty()
+    {
+        return PathBuf::from(val).canonicalize();
+    }
+
     if let Ok(val) = std::env::var("CODEX_HOME")
         && !val.is_empty()
     {
         return PathBuf::from(val).canonicalize();
     }
 
-    let mut p = home_dir().ok_or_else(|| {
+    let home = home_dir().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "Could not find home directory",
         )
     })?;
-    p.push(".codex");
-    Ok(p)
+
+    let codexel_home = home.join(".codexel");
+    if codexel_home.exists() {
+        return Ok(codexel_home);
+    }
+
+    let codex_home = home.join(".codex");
+    if codex_home.exists() {
+        return Ok(codex_home);
+    }
+
+    Ok(codexel_home)
 }

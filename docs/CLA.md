@@ -4,7 +4,7 @@ _Based on the Apache Software Foundation Individual CLA v 2.2._
 
 By commenting **“I have read the CLA Document and I hereby sign the CLA”**
 on a Pull Request, **you (“Contributor”) agree to the following terms** for any
-past and future “Contributions” submitted to the **OpenAI Codex CLI project
+past and future “Contributions” submitted to the **OpenAI Codexel project
 (the “Project”)**.
 
 ---

@@ -247,7 +247,7 @@ pub async fn run_main(
     // Ensure the file is only readable and writable by the current user.
     // Doing the equivalent to `chmod 600` on Windows is quite a bit more code
     // and requires the Windows API crates, so we can reconsider that when
-    // Codex CLI is officially supported on Windows.
+    // Codexel is officially supported on Windows.
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -437,7 +437,7 @@ async fn run_ratatui_app(
                 let _ = tui.terminal.clear();
                 if let Err(err) = writeln!(
                     std::io::stdout(),
-                    "No saved session found with ID {id_str}. Run `codex resume` without an ID to choose from existing sessions."
+                    "No saved session found with ID {id_str}. Run `codexel resume` without an ID to choose from existing sessions."
                 ) {
                     error!("Failed to write resume error message: {err}");
                 }

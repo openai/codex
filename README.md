@@ -1,19 +1,19 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
+<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codexel</code></p>
 
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
+<p align="center"><strong>Codexel</strong> is a coding agent from OpenAI that runs locally on your computer.
 </br>
 </br>If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE</a>
 </br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a></p>
 
 <p align="center">
-  <img src="./.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
+  <img src="./.github/codex-cli-splash.png" alt="Codexel splash" width="80%" />
   </p>
 
 ---
 
 ## Quickstart
 
-### Installing and running Codex CLI
+### Installing and running Codexel
 
 Install globally with your preferred package manager. If you use npm:
 
@@ -24,54 +24,54 @@ npm install -g @openai/codex
 Alternatively, if you use Homebrew:
 
 ```shell
-brew install --cask codex
+brew install --cask codexel
 ```
 
-Then simply run `codex` to get started:
+Then simply run `codexel` to get started:
 
 ```shell
-codex
+codexel
 ```
 
-If you're running into upgrade issues with Homebrew, see the [FAQ entry on brew upgrade codex](./docs/faq.md#brew-upgrade-codex-isnt-upgrading-me).
+If you're running into upgrade issues with Homebrew, see the [FAQ entry on brew upgrade codexel](./docs/faq.md#brew-upgrade-codexel-isnt-upgrading-me).
 
 <details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+<summary>You can also go to the <a href="../../releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
 
 Each GitHub Release contains many executables, but in practice, you likely want one of these:
 
 - macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
+  - Apple Silicon/arm64: `codexel-aarch64-apple-darwin.tar.gz`
+  - x86_64 (older Mac hardware): `codexel-x86_64-apple-darwin.tar.gz`
 - Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+  - x86_64: `codexel-x86_64-unknown-linux-musl.tar.gz`
+  - arm64: `codexel-aarch64-unknown-linux-musl.tar.gz`
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+Each archive contains a single entry with the platform baked into the name (e.g., `codexel-x86_64-unknown-linux-musl`), so you likely want to rename it to `codexel` after extracting it.
 
 </details>
 
-### Using Codex with your ChatGPT plan
+### Using Codexel with your ChatGPT plan
 
 <p align="center">
-  <img src="./.github/codex-cli-login.png" alt="Codex CLI login" width="80%" />
+  <img src="./.github/codex-cli-login.png" alt="Codexel login" width="80%" />
   </p>
 
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Team, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
+Run `codexel` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codexel as part of your Plus, Pro, Team, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
 
-You can also use Codex with an API key, but this requires [additional setup](./docs/authentication.md#usage-based-billing-alternative-use-an-openai-api-key). If you previously used an API key for usage-based billing, see the [migration steps](./docs/authentication.md#migrating-from-usage-based-billing-api-key). If you're having trouble with login, please comment on [this issue](https://github.com/openai/codex/issues/1243).
+You can also use Codexel with an API key, but this requires [additional setup](./docs/authentication.md#usage-based-billing-alternative-use-an-openai-api-key). If you previously used an API key for usage-based billing, see the [migration steps](./docs/authentication.md#migrating-from-usage-based-billing-api-key). If you're having trouble with login, please comment on [this issue](https://github.com/openai/codex/issues/1243).
 
 ### Model Context Protocol (MCP)
 
-Codex can access MCP servers. To configure them, refer to the [config docs](./docs/config.md#mcp_servers).
+Codexel can access MCP servers. To configure them, refer to the [config docs](./docs/config.md#mcp_servers).
 
 ### Configuration
 
-Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
+Codexel supports a rich set of configuration options, with preferences stored in `~/.codexel/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
 
 ### Execpolicy
 
-See the [Execpolicy quickstart](./docs/execpolicy.md) to set up rules that govern what commands Codex can execute.
+See the [Execpolicy quickstart](./docs/execpolicy.md) to set up rules that govern what commands Codexel can execute.
 
 ### Docs & FAQ
 
@@ -89,10 +89,10 @@ See the [Execpolicy quickstart](./docs/execpolicy.md) to set up rules that gover
 - [**Authentication**](./docs/authentication.md)
   - [Auth methods](./docs/authentication.md#forcing-a-specific-auth-method-advanced)
   - [Login on a "Headless" machine](./docs/authentication.md#connecting-on-a-headless-machine)
-- **Automating Codex**
+- **Automating Codexel**
   - [GitHub Action](https://github.com/openai/codex-action)
   - [TypeScript SDK](./sdk/typescript/README.md)
-  - [Non-interactive mode (`codex exec`)](./docs/exec.md)
+  - [Non-interactive mode (`codexel exec`)](./docs/exec.md)
 - [**Advanced**](./docs/advanced.md)
   - [Tracing / verbose logging](./docs/advanced.md#tracing--verbose-logging)
   - [Model Context Protocol (MCP)](./docs/advanced.md#model-context-protocol-mcp)

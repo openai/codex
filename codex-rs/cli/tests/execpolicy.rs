@@ -24,7 +24,7 @@ prefix_rule(
 "#,
     )?;
 
-    let output = Command::cargo_bin("codex")?
+    let output = Command::cargo_bin("codexel")?
         .env("CODEX_HOME", codex_home.path())
         .args([
             "execpolicy",

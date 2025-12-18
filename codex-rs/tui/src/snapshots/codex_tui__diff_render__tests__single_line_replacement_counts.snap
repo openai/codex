@@ -4,8 +4,8 @@ assertion_line: 765
 expression: terminal.backend()
 ---
 "• Proposed Change README.md (+1 -1)                                             "
-"    1     -# Codex CLI (Rust Implementation)                                    "
-"    1     +# Codex CLI (Rust Implementation) banana                             "
+"    1     -# Codexel (Rust Implementation)                                      "
+"    1     +# Codexel (Rust Implementation) banana                               "
 "                                                                                "
 "                                                                                "
 "                                                                                "

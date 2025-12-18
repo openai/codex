@@ -266,7 +266,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
     use ModelProviderInfo as P;
 
     // We do not want to be in the business of adjucating which third-party
-    // providers are bundled with Codex CLI, so we only include the OpenAI and
+    // providers are bundled with Codexel, so we only include the OpenAI and
     // open source ("oss") providers by default. Users are encouraged to add to
     // `model_providers` in config.toml to add their own providers.
     [

@@ -45,7 +45,7 @@ use codex_core::features::FeatureOverrides;
 use codex_core::features::Features;
 use codex_core::features::is_known_feature_key;
 
-/// Codex CLI
+/// Codexel
 ///
 /// If no subcommand is specified, options will be forwarded to the interactive CLI.
 #[derive(Debug, Parser)]
@@ -55,10 +55,10 @@ use codex_core::features::is_known_feature_key;
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like
-    // `codex-x86_64-unknown-linux-musl`, but the help output should always use
-    // the generic `codex` command name that users run.
-    bin_name = "codex",
-    override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
+    // `codexel-x86_64-unknown-linux-musl`, but the help output should always use
+    // the generic `codexel` command name that users run.
+    bin_name = "codexel",
+    override_usage = "codexel [OPTIONS] [PROMPT]\n       codexel [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -76,7 +76,7 @@ struct MultitoolCli {
 
 #[derive(Debug, clap::Subcommand)]
 enum Subcommand {
-    /// Run Codex non-interactively.
+    /// Run Codexel non-interactively.
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
 
@@ -89,10 +89,10 @@ enum Subcommand {
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
-    /// [experimental] Run Codex as an MCP server and manage MCP servers.
+    /// [experimental] Run Codexel as an MCP server and manage MCP servers.
     Mcp(McpCli),
 
-    /// [experimental] Run the Codex MCP server (stdio transport).
+    /// [experimental] Run the Codexel MCP server (stdio transport).
     McpServer,
 
     /// [experimental] Run the app server or related tooling.
@@ -101,7 +101,7 @@ enum Subcommand {
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
 
-    /// Run commands within a Codex-provided sandbox.
+    /// Run commands within a Codexel-provided sandbox.
     #[clap(visible_alias = "debug")]
     Sandbox(SandboxArgs),
 
@@ -109,14 +109,14 @@ enum Subcommand {
     #[clap(hide = true)]
     Execpolicy(ExecpolicyCommand),
 
-    /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
+    /// Apply the latest diff produced by the Codexel agent as a `git apply` to your local working tree.
     #[clap(visible_alias = "a")]
     Apply(ApplyCommand),
 
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
 
-    /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
+    /// [EXPERIMENTAL] Browse tasks from Codexel Cloud and apply changes locally.
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
 
@@ -198,7 +198,7 @@ struct LoginCommand {
 
     #[arg(
         long = "with-api-key",
-        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)"
+        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codexel login --with-api-key`)"
     )]
     with_api_key: bool,
 
@@ -296,7 +296,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     )];
 
     if let Some(session_id) = conversation_id {
-        let resume_cmd = format!("codex resume {session_id}");
+        let resume_cmd = format!("codexel resume {session_id}");
         let command = if color_enabled {
             resume_cmd.cyan().to_string()
         } else {
@@ -325,7 +325,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
     let cmd_str = action.command_str();
-    println!("Updating Codex via `{cmd_str}`...");
+    println!("Updating Codexel via `{cmd_str}`...");
 
     let status = {
         #[cfg(windows)]
@@ -352,7 +352,7 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
         anyhow::bail!("`{cmd_str}` failed with status {status}");
     }
     println!();
-    println!("🎉 Update ran successfully! Please restart Codex.");
+    println!("🎉 Update ran successfully! Please restart Codexel.");
     Ok(())
 }
 
@@ -461,7 +461,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Review(review_args)) => {
-            let mut exec_cli = ExecCli::try_parse_from(["codex", "exec"])?;
+            let mut exec_cli = ExecCli::try_parse_from(["codexel", "exec"])?;
             exec_cli.command = Some(ExecCommand::Review(review_args));
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
@@ -527,7 +527,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                         .await;
                     } else if login_cli.api_key.is_some() {
                         eprintln!(
-                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
+                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | codexel login --with-api-key`."
                         );
                         std::process::exit(1);
                     } else if login_cli.with_api_key {
@@ -660,7 +660,7 @@ fn prepend_config_flags(
         .splice(0..0, cli_config_overrides.raw_overrides);
 }
 
-/// Run the interactive Codex TUI, dispatching to either the legacy implementation or the
+/// Run the interactive Codexel TUI, dispatching to either the legacy implementation or the
 /// experimental TUI v2 shim based on feature flags resolved from config.
 async fn run_interactive_tui(
     interactive: TuiCli,
@@ -694,7 +694,7 @@ async fn is_tui2_enabled(cli: &TuiCli) -> std::io::Result<bool> {
     Ok(features.enabled(Feature::Tui2))
 }
 
-/// Build the final `TuiCli` for a `codex resume` invocation.
+/// Build the final `TuiCli` for a `codexel resume` invocation.
 fn finalize_resume_interactive(
     mut interactive: TuiCli,
     root_config_overrides: CliConfigOverrides,
@@ -704,7 +704,7 @@ fn finalize_resume_interactive(
     resume_cli: TuiCli,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so resume shares the same
-    // configuration surface area as `codex` without additional flags.
+    // configuration surface area as `codexel` without additional flags.
     let resume_session_id = session_id;
     interactive.resume_picker = resume_session_id.is_none() && !last;
     interactive.resume_last = last;
@@ -720,7 +720,7 @@ fn finalize_resume_interactive(
     interactive
 }
 
-/// Merge flags provided to `codex resume` so they take precedence over any
+/// Merge flags provided to `codexel resume` so they take precedence over any
 /// root-level flags. Only overrides fields explicitly set on the resume-scoped
 /// CLI. Also appends `-c key=value` overrides with highest precedence.
 fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
@@ -769,7 +769,7 @@ fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
 
 fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
-    let name = "codex";
+    let name = "codexel";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
 
@@ -844,7 +844,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
+                "To continue this session, run codexel resume 123e4567-e89b-12d3-a456-426614174000"
                     .to_string(),
             ]
         );
@@ -860,7 +860,7 @@ mod tests {
 
     #[test]
     fn resume_model_flag_applies_when_no_root_flags() {
-        let interactive = finalize_from_args(["codex", "resume", "-m", "gpt-5.1-test"].as_ref());
+        let interactive = finalize_from_args(["codexel", "resume", "-m", "gpt-5.1-test"].as_ref());
 
         assert_eq!(interactive.model.as_deref(), Some("gpt-5.1-test"));
         assert!(interactive.resume_picker);
@@ -870,7 +870,7 @@ mod tests {
 
     #[test]
     fn resume_picker_logic_none_and_not_last() {
-        let interactive = finalize_from_args(["codex", "resume"].as_ref());
+        let interactive = finalize_from_args(["codexel", "resume"].as_ref());
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
@@ -879,7 +879,7 @@ mod tests {
 
     #[test]
     fn resume_picker_logic_last() {
-        let interactive = finalize_from_args(["codex", "resume", "--last"].as_ref());
+        let interactive = finalize_from_args(["codexel", "resume", "--last"].as_ref());
         assert!(!interactive.resume_picker);
         assert!(interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
@@ -888,7 +888,7 @@ mod tests {
 
     #[test]
     fn resume_picker_logic_with_session_id() {
-        let interactive = finalize_from_args(["codex", "resume", "1234"].as_ref());
+        let interactive = finalize_from_args(["codexel", "resume", "1234"].as_ref());
         assert!(!interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id.as_deref(), Some("1234"));
@@ -897,7 +897,7 @@ mod tests {
 
     #[test]
     fn resume_all_flag_sets_show_all() {
-        let interactive = finalize_from_args(["codex", "resume", "--all"].as_ref());
+        let interactive = finalize_from_args(["codexel", "resume", "--all"].as_ref());
         assert!(interactive.resume_picker);
         assert!(interactive.resume_show_all);
     }
@@ -906,7 +906,7 @@ mod tests {
     fn resume_merges_option_flags_and_full_auto() {
         let interactive = finalize_from_args(
             [
-                "codex",
+                "codexel",
                 "resume",
                 "sid",
                 "--oss",
@@ -963,7 +963,7 @@ mod tests {
     fn resume_merges_dangerously_bypass_flag() {
         let interactive = finalize_from_args(
             [
-                "codex",
+                "codexel",
                 "resume",
                 "--dangerously-bypass-approvals-and-sandbox",
             ]

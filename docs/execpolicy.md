@@ -1,23 +1,23 @@
 # Execpolicy quickstart
 
-Codex can enforce your own rules-based execution policy before it runs shell commands. Policies live in `.rules` files under `~/.codex/rules`.
+Codexel can enforce your own rules-based execution policy before it runs shell commands. Policies live in `.rules` files under `~/.codexel/rules`.
 
 ## How to create and edit rules
 
 ### TUI interactions
 
-Codex CLI will present the option to whitelist commands when a command causes a prompt.
+Codexel will present the option to whitelist commands when a command causes a prompt.
 
 <img width="513" height="168" alt="Screenshot 2025-12-04 at 9 23 54 AM" src="https://github.com/user-attachments/assets/4c8ee8ea-3101-4a81-bb13-3f4a9aa02502" />
 
 Whitelisted commands will no longer require your permission to run in current and subsequent sessions.
 
-Under the hood, when you approve and whitelist a command, codex will edit `~/.codex/rules/default.rules`.
+Under the hood, when you approve and whitelist a command, Codexel will edit `~/.codexel/rules/default.rules`.
 
 ### Editing `.rules` files
 
-1. Create a policy directory: `mkdir -p ~/.codex/rules`.
-2. Add one or more `.rules` files in that folder. Codex automatically loads every `.rules` file in there on startup.
+1. Create a policy directory: `mkdir -p ~/.codexel/rules`.
+2. Add one or more `.rules` files in that folder. Codexel automatically loads every `.rules` file in there on startup.
 3. Write `prefix_rule` entries to describe the commands you want to allow, prompt, or block:
 
 ```starlark
@@ -37,10 +37,10 @@ In this example rule, if Codex wants to run commands with the prefix `git push` 
 
 ## Preview decisions
 
-Use the `codex execpolicy check` subcommand to preview decisions before you save a rule (see the [`codex-execpolicy` README](../codex-rs/execpolicy/README.md) for syntax details):
+Use the `codexel execpolicy check` subcommand to preview decisions before you save a rule (see the [`codex-execpolicy` README](../codex-rs/execpolicy/README.md) for syntax details):
 
 ```shell
-codex execpolicy check --rules ~/.codex/rules/default.rules git push origin main
+codexel execpolicy check --rules ~/.codexel/rules/default.rules git push origin main
 ```
 
 Pass multiple `--rules` flags to test how several files combine, and use `--pretty` for formatted JSON output. See the [`codex-rs/execpolicy` README](../codex-rs/execpolicy/README.md) for a more detailed walkthrough of the available syntax.

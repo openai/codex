@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "codex"
+name = "codexel"
 path = "src/main.rs"
 
 [lib]

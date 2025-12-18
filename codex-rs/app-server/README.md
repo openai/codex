@@ -1,6 +1,6 @@
 # codex-app-server
 
-`codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
+`codexel app-server` is the interface Codexel uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
 
 ## Table of Contents
 
@@ -15,15 +15,15 @@
 
 ## Protocol
 
-Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports bidirectional communication, streaming JSONL over stdio. The protocol is JSON-RPC 2.0, though the `"jsonrpc":"2.0"` header is omitted.
+Similar to [MCP](https://modelcontextprotocol.io/), `codexel app-server` supports bidirectional communication, streaming JSONL over stdio. The protocol is JSON-RPC 2.0, though the `"jsonrpc":"2.0"` header is omitted.
 
 ## Message Schema
 
-Currently, you can dump a TypeScript version of the schema using `codex app-server generate-ts`, or a JSON Schema bundle via `codex app-server generate-json-schema`. Each output is specific to the version of Codex you used to run the command, so the generated artifacts are guaranteed to match that version.
+Currently, you can dump a TypeScript version of the schema using `codexel app-server generate-ts`, or a JSON Schema bundle via `codexel app-server generate-json-schema`. Each output is specific to the version of Codexel you used to run the command, so the generated artifacts are guaranteed to match that version.
 
 ```
-codex app-server generate-ts --out DIR
-codex app-server generate-json-schema --out DIR
+codexel app-server generate-ts --out DIR
+codexel app-server generate-json-schema --out DIR
 ```
 
 ## Core Primitives
@@ -48,7 +48,7 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 
 Clients must send a single `initialize` request before invoking any other method, then acknowledge with an `initialized` notification. The server returns the user agent string it will present to upstream services; subsequent requests issued before initialization receive a `"Not initialized"` error, and repeated `initialize` calls receive an `"Already initialized"` error.
 
-Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
+Applications building on top of `codexel app-server` should identify themselves via the `clientInfo` parameter.
 
 Example (from OpenAI's official VSCode extension):
 

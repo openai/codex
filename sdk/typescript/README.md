@@ -2,7 +2,7 @@
 
 Embed the Codex agent in your workflows and apps.
 
-The TypeScript SDK wraps the bundled `codex` binary. It spawns the CLI and exchanges JSONL events over stdin/stdout.
+The TypeScript SDK wraps the bundled `codexel` binary. It spawns the CLI and exchanges JSONL events over stdin/stdout.
 
 ## Installation
 
@@ -85,7 +85,7 @@ console.log(turn.finalResponse);
 
 ### Attaching images
 
-Provide structured input entries when you need to include images alongside text. Text entries are concatenated into the final prompt while image entries are passed to the Codex CLI via `--image`.
+Provide structured input entries when you need to include images alongside text. Text entries are concatenated into the final prompt while image entries are passed to Codexel via `--image`.
 
 ```typescript
 const turn = await thread.run([
@@ -97,7 +97,7 @@ const turn = await thread.run([
 
 ### Resuming an existing thread
 
-Threads are persisted in `~/.codex/sessions`. If you lose the in-memory `Thread` object, reconstruct it with `resumeThread()` and keep going.
+Threads are persisted in `~/.codexel/sessions` (or legacy `~/.codex/sessions`). If you lose the in-memory `Thread` object, reconstruct it with `resumeThread()` and keep going.
 
 ```typescript
 const savedThreadId = process.env.CODEX_THREAD_ID!;
@@ -107,7 +107,7 @@ await thread.run("Implement the fix");
 
 ### Working directory controls
 
-Codex runs in the current working directory by default. To avoid unrecoverable errors, Codex requires the working directory to be a Git repository. You can skip the Git repository check by passing the `skipGitRepoCheck` option when creating a thread.
+Codexel runs in the current working directory by default. To avoid unrecoverable errors, Codexel requires the working directory to be a Git repository. You can skip the Git repository check by passing the `skipGitRepoCheck` option when creating a thread.
 
 ```typescript
 const thread = codex.startThread({
@@ -116,9 +116,9 @@ const thread = codex.startThread({
 });
 ```
 
-### Controlling the Codex CLI environment
+### Controlling the Codexel environment
 
-By default, the Codex CLI inherits the Node.js process environment. Provide the optional `env` parameter when instantiating the
+By default, Codexel inherits the Node.js process environment. Provide the optional `env` parameter when instantiating the
 `Codex` client to fully control which variables the CLI receives—useful for sandboxed hosts like Electron apps.
 
 ```typescript

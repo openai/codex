@@ -1,28 +1,28 @@
 ## Non-interactive mode
 
-Use Codex in non-interactive mode to automate common workflows.
+Use Codexel in non-interactive mode to automate common workflows.
 
 ```shell
-codex exec "count the total number of lines of code in this project"
+codexel exec "count the total number of lines of code in this project"
 ```
 
-In non-interactive mode, Codex does not ask for command or edit approvals. By default it runs in `read-only` mode, so it cannot edit files or run commands that require network access.
+In non-interactive mode, Codexel does not ask for command or edit approvals. By default it runs in `read-only` mode, so it cannot edit files or run commands that require network access.
 
-Use `codex exec --full-auto` to allow file edits. Use `codex exec --sandbox danger-full-access` to allow edits and networked commands.
+Use `codexel exec --full-auto` to allow file edits. Use `codexel exec --sandbox danger-full-access` to allow edits and networked commands.
 
 ### Interactive prompts are disabled
 
-`codex exec` is non-interactive. If the agent attempts to ask an interactive multiple-choice question (AskUserQuestion), the request is automatically cancelled. Plan approval prompts are automatically rejected.
+`codexel exec` is non-interactive. If the agent attempts to ask an interactive multiple-choice question (AskUserQuestion), the request is automatically cancelled. Plan approval prompts are automatically rejected.
 
 ### Default output mode
 
-By default, Codex streams its activity to stderr and only writes the final message from the agent to stdout. This makes it easier to pipe `codex exec` into another tool without extra filtering.
+By default, Codexel streams its activity to stderr and only writes the final message from the agent to stdout. This makes it easier to pipe `codexel exec` into another tool without extra filtering.
 
-To write the output of `codex exec` to a file, in addition to using a shell redirect like `>`, there is also a dedicated flag to specify an output file: `-o`/`--output-last-message`.
+To write the output of `codexel exec` to a file, in addition to using a shell redirect like `>`, there is also a dedicated flag to specify an output file: `-o`/`--output-last-message`.
 
 ### JSON output mode
 
-`codex exec` supports a `--json` mode that streams events to stdout as JSON Lines (JSONL) while the agent runs.
+`codexel exec` supports a `--json` mode that streams events to stdout as JSON Lines (JSONL) while the agent runs.
 
 Supported event types:
 
@@ -79,40 +79,40 @@ Sample schema:
 ```
 
 ```shell
-codex exec "Extract details of the project" --output-schema ~/schema.json
+codexel exec "Extract details of the project" --output-schema ~/schema.json
 ...
 
-{"project_name":"Codex CLI","programming_languages":["Rust","TypeScript","Shell"]}
+{"project_name":"Codexel","programming_languages":["Rust","TypeScript","Shell"]}
 ```
 
 Combine `--output-schema` with `-o` to only print the final JSON output. You can also pass a file path to `-o` to save the JSON output to a file.
 
 ### Git repository requirement
 
-Codex requires a Git repository to avoid destructive changes. To disable this check, use `codex exec --skip-git-repo-check`.
+Codexel requires a Git repository to avoid destructive changes. To disable this check, use `codexel exec --skip-git-repo-check`.
 
 ### Resuming non-interactive sessions
 
-Resume a previous non-interactive session with `codex exec resume <SESSION_ID>` or `codex exec resume --last`. This preserves conversation context so you can ask follow-up questions or give new tasks to the agent.
+Resume a previous non-interactive session with `codexel exec resume <SESSION_ID>` or `codexel exec resume --last`. This preserves conversation context so you can ask follow-up questions or give new tasks to the agent.
 
 ```shell
-codex exec "Review the change, look for use-after-free issues"
-codex exec resume --last "Fix use-after-free issues"
+codexel exec "Review the change, look for use-after-free issues"
+codexel exec resume --last "Fix use-after-free issues"
 ```
 
-Only the conversation context is preserved; you must still provide flags to customize Codex behavior.
+Only the conversation context is preserved; you must still provide flags to customize Codexel behavior.
 
 ```shell
-codex exec --model gpt-5.1-codex-max --json "Review the change, look for use-after-free issues"
-codex exec --model gpt-5.1 --json resume --last "Fix use-after-free issues"
+codexel exec --model gpt-5.1-codex-max --json "Review the change, look for use-after-free issues"
+codexel exec --model gpt-5.1 --json resume --last "Fix use-after-free issues"
 ```
 
 ## Authentication
 
-By default, `codex exec` will use the same authentication method as Codex CLI and VSCode extension. You can override the api key by setting the `CODEX_API_KEY` environment variable.
+By default, `codexel exec` will use the same authentication method as Codexel and the VSCode extension. You can override the api key by setting the `CODEX_API_KEY` environment variable.
 
 ```shell
-CODEX_API_KEY=your-api-key-here codex exec "Fix merge conflict"
+CODEX_API_KEY=your-api-key-here codexel exec "Fix merge conflict"
 ```
 
-NOTE: `CODEX_API_KEY` is only supported in `codex exec`.
+NOTE: `CODEX_API_KEY` is only supported in `codexel exec`.

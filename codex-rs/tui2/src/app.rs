@@ -108,7 +108,7 @@ fn session_summary(
 
     let usage_line = FinalOutput::from(token_usage).to_string();
     let resume_command =
-        conversation_id.map(|conversation_id| format!("codex resume {conversation_id}"));
+        conversation_id.map(|conversation_id| format!("codexel resume {conversation_id}"));
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -2549,7 +2549,7 @@ mod tests {
         );
         assert_eq!(
             summary.resume_command,
-            Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+            Some("codexel resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
     }
 }

@@ -1,10 +1,10 @@
 # Windows Sandbox Security Details
 
-For overall context on sandboxing in Codex, see [sandbox.md](./sandbox.md).
+For overall context on sandboxing in Codexel, see [sandbox.md](./sandbox.md).
 
 ## Implementation Overview
 
-When commands run via `codex sandbox windows …` (or when the CLI/TUI calls into the same crate in-process for sandboxed turns), the launcher configures a restricted Windows token and an allowlist policy scoped to the declared workspace roots. Writes are blocked everywhere except inside those roots (plus `%TEMP%` when workspace-write mode is requested), and common escape vectors such as alternate data streams, UNC paths, and device handles are denied proactively. The CLI also injects stub executables (for example, wrapping `ssh`) ahead of the host PATH so we can intercept dangerous tools before they ever leave the sandbox.
+When commands run via `codexel sandbox windows …` (or when the CLI/TUI calls into the same crate in-process for sandboxed turns), the launcher configures a restricted Windows token and an allowlist policy scoped to the declared workspace roots. Writes are blocked everywhere except inside those roots (plus `%TEMP%` when workspace-write mode is requested), and common escape vectors such as alternate data streams, UNC paths, and device handles are denied proactively. The CLI also injects stub executables (for example, wrapping `ssh`) ahead of the host PATH so we can intercept dangerous tools before they ever leave the sandbox.
 
 ## Known Security Limitations
 
@@ -19,4 +19,4 @@ Running `python windows-sandbox-rs/sandbox_smoketests.py` with full filesystem a
 
 ## Want to Help?
 
-If you are a security-minded Windows user, help us get these tests passing! Improved implementations that make these smoke tests pass meaningfully reduce Codex's escape surface. After iterating, rerun `python windows-sandbox-rs/sandbox_smoketests.py` to validate the fixes and help us drive the suite toward 41/41.
+If you are a security-minded Windows user, help us get these tests passing! Improved implementations that make these smoke tests pass meaningfully reduce Codexel's escape surface. After iterating, rerun `python windows-sandbox-rs/sandbox_smoketests.py` to validate the fixes and help us drive the suite toward 41/41.

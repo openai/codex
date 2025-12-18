@@ -3,7 +3,7 @@ export type CodexOptions = {
   baseUrl?: string;
   apiKey?: string;
   /**
-   * Environment variables passed to the Codex CLI process. When provided, the SDK
+   * Environment variables passed to the Codexel process. When provided, the SDK
    * will not inherit variables from `process.env`.
    */
   env?: Record<string, string>;

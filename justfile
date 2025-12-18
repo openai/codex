@@ -5,18 +5,18 @@ set positional-arguments
 help:
     just -l
 
-# `codex`
-alias c := codex
-codex *args:
-    cargo run --bin codex -- "$@"
+# `codexel`
+alias c := codexel
+codexel *args:
+    cargo run --bin codexel -- "$@"
 
-# `codex exec`
+# `codexel exec`
 exec *args:
-    cargo run --bin codex -- exec "$@"
+    cargo run --bin codexel -- exec "$@"
 
-# `codex tui`
+# `codexel tui`
 tui *args:
-    cargo run --bin codex -- tui "$@"
+    cargo run --bin codexel -- tui "$@"
 
 # Run the CLI version of the file-search crate.
 file-search *args:
@@ -25,7 +25,7 @@ file-search *args:
 # Build the CLI and run the app-server test client
 app-server-test-client *args:
     cargo build -p codex-cli
-    cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex "$@"
+    cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codexel "$@"
 
 # format code
 fmt:

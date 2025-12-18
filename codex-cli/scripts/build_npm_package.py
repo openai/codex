@@ -33,7 +33,7 @@ COMPONENT_DEST_DIR: dict[str, str] = {
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build or stage the Codex CLI npm package.")
+    parser = argparse.ArgumentParser(description="Build or stage the Codexel npm package.")
     parser.add_argument(
         "--package",
         choices=("codex", "codex-responses-api-proxy", "codex-sdk"),
@@ -116,8 +116,8 @@ def main() -> int:
                 print(
                     f"Staged version {version} for release in {staging_dir_str}\n\n"
                     "Verify the CLI:\n"
-                    f"    node {staging_dir_str}/bin/codex.js --version\n"
-                    f"    node {staging_dir_str}/bin/codex.js --help\n\n"
+                    f"    node {staging_dir_str}/bin/codexel.js --version\n"
+                    f"    node {staging_dir_str}/bin/codexel.js --help\n\n"
                 )
             elif package == "codex-responses-api-proxy":
                 print(
@@ -163,7 +163,7 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
     if package == "codex":
         bin_dir = staging_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
+        shutil.copy2(CODEX_CLI_ROOT / "bin" / "codexel.js", bin_dir / "codexel.js")
         rg_manifest = CODEX_CLI_ROOT / "bin" / "rg"
         if rg_manifest.exists():
             shutil.copy2(rg_manifest, bin_dir / "rg")

@@ -14,7 +14,16 @@ import {
   startResponsesTestProxy,
 } from "./responsesProxy";
 
-const codexExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
+const codexExecBinary = process.platform === "win32" ? "codexel.exe" : "codexel";
+const codexExecPath = path.join(
+  process.cwd(),
+  "..",
+  "..",
+  "codex-rs",
+  "target",
+  "debug",
+  codexExecBinary,
+);
 
 function* infiniteShellCall(): Generator<SseResponseBody> {
   while (true) {

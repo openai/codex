@@ -10,7 +10,7 @@
 
 ### DotSlash
 
-The GitHub Release also contains a [DotSlash](https://dotslash-cli.com/) file for the Codex CLI named `codex`. Using a DotSlash file makes it possible to make a lightweight commit to source control to ensure all contributors use the same version of an executable, regardless of what platform they use for development.
+The GitHub Release also contains a [DotSlash](https://dotslash-cli.com/) file for Codexel named `codexel`. Using a DotSlash file makes it possible to make a lightweight commit to source control to ensure all contributors use the same version of an executable, regardless of what platform they use for development.
 
 ### Build from source
 
@@ -29,11 +29,11 @@ cargo install just
 # Optional: install nextest for the `just test` helper (or use `cargo test --all-features` as a fallback)
 cargo install cargo-nextest
 
-# Build Codex.
+# Build Codexel.
 cargo build
 
 # Launch the TUI with a sample prompt.
-cargo run --bin codex -- "explain this codebase to me"
+cargo run --bin codexel -- "explain this codebase to me"
 
 # After making changes, use the root justfile helpers (they default to codex-rs):
 just fmt

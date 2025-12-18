@@ -62,7 +62,7 @@ pub fn arg0_dispatch() -> Option<TempDir> {
     }
 }
 
-/// While we want to deploy the Codex CLI as a single executable for simplicity,
+/// While we want to deploy Codexel as a single executable for simplicity,
 /// we also want to expose some of its functionality as distinct CLIs, so we use
 /// the "arg0 trick" to determine which CLI to dispatch. This effectively allows
 /// us to simulate deploying multiple executables as a single binary on Mac and
@@ -72,7 +72,7 @@ pub fn arg0_dispatch() -> Option<TempDir> {
 /// `codex-linux-sandbox` we *directly* execute
 /// [`codex_linux_sandbox::run_main`] (which never returns). Otherwise we:
 ///
-/// 1.  Load `.env` values from `~/.codex/.env` before creating any threads.
+/// 1.  Load `.env` values from `~/.codexel/.env` before creating any threads.
 /// 2.  Construct a Tokio multi-thread runtime.
 /// 3.  Derive the path to the current executable (so children can re-invoke the
 ///     sandbox) when running on Linux.
@@ -109,7 +109,7 @@ where
 
 const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 
-/// Load env vars from ~/.codex/.env.
+/// Load env vars from ~/.codexel/.env.
 ///
 /// Security: Do not allow `.env` files to create or modify any variables
 /// with names starting with `CODEX_`.
@@ -144,7 +144,7 @@ where
 /// This temporary directory is prepended to the PATH environment variable so
 /// that `apply_patch` can be on the PATH without requiring the user to
 /// install a separate `apply_patch` executable, simplifying the deployment of
-/// Codex CLI.
+/// Codexel.
 ///
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
 /// be called before multiple threads are spawned.

@@ -5,13 +5,13 @@
 If you prefer to pay-as-you-go, you can still authenticate with your OpenAI API key:
 
 ```shell
-printenv OPENAI_API_KEY | codex login --with-api-key
+printenv OPENAI_API_KEY | codexel login --with-api-key
 ```
 
 Alternatively, read from a file:
 
 ```shell
-codex login --with-api-key < my_key.txt
+codexel login --with-api-key < my_key.txt
 ```
 
 The legacy `--api-key` flag now exits with an error instructing you to use `--with-api-key` so that the key never appears in shell history or process listings.
@@ -20,11 +20,11 @@ This key must, at minimum, have write access to the Responses API.
 
 ## Migrating to ChatGPT login from API key
 
-If you've used the Codex CLI before with usage-based billing via an API key and want to switch to using your ChatGPT plan, follow these steps:
+If you've used Codexel before with usage-based billing via an API key and want to switch to using your ChatGPT plan, follow these steps:
 
-1. Update the CLI and ensure `codex --version` is `0.20.0` or later
-2. Delete `~/.codex/auth.json` (on Windows: `C:\\Users\\USERNAME\\.codex\\auth.json`)
-3. Run `codex login` again
+1. Update the CLI and ensure `codexel --version` is `0.20.0` or later
+2. Delete `~/.codexel/auth.json` (on Windows: `C:\\Users\\USERNAME\\.codexel\\auth.json`)
+3. Run `codexel login` again
 
 ## Connecting on a "Headless" Machine
 
@@ -32,37 +32,37 @@ Today, the login process entails running a server on `localhost:1455`. If you ar
 
 ### Authenticate locally and copy your credentials to the "headless" machine
 
-The easiest solution is likely to run through the `codex login` process on your local machine such that `localhost:1455` _is_ accessible in your web browser. When you complete the authentication process, an `auth.json` file should be available at `$CODEX_HOME/auth.json` (on Mac/Linux, `$CODEX_HOME` defaults to `~/.codex` whereas on Windows, it defaults to `%USERPROFILE%\\.codex`).
+The easiest solution is likely to run through the `codexel login` process on your local machine such that `localhost:1455` _is_ accessible in your web browser. When you complete the authentication process, an `auth.json` file should be available at `$CODEXEL_HOME/auth.json` (on Mac/Linux, `$CODEXEL_HOME` defaults to `~/.codexel` whereas on Windows, it defaults to `%USERPROFILE%\\.codexel`). For compatibility, Codexel also supports the legacy `$CODEX_HOME` environment variable.
 
-Because the `auth.json` file is not tied to a specific host, once you complete the authentication flow locally, you can copy the `$CODEX_HOME/auth.json` file to the headless machine and then `codex` should "just work" on that machine. Note to copy a file to a Docker container, you can do:
+Because the `auth.json` file is not tied to a specific host, once you complete the authentication flow locally, you can copy the `$CODEXEL_HOME/auth.json` file to the headless machine and then `codexel` should "just work" on that machine. Note to copy a file to a Docker container, you can do:
 
 ```shell
 # substitute MY_CONTAINER with the name or id of your Docker container:
 CONTAINER_HOME=$(docker exec MY_CONTAINER printenv HOME)
-docker exec MY_CONTAINER mkdir -p "$CONTAINER_HOME/.codex"
-docker cp auth.json MY_CONTAINER:"$CONTAINER_HOME/.codex/auth.json"
+docker exec MY_CONTAINER mkdir -p "$CONTAINER_HOME/.codexel"
+docker cp auth.json MY_CONTAINER:"$CONTAINER_HOME/.codexel/auth.json"
 ```
 
 whereas if you are `ssh`'d into a remote machine, you likely want to use [`scp`](https://en.wikipedia.org/wiki/Secure_copy_protocol):
 
 ```shell
-ssh user@remote 'mkdir -p ~/.codex'
-scp ~/.codex/auth.json user@remote:~/.codex/auth.json
+ssh user@remote 'mkdir -p ~/.codexel'
+scp ~/.codexel/auth.json user@remote:~/.codexel/auth.json
 ```
 
 or try this one-liner:
 
 ```shell
-ssh user@remote 'mkdir -p ~/.codex && cat > ~/.codex/auth.json' < ~/.codex/auth.json
+ssh user@remote 'mkdir -p ~/.codexel && cat > ~/.codexel/auth.json' < ~/.codexel/auth.json
 ```
 
 ### Connecting through VPS or remote
 
-If you run Codex on a remote machine (VPS/server) without a local browser, the login helper starts a server on `localhost:1455` on the remote host. To complete login in your local browser, forward that port to your machine before starting the login flow:
+If you run Codexel on a remote machine (VPS/server) without a local browser, the login helper starts a server on `localhost:1455` on the remote host. To complete login in your local browser, forward that port to your machine before starting the login flow:
 
 ```bash
 # From your local machine
 ssh -L 1455:localhost:1455 <user>@<remote-host>
 ```
 
-Then, in that SSH session, run `codex` and select "Sign in with ChatGPT". When prompted, open the printed URL (it will be `http://localhost:1455/...`) in your local browser. The traffic will be tunneled to the remote server.
+Then, in that SSH session, run `codexel` and select "Sign in with ChatGPT". When prompted, open the printed URL (it will be `http://localhost:1455/...`) in your local browser. The traffic will be tunneled to the remote server.

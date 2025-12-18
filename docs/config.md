@@ -1,6 +1,6 @@
 # Config
 
-Codex configuration gives you fine-grained control over the model, execution environment, and integrations available to the CLI. Use this guide alongside the workflows in [`codex exec`](./exec.md), the guardrails in [Sandbox & approvals](./sandbox.md), and project guidance from [AGENTS.md discovery](./agents_md.md).
+Codexel configuration gives you fine-grained control over the model, execution environment, and integrations available to the CLI. Use this guide alongside the workflows in [`codexel exec`](./exec.md), the guardrails in [Sandbox & approvals](./sandbox.md), and project guidance from [AGENTS.md discovery](./agents_md.md).
 
 ## Quick navigation
 
@@ -18,18 +18,18 @@ Codex supports several mechanisms for setting config values:
 - A generic `-c`/`--config` flag that takes a `key=value` pair, such as `--config model="o3"`.
   - The key can contain dots to set a value deeper than the root, e.g. `--config model_providers.openai.wire_api="chat"`.
   - For consistency with `config.toml`, values are a string in TOML format rather than JSON format, so use `key='{a = 1, b = 2}'` rather than `key='{"a": 1, "b": 2}'`.
-    - The quotes around the value are necessary, as without them your shell would split the config argument on spaces, resulting in `codex` receiving `-c key={a` with (invalid) additional arguments `=`, `1,`, `b`, `=`, `2}`.
+    - The quotes around the value are necessary, as without them your shell would split the config argument on spaces, resulting in `codexel` receiving `-c key={a` with (invalid) additional arguments `=`, `1,`, `b`, `=`, `2}`.
   - Values can contain any TOML object, such as `--config shell_environment_policy.include_only='["PATH", "HOME", "USER"]'`.
   - If `value` cannot be parsed as a valid TOML value, it is treated as a string value. This means that `-c model='"o3"'` and `-c model=o3` are equivalent.
     - In the first case, the value is the TOML string `"o3"`, while in the second the value is `o3`, which is not valid TOML and therefore treated as the TOML string `"o3"`.
     - Because quotes are interpreted by one's shell, `-c key="true"` will be correctly interpreted in TOML as `key = true` (a boolean) and not `key = "true"` (a string). If for some reason you needed the string `"true"`, you would need to use `-c key='"true"'` (note the two sets of quotes).
-- The `$CODEX_HOME/config.toml` configuration file where the `CODEX_HOME` environment value defaults to `~/.codex`. (Note `CODEX_HOME` will also be where logs and other Codex-related information are stored.)
+- The `$CODEXEL_HOME/config.toml` configuration file where the `CODEXEL_HOME` environment value defaults to `~/.codexel`. (For compatibility, `CODEX_HOME` is also supported; when set, it overrides the default.)
 
 Both the `--config` flag and the `config.toml` file support the following options:
 
 ## Feature flags
 
-Optional and experimental capabilities are toggled via the `[features]` table in `$CODEX_HOME/config.toml`. If you see a deprecation notice mentioning a legacy key (for example `experimental_use_exec_command_tool`), move the setting into `[features]` or pass `--enable <feature>`.
+Optional and experimental capabilities are toggled via the `[features]` table in `$CODEXEL_HOME/config.toml` (or legacy `$CODEX_HOME/config.toml`). If you see a deprecation notice mentioning a legacy key (for example `experimental_use_exec_command_tool`), move the setting into `[features]` or pass `--enable <feature>`.
 
 ```toml
 [features]
@@ -106,7 +106,7 @@ wire_api = "chat"
 query_params = {}
 ```
 
-Note this makes it possible to use Codex CLI with non-OpenAI models, so long as they use a wire API that is compatible with the OpenAI chat completions API. For example, you could define the following provider to use Codex CLI with Ollama running locally:
+Note this makes it possible to use Codexel with non-OpenAI models, so long as they use a wire API that is compatible with the OpenAI chat completions API. For example, you could define the following provider to use Codexel with Ollama running locally:
 
 ```toml
 [model_providers.ollama]
@@ -258,7 +258,7 @@ model_supports_reasoning_summaries = true
 
 The size of the context window for the model, in tokens.
 
-In general, Codex knows the context window for the most common OpenAI models, but if you are using a new model with an old version of the Codex CLI, then you can use `model_context_window` to tell Codex what value to use to determine how much context is left during a conversation.
+In general, Codexel knows the context window for the most common OpenAI models, but if you are using a new model with an old version of Codexel, then you can use `model_context_window` to tell Codexel what value to use to determine how much context is left during a conversation.
 
 ### oss_provider
 
@@ -485,7 +485,7 @@ Streamable HTTP connections always use the experimental Rust MCP client under th
 rmcp_client = true
 ```
 
-After enabling it, run `codex mcp login <server-name>` when the server supports OAuth.
+After enabling it, run `codexel mcp login <server-name>` when the server supports OAuth.
 
 #### Other configuration options
 
@@ -508,27 +508,27 @@ When both `enabled_tools` and `disabled_tools` are specified, Codex first restri
 
 ```shell
 # List all available commands
-codex mcp --help
+codexel mcp --help
 
 # Add a server (env can be repeated; `--` separates the launcher command)
-codex mcp add docs -- docs-server --port 4000
+codexel mcp add docs -- docs-server --port 4000
 
 # List configured servers (pretty table or JSON)
-codex mcp list
-codex mcp list --json
+codexel mcp list
+codexel mcp list --json
 
 # Show one server (table or JSON)
-codex mcp get docs
-codex mcp get docs --json
+codexel mcp get docs
+codexel mcp get docs --json
 
 # Remove a server
-codex mcp remove docs
+codexel mcp remove docs
 
 # Log in to a streamable HTTP server that supports oauth
-codex mcp login SERVER_NAME
+codexel mcp login SERVER_NAME
 
 # Log out from a streamable HTTP server that supports oauth
-codex mcp logout SERVER_NAME
+codexel mcp logout SERVER_NAME
 ```
 
 ### Examples of useful MCPs
@@ -646,7 +646,7 @@ Set `otel.exporter` to control where events go:
   ```
 
 Both OTLP exporters accept an optional `tls` block so you can trust a custom CA
-or enable mutual TLS. Relative paths are resolved against `~/.codex/`:
+or enable mutual TLS. Relative paths are resolved against `~/.codexel/`:
 
 ```toml
 [otel.exporter."otlp-http"]
@@ -658,8 +658,8 @@ protocol = "binary"
 
 [otel.exporter."otlp-http".tls]
 ca-certificate = "certs/otel-ca.pem"
-client-certificate = "/etc/codex/certs/client.pem"
-client-private-key = "/etc/codex/certs/client-key.pem"
+client-certificate = "/etc/codexel/certs/client.pem"
+client-private-key = "/etc/codexel/certs/client-key.pem"
 ```
 
 If the exporter is `none` nothing is written anywhere; otherwise you must run or point to your
@@ -750,10 +750,10 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-To have Codex use this script for notifications, you would configure it via `notify` in `~/.codex/config.toml` using the appropriate path to `notify.py` on your computer:
+To have Codexel use this script for notifications, you would configure it via `notify` in `~/.codexel/config.toml` using the appropriate path to `notify.py` on your computer:
 
 ```toml
-notify = ["python3", "/Users/mbolin/.codex/notify.py"]
+notify = ["python3", "/Users/mbolin/.codexel/notify.py"]
 ```
 
 > [!NOTE]
@@ -831,11 +831,11 @@ Users can specify config values at multiple levels. Order of precedence is as fo
 1. custom command-line argument, e.g., `--model o3`
 2. as part of a profile, where the `--profile` is specified via a CLI (or in the config file itself)
 3. as an entry in `config.toml`, e.g., `model = "o3"`
-4. the default value that comes with Codex CLI (i.e., Codex CLI defaults to `gpt-5.1-codex-max`)
+4. the default value that comes with Codexel (i.e., Codexel defaults to `gpt-5.1-codex-max`)
 
 ### history
 
-By default, Codex CLI records messages sent to the model in `$CODEX_HOME/history.jsonl`. Note that on UNIX, the file permissions are set to `o600`, so it should only be readable and writable by the owner.
+By default, Codexel records messages sent to the model in `$CODEXEL_HOME/history.jsonl` (or legacy `$CODEX_HOME/history.jsonl`). Note that on UNIX, the file permissions are set to `o600`, so it should only be readable and writable by the owner.
 
 To disable this behavior, configure `[history]` as follows:
 
@@ -931,13 +931,13 @@ cli_auth_credentials_store = "keyring"
 
 Valid values:
 
-- `file` (default) – Store credentials in `auth.json` under `$CODEX_HOME`.
+- `file` (default) – Store credentials in `auth.json` under `$CODEXEL_HOME` (or legacy `$CODEX_HOME`).
 - `keyring` – Store credentials in the operating system keyring via the [`keyring` crate](https://crates.io/crates/keyring); the CLI reports an error if secure storage is unavailable. Backends by OS:
   - macOS: macOS Keychain
   - Windows: Windows Credential Manager
   - Linux: DBus‑based Secret Service, the kernel keyutils, or a combination
   - FreeBSD/OpenBSD: DBus‑based Secret Service
-- `auto` – Save credentials to the operating system keyring when available; otherwise, fall back to `auth.json` under `$CODEX_HOME`.
+- `auto` – Save credentials to the operating system keyring when available; otherwise, fall back to `auth.json` under `$CODEXEL_HOME` (or legacy `$CODEX_HOME`).
 
 ## Config reference
 

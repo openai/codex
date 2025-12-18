@@ -1,6 +1,6 @@
 # @openai/codex-shell-tool-mcp
 
-**Note: This MCP server is still experimental. When using it with Codex CLI, ensure the CLI version matches the MCP server version.**
+**Note: This MCP server is still experimental. When using it with Codexel, ensure the CLI version matches the MCP server version.**
 
 `@openai/codex-shell-tool-mcp` is an MCP server that provides a tool named `shell` that runs a shell command inside a sandboxed instance of Bash. This special instance of Bash intercepts requests to spawn new processes (specifically, [`execve(2)`](https://man7.org/linux/man-pages/man2/execve.2.html) calls). For each call, it makes a request back to the MCP server to determine whether to allow the proposed command to execute. It also has the option of _escalating_ the command to run unprivileged outside of the sandbox governing the Bash process.
 
@@ -29,14 +29,14 @@ First, verify that you can download and run the MCP executable:
 npx -y @openai/codex-shell-tool-mcp --version
 ```
 
-To test out the MCP with a one-off invocation of Codex CLI, it is important to _disable_ the default shell tool in addition to enabling the MCP so Codex has exactly one shell-like tool available to it:
+To test out the MCP with a one-off invocation of Codexel, it is important to _disable_ the default shell tool in addition to enabling the MCP so Codexel has exactly one shell-like tool available to it:
 
 ```bash
-codex --disable shell_tool \
+codexel --disable shell_tool \
   --config 'mcp_servers.bash={command = "npx", args = ["-y", "@openai/codex-shell-tool-mcp"]}'
 ```
 
-To configure this permanently so you can use the MCP while running `codex` without additional command-line flags, add the following to your `~/.codex/config.toml`:
+To configure this permanently so you can use the MCP while running `codexel` without additional command-line flags, add the following to your `~/.codexel/config.toml`:
 
 ```toml
 [features]
@@ -47,7 +47,7 @@ command = "npx"
 args = ["-y", "@openai/codex-shell-tool-mcp"]
 ```
 
-Note when the `@openai/codex-shell-tool-mcp` launcher runs, it selects the appropriate native binary to run based on the host OS/architecture. For the Bash wrapper, it inspects `/etc/os-release` on Linux or the Darwin major version on macOS to try to find the best match it has available. See [`bashSelection.ts`](https://github.com/openai/codex/blob/main/shell-tool-mcp/src/bashSelection.ts) for details.
+Note when the `@openai/codex-shell-tool-mcp` launcher runs, it selects the appropriate native binary to run based on the host OS/architecture. For the Bash wrapper, it inspects `/etc/os-release` on Linux or the Darwin major version on macOS to try to find the best match it has available. See `shell-tool-mcp/src/bashSelection.ts` for details.
 
 ## MCP Client Requirements
 
@@ -82,7 +82,7 @@ This capability means the MCP server honors notifications like the following to 
 }
 ```
 
-The Codex harness (used by the CLI and the VS Code extension) sends such notifications to MCP servers that declare the `codex/sandbox-state` capability.
+The Codexel harness (used by the CLI and the VS Code extension) sends such notifications to MCP servers that declare the `codex/sandbox-state` capability.
 
 ## Package Contents
 
@@ -92,4 +92,4 @@ This package wraps the `codex-exec-mcp-server` binary and its helpers so that th
 - A patched Bash that honors `BASH_EXEC_WRAPPER`, built for multiple glibc baselines (Ubuntu 24.04/22.04/20.04, Debian 12/11, CentOS-like 9) and macOS (15/14/13).
 - A launcher (`bin/mcp-server.js`) that picks the correct binaries for the current `process.platform` / `process.arch`, specifying `--execve` and `--bash` for the MCP, as appropriate.
 
-See [the README in the Codex repo](https://github.com/openai/codex/blob/main/codex-rs/exec-server/README.md) for details.
+See [the exec-server README](../codex-rs/exec-server/README.md) for details.

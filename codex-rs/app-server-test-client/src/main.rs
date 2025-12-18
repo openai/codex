@@ -59,10 +59,10 @@ use uuid::Uuid;
 
 /// Minimal launcher that initializes the Codex app-server and logs the handshake.
 #[derive(Parser)]
-#[command(author = "Codex", version, about = "Bootstrap Codex app-server", long_about = None)]
+#[command(author = "Codexel", version, about = "Bootstrap Codexel app-server", long_about = None)]
 struct Cli {
-    /// Path to the `codex` CLI binary.
-    #[arg(long, env = "CODEX_BIN", default_value = "codex")]
+    /// Path to the `codexel` CLI binary.
+    #[arg(long, env = "CODEX_BIN", default_value = "codexel")]
     codex_bin: String,
 
     #[command(subcommand)]
@@ -71,15 +71,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum CliCommand {
-    /// Send a user message through the Codex app-server.
+    /// Send a user message through the Codexel app-server.
     SendMessage {
-        /// User message to send to Codex.
+        /// User message to send to Codexel.
         #[arg()]
         user_message: String,
     },
     /// Send a user message through the app-server V2 thread/turn APIs.
     SendMessageV2 {
-        /// User message to send to Codex.
+        /// User message to send to Codexel.
         #[arg()]
         user_message: String,
     },

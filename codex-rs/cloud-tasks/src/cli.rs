@@ -14,38 +14,38 @@ pub struct Cli {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Command {
-    /// Submit a new Codex Cloud task without launching the TUI.
+    /// Submit a new Codexel Cloud task without launching the TUI.
     Exec(ExecCommand),
-    /// Show the status of a Codex Cloud task.
+    /// Show the status of a Codexel Cloud task.
     Status(StatusCommand),
-    /// Apply the diff for a Codex Cloud task locally.
+    /// Apply the diff for a Codexel Cloud task locally.
     Apply(ApplyCommand),
-    /// Show the unified diff for a Codex Cloud task.
+    /// Show the unified diff for a Codexel Cloud task.
     Diff(DiffCommand),
 }
 
 #[derive(Debug, Args)]
 pub struct ExecCommand {
-    /// Task prompt to run in Codex Cloud.
+    /// Task prompt to run in Codexel Cloud.
     #[arg(value_name = "QUERY")]
     pub query: Option<String>,
 
-    /// Target environment identifier (see `codex cloud` to browse).
-    #[arg(long = "env", value_name = "ENV_ID")]
-    pub environment: String,
+    /// Target environment identifier (see `codexel cloud` to browse). 
+    #[arg(long = "env", value_name = "ENV_ID")] 
+    pub environment: String, 
 
-    /// Number of assistant attempts (best-of-N).
-    #[arg(
-        long = "attempts",
-        default_value_t = 1usize,
+    /// Number of assistant attempts (best-of-N). 
+    #[arg( 
+        long = "attempts", 
+        default_value_t = 1usize, 
         value_parser = parse_attempts
-    )]
-    pub attempts: usize,
+    )] 
+    pub attempts: usize, 
 
-    /// Git branch to run in Codex Cloud (defaults to current branch).
-    #[arg(long = "branch", value_name = "BRANCH")]
-    pub branch: Option<String>,
-}
+    /// Git branch to run in Codexel Cloud (defaults to current branch). 
+    #[arg(long = "branch", value_name = "BRANCH")] 
+    pub branch: Option<String>, 
+} 
 
 fn parse_attempts(input: &str) -> Result<usize, String> {
     let value: usize = input
@@ -60,14 +60,14 @@ fn parse_attempts(input: &str) -> Result<usize, String> {
 
 #[derive(Debug, Args)]
 pub struct StatusCommand {
-    /// Codex Cloud task identifier to inspect.
+    /// Codexel Cloud task identifier to inspect.
     #[arg(value_name = "TASK_ID")]
     pub task_id: String,
 }
 
 #[derive(Debug, Args)]
 pub struct ApplyCommand {
-    /// Codex Cloud task identifier to apply.
+    /// Codexel Cloud task identifier to apply.
     #[arg(value_name = "TASK_ID")]
     pub task_id: String,
 
@@ -78,7 +78,7 @@ pub struct ApplyCommand {
 
 #[derive(Debug, Args)]
 pub struct DiffCommand {
-    /// Codex Cloud task identifier to display.
+    /// Codexel Cloud task identifier to display.
     #[arg(value_name = "TASK_ID")]
     pub task_id: String,
 

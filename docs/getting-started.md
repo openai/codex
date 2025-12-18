@@ -3,46 +3,46 @@
 Looking for something specific? Jump ahead:
 
 - [Tips & shortcuts](#tips--shortcuts) – hotkeys, resume flow, prompts
-- [Non-interactive runs](./exec.md) – automate with `codex exec`
+- [Non-interactive runs](./exec.md) – automate with `codexel exec`
 - Ready for deeper customization? Head to [`advanced.md`](./advanced.md)
 
 ### CLI usage
 
 | Command            | Purpose                            | Example                         |
 | ------------------ | ---------------------------------- | ------------------------------- |
-| `codex`            | Interactive TUI                    | `codex`                         |
-| `codex "..."`      | Initial prompt for interactive TUI | `codex "fix lint errors"`       |
-| `codex exec "..."` | Non-interactive "automation mode"  | `codex exec "explain utils.ts"` |
+| `codexel`          | Interactive TUI                    | `codexel`                       |
+| `codexel "..."`    | Initial prompt for interactive TUI | `codexel "fix lint errors"`     |
+| `codexel exec "..."` | Non-interactive "automation mode" | `codexel exec "explain utils.ts"` |
 
 Key flags: `--model/-m`, `--ask-for-approval/-a`.
 
 ### Resuming interactive sessions
-
-- Run `codex resume` to display the session picker UI
-- Resume most recent: `codex resume --last`
-- Resume by id: `codex resume <SESSION_ID>` (You can get session ids from /status or `~/.codex/sessions/`)
+ 
+- Run `codexel resume` to display the session picker UI
+- Resume most recent: `codexel resume --last`
+- Resume by id: `codexel resume <SESSION_ID>` (You can get session ids from /status or `~/.codexel/sessions/`)
 - The picker shows the session's recorded Git branch when available.
-- To show the session's original working directory (CWD), run `codex resume --all` (this also disables cwd filtering and adds a `CWD` column).
-
-Examples:
-
+- To show the session's original working directory (CWD), run `codexel resume --all` (this also disables cwd filtering and adds a `CWD` column).
+ 
+ Examples:
+ 
 ```shell
 # Open a picker of recent sessions
-codex resume
+codexel resume
 
 # Resume the most recent session
-codex resume --last
+codexel resume --last
 
 # Resume a specific session by id
-codex resume 7f9f9a2e-1b3c-4c7a-9b0e-123456789abc
+codexel resume 7f9f9a2e-1b3c-4c7a-9b0e-123456789abc
 ```
 
 ### Running with a prompt as input
 
-You can also run Codex CLI with a prompt as input:
+You can also run Codexel with a prompt as input:
 
 ```shell
-codex "explain this codebase to me"
+codexel "explain this codebase to me"
 ```
 
 ### Example prompts
@@ -51,21 +51,21 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
 
 | ✨  | What you type                                                                   | What happens                                                               |
 | --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 1   | `codex "Refactor the Dashboard component to React Hooks"`                       | Codex rewrites the class component, runs `npm test`, and shows the diff.   |
-| 2   | `codex "Generate SQL migrations for adding a users table"`                      | Infers your ORM, creates migration files, and runs them in a sandboxed DB. |
-| 3   | `codex "Write unit tests for utils/date.ts"`                                    | Generates tests, executes them, and iterates until they pass.              |
-| 4   | `codex "Bulk-rename *.jpeg -> *.jpg with git mv"`                               | Safely renames files and updates imports/usages.                           |
-| 5   | `codex "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step-by-step human explanation.                                  |
-| 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
-| 7   | `codex "Look for vulnerabilities and create a security review report"`          | Finds and explains security bugs.                                          |
+| 1   | `codexel "Refactor the Dashboard component to React Hooks"`                     | Codexel rewrites the class component, runs `npm test`, and shows the diff. |
+| 2   | `codexel "Generate SQL migrations for adding a users table"`                    | Infers your ORM, creates migration files, and runs them in a sandboxed DB. |
+| 3   | `codexel "Write unit tests for utils/date.ts"`                                  | Generates tests, executes them, and iterates until they pass.              |
+| 4   | `codexel "Bulk-rename *.jpeg -> *.jpg with git mv"`                             | Safely renames files and updates imports/usages.                           |
+| 5   | `codexel "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                    | Outputs a step-by-step human explanation.                                  |
+| 6   | `codexel "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                          |
+| 7   | `codexel "Look for vulnerabilities and create a security review report"`        | Finds and explains security bugs.                                          |
 
 Looking to reuse your own instructions? Create slash commands with [custom prompts](./prompts.md).
 
 ### Memory with AGENTS.md
 
-You can give Codex extra instructions and guidance using `AGENTS.md` files. Codex looks for them in the following places, and merges them top-down:
+You can give Codexel extra instructions and guidance using `AGENTS.md` files. Codexel looks for them in the following places, and merges them top-down:
 
-1. `~/.codex/AGENTS.md` - personal global guidance
+1. `~/.codexel/AGENTS.md` - personal global guidance
 2. Every directory from the repository root down to your current working directory (inclusive). In each directory, Codex first looks for `AGENTS.override.md` and uses it if present; otherwise it falls back to `AGENTS.md`. Use the override form when you want to replace inherited instructions for that directory.
 
 For more information on how to use AGENTS.md, see the [official AGENTS.md documentation](https://agents.md/).
@@ -78,7 +78,7 @@ Typing `@` triggers a fuzzy-filename search over the workspace root. Use up/down
 
 #### Answer interactive questions
 
-When Codex needs a decision mid-run, it may pause and show an interactive question picker instead of continuing.
+When Codexel needs a decision mid-run, it may pause and show an interactive question picker instead of continuing.
 
 - Use arrow keys to move, Enter to choose/confirm, and Esc to cancel.
 - Some questions support multi-select (Space toggles selections).
@@ -96,14 +96,14 @@ In the transcript preview, the footer shows an `Esc edit prev` hint while editin
 
 #### `--cd`/`-C` flag
 
-Sometimes it is not convenient to `cd` to the directory you want Codex to use as the "working root" before running Codex. Fortunately, `codex` supports a `--cd` option so you can specify whatever folder you want. You can confirm that Codex is honoring `--cd` by double-checking the **workdir** it reports in the TUI at the start of a new session.
+Sometimes it is not convenient to `cd` to the directory you want Codexel to use as the "working root" before running Codexel. Fortunately, `codexel` supports a `--cd` option so you can specify whatever folder you want. You can confirm that Codexel is honoring `--cd` by double-checking the **workdir** it reports in the TUI at the start of a new session.
 
 #### `--add-dir` flag
 
 Need to work across multiple projects in one run? Pass `--add-dir` one or more times to expose extra directories as writable roots for the current session while keeping the main working directory unchanged. For example:
 
 ```shell
-codex --cd apps/frontend --add-dir ../backend --add-dir ../shared
+codexel --cd apps/frontend --add-dir ../backend --add-dir ../shared
 ```
 
 Codex can then inspect and edit files in each listed directory without leaving the primary workspace.
@@ -113,9 +113,9 @@ Codex can then inspect and edit files in each listed directory without leaving t
 Generate shell completion scripts via:
 
 ```shell
-codex completion bash
-codex completion zsh
-codex completion fish
+codexel completion bash
+codexel completion zsh
+codexel completion fish
 ```
 
 #### Image input
@@ -123,10 +123,10 @@ codex completion fish
 Paste images directly into the composer (Ctrl+V / Cmd+V) to attach them to your prompt. You can also attach files via the CLI using `-i/--image` (comma‑separated):
 
 ```bash
-codex -i screenshot.png "Explain this error"
-codex --image img1.png,img2.jpg "Summarize these diagrams"
+codexel -i screenshot.png "Explain this error"
+codexel --image img1.png,img2.jpg "Summarize these diagrams"
 ```
 
 #### Environment variables and executables
 
-Make sure your environment is already set up before launching Codex so it does not spend tokens probing what to activate. For example, source your Python virtualenv (or other language runtimes), start any required daemons, and export the env vars you expect to use ahead of time.
+Make sure your environment is already set up before launching Codexel so it does not spend tokens probing what to activate. For example, source your Python virtualenv (or other language runtimes), start any required daemons, and export the env vars you expect to use ahead of time.

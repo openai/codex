@@ -17,7 +17,16 @@ import {
   SseResponseBody,
 } from "./responsesProxy";
 
-const codexExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
+const codexExecBinary = process.platform === "win32" ? "codexel.exe" : "codexel";
+const codexExecPath = path.join(
+  process.cwd(),
+  "..",
+  "..",
+  "codex-rs",
+  "target",
+  "debug",
+  codexExecBinary,
+);
 
 describe("Codex", () => {
   it("returns thread events", async () => {
@@ -348,7 +357,7 @@ describe("Codex", () => {
     }
   });
 
-  it("allows overriding the env passed to the Codex CLI", async () => {
+  it("allows overriding the env passed to Codexel", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
       responseBodies: [

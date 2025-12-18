@@ -20,13 +20,13 @@ use codex_rmcp_client::delete_oauth_tokens;
 use codex_rmcp_client::perform_oauth_login;
 use codex_rmcp_client::supports_oauth_login;
 
-/// [experimental] Launch Codex as an MCP server or manage configured MCP servers.
+/// [experimental] Launch Codexel as an MCP server or manage configured MCP servers.
 ///
 /// Subcommands:
 /// - `serve`  — run the MCP server on stdio
 /// - `list`   — list configured servers (with `--json`)
 /// - `get`    — show a single server (with `--json`)
-/// - `add`    — add a server launcher entry to `~/.codex/config.toml`
+/// - `add`    — add a server launcher entry to `~/.codexel/config.toml`
 /// - `remove` — delete a server entry
 #[derive(Debug, clap::Parser)]
 pub struct McpCli {
@@ -78,7 +78,7 @@ pub struct GetArgs {
 }
 
 #[derive(Debug, clap::Parser)]
-#[command(override_usage = "codex mcp add [OPTIONS] <NAME> (--url <URL> | -- <COMMAND>...)")]
+#[command(override_usage = "codexel mcp add [OPTIONS] <NAME> (--url <URL> | -- <COMMAND>...)")]
 pub struct AddArgs {
     /// Name for the MCP server configuration.
     pub name: String,
@@ -210,7 +210,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     validate_server_name(&name)?;
 
-    let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
+    let codex_home = find_codex_home().context("failed to resolve Codexel home directory")?;
     let mut servers = load_global_mcp_servers(&codex_home)
         .await
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
@@ -285,7 +285,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                 if !config.features.enabled(Feature::RmcpClient) {
                     println!(
                         "MCP server supports login. Add `features.rmcp_client = true` \
-                         to your config.toml and run `codex mcp login {name}` to login."
+                         to your config.toml and run `codexel mcp login {name}` to login."
                     );
                 } else {
                     println!("Detected OAuth support. Starting OAuth flow…");
@@ -303,7 +303,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
             }
             Ok(false) => {}
             Err(_) => println!(
-                "MCP server may or may not require login. Run `codex mcp login {name}` to login."
+                "MCP server may or may not require login. Run `codexel mcp login {name}` to login."
             ),
         }
     }
@@ -320,7 +320,7 @@ async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveAr
 
     validate_server_name(&name)?;
 
-    let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
+    let codex_home = find_codex_home().context("failed to resolve Codexel home directory")?;
     let mut servers = load_global_mcp_servers(&codex_home)
         .await
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
@@ -354,7 +354,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
 
     if !config.features.enabled(Feature::RmcpClient) {
         bail!(
-            "OAuth login is only supported when [features].rmcp_client is true in config.toml. See https://github.com/openai/codex/blob/main/docs/config.md#feature-flags for details."
+            "OAuth login is only supported when [features].rmcp_client is true in config.toml. See docs/config.md#feature-flags for details."
         );
     }
 
@@ -491,7 +491,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     }
 
     if entries.is_empty() {
-        println!("No MCP servers configured yet. Try `codex mcp add my-tool -- my-command`.");
+        println!("No MCP servers configured yet. Try `codexel mcp add my-tool -- my-command`.");
         return Ok(());
     }
 
@@ -822,7 +822,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
     if let Some(timeout) = server.tool_timeout_sec {
         println!("  tool_timeout_sec: {}", timeout.as_secs_f64());
     }
-    println!("  remove: codex mcp remove {}", get_args.name);
+    println!("  remove: codexel mcp remove {}", get_args.name);
 
     Ok(())
 }

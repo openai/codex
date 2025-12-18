@@ -20,9 +20,9 @@ prefix_rule(
 ```
 
 ## CLI
-- From the Codex CLI, run `codex execpolicy check` subcommand with one or more policy files (for example `src/default.rules`) to check a command:
+- From Codexel, run the `codexel execpolicy check` subcommand with one or more policy files (for example `src/default.rules`) to check a command:
 ```bash
-codex execpolicy check --rules path/to/policy.rules git status
+codexel execpolicy check --rules path/to/policy.rules git status
 ```
 - Pass multiple `--rules` flags to merge rules, evaluated in the order provided, and use `--pretty` for formatted JSON.
 - You can also run the standalone dev binary directly during development:

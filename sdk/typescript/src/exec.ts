@@ -171,7 +171,7 @@ export class CodexExec {
           } else {
             const stderrBuffer = Buffer.concat(stderrChunks);
             reject(
-              new Error(`Codex Exec exited with code ${code}: ${stderrBuffer.toString("utf8")}`),
+              new Error(`Codexel exec exited with code ${code}: ${stderrBuffer.toString("utf8")}`),
             );
           }
         });
@@ -246,8 +246,8 @@ function findCodexPath() {
 
   const vendorRoot = path.join(scriptDirName, "..", "vendor");
   const archRoot = path.join(vendorRoot, targetTriple);
-  const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
-  const binaryPath = path.join(archRoot, "codex", codexBinaryName);
+  const codexelBinaryName = process.platform === "win32" ? "codexel.exe" : "codexel";
+  const binaryPath = path.join(archRoot, "codex", codexelBinaryName);
 
   return binaryPath;
 }
