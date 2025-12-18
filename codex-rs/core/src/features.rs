@@ -19,6 +19,7 @@ pub(crate) use legacy::LegacyFeatureToggles;
 pub enum Stage {
     Experimental,
     Beta {
+        name: &'static str,
         menu_description: &'static str,
         announcement: &'static str,
     },
@@ -28,6 +29,13 @@ pub enum Stage {
 }
 
 impl Stage {
+    pub fn beta_menu_name(self) -> Option<&'static str> {
+        match self {
+            Stage::Beta { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
     pub fn beta_menu_description(self) -> Option<&'static str> {
         match self {
             Stage::Beta {
@@ -323,21 +331,21 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UnifiedExec,
         key: "unified_exec",
-        // stage: Stage::Beta {
-        //     menu_description: "Run long-running terminal commands in the background.",
-        //     announcement: "NEW! Try Background terminals for long running processes. Enable in /experimental!",
-        // },
-        stage: Stage::Experimental,
+        stage: Stage::Beta {
+            name: "Background terminal",
+            menu_description: "Run long-running terminal commands in the background.",
+            announcement: "NEW! Try Background terminals for long running processes. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ShellSnapshot,
         key: "shell_snapshot",
-        // stage: Stage::Beta {
-        //     menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
-        //     announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
-        // },
-        stage: Stage::Experimental,
+        stage: Stage::Beta {
+            name: "Shell snapshot",
+            menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
+            announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     // Unstable features.

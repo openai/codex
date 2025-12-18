@@ -12,10 +12,10 @@ pub const HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG: &str =
 static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     vec![
         ModelPreset {
-            id: "caribou".to_string(),
-            model: "caribou".to_string(),
-            display_name: "caribou".to_string(),
-            description: "Latest Codex-optimized flagship for deep and fast reasoning.".to_string(),
+            id: "gpt-5.2-codex".to_string(),
+            model: "gpt-5.2-codex".to_string(),
+            display_name: "gpt-5.2-codex".to_string(),
+            description: "Latest frontier agentic coding model.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
@@ -44,7 +44,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
             id: "gpt-5.1-codex-max".to_string(),
             model: "gpt-5.1-codex-max".to_string(),
             display_name: "gpt-5.1-codex-max".to_string(),
-            description: "Latest Codex-optimized flagship for deep and fast reasoning.".to_string(),
+            description: "Codex-optimized flagship for deep and fast reasoning.".to_string(),
             default_reasoning_effort: ReasoningEffort::Medium,
             supported_reasoning_efforts: vec![
                 ReasoningEffortPreset {
@@ -65,43 +65,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "caribou".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: "caribou".to_string(),
-                model_link: Some("https://www.codex.com/models/caribou".to_string()),
-            }),
-            show_in_picker: true,
-            supported_in_api: true,
-        },
-        ModelPreset {
-            id: "gpt-5.1-codex".to_string(),
-            model: "gpt-5.1-codex".to_string(),
-            display_name: "gpt-5.1-codex".to_string(),
-            description: "Optimized for codex.".to_string(),
-            default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
-                ReasoningEffortPreset {
-                    effort: ReasoningEffort::Low,
-                    description: "Fastest responses with limited reasoning".to_string(),
-                },
-                ReasoningEffortPreset {
-                    effort: ReasoningEffort::Medium,
-                    description: "Dynamically adjusts reasoning based on the task".to_string(),
-                },
-                ReasoningEffortPreset {
-                    effort: ReasoningEffort::High,
-                    description: "Maximizes reasoning depth for complex or ambiguous problems"
-                        .to_string(),
-                },
-            ],
-            is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "caribou".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: "caribou".to_string(),
-                model_link: Some("https://www.codex.com/models/caribou".to_string()),
-            }),
+            upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: true,
             supported_in_api: true,
         },
@@ -123,12 +87,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "caribou".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: "caribou".to_string(),
-                model_link: Some("https://www.codex.com/models/caribou".to_string()),
-            }),
+            upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: true,
             supported_in_api: true,
         },
@@ -157,42 +116,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "caribou".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: "caribou".to_string(),
-                model_link: Some("https://www.codex.com/models/caribou".to_string()),
-            }),
-            show_in_picker: true,
-            supported_in_api: true,
-        },
-        ModelPreset {
-            id: "gpt-5.1".to_string(),
-            model: "gpt-5.1".to_string(),
-            display_name: "gpt-5.1".to_string(),
-            description: "Broad world knowledge with strong general reasoning.".to_string(),
-            default_reasoning_effort: ReasoningEffort::Medium,
-            supported_reasoning_efforts: vec![
-                ReasoningEffortPreset {
-                    effort: ReasoningEffort::Low,
-                    description: "Balances speed with some reasoning; useful for straightforward queries and short explanations".to_string(),
-                },
-                ReasoningEffortPreset {
-                    effort: ReasoningEffort::Medium,
-                    description: "Provides a solid balance of reasoning depth and latency for general-purpose tasks".to_string(),
-                },
-                ReasoningEffortPreset {
-                    effort: ReasoningEffort::High,
-                    description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
-                },
-            ],
-            is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "caribou".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: "caribou".to_string(),
-                model_link: Some("https://www.codex.com/models/caribou".to_string()),
-            }),
+            upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: true,
             supported_in_api: true,
         },
@@ -218,12 +142,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "caribou".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: "caribou".to_string(),
-                model_link: Some("https://www.codex.com/models/caribou".to_string()),
-            }),
+            upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: false,
             supported_in_api: true,
         },
@@ -244,12 +163,33 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "gpt-5.1-codex-mini".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG.to_string(),
-                model_link: Some("https://www.codex.com/models/caribou".to_string()),
-            }),
+            upgrade: Some(gpt_52_codex_upgrade()),
+            show_in_picker: false,
+            supported_in_api: true,
+        },
+        ModelPreset {
+            id: "gpt-5.1-codex".to_string(),
+            model: "gpt-5.1-codex".to_string(),
+            display_name: "gpt-5.1-codex".to_string(),
+            description: "Optimized for codex.".to_string(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "Fastest responses with limited reasoning".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Medium,
+                    description: "Dynamically adjusts reasoning based on the task".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "Maximizes reasoning depth for complex or ambiguous problems"
+                        .to_string(),
+                },
+            ],
+            is_default: false,
+            upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: false,
             supported_in_api: true,
         },
@@ -278,17 +218,50 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "caribou".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: "caribou".to_string(),
-                model_link: Some("https://www.codex.com/models/caribou".to_string()),
-            }),
+            upgrade: Some(gpt_52_codex_upgrade()),
+            show_in_picker: false,
+            supported_in_api: true,
+        },
+        ModelPreset {
+            id: "gpt-5.1".to_string(),
+            model: "gpt-5.1".to_string(),
+            display_name: "gpt-5.1".to_string(),
+            description: "Broad world knowledge with strong general reasoning.".to_string(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "Balances speed with some reasoning; useful for straightforward queries and short explanations".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Medium,
+                    description: "Provides a solid balance of reasoning depth and latency for general-purpose tasks".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
+                },
+            ],
+            is_default: false,
+            upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: false,
             supported_in_api: true,
         },
     ]
 });
+
+fn gpt_52_codex_upgrade() -> ModelUpgrade {
+    ModelUpgrade {
+        id: "gpt-5.2-codex".to_string(),
+        reasoning_effort_mapping: None,
+        migration_config_key: "gpt-5.2-codex".to_string(),
+        model_link: Some("https://openai.com/index/introducing-gpt-5-2-codex".to_string()),
+        upgrade_copy: Some(
+            "Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work."
+                .to_string(),
+        ),
+    }
+}
 
 pub(super) fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
     PRESETS

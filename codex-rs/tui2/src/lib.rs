@@ -319,6 +319,9 @@ pub async fn run_main(
         .with(otel_logger_layer)
         .try_init();
 
+    let terminal_info = codex_core::terminal::terminal_info();
+    tracing::info!(terminal = ?terminal_info, "Detected terminal info");
+
     run_ratatui_app(
         cli,
         config,

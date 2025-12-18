@@ -30,7 +30,7 @@ use crate::openai_models::model_presets::builtin_model_presets;
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const OPENAI_DEFAULT_API_MODEL: &str = "gpt-5.1-codex-max";
-const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "caribou";
+const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "gpt-5.2-codex";
 const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
 
 /// Coordinates remote model discovery plus cached metadata on disk.
