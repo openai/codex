@@ -235,6 +235,9 @@ sequenceDiagram
     task->>-user: Event::AgentMessage
 ```
 
+Notes:
+- When the user approves (`Op::ResolvePlanApproval` with `Approved`), the daemon may emit an immediate `Event::BackgroundEvent` and `Event::PlanUpdate` so UIs can show visible progress before the model produces more output.
+
 ### Plan Mode (/plan)
 
 Starting a planning session that runs in a dedicated planning context, optionally uses planning subagents for variants, then exits back to the main session.

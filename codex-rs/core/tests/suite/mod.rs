@@ -38,6 +38,7 @@ mod live_cli;
 mod model_overrides;
 mod model_tools;
 mod otel;
+mod plan_approval;
 mod prompt_caching;
 mod quota_exceeded;
 mod read_file;

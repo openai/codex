@@ -138,6 +138,7 @@ use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
 use crate::state::ActiveTurn;
+use crate::state::PendingPlanApproval;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::tasks::GhostSnapshotTask;
@@ -1301,7 +1302,13 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_plan_approval(sub_id.clone(), tx)
+                    ts.insert_pending_plan_approval(
+                        sub_id.clone(),
+                        PendingPlanApproval {
+                            proposal: proposal.clone(),
+                            tx,
+                        },
+                    )
                 }
                 None => None,
             }
@@ -1316,19 +1323,46 @@ impl Session {
     }
 
     pub async fn notify_plan_approval(&self, sub_id: &str, response: PlanApprovalResponse) {
-        let entry = {
+        let (entry, turn_context) = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
+                    let turn_context = at
+                        .tasks
+                        .get(sub_id)
+                        .map(|task| Arc::clone(&task.turn_context));
                     let mut ts = at.turn_state.lock().await;
-                    ts.remove_pending_plan_approval(sub_id)
+                    (ts.remove_pending_plan_approval(sub_id), turn_context)
                 }
-                None => None,
+                None => (None, None),
             }
         };
         match entry {
-            Some(tx) => {
-                tx.send(response).ok();
+            Some(pending) => {
+                const APPROVED_MESSAGE: &str = "Plan approved; continuing...";
+
+                if response == PlanApprovalResponse::Approved {
+                    if let Some(turn_context) = &turn_context {
+                        self.send_event(
+                            turn_context.as_ref(),
+                            EventMsg::BackgroundEvent(BackgroundEventEvent {
+                                message: APPROVED_MESSAGE.to_string(),
+                            }),
+                        )
+                        .await;
+
+                        let mut update = pending.proposal.plan.clone();
+                        update.explanation = Some(APPROVED_MESSAGE.to_string());
+                        self.send_event(turn_context.as_ref(), EventMsg::PlanUpdate(update))
+                            .await;
+                    } else {
+                        warn!(
+                            "No active task context found for approved PlanApproval: sub_id={sub_id}"
+                        );
+                    }
+                }
+
+                pending.tx.send(response).ok();
             }
             None => {
                 warn!("No pending PlanApproval found for sub_id: {sub_id}");

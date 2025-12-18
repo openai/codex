@@ -14,8 +14,14 @@ use codex_protocol::plan_approval::PlanApprovalResponse;
 use tokio::sync::oneshot;
 
 use crate::codex::TurnContext;
+use crate::protocol::PlanProposal;
 use crate::protocol::ReviewDecision;
 use crate::tasks::SessionTask;
+
+pub(crate) struct PendingPlanApproval {
+    pub(crate) proposal: PlanProposal,
+    pub(crate) tx: oneshot::Sender<PlanApprovalResponse>,
+}
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
@@ -71,7 +77,7 @@ impl ActiveTurn {
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_user_questions: HashMap<String, oneshot::Sender<AskUserQuestionResponse>>,
-    pending_plan_approvals: HashMap<String, oneshot::Sender<PlanApprovalResponse>>,
+    pending_plan_approvals: HashMap<String, PendingPlanApproval>,
     pending_input: Vec<ResponseInputItem>,
 }
 
@@ -109,15 +115,15 @@ impl TurnState {
     pub(crate) fn insert_pending_plan_approval(
         &mut self,
         key: String,
-        tx: oneshot::Sender<PlanApprovalResponse>,
-    ) -> Option<oneshot::Sender<PlanApprovalResponse>> {
-        self.pending_plan_approvals.insert(key, tx)
+        pending: PendingPlanApproval,
+    ) -> Option<PendingPlanApproval> {
+        self.pending_plan_approvals.insert(key, pending)
     }
 
     pub(crate) fn remove_pending_plan_approval(
         &mut self,
         key: &str,
-    ) -> Option<oneshot::Sender<PlanApprovalResponse>> {
+    ) -> Option<PendingPlanApproval> {
         self.pending_plan_approvals.remove(key)
     }
 
