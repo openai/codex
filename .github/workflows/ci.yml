@@ -37,7 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           # Use a rust-release version that includes all native binaries.
-          CODEX_VERSION=0.74.0-alpha.3
+          CODEX_VERSION=0.74.0
           OUTPUT_DIR="${RUNNER_TEMP}"
           python3 ./scripts/stage_npm_packages.py \
             --release-version "$CODEX_VERSION" \
