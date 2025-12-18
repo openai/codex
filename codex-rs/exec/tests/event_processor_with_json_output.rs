@@ -750,7 +750,20 @@ fn command_execution_output_delta_updates_item_progress() {
         }),
     );
     let out_delta = ep.collect_thread_events(&delta);
-    assert_eq!(out_delta, Vec::<ThreadEvent>::new());
+    assert_eq!(
+        out_delta,
+        vec![ThreadEvent::ItemUpdated(ItemUpdatedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                    command: "bash -lc 'echo delta'".to_string(),
+                    aggregated_output: "partial output\n".to_string(),
+                    exit_code: None,
+                    status: CommandExecutionStatus::InProgress,
+                }),
+            },
+        })]
+    );
 
     let end = event(
         "d3",
@@ -779,7 +792,7 @@ fn command_execution_output_delta_updates_item_progress() {
                 id: "item_0".to_string(),
                 details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                     command: "bash -lc 'echo delta'".to_string(),
-                    aggregated_output: String::new(),
+                    aggregated_output: "partial output\n".to_string(),
                     exit_code: Some(0),
                     status: CommandExecutionStatus::Completed,
                 }),
