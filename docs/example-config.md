@@ -106,8 +106,8 @@ exclude_slash_tmp = false
 [shell_environment_policy]
 # inherit: all (default) | core | none
 inherit = "all"
-# Skip default excludes for names containing KEY/TOKEN (case-insensitive). Default: false
-ignore_default_excludes = false
+# Skip default excludes for names containing KEY/SECRET/TOKEN (case-insensitive). Default: true
+ignore_default_excludes = true
 # Case-insensitive glob patterns to remove (e.g., "AWS_*", "AZURE_*"). Default: []
 exclude = []
 # Explicit key/value overrides (always win). Default: {}
