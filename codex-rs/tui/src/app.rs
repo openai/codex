@@ -1252,8 +1252,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
-    fn make_test_app() -> App {
-        let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender();
+    async fn make_test_app() -> App {
+        let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let current_model = chat_widget.get_model_family().get_model_slug().to_string();
         let server = Arc::new(ConversationManager::with_models_provider(
@@ -1287,12 +1287,12 @@ mod tests {
         }
     }
 
-    fn make_test_app_with_channels() -> (
+    async fn make_test_app_with_channels() -> (
         App,
         tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
         tokio::sync::mpsc::UnboundedReceiver<Op>,
     ) {
-        let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender();
+        let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let current_model = chat_widget.get_model_family().get_model_slug().to_string();
         let server = Arc::new(ConversationManager::with_models_provider(
@@ -1334,8 +1334,8 @@ mod tests {
         codex_core::openai_models::model_presets::all_model_presets().clone()
     }
 
-    #[test]
-    fn model_migration_prompt_only_shows_for_deprecated_models() {
+    #[tokio::test]
+    async fn model_migration_prompt_only_shows_for_deprecated_models() {
         let seen = BTreeMap::new();
         assert!(should_show_model_migration_prompt(
             "gpt-5",
@@ -1369,8 +1369,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn model_migration_prompt_respects_hide_flag_and_self_target() {
+    #[tokio::test]
+    async fn model_migration_prompt_respects_hide_flag_and_self_target() {
         let mut seen = BTreeMap::new();
         seen.insert("gpt-5".to_string(), "gpt-5.1".to_string());
         assert!(!should_show_model_migration_prompt(
@@ -1387,8 +1387,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn model_migration_prompt_skips_when_target_missing() {
+    #[tokio::test]
+    async fn model_migration_prompt_skips_when_target_missing() {
         let mut available = all_model_presets();
         let mut current = available
             .iter()
@@ -1415,9 +1415,9 @@ mod tests {
         assert!(target_preset_for_upgrade(&available, "missing-target").is_none());
     }
 
-    #[test]
-    fn update_reasoning_effort_updates_config() {
-        let mut app = make_test_app();
+    #[tokio::test]
+    async fn update_reasoning_effort_updates_config() {
+        let mut app = make_test_app().await;
         app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
@@ -1434,9 +1434,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
-        let mut app = make_test_app();
+    #[tokio::test]
+    async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
+        let mut app = make_test_app().await;
 
         let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
@@ -1503,7 +1503,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_session_requests_shutdown_for_previous_conversation() {
-        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels();
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
         let conversation_id = ConversationId::new();
         let event = SessionConfiguredEvent {
@@ -1537,13 +1537,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn session_summary_skip_zero_usage() {
+    #[tokio::test]
+    async fn session_summary_skip_zero_usage() {
         assert!(session_summary(TokenUsage::default(), None).is_none());
     }
 
-    #[test]
-    fn session_summary_includes_resume_hint() {
+    #[tokio::test]
+    async fn session_summary_includes_resume_hint() {
         let usage = TokenUsage {
             input_tokens: 10,
             output_tokens: 2,
