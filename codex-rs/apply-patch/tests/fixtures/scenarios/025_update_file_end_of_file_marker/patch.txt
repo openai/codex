@@ -1,0 +1,8 @@
+*** Begin Patch
+*** Update File: tail.txt
+@@
+ first
+-second
++second updated
+*** End of File
+*** End Patch
