@@ -12,6 +12,9 @@ mod native {
     use std::ffi::c_void;
     use tokio::task;
 
+    const MANAGED_PREFERENCES_APPLICATION_ID: &str = "com.openai.codex";
+    const MANAGED_PREFERENCES_CONFIG_KEY: &str = "config_toml_base64";
+
     pub(crate) async fn load_managed_admin_config_layer(
         override_base64: Option<&str>,
     ) -> io::Result<Option<TomlValue>> {
@@ -47,9 +50,6 @@ mod native {
                 application_id: CFStringRef,
             ) -> *mut c_void;
         }
-
-        const MANAGED_PREFERENCES_APPLICATION_ID: &str = "com.openai.codex";
-        const MANAGED_PREFERENCES_CONFIG_KEY: &str = "config_toml_base64";
 
         let application_id = CFString::new(MANAGED_PREFERENCES_APPLICATION_ID);
         let key = CFString::new(MANAGED_PREFERENCES_CONFIG_KEY);
@@ -109,10 +109,3 @@ mod native {
 
 #[cfg(target_os = "macos")]
 pub(crate) use native::load_managed_admin_config_layer;
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) async fn load_managed_admin_config_layer(
-    _override_base64: Option<&str>,
-) -> io::Result<Option<TomlValue>> {
-    Ok(None)
-}
