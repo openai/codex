@@ -18,6 +18,7 @@ use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
+use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
@@ -170,6 +171,7 @@ impl From<CoreAskForApproval> for AskForApproval {
 pub enum SandboxMode {
     ReadOnly,
     WorkspaceWrite,
+    ExternalSandbox,
     DangerFullAccess,
 }
 
@@ -178,6 +180,7 @@ impl SandboxMode {
         match self {
             SandboxMode::ReadOnly => CoreSandboxMode::ReadOnly,
             SandboxMode::WorkspaceWrite => CoreSandboxMode::WorkspaceWrite,
+            SandboxMode::ExternalSandbox => CoreSandboxMode::ExternalSandbox,
             SandboxMode::DangerFullAccess => CoreSandboxMode::DangerFullAccess,
         }
     }
@@ -187,7 +190,8 @@ impl From<CoreSandboxMode> for SandboxMode {
     fn from(value: CoreSandboxMode) -> Self {
         match value {
             CoreSandboxMode::ReadOnly => SandboxMode::ReadOnly,
-            CoreSandboxMode::WorkspaceWrite => SandboxMode::WorkspaceWrite,
+            CoreSandboxMode::WorkspaceWrite => SandboxMode::WorkspaceWrite, upstream
+            CoreSandboxMode::ExternalSandbox => SandboxMode::ExternalSandbox,
             CoreSandboxMode::DangerFullAccess => SandboxMode::DangerFullAccess,
         }
     }
@@ -470,6 +474,15 @@ pub enum ApprovalDecision {
     Cancel,
 }
 
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum NetworkAccess {
+    #[default]
+    Restricted,
+    Enabled,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
@@ -477,6 +490,12 @@ pub enum ApprovalDecision {
 pub enum SandboxPolicy {
     DangerFullAccess,
     ReadOnly,
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ExternalSandbox {
+        #[serde(default)]
+        network_access: NetworkAccess,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     WorkspaceWrite {
@@ -498,6 +517,14 @@ impl SandboxPolicy {
                 codex_protocol::protocol::SandboxPolicy::DangerFullAccess
             }
             SandboxPolicy::ReadOnly => codex_protocol::protocol::SandboxPolicy::ReadOnly,
+            SandboxPolicy::ExternalSandbox { network_access } => {
+                codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
+                    network_access: match network_access {
+                        NetworkAccess::Restricted => CoreNetworkAccess::Restricted,
+                        NetworkAccess::Enabled => CoreNetworkAccess::Enabled,
+                    },
+                }
+            }
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 network_access,
@@ -520,6 +547,14 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                 SandboxPolicy::DangerFullAccess
             }
             codex_protocol::protocol::SandboxPolicy::ReadOnly => SandboxPolicy::ReadOnly,
+            codex_protocol::protocol::SandboxPolicy::ExternalSandbox { network_access } => {
+                SandboxPolicy::ExternalSandbox {
+                    network_access: match network_access {
+                        CoreNetworkAccess::Restricted => NetworkAccess::Restricted,
+                        CoreNetworkAccess::Enabled => NetworkAccess::Enabled,
+                    },
+                }
+            }
             codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 network_access,
@@ -1902,10 +1937,29 @@ mod tests {
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::items::WebSearchItem;
+    use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
     use codex_protocol::user_input::UserInput as CoreUserInput;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
+
+    #[test]
+    fn sandbox_policy_round_trips_external_sandbox_network_access() {
+        let v2_policy = SandboxPolicy::ExternalSandbox {
+            network_access: NetworkAccess::Enabled,
+        };
+
+        let core_policy = v2_policy.to_core();
+        assert_eq!(
+            core_policy,
+            codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
+                network_access: CoreNetworkAccess::Enabled,
+            }
+        );
+
+        let back_to_v2 = SandboxPolicy::from(core_policy);
+        assert_eq!(back_to_v2, v2_policy);
+    }
 
     #[test]
     fn core_turn_item_into_thread_item_converts_supported_variants() {

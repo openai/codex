@@ -239,8 +239,11 @@ mod windows_impl {
             require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, codex_home)?;
         log_note("cli creds ready", logs_base_dir);
         // Build capability SID for ACL grants.
-        if matches!(&policy, SandboxPolicy::DangerFullAccess) {
-            anyhow::bail!("DangerFullAccess is not supported for sandboxing")
+        if matches!(
+            &policy,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        ) {
+            anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
         let caps = load_or_create_cap_sids(codex_home)?;
         let (psid_to_use, cap_sid_str) = match &policy {
@@ -252,7 +255,9 @@ mod windows_impl {
                 unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() },
                 caps.workspace.clone(),
             ),
-            SandboxPolicy::DangerFullAccess => unreachable!("DangerFullAccess handled above"),
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                unreachable!("DangerFullAccess handled above")
+            }
         };
 
         let AllowDenyPaths { allow: _, deny: _ } =

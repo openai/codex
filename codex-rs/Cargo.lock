@@ -1244,6 +1244,8 @@ dependencies = [
  "codex-lmstudio",
  "codex-ollama",
  "codex-protocol",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
  "serde",
  "toml 0.9.5",
 ]
@@ -1914,6 +1916,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "dirs-next",
  "dunce",
+ "pretty_assertions",
  "rand 0.8.5",
  "serde",
  "serde_json",

@@ -52,7 +52,10 @@ pub fn run_setup_refresh(
     codex_home: &Path,
 ) -> Result<()> {
     // Skip in danger-full-access.
-    if matches!(policy, SandboxPolicy::DangerFullAccess) {
+    if matches!(
+        policy,
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+    ) {
         return Ok(());
     }
     let (read_roots, write_roots) = build_payload_roots(

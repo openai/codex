@@ -2,6 +2,7 @@ use crate::auth::AuthCredentialsStoreMode;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
+use crate::config::types::NetworkAccess;
 use crate::config::types::Notice;
 use crate::config::types::Notifications;
 use crate::config::types::OtelConfig;
@@ -628,6 +629,9 @@ pub struct ConfigToml {
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
+    // Sandbox configuration to apply if `sandbox` is `ExternalSandbox`
+    pub sandbox_network_access: Option<NetworkAccess>,
+
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
@@ -880,6 +884,17 @@ impl ConfigToml {
                     exclude_slash_tmp: *exclude_slash_tmp,
                 },
                 None => SandboxPolicy::new_workspace_write_policy(),
+            },
+            SandboxMode::ExternalSandbox => SandboxPolicy::ExternalSandbox {
+                network_access: match self.sandbox_network_access.as_ref() {
+                    Some(network_access) => match network_access {
+                        NetworkAccess::Restricted => {
+                            codex_protocol::protocol::NetworkAccess::Restricted
+                        }
+                        NetworkAccess::Enabled => codex_protocol::protocol::NetworkAccess::Enabled,
+                    },
+                    None => codex_protocol::protocol::NetworkAccess::Restricted,
+                },
             },
             SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
         };
@@ -1547,6 +1562,51 @@ network_access = true  # This should be ignored.
             resolution,
             SandboxPolicyResolution {
                 policy: SandboxPolicy::ReadOnly,
+                forced_auto_mode_downgraded_on_windows: false,
+            }
+        );
+
+        let sandbox_external_sandbox_enabled_network = r#"
+sandbox_mode = "external-sandbox"
+sandbox_network_access = "Enabled"
+"#;
+
+        let sandbox_external_sandbox_cfg =
+            toml::from_str::<ConfigToml>(sandbox_external_sandbox_enabled_network)
+                .expect("TOML deserialization should succeed");
+        let resolution = sandbox_external_sandbox_cfg.derive_sandbox_policy(
+            None,
+            None,
+            &PathBuf::from("/tmp/test"),
+        );
+        assert_eq!(
+            resolution,
+            SandboxPolicyResolution {
+                policy: SandboxPolicy::ExternalSandbox {
+                    network_access: codex_protocol::protocol::NetworkAccess::Enabled,
+                },
+                forced_auto_mode_downgraded_on_windows: false,
+            }
+        );
+
+        let sandbox_external_sandbox_default_network = r#"
+sandbox_mode = "external-sandbox"
+"#;
+
+        let sandbox_external_sandbox_cfg =
+            toml::from_str::<ConfigToml>(sandbox_external_sandbox_default_network)
+                .expect("TOML deserialization should succeed");
+        let resolution = sandbox_external_sandbox_cfg.derive_sandbox_policy(
+            None,
+            None,
+            &PathBuf::from("/tmp/test"),
+        );
+        assert_eq!(
+            resolution,
+            SandboxPolicyResolution {
+                policy: SandboxPolicy::ExternalSandbox {
+                    network_access: codex_protocol::protocol::NetworkAccess::Restricted,
+                },
                 forced_auto_mode_downgraded_on_windows: false,
             }
         );

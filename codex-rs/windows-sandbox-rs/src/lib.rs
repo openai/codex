@@ -194,8 +194,11 @@ mod windows_impl {
         log_start(&command, logs_base_dir);
         let is_workspace_write = matches!(&policy, SandboxPolicy::WorkspaceWrite { .. });
 
-        if matches!(&policy, SandboxPolicy::DangerFullAccess) {
-            anyhow::bail!("DangerFullAccess is not supported for sandboxing")
+        if matches!(
+            &policy,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        ) {
+            anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
         let caps = load_or_create_cap_sids(codex_home)?;
         let (h_token, psid_to_use): (HANDLE, *mut c_void) = unsafe {
@@ -208,7 +211,9 @@ mod windows_impl {
                     let psid = convert_string_sid_to_sid(&caps.workspace).unwrap();
                     super::token::create_workspace_write_token_with_cap(psid)?
                 }
-                SandboxPolicy::DangerFullAccess => unreachable!("DangerFullAccess handled above"),
+                SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                    unreachable!("DangerFullAccess handled above")
+                }
             }
         };
 
