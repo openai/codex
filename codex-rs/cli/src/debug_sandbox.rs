@@ -109,7 +109,7 @@ async fn run_command_under_sandbox(
     log_denials: bool,
 ) -> anyhow::Result<()> {
     let sandbox_mode = create_sandbox_mode(full_auto);
-    let config = Config::load_with_cli_overrides(
+    let config = Config::load_with_cli_overrides_and_harness_overrides(
         config_overrides
             .parse_overrides()
             .map_err(anyhow::Error::msg)?,
