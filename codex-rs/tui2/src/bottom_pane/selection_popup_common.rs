@@ -9,6 +9,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint::KeyBinding;
 
@@ -21,6 +22,79 @@ pub(crate) struct GenericDisplayRow {
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
     pub wrap_indent: Option<usize>,        // optional indent for wrapped lines
+    pub max_row_lines: Option<usize>,      // optional max row lines before truncating
+}
+
+fn line_width(line: &Line<'_>) -> usize {
+    line.iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
+}
+
+fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
+    if max_width == 0 {
+        return Line::from(Vec::<Span<'static>>::new());
+    }
+
+    let mut used = 0usize;
+    let mut spans_out: Vec<Span<'static>> = Vec::new();
+
+    for span in line.spans {
+        let text = span.content.into_owned();
+        let style = span.style;
+        let span_width = UnicodeWidthStr::width(text.as_str());
+
+        if span_width == 0 {
+            spans_out.push(Span::styled(text, style));
+            continue;
+        }
+
+        if used >= max_width {
+            break;
+        }
+
+        if used + span_width <= max_width {
+            used += span_width;
+            spans_out.push(Span::styled(text, style));
+            continue;
+        }
+
+        let mut truncated = String::new();
+        for ch in text.chars() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used + ch_width > max_width {
+                break;
+            }
+            truncated.push(ch);
+            used += ch_width;
+        }
+
+        if !truncated.is_empty() {
+            spans_out.push(Span::styled(truncated, style));
+        }
+
+        break;
+    }
+
+    Line::from(spans_out)
+}
+
+fn append_ellipsis(line: Line<'static>, max_width: usize) -> Line<'static> {
+    if max_width == 0 {
+        return Line::from(Vec::<Span<'static>>::new());
+    }
+
+    let width = line_width(&line);
+    if width < max_width {
+        let mut spans = line.spans;
+        spans.push("…".into());
+        return Line::from(spans);
+    }
+
+    let truncated = truncate_line_to_width(line, max_width.saturating_sub(1));
+    let mut spans = truncated.spans;
+    spans.push("…".into());
+    Line::from(spans)
 }
 
 /// Compute a shared description-column start based on the widest visible name
@@ -191,12 +265,22 @@ pub(crate) fn render_rows(
 
         // Wrap with subsequent indent aligned to the description column.
         use crate::wrapping::RtOptions;
-        use crate::wrapping::word_wrap_line;
+        use crate::wrapping::word_wrap_lines;
         let continuation_indent = wrap_indent(row, desc_col, area.width);
         let options = RtOptions::new(area.width as usize)
             .initial_indent(Line::from(""))
             .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
-        let wrapped = word_wrap_line(&full_line, options);
+        let wrapped = word_wrap_lines([full_line.clone()], options);
+        let max_row_lines = row.max_row_lines.unwrap_or(usize::MAX);
+        let wrapped = if wrapped.len() > max_row_lines {
+            let mut limited: Vec<Line<'static>> = wrapped.into_iter().take(max_row_lines).collect();
+            if let Some(last) = limited.pop() {
+                limited.push(append_ellipsis(last, area.width as usize));
+            }
+            limited
+        } else {
+            wrapped
+        };
 
         // Render the wrapped lines.
         for line in wrapped {
@@ -263,7 +347,10 @@ pub(crate) fn measure_rows_height(
         let opts = RtOptions::new(content_width as usize)
             .initial_indent(Line::from(""))
             .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
-        total = total.saturating_add(word_wrap_line(&full_line, opts).len() as u16);
+        let wrapped_lines = word_wrap_line(&full_line, opts).len();
+        let max_row_lines = row.max_row_lines.unwrap_or(usize::MAX);
+        let capped_lines = wrapped_lines.min(max_row_lines).max(1);
+        total = total.saturating_add(capped_lines as u16);
     }
     total.max(1)
 }

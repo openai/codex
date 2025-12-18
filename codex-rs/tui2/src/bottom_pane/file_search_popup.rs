@@ -131,6 +131,7 @@ impl WidgetRef for &FileSearchPopup {
                         .map(|v| v.iter().map(|&i| i as usize).collect()),
                     display_shortcut: None,
                     description: None,
+                    max_row_lines: None,
                     wrap_indent: None,
                 })
                 .collect()

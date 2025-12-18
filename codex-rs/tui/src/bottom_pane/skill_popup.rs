@@ -12,6 +12,8 @@ use crate::render::RectExt;
 use codex_common::fuzzy_match::fuzzy_match;
 use codex_core::skills::model::SkillMetadata;
 
+use crate::text_formatting::truncate_text;
+
 pub(crate) struct SkillPopup {
     query: String,
     skills: Vec<SkillMetadata>,
@@ -79,13 +81,7 @@ impl SkillPopup {
             .into_iter()
             .map(|(idx, indices, _score)| {
                 let skill = &self.skills[idx];
-                let slug = skill
-                    .path
-                    .parent()
-                    .and_then(|p| p.file_name())
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(&skill.name);
-                let name = format!("{} ({slug})", skill.name);
+                let name = truncate_text(&skill.name, 24);
                 let description = skill
                     .short_description
                     .as_ref()
@@ -97,6 +93,7 @@ impl SkillPopup {
                     display_shortcut: None,
                     description: Some(description),
                     disabled_reason: None,
+                    max_row_lines: Some(2),
                     wrap_indent: None,
                 }
             })
