@@ -1,4 +1,5 @@
 use super::LoaderOverrides;
+#[cfg(target_os = "macos")]
 use super::macos::load_managed_admin_config_layer;
 use super::overrides::default_empty_table;
 use crate::config::CONFIG_TOML_FILE;
@@ -45,7 +46,7 @@ pub(super) async fn load_config_layers_internal(
         load_managed_admin_config_layer(managed_preferences_base64.as_deref()).await?;
 
     #[cfg(not(target_os = "macos"))]
-    let managed_preferences = load_managed_admin_config_layer(None).await?;
+    let managed_preferences = None;
 
     Ok(LoadedConfigLayers {
         base: user_config.unwrap_or_else(default_empty_table),

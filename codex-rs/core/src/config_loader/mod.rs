@@ -1,5 +1,6 @@
 mod fingerprint;
 mod layer_io;
+#[cfg(target_os = "macos")]
 mod macos;
 mod merge;
 mod overrides;
