@@ -109,10 +109,3 @@ mod native {
 
 #[cfg(target_os = "macos")]
 pub(crate) use native::load_managed_admin_config_layer;
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) async fn load_managed_admin_config_layer(
-    _override_base64: Option<&str>,
-) -> io::Result<Option<TomlValue>> {
-    Ok(None)
-}
