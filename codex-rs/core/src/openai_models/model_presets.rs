@@ -100,7 +100,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 reasoning_effort_mapping: None,
                 migration_config_key: "caribou".to_string(),
             }),
-            show_in_picker: true,
+            show_in_picker: false,
             supported_in_api: true,
         },
         ModelPreset {
@@ -184,7 +184,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 reasoning_effort_mapping: None,
                 migration_config_key: "caribou".to_string(),
             }),
-            show_in_picker: true,
+            show_in_picker: false,
             supported_in_api: true,
         },
         // Deprecated models.
