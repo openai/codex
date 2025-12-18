@@ -57,6 +57,32 @@ impl<T: Send + Sync> Constrained<T> {
         }
     }
 
+    pub fn allow_only(value: T) -> Self
+    where
+        T: PartialEq + Send + Sync + fmt::Debug + Clone + 'static,
+    {
+        #[expect(clippy::expect_used)]
+        Self::new(value.clone(), move |candidate| {
+            if *candidate == value {
+                Ok(())
+            } else {
+                Err(ConstraintError::invalid_value(
+                    format!("{candidate:?}"),
+                    format!("{value:?}"),
+                ))
+            }
+        })
+        .expect("initial value should always be valid")
+    }
+
+    /// Allow any value of T, using T's Default as the initial value.
+    pub fn allow_any_from_default() -> Self
+    where
+        T: Default,
+    {
+        Self::allow_any(T::default())
+    }
+
     pub fn allow_values(initial_value: T, allowed: Vec<T>) -> ConstraintResult<Self>
     where
         T: PartialEq + Send + Sync + fmt::Debug + 'static,
@@ -127,6 +153,12 @@ mod tests {
         let mut constrained = Constrained::allow_any(5);
         constrained.set(-10).expect("allow any accepts all values");
         assert_eq!(constrained.value(), -10);
+    }
+
+    #[test]
+    fn constrained_allow_any_default_uses_default_value() {
+        let constrained = Constrained::<i32>::allow_any_from_default();
+        assert_eq!(constrained.value(), 0);
     }
 
     #[test]
