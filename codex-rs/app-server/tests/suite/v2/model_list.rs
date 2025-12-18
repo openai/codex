@@ -153,7 +153,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             id: "gpt-5.1-codex-max".to_string(),
             model: "gpt-5.1-codex-max".to_string(),
             display_name: "gpt-5.1-codex-max".to_string(),
-            description: "Latest Codex-optimized flagship for deep and fast reasoning.".to_string(),
+            description: "Codex-optimized flagship for deep and fast reasoning.".to_string(),
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Low,
