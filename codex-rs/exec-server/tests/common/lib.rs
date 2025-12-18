@@ -9,7 +9,7 @@ use rmcp::model::ClientCapabilities;
 use rmcp::model::ClientInfo;
 use rmcp::model::CreateElicitationRequestParam;
 use rmcp::model::CreateElicitationResult;
-use rmcp::model::CustomClientNotification;
+use rmcp::model::CustomNotification;
 use rmcp::model::ElicitationAction;
 use rmcp::service::RunningService;
 use rmcp::transport::ConfigureCommandExt;
@@ -129,7 +129,7 @@ async fn send_sandbox_notification<S>(
 where
     S: Service<RoleClient> + ClientHandler,
 {
-    let sandbox_state_notification = CustomClientNotification::new(
+    let sandbox_state_notification = CustomNotification::new(
         MCP_SANDBOX_STATE_NOTIFICATION,
         Some(serde_json::to_value(sandbox_state)?),
     );

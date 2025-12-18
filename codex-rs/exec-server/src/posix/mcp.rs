@@ -183,10 +183,10 @@ impl ServerHandler for ExecTool {
 
     async fn on_custom_notification(
         &self,
-        notification: rmcp::model::CustomClientNotification,
+        notification: rmcp::model::CustomNotification,
         _context: rmcp::service::NotificationContext<rmcp::RoleServer>,
     ) {
-        let rmcp::model::CustomClientNotification { method, params, .. } = notification;
+        let rmcp::model::CustomNotification { method, params, .. } = notification;
         if method == MCP_SANDBOX_STATE_NOTIFICATION
             && let Some(params) = params
         {

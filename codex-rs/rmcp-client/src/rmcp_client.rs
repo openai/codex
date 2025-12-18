@@ -28,7 +28,7 @@ use rmcp::model::CallToolRequestParam;
 use rmcp::model::ClientNotification;
 use rmcp::model::CreateElicitationRequestParam;
 use rmcp::model::CreateElicitationResult;
-use rmcp::model::CustomClientNotification;
+use rmcp::model::CustomNotification;
 use rmcp::model::Extensions;
 use rmcp::model::InitializeRequestParam;
 use rmcp::model::PaginatedRequestParam;
@@ -372,13 +372,11 @@ impl RmcpClient {
         let service: Arc<RunningService<RoleClient, LoggingClientHandler>> = self.service().await?;
         service.service();
         service
-            .send_notification(ClientNotification::CustomClientNotification(
-                CustomClientNotification {
-                    method: method.to_string(),
-                    params,
-                    extensions: Extensions::new(),
-                },
-            ))
+            .send_notification(ClientNotification::CustomNotification(CustomNotification {
+                method: method.to_string(),
+                params,
+                extensions: Extensions::new(),
+            }))
             .await?;
         Ok(())
     }
