@@ -74,12 +74,17 @@ pub async fn run_main(
 
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
-    let cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
+    let mut cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
         std::io::Error::new(
             ErrorKind::InvalidInput,
             format!("error parsing -c overrides: {e}"),
         )
     })?;
+    // Allow app-server clients to inherit KEY/SECRET/TOKEN env vars.
+    cli_kv_overrides.push((
+        "shell_environment_policy.ignore_default_excludes".to_string(),
+        TomlValue::Boolean(true),
+    ));
     let config = Config::load_with_cli_overrides(cli_kv_overrides.clone())
         .await
         .map_err(|e| {
