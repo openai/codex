@@ -366,7 +366,7 @@ mod tests {
             rx_event: rx_events,
         });
 
-        let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx();
+        let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;
 
         let (tx_out, rx_out) = bounded(1);
         tx_out

@@ -314,15 +314,16 @@ mod tests {
     use super::*;
     use crate::CodexAuth;
     use crate::auth::AuthCredentialsStoreMode;
-    use crate::config::Config;
-    use crate::config::ConfigOverrides;
-    use crate::config::ConfigToml;
+
+    use crate::config::ConfigBuilder;
+    use crate::config_loader::LoaderOverrides;
     use crate::features::Feature;
     use crate::model_provider_info::WireApi;
     use codex_protocol::openai_models::ModelsResponse;
     use core_test_support::responses::mount_models_once;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::path::Path;
     use tempfile::tempdir;
     use wiremock::MockServer;
 
@@ -380,6 +381,14 @@ mod tests {
         }
     }
 
+    fn test_loader_overrides(codex_home: &Path) -> LoaderOverrides {
+        LoaderOverrides {
+            managed_config_path: Some(codex_home.join("managed_config.toml")),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: Some(String::new()),
+        }
+    }
+
     #[tokio::test]
     async fn refresh_available_models_sorts_and_marks_default() {
         let server = MockServer::start().await;
@@ -397,12 +406,12 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .loader_overrides(test_loader_overrides(codex_home.path()))
+            .build()
+            .await
+            .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
@@ -455,12 +464,12 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .loader_overrides(test_loader_overrides(codex_home.path()))
+            .build()
+            .await
+            .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager = Arc::new(AuthManager::new(
             codex_home.path().to_path_buf(),
@@ -511,12 +520,12 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .loader_overrides(test_loader_overrides(codex_home.path()))
+            .build()
+            .await
+            .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager = Arc::new(AuthManager::new(
             codex_home.path().to_path_buf(),
@@ -587,12 +596,12 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .loader_overrides(test_loader_overrides(codex_home.path()))
+            .build()
+            .await
+            .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
