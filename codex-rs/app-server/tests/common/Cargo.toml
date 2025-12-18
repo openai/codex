@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "app_test_support"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [lib]
 path = "lib.rs"
@@ -12,7 +13,7 @@ assert_cmd = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 codex-app-server-protocol = { workspace = true }
-codex-core = { workspace = true }
+codex-core = { workspace = true, features = ["test-support"] }
 codex-protocol = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -24,3 +25,5 @@ tokio = { workspace = true, features = [
 ] }
 uuid = { workspace = true }
 wiremock = { workspace = true }
+core_test_support = { path = "../../../core/tests/common" }
+shlex = { workspace = true }

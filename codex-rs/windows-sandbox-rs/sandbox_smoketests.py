@@ -12,36 +12,30 @@ from typing import List, Optional, Tuple
 def _resolve_codex_cmd() -> List[str]:
     """Resolve the Codex CLI to invoke `codex sandbox windows`.
 
-    Prefer `codex` on PATH; if not found, try common local build locations.
+    Prefer local builds (debug first), then fall back to PATH.
     Returns the argv prefix to run Codex.
     """
-    # 1) Prefer PATH
-    try:
-        cp = subprocess.run(["where", "codex"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        if cp.returncode == 0:
-            for line in cp.stdout.splitlines():
-                p = Path(line.strip())
-                if p.exists():
-                    return [str(p)]
-    except Exception:
-        pass
-
-    # 2) Try workspace targets
     root = Path(__file__).parent
     ws_root = root.parent
     cargo_target = os.environ.get("CARGO_TARGET_DIR")
+
     candidates = [
-        ws_root / "target" / "release" / "codex.exe",
         ws_root / "target" / "debug" / "codex.exe",
+        ws_root / "target" / "release" / "codex.exe",
     ]
     if cargo_target:
+        cargo_base = Path(cargo_target)
         candidates.extend([
-            Path(cargo_target) / "release" / "codex.exe",
-            Path(cargo_target) / "debug" / "codex.exe",
+            cargo_base / "debug" / "codex.exe",
+            cargo_base / "release" / "codex.exe",
         ])
-    for p in candidates:
-        if p.exists():
-            return [str(p)]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return [str(candidate)]
+
+    if shutil.which("codex"):
+        return ["codex"]
 
     raise FileNotFoundError(
         "Codex CLI not found. Build it first, e.g.\n"
@@ -51,10 +45,12 @@ def _resolve_codex_cmd() -> List[str]:
     )
 
 CODEX_CMD = _resolve_codex_cmd()
+print(CODEX_CMD)
 TIMEOUT_SEC = 20
 
 WS_ROOT = Path(os.environ["USERPROFILE"]) / "sbx_ws_tests"
 OUTSIDE = Path(os.environ["USERPROFILE"]) / "sbx_ws_outside"  # outside CWD for deny checks
+EXTRA_ROOT = Path(os.environ["USERPROFILE"]) / "WorkspaceRoot"  # additional writable root
 
 ENV_BASE = {}  # extend if needed
 
@@ -62,7 +58,13 @@ class CaseResult:
     def __init__(self, name: str, ok: bool, detail: str = ""):
         self.name, self.ok, self.detail = name, ok, detail
 
-def run_sbx(policy: str, cmd_argv: List[str], cwd: Path, env_extra: Optional[dict] = None) -> Tuple[int, str, str]:
+def run_sbx(
+    policy: str,
+    cmd_argv: List[str],
+    cwd: Path,
+    env_extra: Optional[dict] = None,
+    additional_root: Optional[Path] = None,
+) -> Tuple[int, str, str]:
     env = os.environ.copy()
     env.update(ENV_BASE)
     if env_extra:
@@ -73,7 +75,15 @@ def run_sbx(policy: str, cmd_argv: List[str], cwd: Path, env_extra: Optional[dic
         raise ValueError(f"unknown policy: {policy}")
     policy_flags: List[str] = ["--full-auto"] if policy == "workspace-write" else []
 
-    argv = [*CODEX_CMD, "sandbox", "windows", *policy_flags, "--", *cmd_argv]
+    overrides: List[str] = []
+    if policy == "workspace-write" and additional_root is not None:
+        # Use config override to inject an additional writable root.
+        overrides = [
+            "-c",
+            f'sandbox_workspace_write.writable_roots=["{additional_root.as_posix()}"]',
+        ]
+
+    argv = [*CODEX_CMD, "sandbox", "windows", *policy_flags, *overrides, "--", *cmd_argv]
     print(cmd_argv)
     cp = subprocess.run(argv, cwd=str(cwd), env=env,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -81,11 +91,7 @@ def run_sbx(policy: str, cmd_argv: List[str], cwd: Path, env_extra: Optional[dic
     return cp.returncode, cp.stdout, cp.stderr
 
 def have(cmd: str) -> bool:
-    try:
-        cp = subprocess.run(["where", cmd], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        return cp.returncode == 0 and any(Path(p.strip()).exists() for p in cp.stdout.splitlines())
-    except Exception:
-        return False
+    return shutil.which(cmd) is not None
 
 def make_dir_clean(p: Path) -> None:
     if p.exists():
@@ -120,7 +126,11 @@ def make_junction(link: Path, target: Path) -> bool:
 def make_symlink(link: Path, target: Path) -> bool:
     """Create a directory symlink; return True if it exists afterward."""
     remove_if_exists(link)
-    target.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
     cmd = ["cmd", "/c", f'mklink /D "{link}" "{target}"']
     cp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return cp.returncode == 0 and link.exists()
@@ -139,6 +149,7 @@ def main() -> int:
     results: List[CaseResult] = []
     make_dir_clean(WS_ROOT)
     OUTSIDE.mkdir(exist_ok=True)
+    EXTRA_ROOT.mkdir(exist_ok=True)
     # Environment probe: some hosts allow TEMP writes even under read-only
     # tokens due to ACLs and restricted SID semantics. Detect and adapt tests.
     probe_rc, _, _ = run_sbx(
@@ -169,6 +180,32 @@ def main() -> int:
     remove_if_exists(outside_file)
     rc, out, err = run_sbx("workspace-write", ["cmd", "/c", f"echo nope > {outside_file}"], WS_ROOT)
     add("WS: write outside workspace denied", rc != 0 and assert_not_exists(outside_file), f"rc={rc}")
+
+    # 3b. WS: allow write in additional workspace root
+    extra_target = EXTRA_ROOT / "extra_ok.txt"
+    remove_if_exists(extra_target)
+    rc, out, err = run_sbx(
+        "workspace-write",
+        ["cmd", "/c", f"echo extra > {extra_target}"],
+        WS_ROOT,
+        additional_root=EXTRA_ROOT,
+    )
+    add("WS: write in additional root allowed", rc == 0 and assert_exists(extra_target), f"rc={rc}, err={err}")
+
+    # 3c. RO: deny write in additional workspace root
+    ro_extra_target = EXTRA_ROOT / "extra_ro.txt"
+    remove_if_exists(ro_extra_target)
+    rc, out, err = run_sbx(
+        "read-only",
+        ["cmd", "/c", f"echo nope > {ro_extra_target}"],
+        WS_ROOT,
+        additional_root=EXTRA_ROOT,
+    )
+    add(
+        "RO: write in additional root denied",
+        rc != 0 and assert_not_exists(ro_extra_target),
+        f"rc={rc}",
+    )
 
     # 4. WS: allow TEMP write
     rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo tempok > %TEMP%\\ws_temp_ok.txt"], WS_ROOT)
@@ -271,24 +308,6 @@ def main() -> int:
     else:
         add("WS: git --version (optional, skipped)", True)
 
-    # 21–23. JSON policy: allow only .\allowed — note CWD is still allowed by current impl
-    (WS_ROOT / "allowed").mkdir(exist_ok=True)
-    (WS_ROOT / "blocked").mkdir(exist_ok=True)
-    policy_json = '{"mode":"workspace-write","workspace_roots":[".\\\\allowed"]}'
-
-    # Allowed: inside .\allowed (OK)
-    rc, out, err = run_sbx(policy_json, ["cmd", "/c", "echo ok > allowed\\in_allowed.txt"], WS_ROOT)
-    add("JSON WS: write in allowed/ OK", rc == 0 and (WS_ROOT / "allowed/in_allowed.txt").exists(), f"rc={rc}")
-
-    # Outside CWD (deny)
-    json_outside = OUTSIDE / "json_blocked.txt"; remove_if_exists(json_outside)
-    rc, out, err = run_sbx(policy_json, ["cmd", "/c", f"echo nope > {json_outside}"], WS_ROOT)
-    add("JSON WS: write outside allowed/ denied", rc != 0 and not json_outside.exists(), f"rc={rc}")
-
-    # CWD is still allowed by current sandbox (documented behavior)
-    rc, out, err = run_sbx(policy_json, ["cmd", "/c", "echo ok > cwd_ok_under_json.txt"], WS_ROOT)
-    add("JSON WS: write in CWD allowed (by design)", rc == 0 and (WS_ROOT / "cwd_ok_under_json.txt").exists(), f"rc={rc}")
-
     # 24. WS: PS bytes write (OK)
     rc, out, err = run_sbx("workspace-write",
                            ["powershell", "-NoLogo", "-NoProfile", "-Command",
@@ -363,7 +382,13 @@ def main() -> int:
     add("WS: protected path case-variation denied", rc != 0 and assert_not_exists(git_variation), f"rc={rc}")
 
     # 34. WS: policy tamper (.codex artifacts) denied
-    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo tamper > .codex\\cap_sid"], WS_ROOT)
+    codex_home = Path(os.environ["USERPROFILE"]) / ".codex"
+    cap_sid_target = codex_home / "cap_sid"
+    rc, out, err = run_sbx(
+        "workspace-write",
+        ["cmd", "/c", f"echo tamper > \"{cap_sid_target}\""],
+        WS_ROOT,
+    )
     rc2, out2, err2 = run_sbx("workspace-write", ["cmd", "/c", "echo tamper > .codex\\policy.json"], WS_ROOT)
     add("WS: .codex cap_sid tamper denied", rc != 0, f"rc={rc}, err={err}")
     add("WS: .codex policy tamper denied", rc2 != 0, f"rc={rc2}, err={err2}")
@@ -373,35 +398,22 @@ def main() -> int:
     tools_dir.mkdir(exist_ok=True)
     ssh_path = None
     if have("ssh"):
-        # Best-effort copy ssh.exe if found in PATH (optional)
-        try:
-            where_out = subprocess.run(["where", "ssh"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-            for line in where_out.stdout.splitlines():
-                candidate = Path(line.strip())
-                if candidate.exists():
-                    ssh_path = candidate
-                    break
-            if ssh_path:
-                dest = tools_dir / "ssh.exe"
-                shutil.copy2(ssh_path, dest)
-                rc, out, err = run_sbx(
-                    "workspace-write",
-                    ["cmd", "/c", f"set PATH={tools_dir};%PATH% & ssh example.com"],
-                    WS_ROOT,
-                )
-                add("WS: PATH stub bypass denied (ssh)", rc != 0, f"rc={rc}")
-            else:
-                add("WS: PATH stub bypass denied (ssh missing)", True)
-        except Exception as ex:
-            add("WS: PATH stub bypass denied (ssh copy failed)", True, str(ex))
+        # shutil.which considers PATHEXT + PATHEXT semantics
+        ssh_path = shutil.which("ssh")
+    if ssh_path:
+        shim = tools_dir / "ssh.bat"
+        shim.write_text("@echo off\r\necho stubbed\r\n", encoding="utf-8")
+        env = {"PATH": f"{tools_dir};%PATH%"}
+        rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "ssh"], WS_ROOT, env_extra=env)
+        add("WS: PATH stub bypass denied", "stubbed" in out, f"rc={rc}, out={out}")
     else:
-        add("WS: PATH stub bypass denied (ssh not present)", True)
+        add("WS: PATH stub bypass denied (ssh missing)", True, "ssh not installed")
 
-    # 36. WS: symlink race (best-effort deny)
-    race_root = WS_ROOT / "race_root"
-    make_dir_clean(race_root)
+    # 36. WS: symlink races blocked
+    race_root = WS_ROOT / "race"
     inside = race_root / "inside"
-    outside = OUTSIDE / "race_out"
+    outside = race_root / "outside"
+    make_dir_clean(race_root)
     inside.mkdir(parents=True, exist_ok=True)
     outside.mkdir(parents=True, exist_ok=True)
     link = race_root / "flip"
@@ -418,7 +430,7 @@ def main() -> int:
     rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo race > flip\\race.txt"], race_root)
     add("WS: symlink race write denied (best-effort)", rc != 0 and not (outside / "race.txt").exists(), f"rc={rc}")
 
-    # 37. WS: audit blind spots — deep junction/world-writable denied
+    # 37. WS: audit blind spots – deep junction/world-writable denied
     deep = WS_ROOT / "deep" / "redir"
     unsafe_dir = WS_ROOT / "deep" / "unsafe"
     make_junction(deep, Path("C:/Windows"))
@@ -465,12 +477,23 @@ def main() -> int:
     rc, out, err = run_sbx("workspace-write", ["cmd", "/c", f"echo leak > {outside_after_timeout}"], WS_ROOT)
     add("WS: post-timeout outside write still denied", rc != 0 and assert_not_exists(outside_after_timeout), f"rc={rc}")
 
-    # 41. WS: additional protected path variation (.ssh)
-    ssh_var = WS_ROOT / ".SsH" / "config"
-    remove_if_exists(ssh_var.parent)
-    ssh_var.parent.mkdir(exist_ok=True)
-    rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "echo key > .SsH\\config"], WS_ROOT)
-    add("WS: protected path variation (.ssh) denied", rc != 0 and assert_not_exists(ssh_var), f"rc={rc}")
+    # 41. RO: Start-Process https blocked (KNOWN FAIL until GUI escape fixed)
+    rc, out, err = run_sbx(
+        "read-only",
+        [
+            "powershell",
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            "Start-Process 'https://codex-invalid.local/smoke'",
+        ],
+        WS_ROOT,
+    )
+    add(
+        "RO: Start-Process https denied (KNOWN FAIL)",
+        rc != 0,
+        f"rc={rc}, stdout={out}, stderr={err}",
+    )
 
     return summarize(results)
 

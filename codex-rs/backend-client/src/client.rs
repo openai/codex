@@ -1,4 +1,5 @@
 use crate::types::CodeTaskDetailsResponse;
+use crate::types::CreditStatusDetails;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitStatusPayload;
 use crate::types::RateLimitWindowSnapshot;
@@ -6,6 +7,8 @@ use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_core::auth::CodexAuth;
 use codex_core::default_client::get_codex_user_agent;
+use codex_protocol::account::PlanType as AccountPlanType;
+use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use reqwest::header::AUTHORIZATION;
@@ -272,19 +275,24 @@ impl Client {
 
     // rate limit helpers
     fn rate_limit_snapshot_from_payload(payload: RateLimitStatusPayload) -> RateLimitSnapshot {
-        let Some(details) = payload
+        let rate_limit_details = payload
             .rate_limit
-            .and_then(|inner| inner.map(|boxed| *boxed))
-        else {
-            return RateLimitSnapshot {
-                primary: None,
-                secondary: None,
-            };
+            .and_then(|inner| inner.map(|boxed| *boxed));
+
+        let (primary, secondary) = if let Some(details) = rate_limit_details {
+            (
+                Self::map_rate_limit_window(details.primary_window),
+                Self::map_rate_limit_window(details.secondary_window),
+            )
+        } else {
+            (None, None)
         };
 
         RateLimitSnapshot {
-            primary: Self::map_rate_limit_window(details.primary_window),
-            secondary: Self::map_rate_limit_window(details.secondary_window),
+            primary,
+            secondary,
+            credits: Self::map_credits(payload.credits),
+            plan_type: Some(Self::map_plan_type(payload.plan_type)),
         }
     }
 
@@ -304,6 +312,36 @@ impl Client {
             window_minutes,
             resets_at,
         })
+    }
+
+    fn map_credits(credits: Option<Option<Box<CreditStatusDetails>>>) -> Option<CreditsSnapshot> {
+        let details = match credits {
+            Some(Some(details)) => *details,
+            _ => return None,
+        };
+
+        Some(CreditsSnapshot {
+            has_credits: details.has_credits,
+            unlimited: details.unlimited,
+            balance: details.balance.and_then(|inner| inner),
+        })
+    }
+
+    fn map_plan_type(plan_type: crate::types::PlanType) -> AccountPlanType {
+        match plan_type {
+            crate::types::PlanType::Free => AccountPlanType::Free,
+            crate::types::PlanType::Plus => AccountPlanType::Plus,
+            crate::types::PlanType::Pro => AccountPlanType::Pro,
+            crate::types::PlanType::Team => AccountPlanType::Team,
+            crate::types::PlanType::Business => AccountPlanType::Business,
+            crate::types::PlanType::Enterprise => AccountPlanType::Enterprise,
+            crate::types::PlanType::Edu | crate::types::PlanType::Education => AccountPlanType::Edu,
+            crate::types::PlanType::Guest
+            | crate::types::PlanType::Go
+            | crate::types::PlanType::FreeWorkspace
+            | crate::types::PlanType::Quorum
+            | crate::types::PlanType::K12 => AccountPlanType::Unknown,
+        }
     }
 
     fn window_minutes_from_seconds(seconds: i32) -> Option<i64> {

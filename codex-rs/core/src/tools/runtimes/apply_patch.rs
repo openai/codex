@@ -7,12 +7,11 @@
 use crate::CODEX_APPLY_PATCH_ARG1;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::CommandSpec;
+use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ProvidesSandboxRetryData;
 use crate::tools::sandboxing::SandboxAttempt;
-use crate::tools::sandboxing::SandboxRetryData;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
@@ -32,12 +31,6 @@ pub struct ApplyPatchRequest {
     pub timeout_ms: Option<u64>,
     pub user_explicitly_approved: bool,
     pub codex_exe: Option<PathBuf>,
-}
-
-impl ProvidesSandboxRetryData for ApplyPatchRequest {
-    fn sandbox_retry_data(&self) -> Option<SandboxRetryData> {
-        None
-    }
 }
 
 #[derive(Default)]
@@ -67,10 +60,10 @@ impl ApplyPatchRuntime {
             program,
             args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.patch.clone()],
             cwd: req.cwd.clone(),
-            timeout_ms: req.timeout_ms,
+            expiration: req.timeout_ms.into(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
-            with_escalated_permissions: None,
+            sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
         })
     }
@@ -114,7 +107,6 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let call_id = ctx.call_id.to_string();
         let cwd = req.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
-        let risk = ctx.risk.clone();
         let user_explicitly_approved = req.user_explicitly_approved;
         Box::pin(async move {
             with_cached_approval(&session.services, key, move || async move {
@@ -127,7 +119,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                                 command: vec!["apply_patch".to_string()],
                                 cwd,
                                 reason: Some(reason),
-                                risk,
+                                proposed_execpolicy_amendment: None,
                                 network_preflight_only: false,
                             },
                         )
@@ -156,9 +148,9 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
     ) -> Result<ExecToolCallOutput, ToolError> {
         let spec = Self::build_command_spec(req)?;
         let env = attempt
-            .env_for(&spec)
+            .env_for(spec)
             .map_err(|err| ToolError::Codex(err.into()))?;
-        let out = execute_env(&env, attempt.policy, Self::stdout_stream(ctx))
+        let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
             .await
             .map_err(ToolError::Codex)?;
         Ok(out)

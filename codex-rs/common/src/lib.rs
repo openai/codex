@@ -32,8 +32,8 @@ mod config_summary;
 pub use config_summary::create_config_summary_entries;
 // Shared fuzzy matcher (used by TUI selection popups and other UI filtering)
 pub mod fuzzy_match;
-// Shared model presets used by TUI and MCP server
-pub mod model_presets;
 // Shared approval presets (AskForApproval + Sandbox) used by TUI and MCP server
 // Not to be confused with AskForApproval, which we should probably rename to EscalationPolicy.
 pub mod approval_presets;
+// Shared OSS provider utilities used by TUI and exec
+pub mod oss;

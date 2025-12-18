@@ -2,35 +2,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
-use strum_macros::EnumIter;
 use ts_rs::TS;
-
-/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
-#[derive(
-    Debug,
-    Serialize,
-    Deserialize,
-    Default,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Display,
-    JsonSchema,
-    TS,
-    EnumIter,
-    Hash,
-)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum ReasoningEffort {
-    None,
-    Minimal,
-    Low,
-    #[default]
-    Medium,
-    High,
-}
 
 /// A summary of the reasoning performed by the model. This can be useful for
 /// debugging and understanding the model's reasoning process.
@@ -97,4 +69,14 @@ pub enum SandboxMode {
 pub enum ForcedLoginMethod {
     Chatgpt,
     Api,
+}
+
+/// Represents the trust level for a project directory.
+/// This determines the approval policy and sandbox mode applied.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum TrustLevel {
+    Trusted,
+    Untrusted,
 }

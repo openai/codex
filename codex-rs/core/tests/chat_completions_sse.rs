@@ -1,8 +1,9 @@
 use assert_matches::assert_matches;
+use codex_core::AuthManager;
 use std::sync::Arc;
 use tracing_test::traced_test;
 
-use codex_app_server_protocol::AuthMode;
+use codex_core::CodexAuth;
 use codex_core::ContentItem;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
@@ -10,11 +11,13 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_otel::otel_event_manager::OtelEventManager;
+use codex_core::openai_models::models_manager::ModelsManager;
+use codex_otel::otel_manager::OtelManager;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
+use core_test_support::skip_if_no_network;
 use futures::StreamExt;
 use tempfile::TempDir;
 use wiremock::Mock;
@@ -22,10 +25,6 @@ use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
-
-fn network_disabled() -> bool {
-    std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
-}
 
 async fn run_stream(sse_body: &str) -> Vec<ResponseEvent> {
     run_stream_with_bytes(sse_body.as_bytes()).await
@@ -74,27 +73,32 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
     let config = Arc::new(config);
 
     let conversation_id = ConversationId::new();
-
-    let otel_event_manager = OtelEventManager::new(
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let auth_mode = auth_manager.get_auth_mode();
+    let model = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
+    let otel_manager = OtelManager::new(
         conversation_id,
-        config.model.as_str(),
-        config.model_family.slug.as_str(),
+        model.as_str(),
+        model_family.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        Some(AuthMode::ChatGPT),
+        auth_mode,
         false,
         "test".to_string(),
+        SessionSource::Exec,
     );
 
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
-        otel_event_manager,
+        model_family,
+        otel_manager,
         provider,
         effort,
         summary,
         conversation_id,
-        codex_protocol::protocol::SessionSource::Exec,
+        SessionSource::Exec,
     );
 
     let mut prompt = Prompt::default();
@@ -157,12 +161,7 @@ fn assert_reasoning(item: &ResponseItem, expected: &str) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn streams_text_without_reasoning() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let sse = concat!(
         "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
@@ -193,12 +192,7 @@ async fn streams_text_without_reasoning() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn streams_reasoning_from_string_delta() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let sse = concat!(
         "data: {\"choices\":[{\"delta\":{\"reasoning\":\"think1\"}}]}\n\n",
@@ -215,7 +209,13 @@ async fn streams_reasoning_from_string_delta() {
     }
 
     match &events[1] {
-        ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "think1"),
+        ResponseEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+        } => {
+            assert_eq!(delta, "think1");
+            assert_eq!(content_index, &0);
+        }
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
@@ -244,12 +244,7 @@ async fn streams_reasoning_from_string_delta() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn streams_reasoning_from_object_delta() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let sse = concat!(
         "data: {\"choices\":[{\"delta\":{\"reasoning\":{\"text\":\"partA\"}}}]}\n\n",
@@ -267,12 +262,24 @@ async fn streams_reasoning_from_object_delta() {
     }
 
     match &events[1] {
-        ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "partA"),
+        ResponseEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+        } => {
+            assert_eq!(delta, "partA");
+            assert_eq!(content_index, &0);
+        }
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
     match &events[2] {
-        ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "partB"),
+        ResponseEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+        } => {
+            assert_eq!(delta, "partB");
+            assert_eq!(content_index, &1);
+        }
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
@@ -301,12 +308,7 @@ async fn streams_reasoning_from_object_delta() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn streams_reasoning_from_final_message() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let sse = "data: {\"choices\":[{\"message\":{\"reasoning\":\"final-cot\"},\"finish_reason\":\"stop\"}]}\n\n";
 
@@ -319,7 +321,13 @@ async fn streams_reasoning_from_final_message() {
     }
 
     match &events[1] {
-        ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "final-cot"),
+        ResponseEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+        } => {
+            assert_eq!(delta, "final-cot");
+            assert_eq!(content_index, &0);
+        }
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
@@ -333,12 +341,7 @@ async fn streams_reasoning_from_final_message() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn streams_reasoning_before_tool_call() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let sse = concat!(
         "data: {\"choices\":[{\"delta\":{\"reasoning\":\"pre-tool\"}}]}\n\n",
@@ -354,7 +357,13 @@ async fn streams_reasoning_before_tool_call() {
     }
 
     match &events[1] {
-        ResponseEvent::ReasoningContentDelta(text) => assert_eq!(text, "pre-tool"),
+        ResponseEvent::ReasoningContentDelta {
+            delta,
+            content_index,
+        } => {
+            assert_eq!(delta, "pre-tool");
+            assert_eq!(content_index, &0);
+        }
         other => panic!("expected reasoning delta, got {other:?}"),
     }
 
@@ -383,12 +392,7 @@ async fn streams_reasoning_before_tool_call() {
 #[tokio::test]
 #[traced_test]
 async fn chat_sse_emits_failed_on_parse_error() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let sse_body = concat!("data: not-json\n\n", "data: [DONE]\n\n");
 
@@ -420,12 +424,7 @@ async fn chat_sse_emits_failed_on_parse_error() {
 #[tokio::test]
 #[traced_test]
 async fn chat_sse_done_chunk_emits_event() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let sse_body = "data: [DONE]\n\n";
 
@@ -443,12 +442,7 @@ async fn chat_sse_done_chunk_emits_event() {
 #[tokio::test]
 #[traced_test]
 async fn chat_sse_emits_error_on_invalid_utf8() {
-    if network_disabled() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let _ = run_stream_with_bytes(b"data: \x80\x80\n\n").await;
 

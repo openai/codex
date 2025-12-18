@@ -10,14 +10,32 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::mcp::auth::McpAuthStatusEntry;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use async_channel::Sender;
+use codex_async_utils::CancelErr;
+use codex_async_utils::OrCancelExt;
+use codex_protocol::approvals::ElicitationRequestEvent;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::McpStartupCompleteEvent;
+use codex_protocol::protocol::McpStartupFailure;
+use codex_protocol::protocol::McpStartupStatus;
+use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_rmcp_client::RmcpClient;
+use codex_rmcp_client::SendElicitation;
+use futures::future::BoxFuture;
+use futures::future::FutureExt;
+use futures::future::Shared;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
 use mcp_types::ListResourceTemplatesRequestParams;
@@ -26,17 +44,24 @@ use mcp_types::ListResourcesRequestParams;
 use mcp_types::ListResourcesResult;
 use mcp_types::ReadResourceRequestParams;
 use mcp_types::ReadResourceResult;
+use mcp_types::RequestId;
 use mcp_types::Resource;
 use mcp_types::ResourceTemplate;
 use mcp_types::Tool;
 
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
+use tokio::sync::Mutex;
+use tokio::sync::oneshot;
 use tokio::task::JoinSet;
-use tracing::info;
+use tokio_util::sync::CancellationToken;
+use tracing::instrument;
 use tracing::warn;
 
+use crate::codex::INITIAL_SUBMIT_ID;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
 
@@ -54,11 +79,10 @@ pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default timeout for individual tool calls.
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Map that holds a startup error for every MCP server that could **not** be
-/// spawned successfully.
-pub type ClientStartErrors = HashMap<String, anyhow::Error>;
-
-fn qualify_tools(tools: Vec<ToolInfo>) -> HashMap<String, ToolInfo> {
+fn qualify_tools<I>(tools: I) -> HashMap<String, ToolInfo>
+where
+    I: IntoIterator<Item = ToolInfo>,
+{
     let mut used_names = HashSet::new();
     let mut qualified_tools = HashMap::new();
     for tool in tools {
@@ -90,222 +114,302 @@ fn qualify_tools(tools: Vec<ToolInfo>) -> HashMap<String, ToolInfo> {
     qualified_tools
 }
 
-struct ToolInfo {
-    server_name: String,
-    tool_name: String,
-    tool: Tool,
+#[derive(Clone)]
+pub(crate) struct ToolInfo {
+    pub(crate) server_name: String,
+    pub(crate) tool_name: String,
+    pub(crate) tool: Tool,
 }
 
+type ResponderMap = HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>;
+
+#[derive(Clone, Default)]
+struct ElicitationRequestManager {
+    requests: Arc<Mutex<ResponderMap>>,
+}
+
+impl ElicitationRequestManager {
+    async fn resolve(
+        &self,
+        server_name: String,
+        id: RequestId,
+        response: ElicitationResponse,
+    ) -> Result<()> {
+        self.requests
+            .lock()
+            .await
+            .remove(&(server_name, id))
+            .ok_or_else(|| anyhow!("elicitation request not found"))?
+            .send(response)
+            .map_err(|e| anyhow!("failed to send elicitation response: {e:?}"))
+    }
+
+    fn make_sender(&self, server_name: String, tx_event: Sender<Event>) -> SendElicitation {
+        let elicitation_requests = self.requests.clone();
+        Box::new(move |id, elicitation| {
+            let elicitation_requests = elicitation_requests.clone();
+            let tx_event = tx_event.clone();
+            let server_name = server_name.clone();
+            async move {
+                let (tx, rx) = oneshot::channel();
+                {
+                    let mut lock = elicitation_requests.lock().await;
+                    lock.insert((server_name.clone(), id.clone()), tx);
+                }
+                let _ = tx_event
+                    .send(Event {
+                        id: "mcp_elicitation_request".to_string(),
+                        msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
+                            server_name,
+                            id,
+                            message: elicitation.message,
+                        }),
+                    })
+                    .await;
+                rx.await
+                    .context("elicitation request channel closed unexpectedly")
+            }
+            .boxed()
+        })
+    }
+}
+
+#[derive(Clone)]
 struct ManagedClient {
     client: Arc<RmcpClient>,
-    startup_timeout: Duration,
+    tools: Vec<ToolInfo>,
+    tool_filter: ToolFilter,
     tool_timeout: Option<Duration>,
+    server_supports_sandbox_state_capability: bool,
+}
+
+impl ManagedClient {
+    async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
+        if !self.server_supports_sandbox_state_capability {
+            return Ok(());
+        }
+
+        self.client
+            .send_custom_notification(
+                MCP_SANDBOX_STATE_NOTIFICATION,
+                Some(serde_json::to_value(sandbox_state)?),
+            )
+            .await
+    }
+}
+
+#[derive(Clone)]
+struct AsyncManagedClient {
+    client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
+}
+
+impl AsyncManagedClient {
+    fn new(
+        server_name: String,
+        config: McpServerConfig,
+        store_mode: OAuthCredentialsStoreMode,
+        cancel_token: CancellationToken,
+        tx_event: Sender<Event>,
+        elicitation_requests: ElicitationRequestManager,
+    ) -> Self {
+        let tool_filter = ToolFilter::from_config(&config);
+        let fut = async move {
+            if let Err(error) = validate_mcp_server_name(&server_name) {
+                return Err(error.into());
+            }
+
+            let client =
+                Arc::new(make_rmcp_client(&server_name, config.transport, store_mode).await?);
+            match start_server_task(
+                server_name,
+                client,
+                config.startup_timeout_sec.or(Some(DEFAULT_STARTUP_TIMEOUT)),
+                config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
+                tool_filter,
+                tx_event,
+                elicitation_requests,
+            )
+            .or_cancel(&cancel_token)
+            .await
+            {
+                Ok(result) => result,
+                Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
+            }
+        };
+        Self {
+            client: fut.boxed().shared(),
+        }
+    }
+
+    async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
+        self.client.clone().await
+    }
+
+    async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
+        let managed = self.client().await?;
+        managed.notify_sandbox_state_change(sandbox_state).await
+    }
+}
+
+pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
+
+/// Custom MCP notification for sandbox state updates.
+/// When used, the `params` field of the notification is [`SandboxState`].
+pub const MCP_SANDBOX_STATE_NOTIFICATION: &str = "codex/sandbox-state/update";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxState {
+    pub sandbox_policy: SandboxPolicy,
+    pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub sandbox_cwd: PathBuf,
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
 #[derive(Default)]
 pub(crate) struct McpConnectionManager {
-    /// Server-name -> client instance.
-    ///
-    /// The server name originates from the keys of the `mcp_servers` map in
-    /// the user configuration.
-    clients: HashMap<String, ManagedClient>,
-
-    /// Fully qualified tool name -> tool instance.
-    tools: HashMap<String, ToolInfo>,
-
-    /// Server-name -> configured tool filters.
-    tool_filters: HashMap<String, ToolFilter>,
+    clients: HashMap<String, AsyncManagedClient>,
+    elicitation_requests: ElicitationRequestManager,
 }
 
 impl McpConnectionManager {
-    /// Spawn a [`RmcpClient`] for each configured server.
-    ///
-    /// * `mcp_servers` – Map loaded from the user configuration where *keys*
-    ///   are human-readable server identifiers and *values* are the spawn
-    ///   instructions.
-    ///
-    /// Servers that fail to start are reported in `ClientStartErrors`: the
-    /// user should be informed about these errors.
-    pub async fn new(
+    pub async fn initialize(
+        &mut self,
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
-    ) -> Result<(Self, ClientStartErrors)> {
-        // Early exit if no servers are configured.
-        if mcp_servers.is_empty() {
-            return Ok((Self::default(), ClientStartErrors::default()));
+        auth_entries: HashMap<String, McpAuthStatusEntry>,
+        tx_event: Sender<Event>,
+        cancel_token: CancellationToken,
+        initial_sandbox_state: SandboxState,
+    ) {
+        if cancel_token.is_cancelled() {
+            return;
         }
-
-        // Launch all configured servers concurrently.
+        let mut clients = HashMap::new();
         let mut join_set = JoinSet::new();
-        let mut errors = ClientStartErrors::new();
-        let mut tool_filters: HashMap<String, ToolFilter> = HashMap::new();
-
-        for (server_name, cfg) in mcp_servers {
-            // Validate server name before spawning
-            if !is_valid_mcp_server_name(&server_name) {
-                let error = anyhow::anyhow!(
-                    "invalid server name '{server_name}': must match pattern ^[a-zA-Z0-9_-]+$"
-                );
-                errors.insert(server_name, error);
-                continue;
-            }
-
-            if !cfg.enabled {
-                tool_filters.insert(server_name, ToolFilter::from_config(&cfg));
-                continue;
-            }
-
-            let startup_timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
-            let tool_timeout = cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
-            tool_filters.insert(server_name.clone(), ToolFilter::from_config(&cfg));
-
-            let resolved_bearer_token = match &cfg.transport {
-                McpServerTransportConfig::StreamableHttp {
-                    bearer_token_env_var,
-                    ..
-                } => resolve_bearer_token(&server_name, bearer_token_env_var.as_deref()),
-                _ => Ok(None),
-            };
-
+        let elicitation_requests = ElicitationRequestManager::default();
+        for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
+            let cancel_token = cancel_token.child_token();
+            let _ = emit_update(
+                &tx_event,
+                McpStartupUpdateEvent {
+                    server: server_name.clone(),
+                    status: McpStartupStatus::Starting,
+                },
+            )
+            .await;
+            let async_managed_client = AsyncManagedClient::new(
+                server_name.clone(),
+                cfg,
+                store_mode,
+                cancel_token.clone(),
+                tx_event.clone(),
+                elicitation_requests.clone(),
+            );
+            clients.insert(server_name.clone(), async_managed_client.clone());
+            let tx_event = tx_event.clone();
+            let auth_entry = auth_entries.get(&server_name).cloned();
+            let sandbox_state = initial_sandbox_state.clone();
             join_set.spawn(async move {
-                let McpServerConfig { transport, .. } = cfg;
-                let params = mcp_types::InitializeRequestParams {
-                    capabilities: ClientCapabilities {
-                        experimental: None,
-                        roots: None,
-                        sampling: None,
-                        // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-                        // indicates this should be an empty object.
-                        elicitation: Some(json!({})),
-                    },
-                    client_info: Implementation {
-                        name: "codex-mcp-client".to_owned(),
-                        version: env!("CARGO_PKG_VERSION").to_owned(),
-                        title: Some("Codex".into()),
-                        // This field is used by Codex when it is an MCP
-                        // server: it should not be used when Codex is
-                        // an MCP client.
-                        user_agent: None,
-                    },
-                    protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
-                };
-
-                let resolved_bearer_token = resolved_bearer_token.unwrap_or_default();
-                let client_result = match transport {
-                    McpServerTransportConfig::Stdio {
-                        command,
-                        args,
-                        env,
-                        env_vars,
-                        cwd,
-                    } => {
-                        let command_os: OsString = command.into();
-                        let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
-                        match RmcpClient::new_stdio_client(command_os, args_os, env, &env_vars, cwd)
+                let outcome = async_managed_client.client().await;
+                if cancel_token.is_cancelled() {
+                    return (server_name, Err(StartupOutcomeError::Cancelled));
+                }
+                let status = match &outcome {
+                    Ok(_) => {
+                        // Send sandbox state notification immediately after Ready
+                        if let Err(e) = async_managed_client
+                            .notify_sandbox_state_change(&sandbox_state)
                             .await
                         {
-                            Ok(client) => {
-                                let client = Arc::new(client);
-                                client
-                                    .initialize(params.clone(), Some(startup_timeout))
-                                    .await
-                                    .map(|_| client)
-                            }
-                            Err(err) => Err(err.into()),
+                            warn!(
+                                "Failed to notify sandbox state to MCP server {server_name}: {e:#}",
+                            );
                         }
+                        McpStartupStatus::Ready
                     }
-                    McpServerTransportConfig::StreamableHttp {
-                        url,
-                        http_headers,
-                        env_http_headers,
-                        ..
-                    } => {
-                        match RmcpClient::new_streamable_http_client(
-                            &server_name,
-                            &url,
-                            resolved_bearer_token.clone(),
-                            http_headers,
-                            env_http_headers,
-                            store_mode,
-                        )
-                        .await
-                        {
-                            Ok(client) => {
-                                let client = Arc::new(client);
-                                client
-                                    .initialize(params.clone(), Some(startup_timeout))
-                                    .await
-                                    .map(|_| client)
-                            }
-                            Err(err) => Err(err),
-                        }
+                    Err(error) => {
+                        let error_str = mcp_init_error_display(
+                            server_name.as_str(),
+                            auth_entry.as_ref(),
+                            error,
+                        );
+                        McpStartupStatus::Failed { error: error_str }
                     }
                 };
 
-                (
-                    (server_name, tool_timeout),
-                    client_result.map(|client| (client, startup_timeout)),
+                let _ = emit_update(
+                    &tx_event,
+                    McpStartupUpdateEvent {
+                        server: server_name.clone(),
+                        status,
+                    },
                 )
+                .await;
+
+                (server_name, outcome)
             });
         }
-
-        let mut clients: HashMap<String, ManagedClient> = HashMap::with_capacity(join_set.len());
-
-        while let Some(res) = join_set.join_next().await {
-            let ((server_name, tool_timeout), client_res) = match res {
-                Ok(result) => result,
-                Err(e) => {
-                    warn!("Task panic when starting MCP server: {e:#}");
-                    continue;
-                }
-            };
-
-            match client_res {
-                Ok((client, startup_timeout)) => {
-                    clients.insert(
-                        server_name,
-                        ManagedClient {
-                            client,
-                            startup_timeout,
-                            tool_timeout: Some(tool_timeout),
-                        },
-                    );
-                }
-                Err(e) => {
-                    errors.insert(server_name, e);
+        self.clients = clients;
+        self.elicitation_requests = elicitation_requests.clone();
+        tokio::spawn(async move {
+            let outcomes = join_set.join_all().await;
+            let mut summary = McpStartupCompleteEvent::default();
+            for (server_name, outcome) in outcomes {
+                match outcome {
+                    Ok(_) => summary.ready.push(server_name),
+                    Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
+                    Err(StartupOutcomeError::Failed { error }) => {
+                        summary.failed.push(McpStartupFailure {
+                            server: server_name,
+                            error,
+                        })
+                    }
                 }
             }
-        }
+            let _ = tx_event
+                .send(Event {
+                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    msg: EventMsg::McpStartupComplete(summary),
+                })
+                .await;
+        });
+    }
 
-        let all_tools = match list_all_tools(&clients).await {
-            Ok(tools) => tools,
-            Err(e) => {
-                warn!("Failed to list tools from some MCP servers: {e:#}");
-                Vec::new()
-            }
-        };
+    async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {
+        self.clients
+            .get(name)
+            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?
+            .client()
+            .await
+            .context("failed to get client")
+    }
 
-        let filtered_tools = filter_tools(all_tools, &tool_filters);
-        let tools = qualify_tools(filtered_tools);
-
-        Ok((
-            Self {
-                clients,
-                tools,
-                tool_filters,
-            },
-            errors,
-        ))
+    pub async fn resolve_elicitation(
+        &self,
+        server_name: String,
+        id: RequestId,
+        response: ElicitationResponse,
+    ) -> Result<()> {
+        self.elicitation_requests
+            .resolve(server_name, id, response)
+            .await
     }
 
     /// Returns a single map that contains all tools. Each key is the
     /// fully-qualified name for the tool.
-    pub fn list_all_tools(&self) -> HashMap<String, Tool> {
-        self.tools
-            .iter()
-            .map(|(name, tool)| (name.clone(), tool.tool.clone()))
-            .collect()
+    #[instrument(level = "trace", skip_all)]
+    pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
+        let mut tools = HashMap::new();
+        for managed_client in self.clients.values() {
+            if let Ok(client) = managed_client.client().await {
+                tools.extend(qualify_tools(filter_tools(
+                    client.tools,
+                    client.tool_filter,
+                )));
+            }
+        }
+        tools
     }
 
     /// Returns a single map that contains all resources. Each key is the
@@ -313,10 +417,15 @@ impl McpConnectionManager {
     pub async fn list_all_resources(&self) -> HashMap<String, Vec<Resource>> {
         let mut join_set = JoinSet::new();
 
-        for (server_name, managed_client) in &self.clients {
-            let server_name_cloned = server_name.clone();
-            let client_clone = managed_client.client.clone();
+        let clients_snapshot = &self.clients;
+
+        for (server_name, async_managed_client) in clients_snapshot {
+            let server_name = server_name.clone();
+            let Ok(managed_client) = async_managed_client.client().await else {
+                continue;
+            };
             let timeout = managed_client.tool_timeout;
+            let client = managed_client.client.clone();
 
             join_set.spawn(async move {
                 let mut collected: Vec<Resource> = Vec::new();
@@ -326,9 +435,9 @@ impl McpConnectionManager {
                     let params = cursor.as_ref().map(|next| ListResourcesRequestParams {
                         cursor: Some(next.clone()),
                     });
-                    let response = match client_clone.list_resources(params, timeout).await {
+                    let response = match client.list_resources(params, timeout).await {
                         Ok(result) => result,
-                        Err(err) => return (server_name_cloned, Err(err)),
+                        Err(err) => return (server_name, Err(err)),
                     };
 
                     collected.extend(response.resources);
@@ -337,13 +446,13 @@ impl McpConnectionManager {
                         Some(next) => {
                             if cursor.as_ref() == Some(&next) {
                                 return (
-                                    server_name_cloned,
+                                    server_name,
                                     Err(anyhow!("resources/list returned duplicate cursor")),
                                 );
                             }
                             cursor = Some(next);
                         }
-                        None => return (server_name_cloned, Ok(collected)),
+                        None => return (server_name, Ok(collected)),
                     }
                 }
             });
@@ -373,9 +482,14 @@ impl McpConnectionManager {
     pub async fn list_all_resource_templates(&self) -> HashMap<String, Vec<ResourceTemplate>> {
         let mut join_set = JoinSet::new();
 
-        for (server_name, managed_client) in &self.clients {
+        let clients_snapshot = &self.clients;
+
+        for (server_name, async_managed_client) in clients_snapshot {
             let server_name_cloned = server_name.clone();
-            let client_clone = managed_client.client.clone();
+            let Ok(managed_client) = async_managed_client.client().await else {
+                continue;
+            };
+            let client = managed_client.client.clone();
             let timeout = managed_client.tool_timeout;
 
             join_set.spawn(async move {
@@ -388,8 +502,7 @@ impl McpConnectionManager {
                         .map(|next| ListResourceTemplatesRequestParams {
                             cursor: Some(next.clone()),
                         });
-                    let response = match client_clone.list_resource_templates(params, timeout).await
-                    {
+                    let response = match client.list_resource_templates(params, timeout).await {
                         Ok(result) => result,
                         Err(err) => return (server_name_cloned, Err(err)),
                     };
@@ -442,22 +555,16 @@ impl McpConnectionManager {
         tool: &str,
         arguments: Option<serde_json::Value>,
     ) -> Result<mcp_types::CallToolResult> {
-        if let Some(filter) = self.tool_filters.get(server)
-            && !filter.allows(tool)
-        {
+        let client = self.client_by_name(server).await?;
+        if !client.tool_filter.allows(tool) {
             return Err(anyhow!(
                 "tool '{tool}' is disabled for MCP server '{server}'"
             ));
         }
-        let managed = self
-            .clients
-            .get(server)
-            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
-        let client = &managed.client;
-        let timeout = managed.tool_timeout;
 
         client
-            .call_tool(tool.to_string(), arguments, timeout)
+            .client
+            .call_tool(tool.to_string(), arguments, client.tool_timeout)
             .await
             .with_context(|| format!("tool call failed for `{server}/{tool}`"))
     }
@@ -468,14 +575,11 @@ impl McpConnectionManager {
         server: &str,
         params: Option<ListResourcesRequestParams>,
     ) -> Result<ListResourcesResult> {
-        let managed = self
-            .clients
-            .get(server)
-            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
-        let client = managed.client.clone();
+        let managed = self.client_by_name(server).await?;
         let timeout = managed.tool_timeout;
 
-        client
+        managed
+            .client
             .list_resources(params, timeout)
             .await
             .with_context(|| format!("resources/list failed for `{server}`"))
@@ -487,10 +591,7 @@ impl McpConnectionManager {
         server: &str,
         params: Option<ListResourceTemplatesRequestParams>,
     ) -> Result<ListResourceTemplatesResult> {
-        let managed = self
-            .clients
-            .get(server)
-            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
+        let managed = self.client_by_name(server).await?;
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
 
@@ -506,10 +607,7 @@ impl McpConnectionManager {
         server: &str,
         params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
-        let managed = self
-            .clients
-            .get(server)
-            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
+        let managed = self.client_by_name(server).await?;
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
         let uri = params.uri.clone();
@@ -520,18 +618,59 @@ impl McpConnectionManager {
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
     }
 
-    pub fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
-        self.tools
+    pub async fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
+        self.list_all_tools()
+            .await
             .get(tool_name)
             .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
     }
+
+    pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
+        let mut join_set = JoinSet::new();
+
+        for async_managed_client in self.clients.values() {
+            let sandbox_state = sandbox_state.clone();
+            let async_managed_client = async_managed_client.clone();
+            join_set.spawn(async move {
+                async_managed_client
+                    .notify_sandbox_state_change(&sandbox_state)
+                    .await
+            });
+        }
+
+        while let Some(join_res) = join_set.join_next().await {
+            match join_res {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    warn!("Failed to notify sandbox state change to MCP server: {err:#}");
+                }
+                Err(err) => {
+                    warn!("Task panic when notifying sandbox state change to MCP server: {err:#}");
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+async fn emit_update(
+    tx_event: &Sender<Event>,
+    update: McpStartupUpdateEvent,
+) -> Result<(), async_channel::SendError<Event>> {
+    tx_event
+        .send(Event {
+            id: INITIAL_SUBMIT_ID.to_owned(),
+            msg: EventMsg::McpStartupUpdate(update),
+        })
+        .await
 }
 
 /// A tool is allowed to be used if both are true:
 /// 1. enabled is None (no allowlist is set) or the tool is explicitly enabled.
 /// 2. The tool is not explicitly disabled.
 #[derive(Default, Clone)]
-struct ToolFilter {
+pub(crate) struct ToolFilter {
     enabled: Option<HashSet<String>>,
     disabled: HashSet<String>,
 }
@@ -562,14 +701,10 @@ impl ToolFilter {
     }
 }
 
-fn filter_tools(tools: Vec<ToolInfo>, filters: &HashMap<String, ToolFilter>) -> Vec<ToolInfo> {
+fn filter_tools(tools: Vec<ToolInfo>, filter: ToolFilter) -> Vec<ToolInfo> {
     tools
         .into_iter()
-        .filter(|tool| {
-            filters
-                .get(&tool.server_name)
-                .is_none_or(|filter| filter.allows(&tool.tool_name))
-        })
+        .filter(|tool| filter.allows(&tool.tool_name))
         .collect()
 }
 
@@ -600,70 +735,218 @@ fn resolve_bearer_token(
     }
 }
 
-/// Query every server for its available tools and return a single map that
-/// contains all tools. Each key is the fully-qualified name for the tool.
-async fn list_all_tools(clients: &HashMap<String, ManagedClient>) -> Result<Vec<ToolInfo>> {
-    let mut join_set = JoinSet::new();
+#[derive(Debug, Clone, thiserror::Error)]
+enum StartupOutcomeError {
+    #[error("MCP startup cancelled")]
+    Cancelled,
+    // We can't store the original error here because anyhow::Error doesn't implement
+    // `Clone`.
+    #[error("MCP startup failed: {error}")]
+    Failed { error: String },
+}
 
-    // Spawn one task per server so we can query them concurrently. This
-    // keeps the overall latency roughly at the slowest server instead of
-    // the cumulative latency.
-    for (server_name, managed_client) in clients {
-        let server_name_cloned = server_name.clone();
-        let client_clone = managed_client.client.clone();
-        let startup_timeout = managed_client.startup_timeout;
-        join_set.spawn(async move {
-            let res = client_clone.list_tools(None, Some(startup_timeout)).await;
-            (server_name_cloned, res)
-        });
-    }
-
-    let mut aggregated: Vec<ToolInfo> = Vec::with_capacity(join_set.len());
-
-    while let Some(join_res) = join_set.join_next().await {
-        let (server_name, list_result) = if let Ok(result) = join_res {
-            result
-        } else {
-            warn!("Task panic when listing tools for MCP server: {join_res:#?}");
-            continue;
-        };
-
-        let list_result = if let Ok(result) = list_result {
-            result
-        } else {
-            warn!("Failed to list tools for MCP server '{server_name}': {list_result:#?}");
-            continue;
-        };
-
-        for tool in list_result.tools {
-            let tool_info = ToolInfo {
-                server_name: server_name.clone(),
-                tool_name: tool.name.clone(),
-                tool,
-            };
-            aggregated.push(tool_info);
+impl From<anyhow::Error> for StartupOutcomeError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed {
+            error: error.to_string(),
         }
     }
-
-    info!(
-        "aggregated {} tools from {} servers",
-        aggregated.len(),
-        clients.len()
-    );
-
-    Ok(aggregated)
 }
 
-fn is_valid_mcp_server_name(server_name: &str) -> bool {
-    !server_name.is_empty()
-        && server_name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+async fn start_server_task(
+    server_name: String,
+    client: Arc<RmcpClient>,
+    startup_timeout: Option<Duration>, // TODO: cancel_token should handle this.
+    tool_timeout: Duration,
+    tool_filter: ToolFilter,
+    tx_event: Sender<Event>,
+    elicitation_requests: ElicitationRequestManager,
+) -> Result<ManagedClient, StartupOutcomeError> {
+    let params = mcp_types::InitializeRequestParams {
+        capabilities: ClientCapabilities {
+            experimental: None,
+            roots: None,
+            sampling: None,
+            // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+            // indicates this should be an empty object.
+            elicitation: Some(json!({})),
+        },
+        client_info: Implementation {
+            name: "codex-mcp-client".to_owned(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            title: Some("Codex".into()),
+            // This field is used by Codex when it is an MCP
+            // server: it should not be used when Codex is
+            // an MCP client.
+            user_agent: None,
+        },
+        protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
+    };
+
+    let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
+
+    let initialize_result = client
+        .initialize(params, startup_timeout, send_elicitation)
+        .await
+        .map_err(StartupOutcomeError::from)?;
+
+    let tools = list_tools_for_client(&server_name, &client, startup_timeout)
+        .await
+        .map_err(StartupOutcomeError::from)?;
+
+    let server_supports_sandbox_state_capability = initialize_result
+        .capabilities
+        .experimental
+        .as_ref()
+        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
+        .is_some();
+
+    let managed = ManagedClient {
+        client: Arc::clone(&client),
+        tools,
+        tool_timeout: Some(tool_timeout),
+        tool_filter,
+        server_supports_sandbox_state_capability,
+    };
+
+    Ok(managed)
 }
+
+async fn make_rmcp_client(
+    server_name: &str,
+    transport: McpServerTransportConfig,
+    store_mode: OAuthCredentialsStoreMode,
+) -> Result<RmcpClient, StartupOutcomeError> {
+    match transport {
+        McpServerTransportConfig::Stdio {
+            command,
+            args,
+            env,
+            env_vars,
+            cwd,
+        } => {
+            let command_os: OsString = command.into();
+            let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
+            RmcpClient::new_stdio_client(command_os, args_os, env, &env_vars, cwd)
+                .await
+                .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
+        }
+        McpServerTransportConfig::StreamableHttp {
+            url,
+            http_headers,
+            env_http_headers,
+            bearer_token_env_var,
+        } => {
+            let resolved_bearer_token =
+                match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
+                    Ok(token) => token,
+                    Err(error) => return Err(error.into()),
+                };
+            RmcpClient::new_streamable_http_client(
+                server_name,
+                &url,
+                resolved_bearer_token,
+                http_headers,
+                env_http_headers,
+                store_mode,
+            )
+            .await
+            .map_err(StartupOutcomeError::from)
+        }
+    }
+}
+
+async fn list_tools_for_client(
+    server_name: &str,
+    client: &Arc<RmcpClient>,
+    timeout: Option<Duration>,
+) -> Result<Vec<ToolInfo>> {
+    let resp = client.list_tools(None, timeout).await?;
+    Ok(resp
+        .tools
+        .into_iter()
+        .map(|tool| ToolInfo {
+            server_name: server_name.to_owned(),
+            tool_name: tool.name.clone(),
+            tool,
+        })
+        .collect())
+}
+
+fn validate_mcp_server_name(server_name: &str) -> Result<()> {
+    let re = regex_lite::Regex::new(r"^[a-zA-Z0-9_-]+$")?;
+    if !re.is_match(server_name) {
+        return Err(anyhow!(
+            "Invalid MCP server name '{server_name}': must match pattern {pattern}",
+            pattern = re.as_str()
+        ));
+    }
+    Ok(())
+}
+
+fn mcp_init_error_display(
+    server_name: &str,
+    entry: Option<&McpAuthStatusEntry>,
+    err: &StartupOutcomeError,
+) -> String {
+    if let Some(McpServerTransportConfig::StreamableHttp {
+        url,
+        bearer_token_env_var,
+        http_headers,
+        ..
+    }) = &entry.map(|entry| &entry.config.transport)
+        && url == "https://api.githubcopilot.com/mcp/"
+        && bearer_token_env_var.is_none()
+        && http_headers.as_ref().map(HashMap::is_empty).unwrap_or(true)
+    {
+        format!(
+            "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
+        )
+    } else if is_mcp_client_auth_required_error(err) {
+        format!(
+            "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
+        )
+    } else if is_mcp_client_startup_timeout_error(err) {
+        let startup_timeout_secs = match entry {
+            Some(entry) => match entry.config.startup_timeout_sec {
+                Some(timeout) => timeout,
+                None => DEFAULT_STARTUP_TIMEOUT,
+            },
+            None => DEFAULT_STARTUP_TIMEOUT,
+        }
+        .as_secs();
+        format!(
+            "MCP client for `{server_name}` timed out after {startup_timeout_secs} seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.{server_name}]\nstartup_timeout_sec = XX"
+        )
+    } else {
+        format!("MCP client for `{server_name}` failed to start: {err:#}")
+    }
+}
+
+fn is_mcp_client_auth_required_error(error: &StartupOutcomeError) -> bool {
+    match error {
+        StartupOutcomeError::Failed { error } => error.contains("Auth required"),
+        _ => false,
+    }
+}
+
+fn is_mcp_client_startup_timeout_error(error: &StartupOutcomeError) -> bool {
+    match error {
+        StartupOutcomeError::Failed { error } => {
+            error.contains("request timed out")
+                || error.contains("timed out handshaking with MCP server")
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod mcp_init_error_display_tests {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::McpAuthStatus;
     use mcp_types::ToolInputSchema;
     use std::collections::HashSet;
 
@@ -792,31 +1075,112 @@ mod tests {
 
     #[test]
     fn filter_tools_applies_per_server_filters() {
-        let tools = vec![
+        let server1_tools = vec![
             create_test_tool("server1", "tool_a"),
             create_test_tool("server1", "tool_b"),
-            create_test_tool("server2", "tool_a"),
         ];
-        let mut filters = HashMap::new();
-        filters.insert(
-            "server1".to_string(),
-            ToolFilter {
-                enabled: Some(HashSet::from(["tool_a".to_string(), "tool_b".to_string()])),
-                disabled: HashSet::from(["tool_b".to_string()]),
-            },
-        );
-        filters.insert(
-            "server2".to_string(),
-            ToolFilter {
-                enabled: None,
-                disabled: HashSet::from(["tool_a".to_string()]),
-            },
-        );
+        let server2_tools = vec![create_test_tool("server2", "tool_a")];
+        let server1_filter = ToolFilter {
+            enabled: Some(HashSet::from(["tool_a".to_string(), "tool_b".to_string()])),
+            disabled: HashSet::from(["tool_b".to_string()]),
+        };
+        let server2_filter = ToolFilter {
+            enabled: None,
+            disabled: HashSet::from(["tool_a".to_string()]),
+        };
 
-        let filtered = filter_tools(tools, &filters);
+        let filtered: Vec<_> = filter_tools(server1_tools, server1_filter)
+            .into_iter()
+            .chain(filter_tools(server2_tools, server2_filter))
+            .collect();
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].server_name, "server1");
         assert_eq!(filtered[0].tool_name, "tool_a");
+    }
+
+    #[test]
+    fn mcp_init_error_display_prompts_for_github_pat() {
+        let server_name = "github";
+        let entry = McpAuthStatusEntry {
+            config: McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://api.githubcopilot.com/mcp/".to_string(),
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+            auth_status: McpAuthStatus::Unsupported,
+        };
+        let err: StartupOutcomeError = anyhow::anyhow!("OAuth is unsupported").into();
+
+        let display = mcp_init_error_display(server_name, Some(&entry), &err);
+
+        let expected = format!(
+            "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
+        );
+
+        assert_eq!(expected, display);
+    }
+
+    #[test]
+    fn mcp_init_error_display_prompts_for_login_when_auth_required() {
+        let server_name = "example";
+        let err: StartupOutcomeError = anyhow::anyhow!("Auth required for server").into();
+
+        let display = mcp_init_error_display(server_name, None, &err);
+
+        let expected = format!(
+            "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
+        );
+
+        assert_eq!(expected, display);
+    }
+
+    #[test]
+    fn mcp_init_error_display_reports_generic_errors() {
+        let server_name = "custom";
+        let entry = McpAuthStatusEntry {
+            config: McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://example.com".to_string(),
+                    bearer_token_env_var: Some("TOKEN".to_string()),
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+            auth_status: McpAuthStatus::Unsupported,
+        };
+        let err: StartupOutcomeError = anyhow::anyhow!("boom").into();
+
+        let display = mcp_init_error_display(server_name, Some(&entry), &err);
+
+        let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
+
+        assert_eq!(expected, display);
+    }
+
+    #[test]
+    fn mcp_init_error_display_includes_startup_timeout_hint() {
+        let server_name = "slow";
+        let err: StartupOutcomeError = anyhow::anyhow!("request timed out").into();
+
+        let display = mcp_init_error_display(server_name, None, &err);
+
+        assert_eq!(
+            "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
+            display
+        );
     }
 }

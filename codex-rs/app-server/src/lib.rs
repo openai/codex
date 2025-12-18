@@ -3,7 +3,6 @@
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
@@ -18,6 +17,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::io::{self};
 use tokio::sync::mpsc;
+use toml::Value as TomlValue;
 use tracing::Level;
 use tracing::debug;
 use tracing::error;
@@ -28,7 +28,9 @@ use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+mod bespoke_event_handling;
 mod codex_message_processor;
+mod config_api;
 mod error_code;
 mod fuzzy_file_search;
 mod message_processor;
@@ -46,7 +48,7 @@ pub async fn run_main(
 ) -> IoResult<()> {
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
-    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
+    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
 
     // Task: read from stdin, push to `incoming_tx`.
     let stdin_reader_handle = tokio::spawn({
@@ -79,11 +81,12 @@ pub async fn run_main(
             format!("error parsing -c overrides: {e}"),
         )
     })?;
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, ConfigOverrides::default())
-        .await
-        .map_err(|e| {
-            std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
-        })?;
+    let config =
+        Config::load_with_cli_overrides(cli_kv_overrides.clone(), ConfigOverrides::default())
+            .await
+            .map_err(|e| {
+                std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
+            })?;
 
     let feedback = CodexFeedback::new();
 
@@ -99,6 +102,7 @@ pub async fn run_main(
     // control the log level with `RUST_LOG`.
     let stderr_fmt = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
         .with_filter(EnvFilter::from_default_env());
 
     let feedback_layer = tracing_subscriber::fmt::layer()
@@ -107,23 +111,26 @@ pub async fn run_main(
         .with_target(false)
         .with_filter(Targets::new().with_default(Level::TRACE));
 
+    let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
+
+    let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
+
     let _ = tracing_subscriber::registry()
         .with(stderr_fmt)
         .with(feedback_layer)
-        .with(otel.as_ref().map(|provider| {
-            OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
-                tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
-            )
-        }))
+        .with(otel_logger_layer)
+        .with(otel_tracing_layer)
         .try_init();
 
     // Task: process incoming messages.
     let processor_handle = tokio::spawn({
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
+        let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let mut processor = MessageProcessor::new(
             outgoing_message_sender,
             codex_linux_sandbox_exe,
             std::sync::Arc::new(config),
+            cli_overrides,
             feedback.clone(),
         );
         async move {

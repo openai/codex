@@ -4,17 +4,76 @@ macro_rules! windows_modules {
     };
 }
 
-windows_modules!(acl, allow, audit, cap, env, logging, policy, token, winutil);
+windows_modules!(
+    acl, allow, audit, cap, dpapi, env, identity, logging, policy, process, token, winutil
+);
 
 #[cfg(target_os = "windows")]
-pub use windows_impl::preflight_audit_everyone_writable;
+#[path = "setup_orchestrator.rs"]
+mod setup;
+
+#[cfg(target_os = "windows")]
+mod elevated_impl;
+
+#[cfg(target_os = "windows")]
+pub use acl::allow_null_device;
+#[cfg(target_os = "windows")]
+pub use acl::ensure_allow_mask_aces;
+#[cfg(target_os = "windows")]
+pub use acl::ensure_allow_write_aces;
+#[cfg(target_os = "windows")]
+pub use acl::fetch_dacl_handle;
+#[cfg(target_os = "windows")]
+pub use acl::path_mask_allows;
+#[cfg(target_os = "windows")]
+pub use audit::apply_world_writable_scan_and_denies;
+#[cfg(target_os = "windows")]
+pub use cap::load_or_create_cap_sids;
+#[cfg(target_os = "windows")]
+pub use dpapi::protect as dpapi_protect;
+#[cfg(target_os = "windows")]
+pub use dpapi::unprotect as dpapi_unprotect;
+#[cfg(target_os = "windows")]
+pub use elevated_impl::run_windows_sandbox_capture as run_windows_sandbox_capture_elevated;
+#[cfg(target_os = "windows")]
+pub use identity::require_logon_sandbox_creds;
+#[cfg(target_os = "windows")]
+pub use logging::log_note;
+#[cfg(target_os = "windows")]
+pub use logging::LOG_FILE_NAME;
+#[cfg(target_os = "windows")]
+pub use policy::parse_policy;
+#[cfg(target_os = "windows")]
+pub use policy::SandboxPolicy;
+#[cfg(target_os = "windows")]
+pub use process::create_process_as_user;
+#[cfg(target_os = "windows")]
+pub use setup::run_elevated_setup;
+#[cfg(target_os = "windows")]
+pub use setup::run_setup_refresh;
+#[cfg(target_os = "windows")]
+pub use setup::sandbox_dir;
+#[cfg(target_os = "windows")]
+pub use setup::SETUP_VERSION;
+#[cfg(target_os = "windows")]
+pub use token::convert_string_sid_to_sid;
+#[cfg(target_os = "windows")]
+pub use token::create_readonly_token_with_cap_from;
+#[cfg(target_os = "windows")]
+pub use token::create_workspace_write_token_with_cap_from;
+#[cfg(target_os = "windows")]
+pub use token::get_current_token_for_restriction;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_capture;
 #[cfg(target_os = "windows")]
 pub use windows_impl::CaptureResult;
+#[cfg(target_os = "windows")]
+pub use winutil::string_from_sid_bytes;
+#[cfg(target_os = "windows")]
+pub use winutil::to_wide;
 
 #[cfg(not(target_os = "windows"))]
-pub use stub::preflight_audit_everyone_writable;
+pub use stub::apply_world_writable_scan_and_denies;
 #[cfg(not(target_os = "windows"))]
 pub use stub::run_windows_sandbox_capture;
 #[cfg(not(target_os = "windows"))]
@@ -23,11 +82,11 @@ pub use stub::CaptureResult;
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::acl::add_allow_ace;
+    use super::acl::add_deny_write_ace;
     use super::acl::allow_null_device;
     use super::acl::revoke_ace;
     use super::allow::compute_allow_paths;
-    use super::audit;
-    use super::cap::cap_sid_file;
+    use super::allow::AllowDenyPaths;
     use super::cap::load_or_create_cap_sids;
     use super::env::apply_no_network_to_env;
     use super::env::ensure_non_interactive_pager;
@@ -36,15 +95,16 @@ mod windows_impl {
     use super::logging::log_failure;
     use super::logging::log_start;
     use super::logging::log_success;
-    use super::policy::SandboxMode;
+    use super::policy::parse_policy;
     use super::policy::SandboxPolicy;
+    use super::process::make_env_block;
     use super::token::convert_string_sid_to_sid;
     use super::winutil::format_last_error;
+    use super::winutil::quote_windows_arg;
     use super::winutil::to_wide;
     use anyhow::Result;
     use std::collections::HashMap;
     use std::ffi::c_void;
-    use std::fs;
     use std::io;
     use std::path::Path;
     use std::path::PathBuf;
@@ -66,71 +126,13 @@ mod windows_impl {
 
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
 
-    fn ensure_dir(p: &Path) -> Result<()> {
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d)?;
-        }
+    fn should_apply_network_block(policy: &SandboxPolicy) -> bool {
+        !policy.has_full_network_access()
+    }
+
+    fn ensure_codex_home_exists(p: &Path) -> Result<()> {
+        std::fs::create_dir_all(p)?;
         Ok(())
-    }
-
-    fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
-        let mut items: Vec<(String, String)> =
-            env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        items.sort_by(|a, b| {
-            a.0.to_uppercase()
-                .cmp(&b.0.to_uppercase())
-                .then(a.0.cmp(&b.0))
-        });
-        let mut w: Vec<u16> = Vec::new();
-        for (k, v) in items {
-            let mut s = to_wide(format!("{}={}", k, v));
-            s.pop();
-            w.extend_from_slice(&s);
-            w.push(0);
-        }
-        w.push(0);
-        w
-    }
-
-    // Quote a single Windows command-line argument following the rules used by
-    // CommandLineToArgvW/CRT so that spaces, quotes, and backslashes are preserved.
-    // Reference behavior matches Rust std::process::Command on Windows.
-    fn quote_windows_arg(arg: &str) -> String {
-        let needs_quotes = arg.is_empty()
-            || arg
-                .chars()
-                .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'));
-        if !needs_quotes {
-            return arg.to_string();
-        }
-
-        let mut quoted = String::with_capacity(arg.len() + 2);
-        quoted.push('"');
-        let mut backslashes = 0;
-        for ch in arg.chars() {
-            match ch {
-                '\\' => {
-                    backslashes += 1;
-                }
-                '"' => {
-                    quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
-                    quoted.push('"');
-                    backslashes = 0;
-                }
-                _ => {
-                    if backslashes > 0 {
-                        quoted.push_str(&"\\".repeat(backslashes));
-                        backslashes = 0;
-                    }
-                    quoted.push(ch);
-                }
-            }
-        }
-        if backslashes > 0 {
-            quoted.push_str(&"\\".repeat(backslashes * 2));
-        }
-        quoted.push('"');
-        quoted
     }
 
     unsafe fn setup_stdio_pipes() -> io::Result<PipeHandles> {
@@ -168,59 +170,50 @@ mod windows_impl {
         pub timed_out: bool,
     }
 
-    pub fn preflight_audit_everyone_writable(
-        cwd: &Path,
-        env_map: &HashMap<String, String>,
-        logs_base_dir: Option<&Path>,
-    ) -> Result<Vec<PathBuf>> {
-        audit::audit_everyone_writable(cwd, env_map, logs_base_dir)
-    }
-
     pub fn run_windows_sandbox_capture(
         policy_json_or_preset: &str,
         sandbox_policy_cwd: &Path,
+        codex_home: &Path,
         command: Vec<String>,
         cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
-        logs_base_dir: Option<&Path>,
     ) -> Result<CaptureResult> {
-        let policy = SandboxPolicy::parse(policy_json_or_preset)?;
+        let policy = parse_policy(policy_json_or_preset)?;
+        let apply_network_block = should_apply_network_block(&policy);
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
-        apply_no_network_to_env(&mut env_map)?;
-
+        if apply_network_block {
+            apply_no_network_to_env(&mut env_map)?;
+        }
+        ensure_codex_home_exists(codex_home)?;
         let current_dir = cwd.to_path_buf();
-        // for now, don't fail if we detect world-writable directories
-        // audit::audit_everyone_writable(&current_dir, &env_map)?;
+        let sandbox_base = codex_home.join(".sandbox");
+        std::fs::create_dir_all(&sandbox_base)?;
+        let logs_base_dir = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
+        let is_workspace_write = matches!(&policy, SandboxPolicy::WorkspaceWrite { .. });
+
+        if matches!(&policy, SandboxPolicy::DangerFullAccess) {
+            anyhow::bail!("DangerFullAccess is not supported for sandboxing")
+        }
+        let caps = load_or_create_cap_sids(codex_home)?;
         let (h_token, psid_to_use): (HANDLE, *mut c_void) = unsafe {
-            match &policy.0 {
-                SandboxMode::ReadOnly => {
-                    let caps = load_or_create_cap_sids(sandbox_policy_cwd);
-                    ensure_dir(&cap_sid_file(sandbox_policy_cwd))?;
-                    fs::write(
-                        cap_sid_file(sandbox_policy_cwd),
-                        serde_json::to_string(&caps)?,
-                    )?;
+            match &policy {
+                SandboxPolicy::ReadOnly => {
                     let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
                     super::token::create_readonly_token_with_cap(psid)?
                 }
-                SandboxMode::WorkspaceWrite => {
-                    let caps = load_or_create_cap_sids(sandbox_policy_cwd);
-                    ensure_dir(&cap_sid_file(sandbox_policy_cwd))?;
-                    fs::write(
-                        cap_sid_file(sandbox_policy_cwd),
-                        serde_json::to_string(&caps)?,
-                    )?;
+                SandboxPolicy::WorkspaceWrite { .. } => {
                     let psid = convert_string_sid_to_sid(&caps.workspace).unwrap();
                     super::token::create_workspace_write_token_with_cap(psid)?
                 }
+                SandboxPolicy::DangerFullAccess => unreachable!("DangerFullAccess handled above"),
             }
         };
 
         unsafe {
-            if matches!(policy.0, SandboxMode::WorkspaceWrite) {
+            if is_workspace_write {
                 if let Ok(base) = super::token::get_current_token_for_restriction() {
                     if let Ok(bytes) = super::token::get_logon_sid_bytes(base) {
                         let mut tmp = bytes.clone();
@@ -232,8 +225,9 @@ mod windows_impl {
             }
         }
 
-        let persist_aces = matches!(policy.0, SandboxMode::WorkspaceWrite);
-        let allow = compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
+        let persist_aces = is_workspace_write;
+        let AllowDenyPaths { allow, deny } =
+            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
         let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
         unsafe {
             for p in &allow {
@@ -246,6 +240,13 @@ mod windows_impl {
                         } else {
                             guards.push((p.clone(), psid_to_use));
                         }
+                    }
+                }
+            }
+            for p in &deny {
+                if let Ok(added) = add_deny_write_ace(p, psid_to_use) {
+                    if added && !persist_aces {
+                        guards.push((p.clone(), psid_to_use));
                     }
                 }
             }
@@ -417,12 +418,43 @@ mod windows_impl {
             timed_out,
         })
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::should_apply_network_block;
+        use crate::policy::SandboxPolicy;
+
+        fn workspace_policy(network_access: bool) -> SandboxPolicy {
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: Vec::new(),
+                network_access,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            }
+        }
+
+        #[test]
+        fn applies_network_block_when_access_is_disabled() {
+            assert!(should_apply_network_block(&workspace_policy(false)));
+        }
+
+        #[test]
+        fn skips_network_block_when_access_is_allowed() {
+            assert!(!should_apply_network_block(&workspace_policy(true)));
+        }
+
+        #[test]
+        fn applies_network_block_for_read_only() {
+            assert!(should_apply_network_block(&SandboxPolicy::ReadOnly));
+        }
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
     use anyhow::bail;
     use anyhow::Result;
+    use codex_protocol::protocol::SandboxPolicy;
     use std::collections::HashMap;
     use std::path::Path;
 
@@ -434,23 +466,25 @@ mod stub {
         pub timed_out: bool,
     }
 
-    pub fn preflight_audit_everyone_writable(
-        _cwd: &Path,
-        _env_map: &HashMap<String, String>,
-        _logs_base_dir: Option<&Path>,
-    ) -> Result<Vec<std::path::PathBuf>> {
-        bail!("Windows sandbox is only available on Windows")
-    }
-
     pub fn run_windows_sandbox_capture(
         _policy_json_or_preset: &str,
         _sandbox_policy_cwd: &Path,
+        _codex_home: &Path,
         _command: Vec<String>,
         _cwd: &Path,
         _env_map: HashMap<String, String>,
         _timeout_ms: Option<u64>,
-        _logs_base_dir: Option<&Path>,
     ) -> Result<CaptureResult> {
+        bail!("Windows sandbox is only available on Windows")
+    }
+
+    pub fn apply_world_writable_scan_and_denies(
+        _codex_home: &Path,
+        _cwd: &Path,
+        _env_map: &HashMap<String, String>,
+        _sandbox_policy: &SandboxPolicy,
+        _logs_base_dir: Option<&Path>,
+    ) -> Result<()> {
         bail!("Windows sandbox is only available on Windows")
     }
 }

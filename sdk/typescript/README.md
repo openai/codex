@@ -115,3 +115,19 @@ const thread = codex.startThread({
   skipGitRepoCheck: true,
 });
 ```
+
+### Controlling the Codex CLI environment
+
+By default, the Codex CLI inherits the Node.js process environment. Provide the optional `env` parameter when instantiating the
+`Codex` client to fully control which variables the CLI receives—useful for sandboxed hosts like Electron apps.
+
+```typescript
+const codex = new Codex({
+  env: {
+    PATH: "/usr/local/bin",
+  },
+});
+```
+
+The SDK still injects its required variables (such as `OPENAI_BASE_URL` and `CODEX_API_KEY`) on top of the environment you
+provide.

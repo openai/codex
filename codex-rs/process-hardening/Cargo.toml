@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "codex-process-hardening"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [lib]
 name = "codex_process_hardening"
@@ -11,11 +12,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-[target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }
 
-[target.'cfg(target_os = "android")'.dependencies]
-libc = { workspace = true }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-libc = { workspace = true }
+[dev-dependencies]
+pretty_assertions = { workspace = true }

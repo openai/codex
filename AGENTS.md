@@ -11,7 +11,6 @@ In the codex-rs folder where the rust code lives:
 - Always collapse if statements per https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
 - Always inline format! args when possible per https://rust-lang.github.io/rust-clippy/master/index.html#uninlined_format_args
 - Use method references over closures when possible per https://rust-lang.github.io/rust-clippy/master/index.html#redundant_closure_for_method_calls
-- Do not use unsigned integer even if the number cannot be negative.
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
 
@@ -75,6 +74,8 @@ If you don’t have the tool:
 ### Test assertions
 
 - Tests should use pretty_assertions::assert_eq for clearer diffs. Import this at the top of the test module if it isn't already.
+- Prefer deep equals comparisons whenever possible. Perform `assert_eq!()` on entire objects, rather than individual fields.
+- Avoid mutating process environment in tests; prefer passing environment-derived flags or dependencies from above.
 
 ### Integration tests (core)
 
@@ -85,6 +86,7 @@ If you don’t have the tool:
 - `ResponsesRequest` exposes helpers (`body_json`, `input`, `function_call_output`, `custom_tool_call_output`, `call_output`, `header`, `path`, `query_param`) so assertions can target structured payloads instead of manual JSON digging.
 - Build SSE payloads with the provided `ev_*` constructors and the `sse(...)`.
 - Prefer `wait_for_event` over `wait_for_event_with_timeout`.
+- Prefer `mount_sse_once` over `mount_sse_once_match` or `mount_sse_sequence`
 
 - Typical pattern:
 

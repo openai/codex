@@ -1,6 +1,9 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use anyhow::Result;
+use base64::Engine;
+use codex_protocol::openai_models::ModelsResponse;
 use serde_json::Value;
 use wiremock::BodyPrintLimit;
 use wiremock::Match;
@@ -11,6 +14,8 @@ use wiremock::Respond;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
+
+use crate::test_codex::ApplyPatchModelOutput;
 
 #[derive(Debug, Clone)]
 pub struct ResponseMock {
@@ -34,6 +39,10 @@ impl ResponseMock {
 
     pub fn requests(&self) -> Vec<ResponsesRequest> {
         self.requests.lock().unwrap().clone()
+    }
+
+    pub fn last_request(&self) -> Option<ResponsesRequest> {
+        self.requests.lock().unwrap().last().cloned()
     }
 
     /// Returns true if any captured request contains a `function_call` with the
@@ -128,6 +137,42 @@ impl ResponsesRequest {
             .map(str::to_string)
     }
 
+    pub fn function_call_output_content_and_success(
+        &self,
+        call_id: &str,
+    ) -> Option<(Option<String>, Option<bool>)> {
+        self.call_output_content_and_success(call_id, "function_call_output")
+    }
+
+    pub fn custom_tool_call_output_content_and_success(
+        &self,
+        call_id: &str,
+    ) -> Option<(Option<String>, Option<bool>)> {
+        self.call_output_content_and_success(call_id, "custom_tool_call_output")
+    }
+
+    fn call_output_content_and_success(
+        &self,
+        call_id: &str,
+        call_type: &str,
+    ) -> Option<(Option<String>, Option<bool>)> {
+        let output = self
+            .call_output(call_id, call_type)
+            .get("output")
+            .cloned()
+            .unwrap_or(Value::Null);
+        match output {
+            Value::String(text) => Some((Some(text), None)),
+            Value::Object(obj) => Some((
+                obj.get("content")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                obj.get("success").and_then(Value::as_bool),
+            )),
+            _ => Some((None, None)),
+        }
+    }
+
     pub fn header(&self, name: &str) -> Option<String> {
         self.0
             .headers
@@ -146,6 +191,38 @@ impl ResponsesRequest {
             .query_pairs()
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelsMock {
+    requests: Arc<Mutex<Vec<wiremock::Request>>>,
+}
+
+impl ModelsMock {
+    fn new() -> Self {
+        Self {
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn requests(&self) -> Vec<wiremock::Request> {
+        self.requests.lock().unwrap().clone()
+    }
+
+    pub fn single_request_path(&self) -> String {
+        let requests = self.requests.lock().unwrap();
+        if requests.len() != 1 {
+            panic!("expected 1 request, got {}", requests.len());
+        }
+        requests.first().unwrap().url.path().to_string()
+    }
+}
+
+impl Match for ModelsMock {
+    fn matches(&self, request: &wiremock::Request) -> bool {
+        self.requests.lock().unwrap().push(request.clone());
+        true
     }
 }
 
@@ -254,12 +331,18 @@ pub fn ev_reasoning_item(id: &str, summary: &[&str], raw_content: &[&str]) -> Va
         .map(|text| serde_json::json!({"type": "summary_text", "text": text}))
         .collect();
 
+    let overhead = "b".repeat(550);
+    let raw_content_joined = raw_content.join("");
+    let encrypted_content =
+        base64::engine::general_purpose::STANDARD.encode(overhead + raw_content_joined.as_str());
+
     let mut event = serde_json::json!({
         "type": "response.output_item.done",
         "item": {
             "type": "reasoning",
             "id": id,
             "summary": summary_entries,
+            "encrypted_content": encrypted_content,
         }
     });
 
@@ -294,6 +377,7 @@ pub fn ev_reasoning_summary_text_delta(delta: &str) -> Value {
     serde_json::json!({
         "type": "response.reasoning_summary_text.delta",
         "delta": delta,
+        "summary_index": 0,
     })
 }
 
@@ -301,6 +385,7 @@ pub fn ev_reasoning_text_delta(delta: &str) -> Value {
     serde_json::json!({
         "type": "response.reasoning_text.delta",
         "delta": delta,
+        "content_index": 0,
     })
 }
 
@@ -367,6 +452,24 @@ pub fn ev_local_shell_call(call_id: &str, status: &str, command: Vec<&str>) -> V
     })
 }
 
+pub fn ev_apply_patch_call(
+    call_id: &str,
+    patch: &str,
+    output_type: ApplyPatchModelOutput,
+) -> Value {
+    match output_type {
+        ApplyPatchModelOutput::Freeform => ev_apply_patch_custom_tool_call(call_id, patch),
+        ApplyPatchModelOutput::Function => ev_apply_patch_function_call(call_id, patch),
+        ApplyPatchModelOutput::Shell => ev_apply_patch_shell_call(call_id, patch),
+        ApplyPatchModelOutput::ShellViaHeredoc => {
+            ev_apply_patch_shell_call_via_heredoc(call_id, patch)
+        }
+        ApplyPatchModelOutput::ShellCommandViaHeredoc => {
+            ev_apply_patch_shell_command_call_via_heredoc(call_id, patch)
+        }
+    }
+}
+
 /// Convenience: SSE event for an `apply_patch` custom tool call with raw patch
 /// text. This mirrors the payload produced by the Responses API when the model
 /// invokes `apply_patch` directly (before we convert it to a function call).
@@ -400,6 +503,38 @@ pub fn ev_apply_patch_function_call(call_id: &str, patch: &str) -> Value {
     })
 }
 
+pub fn ev_shell_command_call(call_id: &str, command: &str) -> Value {
+    let args = serde_json::json!({ "command": command });
+    ev_shell_command_call_with_args(call_id, &args)
+}
+
+pub fn ev_shell_command_call_with_args(call_id: &str, args: &serde_json::Value) -> Value {
+    let arguments = serde_json::to_string(args).expect("serialize shell command arguments");
+    ev_function_call(call_id, "shell_command", &arguments)
+}
+
+pub fn ev_apply_patch_shell_call(call_id: &str, patch: &str) -> Value {
+    let args = serde_json::json!({ "command": ["apply_patch", patch] });
+    let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");
+
+    ev_function_call(call_id, "shell", &arguments)
+}
+
+pub fn ev_apply_patch_shell_call_via_heredoc(call_id: &str, patch: &str) -> Value {
+    let script = format!("apply_patch <<'EOF'\n{patch}\nEOF\n");
+    let args = serde_json::json!({ "command": ["bash", "-lc", script] });
+    let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");
+
+    ev_function_call(call_id, "shell", &arguments)
+}
+
+pub fn ev_apply_patch_shell_command_call_via_heredoc(call_id: &str, patch: &str) -> Value {
+    let args = serde_json::json!({ "command": format!("apply_patch <<'EOF'\n{patch}\nEOF\n") });
+    let arguments = serde_json::to_string(&args).expect("serialize apply_patch arguments");
+
+    ev_function_call(call_id, "shell_command", &arguments)
+}
+
 pub fn sse_failed(id: &str, code: &str, message: &str) -> String {
     sse(vec![serde_json::json!({
         "type": "response.failed",
@@ -416,12 +551,54 @@ pub fn sse_response(body: String) -> ResponseTemplate {
         .set_body_raw(body, "text/event-stream")
 }
 
+pub async fn mount_response_once(server: &MockServer, response: ResponseTemplate) -> ResponseMock {
+    let (mock, response_mock) = base_mock();
+    mock.respond_with(response)
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+    response_mock
+}
+
+pub async fn mount_response_once_match<M>(
+    server: &MockServer,
+    matcher: M,
+    response: ResponseTemplate,
+) -> ResponseMock
+where
+    M: wiremock::Match + Send + Sync + 'static,
+{
+    let (mock, response_mock) = base_mock();
+    mock.and(matcher)
+        .respond_with(response)
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+    response_mock
+}
+
 fn base_mock() -> (MockBuilder, ResponseMock) {
     let response_mock = ResponseMock::new();
     let mock = Mock::given(method("POST"))
         .and(path_regex(".*/responses$"))
         .and(response_mock.clone());
     (mock, response_mock)
+}
+
+fn compact_mock() -> (MockBuilder, ResponseMock) {
+    let response_mock = ResponseMock::new();
+    let mock = Mock::given(method("POST"))
+        .and(path_regex(".*/responses/compact$"))
+        .and(response_mock.clone());
+    (mock, response_mock)
+}
+
+fn models_mock() -> (MockBuilder, ModelsMock) {
+    let models_mock = ModelsMock::new();
+    let mock = Mock::given(method("GET"))
+        .and(path_regex(".*/models$"))
+        .and(models_mock.clone());
+    (mock, models_mock)
 }
 
 pub async fn mount_sse_once_match<M>(server: &MockServer, matcher: M, body: String) -> ResponseMock
@@ -446,11 +623,128 @@ pub async fn mount_sse_once(server: &MockServer, body: String) -> ResponseMock {
     response_mock
 }
 
+pub async fn mount_compact_json_once_match<M>(
+    server: &MockServer,
+    matcher: M,
+    body: serde_json::Value,
+) -> ResponseMock
+where
+    M: wiremock::Match + Send + Sync + 'static,
+{
+    let (mock, response_mock) = compact_mock();
+    mock.and(matcher)
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(body.clone()),
+        )
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+    response_mock
+}
+
+pub async fn mount_compact_json_once(server: &MockServer, body: serde_json::Value) -> ResponseMock {
+    let (mock, response_mock) = compact_mock();
+    mock.respond_with(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_json(body.clone()),
+    )
+    .up_to_n_times(1)
+    .mount(server)
+    .await;
+    response_mock
+}
+
+pub async fn mount_models_once(server: &MockServer, body: ModelsResponse) -> ModelsMock {
+    let (mock, models_mock) = models_mock();
+    mock.respond_with(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_json(body.clone()),
+    )
+    .up_to_n_times(1)
+    .mount(server)
+    .await;
+    models_mock
+}
+
 pub async fn start_mock_server() -> MockServer {
-    MockServer::builder()
+    let server = MockServer::builder()
         .body_print_limit(BodyPrintLimit::Limited(80_000))
         .start()
+        .await;
+
+    // Provide a default `/models` response so tests remain hermetic when the client queries it.
+    let _ = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: Vec::new(),
+            etag: String::new(),
+        },
+    )
+    .await;
+
+    server
+}
+
+// todo(aibrahim): remove this and use our search matching patterns directly
+/// Get all POST requests to `/responses` endpoints from the mock server.
+/// Filters out GET requests (e.g., `/models`) .
+pub async fn get_responses_requests(server: &MockServer) -> Vec<wiremock::Request> {
+    server
+        .received_requests()
         .await
+        .expect("mock server should not fail")
+        .into_iter()
+        .filter(|req| req.method == "POST" && req.url.path().ends_with("/responses"))
+        .collect()
+}
+
+// todo(aibrahim): remove this and use our search matching patterns directly
+/// Get request bodies as JSON values from POST requests to `/responses` endpoints.
+/// Filters out GET requests (e.g., `/models`) .
+pub async fn get_responses_request_bodies(server: &MockServer) -> Vec<Value> {
+    get_responses_requests(server)
+        .await
+        .into_iter()
+        .map(|req| {
+            req.body_json::<Value>()
+                .expect("request body to be valid JSON")
+        })
+        .collect()
+}
+
+#[derive(Clone)]
+pub struct FunctionCallResponseMocks {
+    pub function_call: ResponseMock,
+    pub completion: ResponseMock,
+}
+
+pub async fn mount_function_call_agent_response(
+    server: &MockServer,
+    call_id: &str,
+    arguments: &str,
+    tool_name: &str,
+) -> FunctionCallResponseMocks {
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(call_id, tool_name, arguments),
+        ev_completed("resp-1"),
+    ]);
+    let function_call = mount_sse_once(server, first_response).await;
+
+    let second_response = sse(vec![
+        ev_assistant_message("msg-1", "done"),
+        ev_completed("resp-2"),
+    ]);
+    let completion = mount_sse_once(server, second_response).await;
+
+    FunctionCallResponseMocks {
+        function_call,
+        completion,
+    }
 }
 
 /// Mounts a sequence of SSE response bodies and serves them in order for each
@@ -502,6 +796,10 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> Res
 /// - Additionally, enforce symmetry: every `function_call`/`custom_tool_call`
 ///   in the `input` must have a matching output entry.
 fn validate_request_body_invariants(request: &wiremock::Request) {
+    // Skip GET requests (e.g., /models)
+    if request.method != "POST" || !request.url.path().ends_with("/responses") {
+        return;
+    }
     let Ok(body): Result<Value, _> = request.body_json() else {
         return;
     };

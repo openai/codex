@@ -1,13 +1,13 @@
 use crate::config;
 use crate::config::types::NetworkProxyConfig;
 use crate::config::types::NetworkProxyMode;
-use crate::default_client::CodexHttpClient;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::tools::sandboxing::ApprovalStore;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_client::CodexHttpClient;
 use serde::Deserialize;
 use serde::Serialize;
 use shlex::split as shlex_split;

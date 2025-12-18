@@ -5,6 +5,7 @@ use crate::default_client::originator;
 use codex_otel::config::OtelExporter;
 use codex_otel::config::OtelHttpProtocol;
 use codex_otel::config::OtelSettings;
+use codex_otel::config::OtelTlsConfig as OtelTlsSettings;
 use codex_otel::otel_provider::OtelProvider;
 use std::error::Error;
 
@@ -15,12 +16,13 @@ pub fn build_provider(
     config: &Config,
     service_version: &str,
 ) -> Result<Option<OtelProvider>, Box<dyn Error>> {
-    let exporter = match &config.otel.exporter {
+    let to_otel_exporter = |kind: &Kind| match kind {
         Kind::None => OtelExporter::None,
         Kind::OtlpHttp {
             endpoint,
             headers,
             protocol,
+            tls,
         } => {
             let protocol = match protocol {
                 Protocol::Json => OtelHttpProtocol::Json,
@@ -34,16 +36,33 @@ pub fn build_provider(
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
                 protocol,
+                tls: tls.as_ref().map(|config| OtelTlsSettings {
+                    ca_certificate: config.ca_certificate.clone(),
+                    client_certificate: config.client_certificate.clone(),
+                    client_private_key: config.client_private_key.clone(),
+                }),
             }
         }
-        Kind::OtlpGrpc { endpoint, headers } => OtelExporter::OtlpGrpc {
+        Kind::OtlpGrpc {
+            endpoint,
+            headers,
+            tls,
+        } => OtelExporter::OtlpGrpc {
             endpoint: endpoint.clone(),
             headers: headers
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
+            tls: tls.as_ref().map(|config| OtelTlsSettings {
+                ca_certificate: config.ca_certificate.clone(),
+                client_certificate: config.client_certificate.clone(),
+                client_private_key: config.client_private_key.clone(),
+            }),
         },
     };
+
+    let exporter = to_otel_exporter(&config.otel.exporter);
+    let trace_exporter = to_otel_exporter(&config.otel.trace_exporter);
 
     OtelProvider::from(&OtelSettings {
         service_name: originator().value.to_owned(),
@@ -51,6 +70,7 @@ pub fn build_provider(
         codex_home: config.codex_home.clone(),
         environment: config.otel.environment.to_string(),
         exporter,
+        trace_exporter,
     })
 }
 

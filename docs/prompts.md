@@ -42,16 +42,55 @@ Custom prompts turn your repeatable instructions into reusable slash commands, s
 
 ### Examples
 
-**Draft PR helper**
+### Example 1: Basic named arguments
 
-`~/.codex/prompts/draftpr.md`
+**File**: `~/.codex/prompts/ticket.md`
 
 ```markdown
 ---
-description: Create feature branch, commit and open draft PR.
+description: Generate a commit message for a ticket
+argument-hint: TICKET_ID=<id> TICKET_TITLE=<title>
 ---
 
-Create a branch named `tibo/<feature_name>`, commit the changes, and open a draft PR.
+Please write a concise commit message for ticket $TICKET_ID: $TICKET_TITLE
 ```
 
-Usage: type `/prompts:draftpr` to have codex perform the work.
+**Usage**:
+
+```
+/prompts:ticket TICKET_ID=JIRA-1234 TICKET_TITLE="Fix login bug"
+```
+
+**Expanded prompt sent to Codex**:
+
+```
+Please write a concise commit message for ticket JIRA-1234: Fix login bug
+```
+
+**Note**: Both `TICKET_ID` and `TICKET_TITLE` are required. If either is missing, Codex will show a validation error. Values with spaces must be double-quoted.
+
+### Example 2: Mixed positional and named arguments
+
+**File**: `~/.codex/prompts/review.md`
+
+```markdown
+---
+description: Review code in a specific file with focus area
+argument-hint: FILE=<path> [FOCUS=<section>]
+---
+
+Review the code in $FILE. Pay special attention to $FOCUS.
+```
+
+**Usage**:
+
+```
+/prompts:review FILE=src/auth.js FOCUS="error handling"
+```
+
+**Expanded prompt**:
+
+```
+Review the code in src/auth.js. Pay special attention to error handling.
+
+```

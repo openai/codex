@@ -18,12 +18,11 @@ Use this example configuration as a starting point. For an explanation of each f
 # Core Model Selection
 ################################################################################
 
-# Primary model used by Codex. Default differs by OS; non-Windows defaults here.
-# Linux/macOS default: "gpt-5-codex"; Windows default: "gpt-5".
-model = "gpt-5-codex"
+# Primary model used by Codex. Default: "gpt-5.1-codex-max" on all platforms.
+model = "gpt-5.1-codex-max"
 
-# Model used by the /review feature (code reviews). Default: "gpt-5-codex".
-review_model = "gpt-5-codex"
+# Model used by the /review feature (code reviews). Default: "gpt-5.1-codex-max".
+review_model = "gpt-5.1-codex-max"
 
 # Provider id selected from [model_providers]. Default: "openai".
 model_provider = "openai"
@@ -31,14 +30,14 @@ model_provider = "openai"
 # Optional manual model metadata. When unset, Codex auto-detects from model.
 # Uncomment to force values.
 # model_context_window = 128000       # tokens; default: auto for model
-# model_max_output_tokens = 8192      # tokens; default: auto for model
 # model_auto_compact_token_limit = 0  # disable/override auto; default: model family specific
+# tool_output_token_limit = 10000  # tokens stored per tool output; default: 10000 for gpt-5.1-codex-max
 
 ################################################################################
 # Reasoning & Verbosity (Responses API capable models)
 ################################################################################
 
-# Reasoning effort: minimal | low | medium | high (default: medium)
+# Reasoning effort: minimal | low | medium | high | xhigh (default: medium; xhigh on gpt-5.1-codex-max and gpt-5.2)
 model_reasoning_effort = "medium"
 
 # Reasoning summary: auto | concise | detailed | none (default: auto)
@@ -109,10 +108,8 @@ exclude_slash_tmp = false
 enabled = false
 # HTTP/HTTPS/ALL proxy URL. Default: "http://127.0.0.1:3128"
 proxy_url = "http://127.0.0.1:3128"
-# Admin API for the proxy (for /blocked, /allow_once, /reload). Default: "http://127.0.0.1:8080"
+# Admin API for the proxy (for /blocked, /reload, /mode). Default: "http://127.0.0.1:8080"
 admin_url = "http://127.0.0.1:8080"
-# Proxy config file to edit when approvals are granted/denied.
-config_path = "~/.codex/network_proxy/config.toml"
 # limited | full (default: full)
 mode = "full"
 # Hosts/IPs that bypass the proxy. Default includes localhost + loopback.
@@ -147,7 +144,7 @@ experimental_use_profile = false
 [history]
 # save-all (default) | none
 persistence = "save-all"
-# Maximum bytes for history file (currently not enforced). Example: 5242880
+# Maximum bytes for history file; oldest entries are trimmed when exceeded. Example: 5242880
 # max_bytes = 0
 
 # URI scheme for clickable citations: vscode (default) | vscode-insiders | windsurf | cursor | none
@@ -158,17 +155,20 @@ file_opener = "vscode"
 ################################################################################
 
 [tui]
-# Desktop notifications from the TUI: boolean or filtered list. Default: false
-# Examples: true | ["agent-turn-complete", "approval-requested"]
+# Desktop notifications from the TUI: boolean or filtered list. Default: true
+# Examples: false | ["agent-turn-complete", "approval-requested"]
 notifications = false
 
-# Suppress internal reasoning events from output (default: false)
+# Enables welcome/status/spinner animations. Default: true
+animations = true
+
+# Suppress internal reasoning events from output. Default: false
 hide_agent_reasoning = false
 
-# Show raw reasoning content when available (default: false)
+# Show raw reasoning content when available. Default: false
 show_raw_agent_reasoning = false
 
-# Disable burst-paste detection in the TUI (default: false)
+# Disable burst-paste detection in the TUI. Default: false
 disable_paste_burst = false
 
 # Track Windows onboarding acknowledgement (Windows only). Default: false
@@ -199,6 +199,9 @@ chatgpt_base_url = "https://chatgpt.com/backend-api/"
 # Force login mechanism when Codex would normally auto-select. Default: unset.
 # Allowed values: chatgpt | api
 # forced_login_method = "chatgpt"
+
+# Preferred store for MCP OAuth credentials: auto (default) | file | keyring
+mcp_oauth_credentials_store = "auto"
 
 ################################################################################
 # Project Documentation Controls
@@ -231,37 +234,20 @@ view_image = true
 [features]
 # Leave this table empty to accept defaults. Set explicit booleans to opt in/out.
 unified_exec = false
-streamable_shell = false
 rmcp_client = false
 apply_patch_freeform = false
 view_image_tool = true
 web_search_request = false
-experimental_sandbox_command_assessment = false
 ghost_commit = false
 enable_experimental_windows_sandbox = false
+skills = false
 
 ################################################################################
 # Experimental toggles (legacy; prefer [features])
 ################################################################################
 
-# Use experimental unified exec tool. Default: false
-experimental_use_unified_exec_tool = false
-
-# Use experimental Rust MCP client (enables OAuth for HTTP MCP). Default: false
-experimental_use_rmcp_client = false
-
 # Include apply_patch via freeform editing path (affects default tool set). Default: false
 experimental_use_freeform_apply_patch = false
-
-# Enable model-based sandbox command assessment. Default: false
-experimental_sandbox_command_assessment = false
-
-################################################################################
-# MCP (Model Context Protocol) servers
-################################################################################
-
-# Preferred store for MCP OAuth credentials: auto (default) | file | keyring
-mcp_oauth_credentials_store = "auto"
 
 # Define MCP servers under this table. Leave empty to disable.
 [mcp_servers]
@@ -337,7 +323,7 @@ mcp_oauth_credentials_store = "auto"
 [profiles]
 
 # [profiles.default]
-# model = "gpt-5-codex"
+# model = "gpt-5.1-codex-max"
 # model_provider = "openai"
 # approval_policy = "on-request"
 # sandbox_mode = "read-only"
@@ -345,12 +331,9 @@ mcp_oauth_credentials_store = "auto"
 # model_reasoning_summary = "auto"
 # model_verbosity = "medium"
 # chatgpt_base_url = "https://chatgpt.com/backend-api/"
-# experimental_compact_prompt_file = "compact_prompt.txt"
+# experimental_compact_prompt_file = "./compact_prompt.txt"
 # include_apply_patch_tool = false
-# experimental_use_unified_exec_tool = false
-# experimental_use_rmcp_client = false
 # experimental_use_freeform_apply_patch = false
-# experimental_sandbox_command_assessment = false
 # tools_web_search = false
 # tools_view_image = true
 # features = { unified_exec = false }
@@ -377,17 +360,28 @@ environment = "dev"
 exporter = "none"
 
 # Example OTLP/HTTP exporter configuration
-# [otel]
-# exporter = { otlp-http = {
-#   endpoint = "https://otel.example.com/v1/logs",
-#   protocol = "binary",                      # "binary" | "json"
-#   headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" }
-# }}
+# [otel.exporter."otlp-http"]
+# endpoint = "https://otel.example.com/v1/logs"
+# protocol = "binary"                         # "binary" | "json"
+
+# [otel.exporter."otlp-http".headers]
+# "x-otlp-api-key" = "${OTLP_TOKEN}"
 
 # Example OTLP/gRPC exporter configuration
-# [otel]
-# exporter = { otlp-grpc = {
-#   endpoint = "https://otel.example.com:4317",
-#   headers = { "x-otlp-meta" = "abc123" }
-# }}
+# [otel.exporter."otlp-grpc"]
+# endpoint = "https://otel.example.com:4317",
+# headers = { "x-otlp-meta" = "abc123" }
+
+# Example OTLP exporter with mutual TLS
+# [otel.exporter."otlp-http"]
+# endpoint = "https://otel.example.com/v1/logs"
+# protocol = "binary"
+
+# [otel.exporter."otlp-http".headers]
+# "x-otlp-api-key" = "${OTLP_TOKEN}"
+
+# [otel.exporter."otlp-http".tls]
+# ca-certificate = "certs/otel-ca.pem"
+# client-certificate = "/etc/codex/certs/client.pem"
+# client-private-key = "/etc/codex/certs/client-key.pem"
 ```

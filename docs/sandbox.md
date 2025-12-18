@@ -4,20 +4,11 @@ What Codex is allowed to do is governed by a combination of **sandbox modes** (w
 
 ### Approval policies
 
-Codex starts conservatively. Until you explicitly tell it a workspace is trusted, the CLI defaults to **read-only sandboxing** with the `read-only` approval preset. Codex can inspect files and answer questions, but every edit or command requires approval.
+Codex starts conservatively. Until you explicitly tell it a working directory is trusted, the CLI defaults to **read-only**. Codex can inspect files and answer questions, but every edit or command requires approval.
 
-When you mark a workspace as trusted (for example via the onboarding prompt or `/approvals` → “Trust this directory”), Codex upgrades the default preset to **Auto**: sandboxed writes inside the workspace with `AskForApproval::OnRequest`. Codex only interrupts you when it needs to leave the workspace or rerun something outside the sandbox.
+When you mark a working directory as trusted (for example via the onboarding prompt or `/approvals` → “Trust this directory”), Codex upgrades the default preset to **Agent**, which allows writes inside the workspace. Codex only interrupts you when it needs to leave the workspace or rerun something outside the sandbox. Note that the workspace includes the working directory plus temporary directories like `/tmp`. Use `/status` to confirm the exact writable roots.
 
 If you want maximum guardrails for a trusted repo, switch back to Read Only from the `/approvals` picker. If you truly need hands-off automation, use `Full Access`—but be deliberate, because that skips both the sandbox and approvals.
-
-#### Defaults and recommendations
-
-- Every session starts in a sandbox. Until a repo is trusted, Codex enforces read-only access and will prompt before any write or command.
-- Marking a repo as trusted switches the default preset to Auto (`workspace-write` + `ask-for-approval on-request`) so Codex can keep iterating locally without nagging you.
-- The workspace always includes the current directory plus temporary directories like `/tmp`. Use `/status` to confirm the exact writable roots.
-- You can override the defaults from the command line at any time:
-  - `codex --sandbox read-only --ask-for-approval on-request`
-  - `codex --sandbox workspace-write --ask-for-approval on-request`
 
 ### Can I run without ANY approvals?
 
@@ -65,17 +56,18 @@ sandbox_mode    = "read-only"
 
 ### Network proxy approvals
 
-Codex can optionally route outbound network traffic through a proxy (for example the `network_proxy` sandbox proxy) and prompt you when new domains are blocked by policy.
+Codex can optionally route outbound network traffic through a proxy and prompt you when new domains are blocked by policy.
 
 Key behaviors:
 
 - The OS sandbox is still the first line of defense. If network access is disabled, outbound requests are blocked at the OS level.
 - When network is enabled and `network_proxy.prompt_on_block = true`, Codex polls the proxy admin API (`/blocked`) and immediately notifies you about blocked domains.
 - For exec commands that include HTTP/HTTPS URLs, Codex preflights the host against the proxy config and prompts before running the command.
+- Approvals update `~/.codex/config.toml` under `[network_proxy.policy]` and trigger a proxy reload.
 - You can choose to:
-  - **Deny** the request (adds the domain to the proxy denylist).
-  - **Allow once** (temporary exception via the proxy admin API).
-  - **Allow permanently** (adds the domain to the proxy allowlist and reloads policy).
+  - **Deny** the request (adds the domain to the denylist).
+  - **Allow for session** (temporary allow that is reverted on exit).
+  - **Allow always** (adds the domain to the allowlist).
 
 Network access is controlled through a proxy server running outside the sandbox:
 
@@ -86,24 +78,34 @@ Network access is controlled through a proxy server running outside the sandbox:
 
 `NO_PROXY` is supported via `[network_proxy].no_proxy` and is passed to subprocesses as `NO_PROXY/no_proxy`. Any domains or IPs in that list bypass the proxy and are not filtered by proxy policy.
 
-When MITM is enabled in the proxy config, Codex injects common CA environment variables (for example `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `PIP_CERT`, and `NPM_CONFIG_CAFILE`) pointing at the proxy CA cert to reduce per‑tool configuration. It also sets common tool‑specific proxy variables (Yarn/npm/Electron) and, when possible, appends Gradle proxy flags via `GRADLE_OPTS`.
+When MITM is enabled in the proxy config, Codex injects common CA environment variables (for example `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `PIP_CERT`, and `NPM_CONFIG_CAFILE`) pointing at the proxy CA cert to reduce per‑tool configuration.
 
-### Sandbox mechanics by platform {#platform-sandboxing-details}
+### Sandbox mechanics by platform
 
 The mechanism Codex uses to enforce the sandbox policy depends on your OS:
 
-- **macOS 12+** uses **Apple Seatbelt**. Codex invokes `sandbox-exec` with a profile that corresponds to the selected `--sandbox` mode, constraining filesystem and network access at the OS level.
-- **Linux** combines **Landlock** and **seccomp** APIs to approximate the same guarantees. Kernel support is required; older kernels may not expose the necessary features.
-- **Windows (experimental)**:
-  - Launches commands inside a restricted token derived from an AppContainer profile.
-  - Grants only specifically requested filesystem capabilities by attaching capability SIDs to that profile.
-  - Disables outbound network access by overriding proxy-related environment variables and inserting stub executables for common network tools.
+#### macOS 12+
 
-Windows sandbox support remains highly experimental. It cannot prevent file writes, deletions, or creations in any directory where the Everyone SID already has write permissions (for example, world-writable folders).
+Uses **Apple Seatbelt**. Codex invokes `sandbox-exec` with a profile that corresponds to the selected `--sandbox` mode, constraining filesystem and network access at the OS level.
+
+#### Linux
+
+Combines **Landlock** and **seccomp** APIs to approximate the same guarantees. Kernel support is required; older kernels may not expose the necessary features.
 
 In containerized Linux environments (for example Docker), sandboxing may not work when the host or container configuration does not expose Landlock/seccomp. In those cases, configure the container to provide the isolation you need and run Codex with `--sandbox danger-full-access` (or the shorthand `--dangerously-bypass-approvals-and-sandbox`) inside that container.
 
-### Experimenting with the Codex Sandbox
+#### Windows
+
+Windows sandbox support remains experimental. How it works:
+
+- Launches commands inside a restricted token derived from an AppContainer profile.
+- Grants only specifically requested filesystem capabilities by attaching capability SIDs to that profile.
+- Disables outbound network access by overriding proxy-related environment variables and inserting stub executables for common network tools.
+
+Its primary limitation is that it cannot prevent file writes, deletions, or creations in any directory where the Everyone SID already has write permissions (for example, world-writable folders).
+See more discussion and limitations at [Windows Sandbox Security Details](./windows_sandbox_security.md).
+
+## Experimenting with the Codex Sandbox
 
 To test how commands behave under Codex's sandbox, use the CLI helpers:
 

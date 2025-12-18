@@ -1,6 +1,4 @@
-use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
 
 use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
@@ -9,21 +7,11 @@ use crate::export::GeneratedSchema;
 use crate::export::write_json_schema;
 use crate::protocol::v1;
 use crate::protocol::v2;
-use codex_protocol::ConversationId;
-use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxCommandAssessment;
-use paste::paste;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
 use ts_rs::TS;
-
-fn is_false(value: &bool) -> bool {
-    !*value
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
 #[ts(type = "string")]
@@ -129,9 +117,9 @@ client_request_definitions! {
         params: v2::ThreadListParams,
         response: v2::ThreadListResponse,
     },
-    ThreadCompact => "thread/compact" {
-        params: v2::ThreadCompactParams,
-        response: v2::ThreadCompactResponse,
+    SkillsList => "skills/list" {
+        params: v2::SkillsListParams,
+        response: v2::SkillsListResponse,
     },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
@@ -141,10 +129,24 @@ client_request_definitions! {
         params: v2::TurnInterruptParams,
         response: v2::TurnInterruptResponse,
     },
+    ReviewStart => "review/start" {
+        params: v2::ReviewStartParams,
+        response: v2::ReviewStartResponse,
+    },
 
     ModelList => "model/list" {
         params: v2::ModelListParams,
         response: v2::ModelListResponse,
+    },
+
+    McpServerOauthLogin => "mcpServer/oauth/login" {
+        params: v2::McpServerOauthLoginParams,
+        response: v2::McpServerOauthLoginResponse,
+    },
+
+    McpServerStatusList => "mcpServerStatus/list" {
+        params: v2::ListMcpServerStatusParams,
+        response: v2::ListMcpServerStatusResponse,
     },
 
     LoginAccount => "account/login/start" {
@@ -170,6 +172,25 @@ client_request_definitions! {
     FeedbackUpload => "feedback/upload" {
         params: v2::FeedbackUploadParams,
         response: v2::FeedbackUploadResponse,
+    },
+
+    /// Execute a command (argv vector) under the server's sandbox.
+    OneOffCommandExec => "command/exec" {
+        params: v2::CommandExecParams,
+        response: v2::CommandExecResponse,
+    },
+
+    ConfigRead => "config/read" {
+        params: v2::ConfigReadParams,
+        response: v2::ConfigReadResponse,
+    },
+    ConfigValueWrite => "config/value/write" {
+        params: v2::ConfigValueWriteParams,
+        response: v2::ConfigWriteResponse,
+    },
+    ConfigBatchWrite => "config/batchWrite" {
+        params: v2::ConfigBatchWriteParams,
+        response: v2::ConfigWriteResponse,
     },
 
     GetAccount => "account/read" {
@@ -281,34 +302,36 @@ macro_rules! server_request_definitions {
     (
         $(
             $(#[$variant_meta:meta])*
-            $variant:ident
+            $variant:ident $(=> $wire:literal)? {
+                params: $params:ty,
+                response: $response:ty,
+            }
         ),* $(,)?
     ) => {
-        paste! {
-            /// Request initiated from the server and sent to the client.
-            #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-            #[serde(tag = "method", rename_all = "camelCase")]
-            pub enum ServerRequest {
-                $(
-                    $(#[$variant_meta])*
-                    $variant {
-                        #[serde(rename = "id")]
-                        request_id: RequestId,
-                        params: [<$variant Params>],
-                    },
-                )*
-            }
+        /// Request initiated from the server and sent to the client.
+        #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+        #[serde(tag = "method", rename_all = "camelCase")]
+        pub enum ServerRequest {
+            $(
+                $(#[$variant_meta])*
+                $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
+                $variant {
+                    #[serde(rename = "id")]
+                    request_id: RequestId,
+                    params: $params,
+                },
+            )*
+        }
 
-            #[derive(Debug, Clone, PartialEq, JsonSchema)]
-            pub enum ServerRequestPayload {
-                $( $variant([<$variant Params>]), )*
-            }
+        #[derive(Debug, Clone, PartialEq, JsonSchema)]
+        pub enum ServerRequestPayload {
+            $( $variant($params), )*
+        }
 
-            impl ServerRequestPayload {
-                pub fn request_with_id(self, request_id: RequestId) -> ServerRequest {
-                    match self {
-                        $(Self::$variant(params) => ServerRequest::$variant { request_id, params },)*
-                    }
+        impl ServerRequestPayload {
+            pub fn request_with_id(self, request_id: RequestId) -> ServerRequest {
+                match self {
+                    $(Self::$variant(params) => ServerRequest::$variant { request_id, params },)*
                 }
             }
         }
@@ -316,9 +339,9 @@ macro_rules! server_request_definitions {
         pub fn export_server_responses(
             out_dir: &::std::path::Path,
         ) -> ::std::result::Result<(), ::ts_rs::ExportError> {
-            paste! {
-                $(<[<$variant Response>] as ::ts_rs::TS>::export_all_to(out_dir)?;)*
-            }
+            $(
+                <$response as ::ts_rs::TS>::export_all_to(out_dir)?;
+            )*
             Ok(())
         }
 
@@ -327,9 +350,12 @@ macro_rules! server_request_definitions {
             out_dir: &Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
             let mut schemas = Vec::new();
-            paste! {
-                $(schemas.push(crate::export::write_json_schema::<[<$variant Response>]>(out_dir, stringify!([<$variant Response>]))?);)*
-            }
+            $(
+                schemas.push(crate::export::write_json_schema::<$response>(
+                    out_dir,
+                    concat!(stringify!($variant), "Response"),
+                )?);
+            )*
             Ok(schemas)
         }
 
@@ -338,9 +364,12 @@ macro_rules! server_request_definitions {
             out_dir: &Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
             let mut schemas = Vec::new();
-            paste! {
-                $(schemas.push(crate::export::write_json_schema::<[<$variant Params>]>(out_dir, stringify!([<$variant Params>]))?);)*
-            }
+            $(
+                schemas.push(crate::export::write_json_schema::<$params>(
+                    out_dir,
+                    concat!(stringify!($variant), "Params"),
+                )?);
+            )*
             Ok(schemas)
         }
     };
@@ -378,7 +407,7 @@ macro_rules! server_notification_definitions {
         impl TryFrom<JSONRPCNotification> for ServerNotification {
             type Error = serde_json::Error;
 
-            fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
+            fn try_from(value: JSONRPCNotification) -> Result<Self, serde_json::Error> {
                 serde_json::from_value(serde_json::to_value(value)?)
             }
         }
@@ -430,51 +459,34 @@ impl TryFrom<JSONRPCRequest> for ServerRequest {
 }
 
 server_request_definitions! {
+    /// NEW APIs
+    /// Sent when approval is requested for a specific command execution.
+    /// This request is used for Turns started via turn/start.
+    CommandExecutionRequestApproval => "item/commandExecution/requestApproval" {
+        params: v2::CommandExecutionRequestApprovalParams,
+        response: v2::CommandExecutionRequestApprovalResponse,
+    },
+
+    /// Sent when approval is requested for a specific file change.
+    /// This request is used for Turns started via turn/start.
+    FileChangeRequestApproval => "item/fileChange/requestApproval" {
+        params: v2::FileChangeRequestApprovalParams,
+        response: v2::FileChangeRequestApprovalResponse,
+    },
+
+    /// DEPRECATED APIs below
     /// Request to approve a patch.
-    ApplyPatchApproval,
+    /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
+    ApplyPatchApproval {
+        params: v1::ApplyPatchApprovalParams,
+        response: v1::ApplyPatchApprovalResponse,
+    },
     /// Request to exec a command.
-    ExecCommandApproval,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ApplyPatchApprovalParams {
-    pub conversation_id: ConversationId,
-    /// Use to correlate this with [codex_core::protocol::PatchApplyBeginEvent]
-    /// and [codex_core::protocol::PatchApplyEndEvent].
-    pub call_id: String,
-    pub file_changes: HashMap<PathBuf, FileChange>,
-    /// Optional explanatory reason (e.g. request for extra write access).
-    pub reason: Option<String>,
-    /// When set, the agent is asking the user to allow writes under this root
-    /// for the remainder of the session (unclear if this is honored today).
-    pub grant_root: Option<PathBuf>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecCommandApprovalParams {
-    pub conversation_id: ConversationId,
-    /// Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent]
-    /// and [codex_core::protocol::ExecCommandEndEvent].
-    pub call_id: String,
-    pub command: Vec<String>,
-    pub cwd: PathBuf,
-    pub reason: Option<String>,
-    pub risk: Option<SandboxCommandAssessment>,
-    pub parsed_cmd: Vec<ParsedCommand>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub network_preflight_only: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-pub struct ExecCommandApprovalResponse {
-    pub decision: ReviewDecision,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-pub struct ApplyPatchApprovalResponse {
-    pub decision: ReviewDecision,
+    /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
+    ExecCommandApproval {
+        params: v1::ExecCommandApprovalParams,
+        response: v1::ExecCommandApprovalResponse,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -504,16 +516,32 @@ pub struct FuzzyFileSearchResponse {
 
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
+    Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
+    TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
+    TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
+    /// This event is internal-only. Used by Codex Cloud.
+    RawResponseItemCompleted => "rawResponseItem/completed" (v2::RawResponseItemCompletedNotification),
     AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
+    TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
+    FileChangeOutputDelta => "item/fileChange/outputDelta" (v2::FileChangeOutputDeltaNotification),
     McpToolCallProgress => "item/mcpToolCall/progress" (v2::McpToolCallProgressNotification),
+    McpServerOauthLoginCompleted => "mcpServer/oauthLogin/completed" (v2::McpServerOauthLoginCompletedNotification),
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
+    ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),
+    ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
+    ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
+    ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
+
+    /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
+    WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
 
     #[serde(rename = "account/login/completed")]
     #[ts(rename = "account/login/completed")]
@@ -536,17 +564,20 @@ client_notification_definitions! {
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_protocol::ConversationId;
     use codex_protocol::account::PlanType;
+    use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::AskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::path::PathBuf;
 
     #[test]
     fn serialize_new_conversation() -> Result<()> {
         let request = ClientRequest::NewConversation {
             request_id: RequestId::Integer(42),
             params: v1::NewConversationParams {
-                model: Some("gpt-5-codex".to_string()),
+                model: Some("gpt-5.1-codex-max".to_string()),
                 model_provider: None,
                 profile: None,
                 cwd: None,
@@ -564,7 +595,7 @@ mod tests {
                 "method": "newConversation",
                 "id": 42,
                 "params": {
-                    "model": "gpt-5-codex",
+                    "model": "gpt-5.1-codex-max",
                     "modelProvider": null,
                     "profile": null,
                     "cwd": null,
@@ -619,17 +650,15 @@ mod tests {
     #[test]
     fn serialize_server_request() -> Result<()> {
         let conversation_id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
-        let params = ExecCommandApprovalParams {
+        let params = v1::ExecCommandApprovalParams {
             conversation_id,
             call_id: "call-42".to_string(),
             command: vec!["echo".to_string(), "hello".to_string()],
             cwd: PathBuf::from("/tmp"),
             reason: Some("because tests".to_string()),
-            risk: None,
             parsed_cmd: vec![ParsedCommand::Unknown {
                 cmd: "echo hello".to_string(),
             }],
-            network_preflight_only: false,
         };
         let request = ServerRequest::ExecCommandApproval {
             request_id: RequestId::Integer(7),
@@ -646,7 +675,6 @@ mod tests {
                     "command": ["echo", "hello"],
                     "cwd": "/tmp",
                     "reason": "because tests",
-                    "risk": null,
                     "parsedCmd": [
                         {
                             "type": "unknown",

@@ -19,7 +19,7 @@ jobs:
   tag-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Validate tag matches Cargo.toml version
         shell: bash
@@ -50,6 +50,9 @@ jobs:
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         working-directory: codex-rs
@@ -76,12 +79,12 @@ jobs:
             target: aarch64-pc-windows-msvc
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.90
         with:
           targets: ${{ matrix.target }}
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -98,176 +101,43 @@ jobs:
           sudo apt-get install -y musl-tools pkg-config
 
       - name: Cargo build
-        run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
-
-      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
-        name: Configure Apple code signing
         shell: bash
-        env:
-          KEYCHAIN_PASSWORD: actions
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
-          set -euo pipefail
-
-          if [[ -z "${APPLE_CERTIFICATE:-}" ]]; then
-            echo "APPLE_CERTIFICATE is required for macOS signing"
-            exit 1
-          fi
-
-          if [[ -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]]; then
-            echo "APPLE_CERTIFICATE_PASSWORD is required for macOS signing"
-            exit 1
-          fi
-
-          cert_path="${RUNNER_TEMP}/apple_signing_certificate.p12"
-          echo "$APPLE_CERTIFICATE" | base64 -d > "$cert_path"
-
-          keychain_path="${RUNNER_TEMP}/codex-signing.keychain-db"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
-          security set-keychain-settings -lut 21600 "$keychain_path"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
-
-          keychain_args=()
-          cleanup_keychain() {
-            if ((${#keychain_args[@]} > 0)); then
-              security list-keychains -s "${keychain_args[@]}" || true
-              security default-keychain -s "${keychain_args[0]}" || true
-            else
-              security list-keychains -s || true
-            fi
-            if [[ -f "$keychain_path" ]]; then
-              security delete-keychain "$keychain_path" || true
-            fi
-          }
-
-          while IFS= read -r keychain; do
-            [[ -n "$keychain" ]] && keychain_args+=("$keychain")
-          done < <(security list-keychains | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/"//g')
-
-          if ((${#keychain_args[@]} > 0)); then
-            security list-keychains -s "$keychain_path" "${keychain_args[@]}"
+          if [[ "${{ contains(matrix.target, 'windows') }}" == 'true' ]]; then
+            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup --bin codex-command-runner
           else
-            security list-keychains -s "$keychain_path"
+            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
           fi
 
-          security default-keychain -s "$keychain_path"
-          security import "$cert_path" -k "$keychain_path" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path" > /dev/null
+      - if: ${{ contains(matrix.target, 'linux') }}
+        name: Cosign Linux artifacts
+        uses: ./.github/actions/linux-code-sign
+        with:
+          target: ${{ matrix.target }}
+          artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
 
-          codesign_hashes=()
-          while IFS= read -r hash; do
-            [[ -n "$hash" ]] && codesign_hashes+=("$hash")
-          done < <(security find-identity -v -p codesigning "$keychain_path" \
-            | sed -n 's/.*\([0-9A-F]\{40\}\).*/\1/p' \
-            | sort -u)
-
-          if ((${#codesign_hashes[@]} == 0)); then
-            echo "No signing identities found in $keychain_path"
-            cleanup_keychain
-            rm -f "$cert_path"
-            exit 1
-          fi
-
-          if ((${#codesign_hashes[@]} > 1)); then
-            echo "Multiple signing identities found in $keychain_path:"
-            printf '  %s\n' "${codesign_hashes[@]}"
-            cleanup_keychain
-            rm -f "$cert_path"
-            exit 1
-          fi
-
-          APPLE_CODESIGN_IDENTITY="${codesign_hashes[0]}"
-
-          rm -f "$cert_path"
-
-          echo "APPLE_CODESIGN_IDENTITY=$APPLE_CODESIGN_IDENTITY" >> "$GITHUB_ENV"
-          echo "APPLE_CODESIGN_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
-          echo "::add-mask::$APPLE_CODESIGN_IDENTITY"
+      - if: ${{ contains(matrix.target, 'windows') }}
+        name: Sign Windows binaries with Azure Trusted Signing
+        uses: ./.github/actions/windows-code-sign
+        with:
+          target: ${{ matrix.target }}
+          client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
+          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
 
       - if: ${{ matrix.runner == 'macos-15-xlarge' }}
-        name: Sign macOS binaries
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
-            echo "APPLE_CODESIGN_IDENTITY is required for macOS signing"
-            exit 1
-          fi
-
-          keychain_args=()
-          if [[ -n "${APPLE_CODESIGN_KEYCHAIN:-}" && -f "${APPLE_CODESIGN_KEYCHAIN}" ]]; then
-            keychain_args+=(--keychain "${APPLE_CODESIGN_KEYCHAIN}")
-          fi
-
-          for binary in codex codex-responses-api-proxy; do
-            path="target/${{ matrix.target }}/release/${binary}"
-            codesign --force --options runtime --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
-          done
-
-      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
-        name: Notarize macOS binaries
-        shell: bash
-        env:
-          APPLE_NOTARIZATION_KEY_P8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
-          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
-          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
-        run: |
-          set -euo pipefail
-
-          for var in APPLE_NOTARIZATION_KEY_P8 APPLE_NOTARIZATION_KEY_ID APPLE_NOTARIZATION_ISSUER_ID; do
-            if [[ -z "${!var:-}" ]]; then
-              echo "$var is required for notarization"
-              exit 1
-            fi
-          done
-
-          notary_key_path="${RUNNER_TEMP}/notarytool.key.p8"
-          echo "$APPLE_NOTARIZATION_KEY_P8" | base64 -d > "$notary_key_path"
-          cleanup_notary() {
-            rm -f "$notary_key_path"
-          }
-          trap cleanup_notary EXIT
-
-          notarize_binary() {
-            local binary="$1"
-            local source_path="target/${{ matrix.target }}/release/${binary}"
-            local archive_path="${RUNNER_TEMP}/${binary}.zip"
-
-            if [[ ! -f "$source_path" ]]; then
-              echo "Binary $source_path not found"
-              exit 1
-            fi
-
-            rm -f "$archive_path"
-            ditto -c -k --keepParent "$source_path" "$archive_path"
-
-            submission_json=$(xcrun notarytool submit "$archive_path" \
-              --key "$notary_key_path" \
-              --key-id "$APPLE_NOTARIZATION_KEY_ID" \
-              --issuer "$APPLE_NOTARIZATION_ISSUER_ID" \
-              --output-format json \
-              --wait)
-
-            status=$(printf '%s\n' "$submission_json" | jq -r '.status // "Unknown"')
-            submission_id=$(printf '%s\n' "$submission_json" | jq -r '.id // ""')
-
-            if [[ -z "$submission_id" ]]; then
-              echo "Failed to retrieve submission ID for $binary"
-              exit 1
-            fi
-
-            echo "::notice title=Notarization::$binary submission ${submission_id} completed with status ${status}"
-
-            if [[ "$status" != "Accepted" ]]; then
-              echo "Notarization failed for ${binary} (submission ${submission_id}, status ${status})"
-              exit 1
-            fi
-          }
-
-          notarize_binary "codex"
-          notarize_binary "codex-responses-api-proxy"
+        name: MacOS code signing
+        uses: ./.github/actions/macos-code-sign
+        with:
+          target: ${{ matrix.target }}
+          apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
+          apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
 
       - name: Stage artifacts
         shell: bash
@@ -278,9 +148,16 @@ jobs:
           if [[ "${{ matrix.runner }}" == windows* ]]; then
             cp target/${{ matrix.target }}/release/codex.exe "$dest/codex-${{ matrix.target }}.exe"
             cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$dest/codex-responses-api-proxy-${{ matrix.target }}.exe"
+            cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
+            cp target/${{ matrix.target }}/release/codex-command-runner.exe "$dest/codex-command-runner-${{ matrix.target }}.exe"
           else
             cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
             cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
+          fi
+
+          if [[ "${{ matrix.target }}" == *linux* ]]; then
+            cp target/${{ matrix.target }}/release/codex.sigstore "$dest/codex-${{ matrix.target }}.sigstore"
+            cp target/${{ matrix.target }}/release/codex-responses-api-proxy.sigstore "$dest/codex-responses-api-proxy-${{ matrix.target }}.sigstore"
           fi
 
       - if: ${{ matrix.runner == 'windows-11-arm' }}
@@ -321,6 +198,11 @@ jobs:
               continue
             fi
 
+            # Don't try to compress signature bundles.
+            if [[ "$base" == *.sigstore ]]; then
+              continue
+            fi
+
             # Create per-binary tar.gz
             tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
 
@@ -340,30 +222,7 @@ jobs:
             zstd "${zstd_args[@]}" "$dest/$base"
           done
 
-      - name: Remove signing keychain
-        if: ${{ always() && matrix.runner == 'macos-15-xlarge' }}
-        shell: bash
-        env:
-          APPLE_CODESIGN_KEYCHAIN: ${{ env.APPLE_CODESIGN_KEYCHAIN }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${APPLE_CODESIGN_KEYCHAIN:-}" ]]; then
-            keychain_args=()
-            while IFS= read -r keychain; do
-              [[ "$keychain" == "$APPLE_CODESIGN_KEYCHAIN" ]] && continue
-              [[ -n "$keychain" ]] && keychain_args+=("$keychain")
-            done < <(security list-keychains | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/"//g')
-            if ((${#keychain_args[@]} > 0)); then
-              security list-keychains -s "${keychain_args[@]}"
-              security default-keychain -s "${keychain_args[0]}"
-            fi
-
-            if [[ -f "$APPLE_CODESIGN_KEYCHAIN" ]]; then
-              security delete-keychain "$APPLE_CODESIGN_KEYCHAIN"
-            fi
-          fi
-
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.target }}
           # Upload the per-binary .zst files as well as the new .tar.gz
@@ -371,8 +230,19 @@ jobs:
           path: |
             codex-rs/dist/${{ matrix.target }}/*
 
+  shell-tool-mcp:
+    name: shell-tool-mcp
+    needs: tag-check
+    uses: ./.github/workflows/shell-tool-mcp.yml
+    with:
+      release-tag: ${{ github.ref_name }}
+      publish: true
+    secrets: inherit
+
   release:
-    needs: build
+    needs:
+      - build
+      - shell-tool-mcp
     name: release
     runs-on: ubuntu-latest
     permissions:
@@ -386,14 +256,22 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: dist
 
       - name: List
         run: ls -R dist/
+
+      # This is a temporary fix: we should modify shell-tool-mcp.yml so these
+      # files do not end up in dist/ in the first place.
+      - name: Delete entries from dist/ that should not go in the release
+        run: |
+          rm -rf dist/shell-tool-mcp*
+
+          ls -R dist/
 
       - name: Define release name
         id: release_name
@@ -428,7 +306,7 @@ jobs:
           run_install: false
 
       - name: Setup Node.js for npm packaging
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: 22
 
@@ -479,7 +357,7 @@ jobs:
 
     steps:
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           registry-url: "https://registry.npmjs.org"

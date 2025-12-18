@@ -1,14 +1,20 @@
 use crate::bash::extract_bash_command;
 use crate::bash::try_parse_shell;
 use crate::bash::try_parse_word_only_commands_sequence;
+use crate::powershell::extract_powershell_command;
 use codex_protocol::parse_command::ParsedCommand;
 use shlex::split as shlex_split;
 use shlex::try_join as shlex_try_join;
 use std::path::PathBuf;
 
-fn shlex_join(tokens: &[String]) -> String {
+pub fn shlex_join(tokens: &[String]) -> String {
     shlex_try_join(tokens.iter().map(String::as_str))
         .unwrap_or_else(|_| "<command included NUL byte>".to_string())
+}
+
+/// Extracts the shell and script from a command, regardless of platform
+pub fn extract_shell_command(command: &[String]) -> Option<(&str, &str)> {
+    extract_bash_command(command).or_else(|| extract_powershell_command(command))
 }
 
 /// DO NOT REVIEW THIS CODE BY HAND
@@ -111,9 +117,6 @@ mod tests {
                     query: None,
                     path: None,
                 },
-                ParsedCommand::Unknown {
-                    cmd: "head -n 40".to_string(),
-                },
             ],
         );
     }
@@ -137,16 +140,11 @@ mod tests {
         let inner = "rg -n \"BUG|FIXME|TODO|XXX|HACK\" -S | head -n 200";
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
-            vec![
-                ParsedCommand::Search {
-                    cmd: "rg -n 'BUG|FIXME|TODO|XXX|HACK' -S".to_string(),
-                    query: Some("BUG|FIXME|TODO|XXX|HACK".to_string()),
-                    path: None,
-                },
-                ParsedCommand::Unknown {
-                    cmd: "head -n 200".to_string(),
-                },
-            ],
+            vec![ParsedCommand::Search {
+                cmd: "rg -n 'BUG|FIXME|TODO|XXX|HACK' -S".to_string(),
+                query: Some("BUG|FIXME|TODO|XXX|HACK".to_string()),
+                path: None,
+            }],
         );
     }
 
@@ -168,16 +166,11 @@ mod tests {
         let inner = "rg --files | head -n 50";
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
-            vec![
-                ParsedCommand::Search {
-                    cmd: "rg --files".to_string(),
-                    query: None,
-                    path: None,
-                },
-                ParsedCommand::Unknown {
-                    cmd: "head -n 50".to_string(),
-                },
-            ],
+            vec![ParsedCommand::Search {
+                cmd: "rg --files".to_string(),
+                query: None,
+                path: None,
+            }],
         );
     }
 
@@ -268,6 +261,19 @@ mod tests {
     }
 
     #[test]
+    fn supports_head_file_only() {
+        let inner = "head Cargo.toml";
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::Read {
+                cmd: inner.to_string(),
+                name: "Cargo.toml".to_string(),
+                path: PathBuf::from("Cargo.toml"),
+            }],
+        );
+    }
+
+    #[test]
     fn supports_cat_sed_n() {
         let inner = "cat tui/Cargo.toml | sed -n '1,200p'";
         assert_parsed(
@@ -304,6 +310,19 @@ mod tests {
                 name: "README.md".to_string(),
                 path: PathBuf::from("README.md"),
             }]
+        );
+    }
+
+    #[test]
+    fn supports_tail_file_only() {
+        let inner = "tail README.md";
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::Read {
+                cmd: inner.to_string(),
+                name: "README.md".to_string(),
+                path: PathBuf::from("README.md"),
+            }],
         );
     }
 
@@ -385,6 +404,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn supports_single_string_script_with_cd_and_pipe() {
+        let inner = r#"cd /Users/pakrym/code/codex && rg -n "codex_api" codex-rs -S | head -n 50"#;
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::Search {
+                cmd: "rg -n codex_api codex-rs -S".to_string(),
+                query: Some("codex_api".to_string()),
+                path: Some("codex-rs".to_string()),
+            }],
+        );
+    }
+
     // ---- is_small_formatting_command unit tests ----
     #[test]
     fn small_formatting_always_true_commands() {
@@ -402,38 +434,43 @@ mod tests {
     fn head_behavior() {
         // No args -> small formatting
         assert!(is_small_formatting_command(&vec_str(&["head"])));
-        // Numeric count only -> not considered small formatting by implementation
-        assert!(!is_small_formatting_command(&shlex_split_safe(
-            "head -n 40"
-        )));
+        // Numeric count only -> formatting
+        assert!(is_small_formatting_command(&shlex_split_safe("head -n 40")));
         // With explicit file -> not small formatting
         assert!(!is_small_formatting_command(&shlex_split_safe(
             "head -n 40 file.txt"
         )));
-        // File only (no count) -> treated as small formatting by implementation
-        assert!(is_small_formatting_command(&vec_str(&["head", "file.txt"])));
+        // File only (no count) -> not formatting
+        assert!(!is_small_formatting_command(&vec_str(&[
+            "head", "file.txt"
+        ])));
     }
 
     #[test]
     fn tail_behavior() {
         // No args -> small formatting
         assert!(is_small_formatting_command(&vec_str(&["tail"])));
-        // Numeric with plus offset -> not small formatting
-        assert!(!is_small_formatting_command(&shlex_split_safe(
+        // Numeric with plus offset -> formatting
+        assert!(is_small_formatting_command(&shlex_split_safe(
             "tail -n +10"
         )));
         assert!(!is_small_formatting_command(&shlex_split_safe(
             "tail -n +10 file.txt"
         )));
-        // Numeric count
-        assert!(!is_small_formatting_command(&shlex_split_safe(
-            "tail -n 30"
-        )));
+        // Numeric count -> formatting
+        assert!(is_small_formatting_command(&shlex_split_safe("tail -n 30")));
         assert!(!is_small_formatting_command(&shlex_split_safe(
             "tail -n 30 file.txt"
         )));
-        // File only -> small formatting by implementation
-        assert!(is_small_formatting_command(&vec_str(&["tail", "file.txt"])));
+        // Byte count -> formatting
+        assert!(is_small_formatting_command(&shlex_split_safe("tail -c 30")));
+        assert!(is_small_formatting_command(&shlex_split_safe(
+            "tail -c +10"
+        )));
+        // File only (no count) -> not formatting
+        assert!(!is_small_formatting_command(&vec_str(&[
+            "tail", "file.txt"
+        ])));
     }
 
     #[test]
@@ -708,20 +745,15 @@ mod tests {
 
     #[test]
     fn bash_dash_c_pipeline_parsing() {
-        // Ensure -c is handled similarly to -lc by normalization
+        // Ensure -c is handled similarly to -lc by shell parsing
         let inner = "rg --files | head -n 1";
         assert_parsed(
-            &shlex_split_safe(inner),
-            vec![
-                ParsedCommand::Search {
-                    cmd: "rg --files".to_string(),
-                    query: None,
-                    path: None,
-                },
-                ParsedCommand::Unknown {
-                    cmd: "head -n 1".to_string(),
-                },
-            ],
+            &vec_str(&["bash", "-c", inner]),
+            vec![ParsedCommand::Search {
+                cmd: "rg --files".to_string(),
+                query: None,
+                path: None,
+            }],
         );
     }
 
@@ -877,11 +909,53 @@ mod tests {
             }],
         );
     }
+
+    #[test]
+    fn powershell_command_is_stripped() {
+        assert_parsed(
+            &vec_str(&["powershell", "-Command", "Get-ChildItem"]),
+            vec![ParsedCommand::Unknown {
+                cmd: "Get-ChildItem".to_string(),
+            }],
+        );
+    }
+
+    #[test]
+    fn pwsh_with_noprofile_and_c_alias_is_stripped() {
+        assert_parsed(
+            &vec_str(&["pwsh", "-NoProfile", "-c", "Write-Host hi"]),
+            vec![ParsedCommand::Unknown {
+                cmd: "Write-Host hi".to_string(),
+            }],
+        );
+    }
+
+    #[test]
+    fn powershell_with_path_is_stripped() {
+        let command = if cfg!(windows) {
+            "C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        } else {
+            "/usr/local/bin/powershell.exe"
+        };
+
+        assert_parsed(
+            &vec_str(&[command, "-NoProfile", "-c", "Write-Host hi"]),
+            vec![ParsedCommand::Unknown {
+                cmd: "Write-Host hi".to_string(),
+            }],
+        );
+    }
 }
 
 pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
     if let Some(commands) = parse_shell_lc_commands(command) {
         return commands;
+    }
+
+    if let Some((_, script)) = extract_powershell_command(command) {
+        return vec![ParsedCommand::Unknown {
+            cmd: script.to_string(),
+        }];
     }
 
     let normalized = normalize_tokens(command);
@@ -1190,6 +1264,7 @@ fn parse_find_query_and_path(tail: &[String]) -> (Option<String>, Option<String>
 }
 
 fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
+    // Only handle bash/zsh here; PowerShell is stripped separately without bash parsing.
     let (_, script) = extract_bash_command(original)?;
 
     if let Some(tree) = try_parse_shell(script)
@@ -1335,13 +1410,50 @@ fn is_small_formatting_command(tokens: &[String]) -> bool {
             // Treat as formatting when no explicit file operand is present.
             // Common forms: `head -n 40`, `head -c 100`.
             // Keep cases like `head -n 40 file`.
-            tokens.len() < 3
+            match tokens {
+                // `head`
+                [_] => true,
+                // `head <file>` or `head -n50`/`head -c100`
+                [_, arg] => arg.starts_with('-'),
+                // `head -n 40` / `head -c 100` (no file operand)
+                [_, flag, count]
+                    if (flag == "-n" || flag == "-c")
+                        && count.chars().all(|c| c.is_ascii_digit()) =>
+                {
+                    true
+                }
+                _ => false,
+            }
         }
         "tail" => {
             // Treat as formatting when no explicit file operand is present.
-            // Common forms: `tail -n +10`, `tail -n 30`.
+            // Common forms: `tail -n +10`, `tail -n 30`, `tail -c 100`.
             // Keep cases like `tail -n 30 file`.
-            tokens.len() < 3
+            match tokens {
+                // `tail`
+                [_] => true,
+                // `tail <file>` or `tail -n30`/`tail -n+10`
+                [_, arg] => arg.starts_with('-'),
+                // `tail -n 30` / `tail -n +10` (no file operand)
+                [_, flag, count]
+                    if flag == "-n"
+                        && (count.chars().all(|c| c.is_ascii_digit())
+                            || (count.starts_with('+')
+                                && count[1..].chars().all(|c| c.is_ascii_digit()))) =>
+                {
+                    true
+                }
+                // `tail -c 100` / `tail -c +10` (no file operand)
+                [_, flag, count]
+                    if flag == "-c"
+                        && (count.chars().all(|c| c.is_ascii_digit())
+                            || (count.starts_with('+')
+                                && count[1..].chars().all(|c| c.is_ascii_digit()))) =>
+                {
+                    true
+                }
+                _ => false,
+            }
         }
         "sed" => {
             // Keep `sed -n <range> file` (treated as a file read elsewhere);
@@ -1494,6 +1606,16 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                     };
                 }
             }
+            if let [path] = tail
+                && !path.starts_with('-')
+            {
+                let name = short_display_path(path);
+                return ParsedCommand::Read {
+                    cmd: shlex_join(main_cmd),
+                    name,
+                    path: PathBuf::from(path),
+                };
+            }
             ParsedCommand::Unknown {
                 cmd: shlex_join(main_cmd),
             }
@@ -1537,6 +1659,16 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                         path: PathBuf::from(path),
                     };
                 }
+            }
+            if let [path] = tail
+                && !path.starts_with('-')
+            {
+                let name = short_display_path(path);
+                return ParsedCommand::Read {
+                    cmd: shlex_join(main_cmd),
+                    name,
+                    path: PathBuf::from(path),
+                };
             }
             ParsedCommand::Unknown {
                 cmd: shlex_join(main_cmd),

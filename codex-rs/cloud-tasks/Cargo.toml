@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "codex-cloud-tasks"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [lib]
 name = "codex_cloud_tasks"
@@ -33,6 +34,9 @@ tokio-stream = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 unicode-width = { workspace = true }
+owo-colors = { workspace = true, features = ["supports-colors"] }
+supports-color = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
+pretty_assertions = { workspace = true }

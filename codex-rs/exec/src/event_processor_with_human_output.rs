@@ -140,7 +140,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             VERSION
         );
 
-        let mut entries = create_config_summary_entries(config);
+        let mut entries =
+            create_config_summary_entries(config, session_configured_event.model.as_str());
         entries.push((
             "session id",
             session_configured_event.session_id.to_string(),
@@ -161,7 +162,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     fn process_event(&mut self, event: Event) -> CodexStatus {
         let Event { id: _, msg } = event;
         match msg {
-            EventMsg::Error(ErrorEvent { message }) => {
+            EventMsg::Error(ErrorEvent { message, .. }) => {
                 let prefix = "ERROR:".style(self.red);
                 ts_msg!(self, "{prefix} {message}");
             }
@@ -182,14 +183,63 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(self, "  {}", details.style(self.dimmed));
                 }
             }
+            EventMsg::McpStartupUpdate(update) => {
+                let status_text = match update.status {
+                    codex_core::protocol::McpStartupStatus::Starting => "starting".to_string(),
+                    codex_core::protocol::McpStartupStatus::Ready => "ready".to_string(),
+                    codex_core::protocol::McpStartupStatus::Cancelled => "cancelled".to_string(),
+                    codex_core::protocol::McpStartupStatus::Failed { ref error } => {
+                        format!("failed: {error}")
+                    }
+                };
+                ts_msg!(
+                    self,
+                    "{} {} {}",
+                    "mcp:".style(self.cyan),
+                    update.server,
+                    status_text
+                );
+            }
+            EventMsg::McpStartupComplete(summary) => {
+                let mut parts = Vec::new();
+                if !summary.ready.is_empty() {
+                    parts.push(format!("ready: {}", summary.ready.join(", ")));
+                }
+                if !summary.failed.is_empty() {
+                    let servers: Vec<_> = summary.failed.iter().map(|f| f.server.clone()).collect();
+                    parts.push(format!("failed: {}", servers.join(", ")));
+                }
+                if !summary.cancelled.is_empty() {
+                    parts.push(format!("cancelled: {}", summary.cancelled.join(", ")));
+                }
+                let joined = if parts.is_empty() {
+                    "no servers".to_string()
+                } else {
+                    parts.join("; ")
+                };
+                ts_msg!(self, "{} {}", "mcp startup:".style(self.cyan), joined);
+            }
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 ts_msg!(self, "{}", message.style(self.dimmed));
             }
-            EventMsg::StreamError(StreamErrorEvent { message }) => {
+            EventMsg::StreamError(StreamErrorEvent { message, .. }) => {
                 ts_msg!(self, "{}", message.style(self.dimmed));
             }
             EventMsg::TaskStarted(_) => {
                 // Ignore.
+            }
+            EventMsg::ElicitationRequest(ev) => {
+                ts_msg!(
+                    self,
+                    "{} {}",
+                    "elicitation request".style(self.magenta),
+                    ev.server_name.style(self.dimmed)
+                );
+                ts_msg!(
+                    self,
+                    "{}",
+                    "auto-cancelling (not supported in exec mode)".style(self.dimmed)
+                );
             }
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
                 let last_message = last_agent_message.as_deref();
@@ -310,6 +360,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 call_id,
                 auto_approved,
                 changes,
+                ..
             }) => {
                 // Store metadata so we can calculate duration later when we
                 // receive the corresponding PatchApplyEnd event.
@@ -444,11 +495,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 let SessionConfiguredEvent {
                     session_id: conversation_id,
                     model,
-                    reasoning_effort: _,
-                    history_log_id: _,
-                    history_entry_count: _,
-                    initial_messages: _,
-                    rollout_path: _,
+                    ..
                 } = session_configured_event;
 
                 ts_msg!(
@@ -513,14 +560,19 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(self, "task aborted: review ended");
                 }
             },
+            EventMsg::ContextCompacted(_) => {
+                ts_msg!(self, "context compacted");
+            }
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::WebSearchBegin(_)
             | EventMsg::ExecApprovalRequest(_)
             | EventMsg::ApplyPatchApprovalRequest(_)
+            | EventMsg::TerminalInteraction(_)
             | EventMsg::ExecCommandOutputDelta(_)
             | EventMsg::GetHistoryEntryResponse(_)
             | EventMsg::McpListToolsResponse(_)
             | EventMsg::ListCustomPromptsResponse(_)
+            | EventMsg::ListSkillsResponse(_)
             | EventMsg::RawResponseItem(_)
             | EventMsg::UserMessage(_)
             | EventMsg::EnteredReviewMode(_)
@@ -533,6 +585,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::SkillsUpdateAvailable
             | EventMsg::UndoCompleted(_)
             | EventMsg::UndoStarted(_) => {}
         }

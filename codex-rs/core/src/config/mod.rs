@@ -10,27 +10,21 @@ use crate::config::types::Notifications;
 use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
-use crate::config::types::ReasoningSummaryFormat;
 use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
-use crate::config_loader::LoadedConfigLayers;
-use crate::config_loader::load_config_as_toml;
-use crate::config_loader::load_config_layers_with_overrides;
-use crate::config_loader::merge_toml_values;
+use crate::config_loader::load_config_layers_state;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
 use crate::git_info::resolve_root_git_project_for_trust;
-use crate::model_family::ModelFamily;
-use crate::model_family::derive_default_model_family;
-use crate::model_family::find_family_for_model;
+use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
+use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
-use crate::openai_model_info::get_model_info;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
@@ -38,13 +32,16 @@ use crate::protocol::SandboxPolicy;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
-use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningSummaryFormat;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dirs::home_dir;
-use dunce::canonicalize;
 use serde::Deserialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
@@ -52,28 +49,46 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(test)]
+use tempfile::tempdir;
 
 use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
+mod constraint;
 pub mod edit;
 pub mod profile;
+pub mod service;
 pub mod types;
+pub use constraint::Constrained;
+pub use constraint::ConstraintError;
+pub use constraint::ConstraintResult;
 
-#[cfg(target_os = "windows")]
-pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
-#[cfg(not(target_os = "windows"))]
-pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5-codex";
-const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5-codex";
-pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5-codex";
+pub use service::ConfigService;
+pub use service::ConfigServiceError;
+
+const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5.1-codex-max";
+
+pub use codex_git::GhostSnapshotConfig;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
-pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
+pub const CONFIG_TOML_FILE: &str = "config.toml";
+
+#[cfg(test)]
+pub(crate) fn test_config() -> Config {
+    let codex_home = tempdir().expect("create temp dir");
+    Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )
+    .expect("load default test config")
+}
 
 pub fn default_config_path() -> std::io::Result<PathBuf> {
     let codex_home = find_codex_home()?;
@@ -84,18 +99,13 @@ pub fn default_config_path() -> std::io::Result<PathBuf> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     /// Optional override of model selection.
-    pub model: String,
+    pub model: Option<String>,
 
-    /// Model used specifically for review sessions. Defaults to "gpt-5-codex".
+    /// Model used specifically for review sessions. Defaults to "gpt-5.1-codex-max".
     pub review_model: String,
-
-    pub model_family: ModelFamily,
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
-
-    /// Maximum number of output tokens.
-    pub model_max_output_tokens: Option<i64>,
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
@@ -107,7 +117,7 @@ pub struct Config {
     pub model_provider: ModelProviderInfo,
 
     /// Approval policy for executing commands.
-    pub approval_policy: AskForApproval,
+    pub approval_policy: Constrained<AskForApproval>,
 
     pub sandbox_policy: SandboxPolicy,
 
@@ -170,6 +180,12 @@ pub struct Config {
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
 
+    /// Enable ASCII animations and shimmer effects in the TUI.
+    pub animations: bool,
+
+    /// Show startup tooltips in the TUI welcome screen.
+    pub show_tooltips: bool,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -202,6 +218,10 @@ pub struct Config {
     /// Additional filenames to try when looking for project-level docs.
     pub project_doc_fallback_filenames: Vec<String>,
 
+    // todo(aibrahim): this should be used in the override model family
+    /// Token budget applied when storing tool/function outputs in the context manager.
+    pub tool_output_token_limit: Option<usize>,
+
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
@@ -229,6 +249,12 @@ pub struct Config {
     /// request using the Responses API.
     pub model_reasoning_summary: ReasoningSummary,
 
+    /// Optional override to force-enable reasoning summaries for the configured model.
+    pub model_supports_reasoning_summaries: Option<bool>,
+
+    /// Optional override to force reasoning summary format for the configured model.
+    pub model_reasoning_summary_format: Option<ReasoningSummaryFormat>,
+
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
 
@@ -248,15 +274,15 @@ pub struct Config {
 
     pub tools_web_search_request: bool,
 
-    /// When `true`, run a model-based assessment for commands denied by the sandbox.
-    pub experimental_sandbox_command_assessment: bool,
-
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
     /// If set to `true`, use the experimental official Rust MCP client.
     /// https://github.com/modelcontextprotocol/rust-sdk
     pub use_experimental_use_rmcp_client: bool,
+
+    /// Settings for ghost snapshots (used for undo).
+    pub ghost_snapshot: GhostSnapshotConfig,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
@@ -273,6 +299,11 @@ pub struct Config {
 
     /// Collection of various notices we show the user
     pub notices: Notice,
+
+    /// When `true`, checks for Codex updates on startup and surfaces update prompts.
+    /// Set to `false` only if your Codex updates are centrally managed.
+    /// Defaults to `true`.
+    pub check_for_update_on_startup: bool,
 
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
@@ -297,9 +328,9 @@ impl Config {
         )
         .await?;
 
-        let cfg: ConfigToml = root_value.try_into().map_err(|e| {
+        let cfg = deserialize_config_toml_with_base(root_value, &codex_home).map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+            e
         })?;
 
         Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)
@@ -317,9 +348,9 @@ pub async fn load_config_as_toml_with_cli_overrides(
     )
     .await?;
 
-    let cfg: ConfigToml = root_value.try_into().map_err(|e| {
+    let cfg = deserialize_config_toml_with_base(root_value, codex_home).map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
-        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+        e
     })?;
 
     Ok(cfg)
@@ -330,35 +361,31 @@ async fn load_resolved_config(
     cli_overrides: Vec<(String, TomlValue)>,
     overrides: crate::config_loader::LoaderOverrides,
 ) -> std::io::Result<TomlValue> {
-    let layers = load_config_layers_with_overrides(codex_home, overrides).await?;
-    Ok(apply_overlays(layers, cli_overrides))
+    let layers = load_config_layers_state(codex_home, &cli_overrides, overrides).await?;
+    Ok(layers.effective_config())
 }
 
-fn apply_overlays(
-    layers: LoadedConfigLayers,
-    cli_overrides: Vec<(String, TomlValue)>,
-) -> TomlValue {
-    let LoadedConfigLayers {
-        mut base,
-        managed_config,
-        managed_preferences,
-    } = layers;
-
-    for (path, value) in cli_overrides.into_iter() {
-        apply_toml_override(&mut base, &path, value);
-    }
-
-    for overlay in [managed_config, managed_preferences].into_iter().flatten() {
-        merge_toml_values(&mut base, &overlay);
-    }
-
-    base
+fn deserialize_config_toml_with_base(
+    root_value: TomlValue,
+    config_base_dir: &Path,
+) -> std::io::Result<ConfigToml> {
+    // This guard ensures that any relative paths that is deserialized into an
+    // [AbsolutePathBuf] is resolved against `config_base_dir`.
+    let _guard = AbsolutePathBufGuard::new(config_base_dir);
+    root_value
+        .try_into()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 pub async fn load_global_mcp_servers(
     codex_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
-    let root_value = load_config_as_toml(codex_home).await?;
+    let root_value = load_resolved_config(
+        codex_home,
+        Vec::new(),
+        crate::config_loader::LoaderOverrides::default(),
+    )
+    .await?;
     let Some(servers_value) = root_value.get("mcp_servers") else {
         return Ok(BTreeMap::new());
     };
@@ -392,15 +419,16 @@ fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn set_project_trusted_inner(
+pub(crate) fn set_project_trust_level_inner(
     doc: &mut DocumentMut,
     project_path: &Path,
+    trust_level: TrustLevel,
 ) -> anyhow::Result<()> {
     // Ensure we render a human-friendly structure:
     //
     // [projects]
     // [projects."/path/to/project"]
-    // trust_level = "trusted"
+    // trust_level = "trusted" or "untrusted"
     //
     // rather than inline tables like:
     //
@@ -456,61 +484,64 @@ pub(crate) fn set_project_trusted_inner(
         return Err(anyhow::anyhow!("project table missing for {project_key}"));
     };
     proj_tbl.set_implicit(false);
-    proj_tbl["trust_level"] = toml_edit::value("trusted");
+    proj_tbl["trust_level"] = toml_edit::value(trust_level.to_string());
     Ok(())
 }
 
-/// Patch `CODEX_HOME/config.toml` project state.
+/// Patch `CODEX_HOME/config.toml` project state to set trust level.
 /// Use with caution.
-pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
+pub fn set_project_trust_level(
+    codex_home: &Path,
+    project_path: &Path,
+    trust_level: TrustLevel,
+) -> anyhow::Result<()> {
     use crate::config::edit::ConfigEditsBuilder;
 
     ConfigEditsBuilder::new(codex_home)
-        .set_project_trusted(project_path)
+        .set_project_trust_level(project_path, trust_level)
         .apply_blocking()
 }
 
-/// Apply a single dotted-path override onto a TOML value.
-fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
-    use toml::value::Table;
-
-    let segments: Vec<&str> = path.split('.').collect();
-    let mut current = root;
-
-    for (idx, segment) in segments.iter().enumerate() {
-        let is_last = idx == segments.len() - 1;
-
-        if is_last {
-            match current {
-                TomlValue::Table(table) => {
-                    table.insert(segment.to_string(), value);
-                }
-                _ => {
-                    let mut table = Table::new();
-                    table.insert(segment.to_string(), value);
-                    *current = TomlValue::Table(table);
-                }
-            }
-            return;
+/// Save the default OSS provider preference to config.toml
+pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::Result<()> {
+    // Validate that the provider is one of the known OSS providers
+    match provider {
+        LMSTUDIO_OSS_PROVIDER_ID | OLLAMA_OSS_PROVIDER_ID => {
+            // Valid provider, continue
         }
-
-        // Traverse or create intermediate object.
-        match current {
-            TomlValue::Table(table) => {
-                current = table
-                    .entry(segment.to_string())
-                    .or_insert_with(|| TomlValue::Table(Table::new()));
-            }
-            _ => {
-                *current = TomlValue::Table(Table::new());
-                if let TomlValue::Table(tbl) = current {
-                    current = tbl
-                        .entry(segment.to_string())
-                        .or_insert_with(|| TomlValue::Table(Table::new()));
-                }
-            }
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Invalid OSS provider '{provider}'. Must be one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}"
+                ),
+            ));
         }
     }
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+
+    // Read existing config or create empty string if file doesn't exist
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+
+    // Parse as DocumentMut for editing while preserving structure
+    let mut doc = content.parse::<DocumentMut>().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("failed to parse config.toml: {e}"),
+        )
+    })?;
+
+    // Set the default_oss_provider at root level
+    use toml_edit::value;
+    doc["oss_provider"] = value(provider);
+
+    // Write the modified document back
+    std::fs::write(&config_path, doc.to_string())?;
+    Ok(())
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
@@ -526,9 +557,6 @@ pub struct ConfigToml {
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
-
-    /// Maximum number of output tokens.
-    pub model_max_output_tokens: Option<i64>,
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
@@ -599,6 +627,9 @@ pub struct ConfigToml {
     /// Ordered list of fallback filenames to look for when AGENTS.md is missing.
     pub project_doc_fallback_filenames: Option<Vec<String>>,
 
+    /// Token budget applied when storing tool/function outputs in the context manager.
+    pub tool_output_token_limit: Option<usize>,
+
     /// Profile to use from the `profiles` map.
     pub profile: Option<String>,
 
@@ -648,6 +679,15 @@ pub struct ConfigToml {
     #[serde(default)]
     pub features: Option<FeaturesToml>,
 
+    /// Settings for ghost snapshots (used for undo).
+    #[serde(default)]
+    pub ghost_snapshot: Option<GhostSnapshotToml>,
+
+    /// When `true`, checks for Codex updates on startup and surfaces update prompts.
+    /// Set to `false` only if your Codex updates are centrally managed.
+    /// Defaults to `true`.
+    pub check_for_update_on_startup: Option<bool>,
+
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
@@ -664,12 +704,13 @@ pub struct ConfigToml {
     pub notice: Option<Notice>,
 
     /// Legacy, now use features
-    pub experimental_instructions_file: Option<PathBuf>,
-    pub experimental_compact_prompt_file: Option<PathBuf>,
+    pub experimental_instructions_file: Option<AbsolutePathBuf>,
+    pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
-    pub experimental_sandbox_command_assessment: Option<bool>,
+    /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
+    pub oss_provider: Option<String>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -830,15 +871,16 @@ fn default_no_proxy_entries() -> [&'static str; 3] {
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
-    pub trust_level: Option<String>,
+    pub trust_level: Option<TrustLevel>,
 }
 
 impl ProjectConfig {
     pub fn is_trusted(&self) -> bool {
-        match &self.trust_level {
-            Some(trust_level) => trust_level == "trusted",
-            None => false,
-        }
+        matches!(self.trust_level, Some(TrustLevel::Trusted))
+    }
+
+    pub fn is_untrusted(&self) -> bool {
+        matches!(self.trust_level, Some(TrustLevel::Untrusted))
     }
 }
 
@@ -861,6 +903,19 @@ impl From<ToolsToml> for Tools {
     }
 }
 
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct GhostSnapshotToml {
+    /// Exclude untracked files larger than this many bytes from ghost snapshots.
+    #[serde(alias = "ignore_untracked_files_over_bytes")]
+    pub ignore_large_untracked_files: Option<i64>,
+    /// Ignore untracked directories that contain this many files or more.
+    /// (Still emits a warning unless warnings are disabled.)
+    #[serde(alias = "large_untracked_dir_warning_threshold")]
+    pub ignore_large_untracked_dirs: Option<i64>,
+    /// Disable all ghost snapshot warning events.
+    pub disable_warnings: Option<bool>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct SandboxPolicyResolution {
     pub policy: SandboxPolicy,
@@ -879,9 +934,9 @@ impl ConfigToml {
             .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
             .or_else(|| {
-                // if no sandbox_mode is set, but user has marked directory as trusted, use WorkspaceWrite
+                // if no sandbox_mode is set, but user has marked directory as trusted or untrusted, use WorkspaceWrite
                 self.get_active_project(resolved_cwd).and_then(|p| {
-                    if p.is_trusted() {
+                    if p.is_trusted() || p.is_untrusted() {
                         Some(SandboxMode::WorkspaceWrite)
                     } else {
                         None
@@ -983,9 +1038,36 @@ pub struct ConfigOverrides {
     pub include_apply_patch_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
-    pub experimental_sandbox_command_assessment: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
+}
+
+/// Resolves the OSS provider from CLI override, profile config, or global config.
+/// Returns `None` if no provider is configured at any level.
+pub fn resolve_oss_provider(
+    explicit_provider: Option<&str>,
+    config_toml: &ConfigToml,
+    config_profile: Option<String>,
+) -> Option<String> {
+    if let Some(provider) = explicit_provider {
+        // Explicit provider specified (e.g., via --local-provider)
+        Some(provider.to_string())
+    } else {
+        // Check profile config first, then global config
+        let profile = config_toml.get_config_profile(config_profile).ok();
+        if let Some(profile) = &profile {
+            // Check if profile has an oss provider
+            if let Some(profile_oss_provider) = &profile.oss_provider {
+                Some(profile_oss_provider.clone())
+            }
+            // If not then check if the toml has an oss provider
+            else {
+                config_toml.oss_provider.clone()
+            }
+        } else {
+            config_toml.oss_provider.clone()
+        }
+    }
 }
 
 impl Config {
@@ -1014,7 +1096,6 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
-            experimental_sandbox_command_assessment: sandbox_command_assessment_override,
             additional_writable_roots,
         } = overrides;
 
@@ -1039,13 +1120,17 @@ impl Config {
         let feature_overrides = FeatureOverrides {
             include_apply_patch_tool: include_apply_patch_tool_override,
             web_search_request: override_tools_web_search_request,
-            experimental_sandbox_command_assessment: sandbox_command_assessment_override,
         };
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
         #[cfg(target_os = "windows")]
         {
-            crate::safety::set_windows_sandbox_enabled(features.enabled(Feature::WindowsSandbox));
+            // Base flag controls sandbox on/off; elevated only applies when base is enabled.
+            let sandbox_enabled = features.enabled(Feature::WindowsSandbox);
+            crate::safety::set_windows_sandbox_enabled(sandbox_enabled);
+            let elevated_enabled =
+                sandbox_enabled && features.enabled(Feature::WindowsSandboxElevated);
+            crate::safety::set_windows_elevated_sandbox_enabled(elevated_enabled);
         }
 
         let resolved_cwd = {
@@ -1066,20 +1151,10 @@ impl Config {
                 }
             }
         };
-        let additional_writable_roots: Vec<PathBuf> = additional_writable_roots
+        let additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
-            .map(|path| {
-                let absolute = if path.is_absolute() {
-                    path
-                } else {
-                    resolved_cwd.join(path)
-                };
-                match canonicalize(&absolute) {
-                    Ok(canonical) => canonical,
-                    Err(_) => absolute,
-                }
-            })
-            .collect();
+            .map(|path| AbsolutePathBuf::resolve_path_against_base(path, &resolved_cwd))
+            .collect::<Result<Vec<_>, _>>()?;
         let active_project = cfg
             .get_active_project(&resolved_cwd)
             .unwrap_or(ProjectConfig { trust_level: None });
@@ -1100,12 +1175,14 @@ impl Config {
             .or(cfg.approval_policy)
             .unwrap_or_else(|| {
                 if active_project.is_trusted() {
-                    // If no explicit approval policy is set, but we trust cwd, default to OnRequest
                     AskForApproval::OnRequest
+                } else if active_project.is_untrusted() {
+                    AskForApproval::UnlessTrusted
                 } else {
                     AskForApproval::default()
                 }
             });
+        let approval_policy = Constrained::allow_any(approval_policy);
         let did_user_set_custom_approval_policy_or_sandbox_mode = approval_policy_override
             .is_some()
             || config_profile.approval_policy.is_some()
@@ -1140,12 +1217,35 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
+        let ghost_snapshot = {
+            let mut config = GhostSnapshotConfig::default();
+            if let Some(ghost_snapshot) = cfg.ghost_snapshot.as_ref()
+                && let Some(ignore_over_bytes) = ghost_snapshot.ignore_large_untracked_files
+            {
+                config.ignore_large_untracked_files = if ignore_over_bytes > 0 {
+                    Some(ignore_over_bytes)
+                } else {
+                    None
+                };
+            }
+            if let Some(ghost_snapshot) = cfg.ghost_snapshot.as_ref()
+                && let Some(threshold) = ghost_snapshot.ignore_large_untracked_dirs
+            {
+                config.ignore_large_untracked_dirs =
+                    if threshold > 0 { Some(threshold) } else { None };
+            }
+            if let Some(ghost_snapshot) = cfg.ghost_snapshot.as_ref()
+                && let Some(disable_warnings) = ghost_snapshot.disable_warnings
+            {
+                config.disable_warnings = disable_warnings;
+            }
+            config
+        };
+
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
         let use_experimental_use_rmcp_client = features.enabled(Feature::RmcpClient);
-        let experimental_sandbox_command_assessment =
-            features.enabled(Feature::SandboxCommandAssessment);
 
         let forced_chatgpt_workspace_id =
             cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
@@ -1159,35 +1259,7 @@ impl Config {
 
         let forced_login_method = cfg.forced_login_method;
 
-        let model = model
-            .or(config_profile.model)
-            .or(cfg.model)
-            .unwrap_or_else(default_model);
-
-        let mut model_family =
-            find_family_for_model(&model).unwrap_or_else(|| derive_default_model_family(&model));
-
-        if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
-            model_family.supports_reasoning_summaries = supports_reasoning_summaries;
-        }
-        if let Some(model_reasoning_summary_format) = cfg.model_reasoning_summary_format {
-            model_family.reasoning_summary_format = model_reasoning_summary_format;
-        }
-
-        let openai_model_info = get_model_info(&model_family);
-        let model_context_window = cfg
-            .model_context_window
-            .or_else(|| openai_model_info.as_ref().map(|info| info.context_window));
-        let model_max_output_tokens = cfg.model_max_output_tokens.or_else(|| {
-            openai_model_info
-                .as_ref()
-                .map(|info| info.max_output_tokens)
-        });
-        let model_auto_compact_token_limit = cfg.model_auto_compact_token_limit.or_else(|| {
-            openai_model_info
-                .as_ref()
-                .and_then(|info| info.auto_compact_token_limit)
-        });
+        let model = model.or(config_profile.model).or(cfg.model);
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();
@@ -1205,9 +1277,8 @@ impl Config {
             .experimental_instructions_file
             .as_ref()
             .or(cfg.experimental_instructions_file.as_ref());
-        let file_base_instructions = Self::load_override_from_file(
+        let file_base_instructions = Self::try_read_non_empty_file(
             experimental_instructions_path,
-            &resolved_cwd,
             "experimental instructions file",
         )?;
         let base_instructions = base_instructions.or(file_base_instructions);
@@ -1217,9 +1288,8 @@ impl Config {
             .experimental_compact_prompt_file
             .as_ref()
             .or(cfg.experimental_compact_prompt_file.as_ref());
-        let file_compact_prompt = Self::load_override_from_file(
+        let file_compact_prompt = Self::try_read_non_empty_file(
             experimental_compact_prompt_path,
-            &resolved_cwd,
             "experimental compact prompt file",
         )?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
@@ -1229,13 +1299,13 @@ impl Config {
             .or(cfg.review_model)
             .unwrap_or_else(default_review_model);
 
+        let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
+
         let config = Self {
             model,
             review_model,
-            model_family,
-            model_context_window,
-            model_max_output_tokens,
-            model_auto_compact_token_limit,
+            model_context_window: cfg.model_context_window,
+            model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
@@ -1272,6 +1342,7 @@ impl Config {
                     }
                 })
                 .collect(),
+            tool_output_token_limit: cfg.tool_output_token_limit,
             codex_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
@@ -1289,6 +1360,8 @@ impl Config {
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary)
                 .unwrap_or_default(),
+            model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
+            model_reasoning_summary_format: cfg.model_reasoning_summary_format.clone(),
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
@@ -1298,20 +1371,23 @@ impl Config {
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
-            experimental_sandbox_command_assessment,
             use_experimental_unified_exec_tool,
             use_experimental_use_rmcp_client,
+            ghost_snapshot,
             features,
             active_profile: active_profile_name,
             active_project,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
             notices: cfg.notice.unwrap_or_default(),
+            check_for_update_on_startup,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             tui_notifications: cfg
                 .tui
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
+            show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1319,10 +1395,12 @@ impl Config {
                     .environment
                     .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
                 let exporter = t.exporter.unwrap_or(OtelExporterKind::None);
+                let trace_exporter = t.trace_exporter.unwrap_or_else(|| exporter.clone());
                 OtelConfig {
                     log_user_prompt,
                     environment,
                     exporter,
+                    trace_exporter,
                 }
             },
         };
@@ -1344,25 +1422,21 @@ impl Config {
         None
     }
 
-    fn load_override_from_file(
-        path: Option<&PathBuf>,
-        cwd: &Path,
-        description: &str,
+    /// If `path` is `Some`, attempts to read the file at the given path and
+    /// returns its contents as a trimmed `String`. If the file is empty, or
+    /// is `Some` but cannot be read, returns an `Err`.
+    fn try_read_non_empty_file(
+        path: Option<&AbsolutePathBuf>,
+        context: &str,
     ) -> std::io::Result<Option<String>> {
-        let Some(p) = path else {
+        let Some(path) = path else {
             return Ok(None);
         };
 
-        let full_path = if p.is_relative() {
-            cwd.join(p)
-        } else {
-            p.to_path_buf()
-        };
-
-        let contents = std::fs::read_to_string(&full_path).map_err(|e| {
+        let contents = std::fs::read_to_string(path).map_err(|e| {
             std::io::Error::new(
                 e.kind(),
-                format!("failed to read {description} {}: {e}", full_path.display()),
+                format!("failed to read {context} {}: {e}", path.display()),
             )
         })?;
 
@@ -1370,16 +1444,22 @@ impl Config {
         if s.is_empty() {
             Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("{description} is empty: {}", full_path.display()),
+                format!("{context} is empty: {}", path.display()),
             ))
         } else {
             Ok(Some(s))
         }
     }
-}
 
-fn default_model() -> String {
-    OPENAI_DEFAULT_MODEL.to_string()
+    pub fn set_windows_sandbox_globally(&mut self, value: bool) {
+        crate::safety::set_windows_sandbox_enabled(value);
+        if value {
+            self.features.enable(Feature::WindowsSandbox);
+        } else {
+            self.features.disable(Feature::WindowsSandbox);
+        }
+        self.forced_auto_mode_downgraded_on_windows = !value;
+    }
 }
 
 fn default_review_model() -> String {
@@ -1432,6 +1512,7 @@ mod tests {
     use crate::features::Feature;
 
     use super::*;
+    use core_test_support::test_absolute_path;
     use pretty_assertions::assert_eq;
 
     use std::time::Duration;
@@ -1470,7 +1551,7 @@ persistence = "none"
     }
 
     #[test]
-    fn tui_config_missing_notifications_field_defaults_to_disabled() {
+    fn tui_config_missing_notifications_field_defaults_to_enabled() {
         let cfg = r#"
 [tui]
 "#;
@@ -1479,7 +1560,8 @@ persistence = "none"
             .expect("TUI config without notifications should succeed");
         let tui = parsed.tui.expect("config should include tui section");
 
-        assert_eq!(tui.notifications, Notifications::Enabled(false));
+        assert_eq!(tui.notifications, Notifications::Enabled(true));
+        assert!(tui.show_tooltips);
     }
 
     #[test]
@@ -1529,18 +1611,22 @@ network_access = true  # This should be ignored.
             }
         );
 
-        let sandbox_workspace_write = r#"
+        let writable_root = test_absolute_path("/my/workspace");
+        let sandbox_workspace_write = format!(
+            r#"
 sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
 writable_roots = [
-    "/my/workspace",
+    {},
 ]
 exclude_tmpdir_env_var = true
 exclude_slash_tmp = true
-"#;
+"#,
+            serde_json::json!(writable_root)
+        );
 
-        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
+        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(&sandbox_workspace_write)
             .expect("TOML deserialization should succeed");
         let sandbox_mode_override = None;
         let resolution = sandbox_workspace_write_cfg.derive_sandbox_policy(
@@ -1561,7 +1647,7 @@ exclude_slash_tmp = true
                 resolution,
                 SandboxPolicyResolution {
                     policy: SandboxPolicy::WorkspaceWrite {
-                        writable_roots: vec![PathBuf::from("/my/workspace")],
+                        writable_roots: vec![writable_root.clone()],
                         network_access: false,
                         exclude_tmpdir_env_var: true,
                         exclude_slash_tmp: true,
@@ -1571,21 +1657,24 @@ exclude_slash_tmp = true
             );
         }
 
-        let sandbox_workspace_write = r#"
+        let sandbox_workspace_write = format!(
+            r#"
 sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
 writable_roots = [
-    "/my/workspace",
+    {},
 ]
 exclude_tmpdir_env_var = true
 exclude_slash_tmp = true
 
 [projects."/tmp/test"]
 trust_level = "trusted"
-"#;
+"#,
+            serde_json::json!(writable_root)
+        );
 
-        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
+        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(&sandbox_workspace_write)
             .expect("TOML deserialization should succeed");
         let sandbox_mode_override = None;
         let resolution = sandbox_workspace_write_cfg.derive_sandbox_policy(
@@ -1606,7 +1695,7 @@ trust_level = "trusted"
                 resolution,
                 SandboxPolicyResolution {
                     policy: SandboxPolicy::WorkspaceWrite {
-                        writable_roots: vec![PathBuf::from("/my/workspace")],
+                        writable_roots: vec![writable_root],
                         network_access: false,
                         exclude_tmpdir_env_var: true,
                         exclude_slash_tmp: true,
@@ -1638,7 +1727,7 @@ trust_level = "trusted"
             temp_dir.path().to_path_buf(),
         )?;
 
-        let expected_backend = canonicalize(&backend).expect("canonicalize backend directory");
+        let expected_backend = AbsolutePathBuf::try_from(backend).unwrap();
         if cfg!(target_os = "windows") {
             assert!(
                 config.forced_auto_mode_downgraded_on_windows,
@@ -1919,10 +2008,11 @@ trust_level = "trusted"
         };
 
         let root_value = load_resolved_config(codex_home.path(), Vec::new(), overrides).await?;
-        let cfg: ConfigToml = root_value.try_into().map_err(|e| {
-            tracing::error!("Failed to deserialize overridden config: {e}");
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-        })?;
+        let cfg =
+            deserialize_config_toml_with_base(root_value, codex_home.path()).map_err(|e| {
+                tracing::error!("Failed to deserialize overridden config: {e}");
+                e
+            })?;
         assert_eq!(
             cfg.mcp_oauth_credentials_store,
             Some(OAuthCredentialsStoreMode::Keyring),
@@ -2039,10 +2129,11 @@ trust_level = "trusted"
         )
         .await?;
 
-        let cfg: ConfigToml = root_value.try_into().map_err(|e| {
-            tracing::error!("Failed to deserialize overridden config: {e}");
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-        })?;
+        let cfg =
+            deserialize_config_toml_with_base(root_value, codex_home.path()).map_err(|e| {
+                tracing::error!("Failed to deserialize overridden config: {e}");
+                e
+            })?;
 
         assert_eq!(cfg.model.as_deref(), Some("managed_config"));
         Ok(())
@@ -2679,7 +2770,7 @@ url = "https://example.com/mcp"
         let codex_home = TempDir::new()?;
 
         ConfigEditsBuilder::new(codex_home.path())
-            .set_model(Some("gpt-5-codex"), Some(ReasoningEffort::High))
+            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::High))
             .apply()
             .await?;
 
@@ -2687,7 +2778,7 @@ url = "https://example.com/mcp"
             tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
         let parsed: ConfigToml = toml::from_str(&serialized)?;
 
-        assert_eq!(parsed.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(parsed.model.as_deref(), Some("gpt-5.1-codex"));
         assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
 
         Ok(())
@@ -2701,7 +2792,7 @@ url = "https://example.com/mcp"
         tokio::fs::write(
             &config_path,
             r#"
-model = "gpt-5-codex"
+model = "gpt-5.1-codex"
 model_reasoning_effort = "medium"
 
 [profiles.dev]
@@ -2737,7 +2828,7 @@ model = "gpt-4.1"
 
         ConfigEditsBuilder::new(codex_home.path())
             .with_profile(Some("dev"))
-            .set_model(Some("gpt-5-codex"), Some(ReasoningEffort::Medium))
+            .set_model(Some("gpt-5.1-codex"), Some(ReasoningEffort::Medium))
             .apply()
             .await?;
 
@@ -2749,7 +2840,7 @@ model = "gpt-4.1"
             .get("dev")
             .expect("profile should be created");
 
-        assert_eq!(profile.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(profile.model.as_deref(), Some("gpt-5.1-codex"));
         assert_eq!(
             profile.model_reasoning_effort,
             Some(ReasoningEffort::Medium)
@@ -2771,7 +2862,7 @@ model = "gpt-4"
 model_reasoning_effort = "medium"
 
 [profiles.prod]
-model = "gpt-5-codex"
+model = "gpt-5.1-codex"
 "#,
         )
         .await?;
@@ -2800,7 +2891,7 @@ model = "gpt-5-codex"
                 .profiles
                 .get("prod")
                 .and_then(|profile| profile.model.as_deref()),
-            Some("gpt-5-codex"),
+            Some("gpt-5.1-codex"),
         );
 
         Ok(())
@@ -2857,7 +2948,9 @@ model = "gpt-5-codex"
         std::fs::write(&prompt_path, "  summarize differently  ")?;
 
         let cfg = ConfigToml {
-            experimental_compact_prompt_file: Some(PathBuf::from("compact_prompt.txt")),
+            experimental_compact_prompt_file: Some(AbsolutePathBuf::from_absolute_path(
+                prompt_path,
+            )?),
             ..Default::default()
         };
 
@@ -2915,7 +3008,7 @@ model_provider = "openai"
 approval_policy = "on-failure"
 
 [profiles.gpt5]
-model = "gpt-5"
+model = "gpt-5.1"
 model_provider = "openai"
 approval_policy = "on-failure"
 model_reasoning_effort = "high"
@@ -3002,15 +3095,13 @@ model_verbosity = "high"
         )?;
         assert_eq!(
             Config {
-                model: "o3".to_string(),
+                model: Some("o3".to_string()),
                 review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-                model_family: find_family_for_model("o3").expect("known model slug"),
-                model_context_window: Some(200_000),
-                model_max_output_tokens: Some(100_000),
-                model_auto_compact_token_limit: Some(180_000),
+                model_context_window: None,
+                model_auto_compact_token_limit: None,
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
-                approval_policy: AskForApproval::Never,
+                approval_policy: Constrained::allow_any(AskForApproval::Never),
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
@@ -3025,6 +3116,7 @@ model_verbosity = "high"
                 model_providers: fixture.model_provider_map.clone(),
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
+                tool_output_token_limit: None,
                 codex_home: fixture.codex_home(),
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
@@ -3033,6 +3125,8 @@ model_verbosity = "high"
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
                 model_reasoning_summary: ReasoningSummary::Detailed,
+                model_supports_reasoning_summaries: None,
+                model_reasoning_summary_format: None,
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
@@ -3042,16 +3136,19 @@ model_verbosity = "high"
                 forced_login_method: None,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
-                experimental_sandbox_command_assessment: false,
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
+                ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
                 windows_wsl_setup_acknowledged: false,
                 notices: Default::default(),
+                check_for_update_on_startup: true,
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                animations: true,
+                show_tooltips: true,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -3074,15 +3171,13 @@ model_verbosity = "high"
             fixture.codex_home(),
         )?;
         let expected_gpt3_profile_config = Config {
-            model: "gpt-3.5-turbo".to_string(),
+            model: Some("gpt-3.5-turbo".to_string()),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
-            model_context_window: Some(16_385),
-            model_max_output_tokens: Some(4_096),
-            model_auto_compact_token_limit: Some(14_746),
+            model_context_window: None,
+            model_auto_compact_token_limit: None,
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
-            approval_policy: AskForApproval::UnlessTrusted,
+            approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
@@ -3097,6 +3192,7 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
+            tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3105,6 +3201,8 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
+            model_supports_reasoning_summaries: None,
+            model_reasoning_summary_format: None,
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
@@ -3114,16 +3212,19 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
-            experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
+            ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
+            check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            animations: true,
+            show_tooltips: true,
             otel: OtelConfig::default(),
         };
 
@@ -3161,15 +3262,13 @@ model_verbosity = "high"
             fixture.codex_home(),
         )?;
         let expected_zdr_profile_config = Config {
-            model: "o3".to_string(),
+            model: Some("o3".to_string()),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("o3").expect("known model slug"),
-            model_context_window: Some(200_000),
-            model_max_output_tokens: Some(100_000),
-            model_auto_compact_token_limit: Some(180_000),
+            model_context_window: None,
+            model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
-            approval_policy: AskForApproval::OnFailure,
+            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
@@ -3184,6 +3283,7 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
+            tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3192,6 +3292,8 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
+            model_supports_reasoning_summaries: None,
+            model_reasoning_summary_format: None,
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
@@ -3201,16 +3303,19 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
-            experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
+            ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
+            check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            animations: true,
+            show_tooltips: true,
             otel: OtelConfig::default(),
         };
 
@@ -3234,15 +3339,13 @@ model_verbosity = "high"
             fixture.codex_home(),
         )?;
         let expected_gpt5_profile_config = Config {
-            model: "gpt-5".to_string(),
+            model: Some("gpt-5.1".to_string()),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-5").expect("known model slug"),
-            model_context_window: Some(272_000),
-            model_max_output_tokens: Some(128_000),
-            model_auto_compact_token_limit: Some(244_800),
+            model_context_window: None,
+            model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
-            approval_policy: AskForApproval::OnFailure,
+            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
@@ -3257,6 +3360,7 @@ model_verbosity = "high"
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
+            tool_output_token_limit: None,
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3265,6 +3369,8 @@ model_verbosity = "high"
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
             model_reasoning_summary: ReasoningSummary::Detailed,
+            model_supports_reasoning_summaries: None,
+            model_reasoning_summary_format: None,
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
@@ -3274,16 +3380,19 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
-            experimental_sandbox_command_assessment: false,
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
+            ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
+            check_for_update_on_startup: true,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            animations: true,
+            show_tooltips: true,
             otel: OtelConfig::default(),
         };
 
@@ -3315,7 +3424,7 @@ model_verbosity = "high"
         let project_dir = Path::new("/some/path");
         let mut doc = DocumentMut::new();
 
-        set_project_trusted_inner(&mut doc, project_dir)?;
+        set_project_trust_level_inner(&mut doc, project_dir, TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 
@@ -3355,7 +3464,7 @@ trust_level = "trusted"
         let mut doc = initial.parse::<DocumentMut>()?;
 
         // Run the function; it should convert to explicit tables and set trusted
-        set_project_trusted_inner(&mut doc, project_dir)?;
+        set_project_trust_level_inner(&mut doc, project_dir, TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 
@@ -3382,7 +3491,7 @@ model = "foo""#;
 
         // Approve a new directory
         let new_project = Path::new("/Users/mbolin/code/codex2");
-        set_project_trusted_inner(&mut doc, new_project)?;
+        set_project_trust_level_inner(&mut doc, new_project, TrustLevel::Trusted)?;
 
         let contents = doc.to_string();
 
@@ -3402,6 +3511,196 @@ trust_level = "trusted"
 trust_level = "trusted"
 "#;
         assert_eq!(contents, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_default_oss_provider() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let codex_home = temp_dir.path();
+        let config_path = codex_home.join(CONFIG_TOML_FILE);
+
+        // Test setting valid provider on empty config
+        set_default_oss_provider(codex_home, OLLAMA_OSS_PROVIDER_ID)?;
+        let content = std::fs::read_to_string(&config_path)?;
+        assert!(content.contains("oss_provider = \"ollama\""));
+
+        // Test updating existing config
+        std::fs::write(&config_path, "model = \"gpt-4\"\n")?;
+        set_default_oss_provider(codex_home, LMSTUDIO_OSS_PROVIDER_ID)?;
+        let content = std::fs::read_to_string(&config_path)?;
+        assert!(content.contains("oss_provider = \"lmstudio\""));
+        assert!(content.contains("model = \"gpt-4\""));
+
+        // Test overwriting existing oss_provider
+        set_default_oss_provider(codex_home, OLLAMA_OSS_PROVIDER_ID)?;
+        let content = std::fs::read_to_string(&config_path)?;
+        assert!(content.contains("oss_provider = \"ollama\""));
+        assert!(!content.contains("oss_provider = \"lmstudio\""));
+
+        // Test invalid provider
+        let result = set_default_oss_provider(codex_home, "invalid_provider");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("Invalid OSS provider"));
+        assert!(error.to_string().contains("invalid_provider"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_untrusted_project_gets_workspace_write_sandbox() -> anyhow::Result<()> {
+        let config_with_untrusted = r#"
+[projects."/tmp/test"]
+trust_level = "untrusted"
+"#;
+
+        let cfg = toml::from_str::<ConfigToml>(config_with_untrusted)
+            .expect("TOML deserialization should succeed");
+
+        let resolution = cfg.derive_sandbox_policy(None, None, &PathBuf::from("/tmp/test"));
+
+        // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
+        if cfg!(target_os = "windows") {
+            assert!(
+                matches!(resolution.policy, SandboxPolicy::ReadOnly),
+                "Expected ReadOnly on Windows, got {:?}",
+                resolution.policy
+            );
+        } else {
+            assert!(
+                matches!(resolution.policy, SandboxPolicy::WorkspaceWrite { .. }),
+                "Expected WorkspaceWrite for untrusted project, got {:?}",
+                resolution.policy
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_oss_provider_explicit_override() {
+        let config_toml = ConfigToml::default();
+        let result = resolve_oss_provider(Some("custom-provider"), &config_toml, None);
+        assert_eq!(result, Some("custom-provider".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_oss_provider_from_profile() {
+        let mut profiles = std::collections::HashMap::new();
+        let profile = ConfigProfile {
+            oss_provider: Some("profile-provider".to_string()),
+            ..Default::default()
+        };
+        profiles.insert("test-profile".to_string(), profile);
+        let config_toml = ConfigToml {
+            profiles,
+            ..Default::default()
+        };
+
+        let result = resolve_oss_provider(None, &config_toml, Some("test-profile".to_string()));
+        assert_eq!(result, Some("profile-provider".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_oss_provider_from_global_config() {
+        let config_toml = ConfigToml {
+            oss_provider: Some("global-provider".to_string()),
+            ..Default::default()
+        };
+
+        let result = resolve_oss_provider(None, &config_toml, None);
+        assert_eq!(result, Some("global-provider".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_oss_provider_profile_fallback_to_global() {
+        let mut profiles = std::collections::HashMap::new();
+        let profile = ConfigProfile::default(); // No oss_provider set
+        profiles.insert("test-profile".to_string(), profile);
+        let config_toml = ConfigToml {
+            oss_provider: Some("global-provider".to_string()),
+            profiles,
+            ..Default::default()
+        };
+
+        let result = resolve_oss_provider(None, &config_toml, Some("test-profile".to_string()));
+        assert_eq!(result, Some("global-provider".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_oss_provider_none_when_not_configured() {
+        let config_toml = ConfigToml::default();
+        let result = resolve_oss_provider(None, &config_toml, None);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_resolve_oss_provider_explicit_overrides_all() {
+        let mut profiles = std::collections::HashMap::new();
+        let profile = ConfigProfile {
+            oss_provider: Some("profile-provider".to_string()),
+            ..Default::default()
+        };
+        profiles.insert("test-profile".to_string(), profile);
+        let config_toml = ConfigToml {
+            oss_provider: Some("global-provider".to_string()),
+            profiles,
+            ..Default::default()
+        };
+
+        let result = resolve_oss_provider(
+            Some("explicit-provider"),
+            &config_toml,
+            Some("test-profile".to_string()),
+        );
+        assert_eq!(result, Some("explicit-provider".to_string()));
+    }
+
+    #[test]
+    fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let test_project_dir = TempDir::new()?;
+        let test_path = test_project_dir.path();
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                projects: Some(HashMap::from([(
+                    test_path.to_string_lossy().to_string(),
+                    ProjectConfig {
+                        trust_level: Some(TrustLevel::Untrusted),
+                    },
+                )])),
+                ..Default::default()
+            },
+            ConfigOverrides {
+                cwd: Some(test_path.to_path_buf()),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        // Verify that untrusted projects get UnlessTrusted approval policy
+        assert_eq!(
+            config.approval_policy.value(),
+            AskForApproval::UnlessTrusted,
+            "Expected UnlessTrusted approval policy for untrusted project"
+        );
+
+        // Verify that untrusted projects still get WorkspaceWrite sandbox (or ReadOnly on Windows)
+        if cfg!(target_os = "windows") {
+            assert!(
+                matches!(config.sandbox_policy, SandboxPolicy::ReadOnly),
+                "Expected ReadOnly on Windows"
+            );
+        } else {
+            assert!(
+                matches!(config.sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }),
+                "Expected WorkspaceWrite sandbox for untrusted project"
+            );
+        }
 
         Ok(())
     }

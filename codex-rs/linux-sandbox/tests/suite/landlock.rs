@@ -3,10 +3,11 @@ use codex_core::config::types::ShellEnvironmentPolicy;
 use codex_core::error::CodexErr;
 use codex_core::error::SandboxErr;
 use codex_core::exec::ExecParams;
-use codex_core::exec::SandboxType;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::exec_env::create_env;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::sandboxing::SandboxPermissions;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -40,15 +41,18 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
     let params = ExecParams {
         command: cmd.iter().copied().map(str::to_owned).collect(),
         cwd,
-        timeout_ms: Some(timeout_ms),
+        expiration: timeout_ms.into(),
         env: create_env_from_core_vars(),
-        with_escalated_permissions: None,
+        sandbox_permissions: SandboxPermissions::UseDefault,
         justification: None,
         arg0: None,
     };
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: writable_roots.to_vec(),
+        writable_roots: writable_roots
+            .iter()
+            .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
+            .collect(),
         network_access: false,
         // Exclude tmp-related folders from writable roots because we need a
         // folder that is writable by tests but that we intentionally disallow
@@ -60,7 +64,6 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
     let res = process_exec_tool_call(
         params,
-        SandboxType::LinuxSeccomp,
         &sandbox_policy,
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,
@@ -143,9 +146,9 @@ async fn assert_network_blocked(cmd: &[&str]) {
         cwd,
         // Give the tool a generous 2-second timeout so even slow DNS timeouts
         // do not stall the suite.
-        timeout_ms: Some(NETWORK_TIMEOUT_MS),
+        expiration: NETWORK_TIMEOUT_MS.into(),
         env: create_env_from_core_vars(),
-        with_escalated_permissions: None,
+        sandbox_permissions: SandboxPermissions::UseDefault,
         justification: None,
         arg0: None,
     };
@@ -155,7 +158,6 @@ async fn assert_network_blocked(cmd: &[&str]) {
     let codex_linux_sandbox_exe: Option<PathBuf> = Some(PathBuf::from(sandbox_program));
     let result = process_exec_tool_call(
         params,
-        SandboxType::LinuxSeccomp,
         &sandbox_policy,
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,

@@ -11,7 +11,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use crate::ConversationId;
-use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
 use crate::items::TurnItem;
@@ -19,10 +19,13 @@ use crate::message_history::HistoryEntry;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::num_format::format_with_separators;
+use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use crate::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::CallToolResult;
+use mcp_types::RequestId;
 use mcp_types::Resource as McpResource;
 use mcp_types::ResourceTemplate as McpResourceTemplate;
 use mcp_types::Tool as McpTool;
@@ -32,12 +35,13 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_with::serde_as;
 use strum_macros::Display;
+use tracing::error;
 use ts_rs::TS;
 
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
+pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
-pub use crate::approvals::SandboxCommandAssessment;
-pub use crate::approvals::SandboxRiskLevel;
+pub use crate::approvals::ExecPolicyAmendment;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -153,6 +157,16 @@ pub enum Op {
         decision: ReviewDecision,
     },
 
+    /// Resolve an MCP elicitation request.
+    ResolveElicitation {
+        /// Name of the MCP server that issued the request.
+        server_name: String,
+        /// Request identifier from the MCP server.
+        request_id: RequestId,
+        /// User's decision for the request.
+        decision: ElicitationAction,
+    },
+
     /// Cache a network approval decision for this session.
     NetworkApprovalCache {
         /// The host that was approved.
@@ -180,6 +194,19 @@ pub enum Op {
     /// Request the list of available custom prompts.
     ListCustomPrompts,
 
+    /// Request the list of skills for the provided `cwd` values or the session default.
+    ListSkills {
+        /// Working directories to scope repo skills discovery.
+        ///
+        /// When empty, the session default working directory is used.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        cwds: Vec<PathBuf>,
+
+        /// When true, recompute skills even if a cached result exists.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        force_reload: bool,
+    },
+
     /// Request the agent to summarize the current conversation context.
     /// The agent will use its existing context (either conversation history or previous response id)
     /// to generate a summary which will be returned as an AgentMessage event.
@@ -203,6 +230,9 @@ pub enum Op {
         /// The raw command string after '!'
         command: String,
     },
+
+    /// Request the list of available models.
+    ListModels,
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -249,7 +279,7 @@ pub enum AskForApproval {
 /// Determines execution restrictions for model shell commands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display, JsonSchema, TS)]
 #[strum(serialize_all = "kebab-case")]
-#[serde(tag = "mode", rename_all = "kebab-case")]
+#[serde(tag = "type", rename_all = "kebab-case")]
 pub enum SandboxPolicy {
     /// No restrictions whatsoever. Use with caution.
     #[serde(rename = "danger-full-access")]
@@ -266,7 +296,7 @@ pub enum SandboxPolicy {
         /// Additional folders (beyond cwd and possibly TMPDIR) that should be
         /// writable from within the sandbox.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        writable_roots: Vec<PathBuf>,
+        writable_roots: Vec<AbsolutePathBuf>,
 
         /// When set to `true`, outbound network access is allowed. `false` by
         /// default.
@@ -288,15 +318,15 @@ pub enum SandboxPolicy {
 
 /// A writable root path accompanied by a list of subpaths that should remain
 /// read‑only even when the root is writable. This is primarily used to ensure
-/// top‑level VCS metadata directories (e.g. `.git`) under a writable root are
-/// not modified by the agent.
+/// that folders containing files that could be modified to escalate the
+/// privileges of the agent (e.g. `.codex`, `.git`, notably `.git/hooks`) under
+/// a writable root are not modified by the agent.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
 pub struct WritableRoot {
-    /// Absolute path, by construction.
-    pub root: PathBuf,
+    pub root: AbsolutePathBuf,
 
-    /// Also absolute paths, by construction.
-    pub read_only_subpaths: Vec<PathBuf>,
+    /// By construction, these subpaths are all under `root`.
+    pub read_only_subpaths: Vec<AbsolutePathBuf>,
 }
 
 impl WritableRoot {
@@ -378,16 +408,30 @@ impl SandboxPolicy {
                 network_access: _,
             } => {
                 // Start from explicitly configured writable roots.
-                let mut roots: Vec<PathBuf> = writable_roots.clone();
+                let mut roots: Vec<AbsolutePathBuf> = writable_roots.clone();
 
                 // Always include defaults: cwd, /tmp (if present on Unix), and
                 // on macOS, the per-user TMPDIR unless explicitly excluded.
-                roots.push(cwd.to_path_buf());
+                // TODO(mbolin): cwd param should be AbsolutePathBuf.
+                let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd);
+                match cwd_absolute {
+                    Ok(cwd) => {
+                        roots.push(cwd);
+                    }
+                    Err(e) => {
+                        error!(
+                            "Ignoring invalid cwd {:?} for sandbox writable root: {}",
+                            cwd, e
+                        );
+                    }
+                }
 
                 // Include /tmp on Unix unless explicitly excluded.
                 if cfg!(unix) && !exclude_slash_tmp {
-                    let slash_tmp = PathBuf::from("/tmp");
-                    if slash_tmp.is_dir() {
+                    #[allow(clippy::expect_used)]
+                    let slash_tmp =
+                        AbsolutePathBuf::from_absolute_path("/tmp").expect("/tmp is absolute");
+                    if slash_tmp.as_path().is_dir() {
                         roots.push(slash_tmp);
                     }
                 }
@@ -404,7 +448,16 @@ impl SandboxPolicy {
                     && let Some(tmpdir) = std::env::var_os("TMPDIR")
                     && !tmpdir.is_empty()
                 {
-                    roots.push(PathBuf::from(tmpdir));
+                    match AbsolutePathBuf::from_absolute_path(PathBuf::from(&tmpdir)) {
+                        Ok(tmpdir_path) => {
+                            roots.push(tmpdir_path);
+                        }
+                        Err(e) => {
+                            error!(
+                                "Ignoring invalid TMPDIR value {tmpdir:?} for sandbox writable root: {e}",
+                            );
+                        }
+                    }
                 }
 
                 // For each root, compute subpaths that should remain read-only.
@@ -412,9 +465,19 @@ impl SandboxPolicy {
                     .into_iter()
                     .map(|writable_root| {
                         let mut subpaths = Vec::new();
-                        let top_level_git = writable_root.join(".git");
-                        if top_level_git.is_dir() {
+                        #[allow(clippy::expect_used)]
+                        let top_level_git = writable_root
+                            .join(".git")
+                            .expect(".git is a valid relative path");
+                        if top_level_git.as_path().is_dir() {
                             subpaths.push(top_level_git);
+                        }
+                        #[allow(clippy::expect_used)]
+                        let top_level_codex = writable_root
+                            .join(".codex")
+                            .expect(".codex is a valid relative path");
+                        if top_level_codex.as_path().is_dir() {
+                            subpaths.push(top_level_codex);
                         }
                         WritableRoot {
                             root: writable_root,
@@ -440,6 +503,7 @@ pub struct Event {
 /// NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.
 #[derive(Debug, Clone, Deserialize, Serialize, Display, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type")]
 #[strum(serialize_all = "snake_case")]
 pub enum EventMsg {
     /// Error while executing a submission
@@ -448,6 +512,9 @@ pub enum EventMsg {
     /// Warning issued while processing a submission. Unlike `Error`, this
     /// indicates the task continued but the user should still be notified.
     Warning(WarningEvent),
+
+    /// Conversation history was compacted (either automatically or manually).
+    ContextCompacted(ContextCompactedEvent),
 
     /// Agent has started a task
     TaskStarted(TaskStartedEvent),
@@ -485,6 +552,12 @@ pub enum EventMsg {
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
 
+    /// Incremental MCP startup progress updates.
+    McpStartupUpdate(McpStartupUpdateEvent),
+
+    /// Aggregate MCP startup completion summary.
+    McpStartupComplete(McpStartupCompleteEvent),
+
     McpToolCallBegin(McpToolCallBeginEvent),
 
     McpToolCallEnd(McpToolCallEndEvent),
@@ -499,12 +572,17 @@ pub enum EventMsg {
     /// Incremental chunk of output from a running command.
     ExecCommandOutputDelta(ExecCommandOutputDeltaEvent),
 
+    /// Terminal interaction for an in-progress command (stdin sent and stdout observed).
+    TerminalInteraction(TerminalInteractionEvent),
+
     ExecCommandEnd(ExecCommandEndEvent),
 
     /// Notification that the agent attached a local image via the view_image tool.
     ViewImageToolCall(ViewImageToolCallEvent),
 
     ExecApprovalRequest(ExecApprovalRequestEvent),
+
+    ElicitationRequest(ElicitationRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 
@@ -540,6 +618,12 @@ pub enum EventMsg {
     /// List of custom prompts available to the agent.
     ListCustomPromptsResponse(ListCustomPromptsResponseEvent),
 
+    /// List of skills available to the agent.
+    ListSkillsResponse(ListSkillsResponseEvent),
+
+    /// Notification that skill data may have been updated and clients may want to reload.
+    SkillsUpdateAvailable,
+
     PlanUpdate(UpdatePlanArgs),
 
     TurnAborted(TurnAbortedEvent),
@@ -561,6 +645,35 @@ pub enum EventMsg {
     AgentMessageContentDelta(AgentMessageContentDeltaEvent),
     ReasoningContentDelta(ReasoningContentDeltaEvent),
     ReasoningRawContentDelta(ReasoningRawContentDeltaEvent),
+}
+
+/// Codex errors that we expose to clients.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum CodexErrorInfo {
+    ContextWindowExceeded,
+    UsageLimitExceeded,
+    HttpConnectionFailed {
+        http_status_code: Option<u16>,
+    },
+    /// Failed to connect to the response SSE stream.
+    ResponseStreamConnectionFailed {
+        http_status_code: Option<u16>,
+    },
+    InternalServerError,
+    Unauthorized,
+    BadRequest,
+    SandboxError,
+    /// The response SSE stream disconnected in the middle of a turnbefore completion.
+    ResponseStreamDisconnected {
+        http_status_code: Option<u16>,
+    },
+    /// Reached the retry limit for responses.
+    ResponseTooManyFailedAttempts {
+        http_status_code: Option<u16>,
+    },
+    Other,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -625,6 +738,9 @@ pub struct ReasoningContentDeltaEvent {
     pub turn_id: String,
     pub item_id: String,
     pub delta: String,
+    // load with default value so it's backward compatible with the old format.
+    #[serde(default)]
+    pub summary_index: i64,
 }
 
 impl HasLegacyEvent for ReasoningContentDeltaEvent {
@@ -641,6 +757,9 @@ pub struct ReasoningRawContentDeltaEvent {
     pub turn_id: String,
     pub item_id: String,
     pub delta: String,
+    // load with default value so it's backward compatible with the old format.
+    #[serde(default)]
+    pub content_index: i64,
 }
 
 impl HasLegacyEvent for ReasoningRawContentDeltaEvent {
@@ -681,12 +800,17 @@ pub struct ExitedReviewModeEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ErrorEvent {
     pub message: String,
+    #[serde(default)]
+    pub codex_error_info: Option<CodexErrorInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct WarningEvent {
     pub message: String,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ContextCompactedEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TaskCompleteEvent {
@@ -785,6 +909,8 @@ pub struct TokenCountEvent {
 pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
+    pub credits: Option<CreditsSnapshot>,
+    pub plan_type: Option<crate::account::PlanType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
@@ -797,6 +923,13 @@ pub struct RateLimitWindow {
     /// Unix timestamp (seconds since epoch) when the window resets.
     #[ts(type = "number | null")]
     pub resets_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct CreditsSnapshot {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    pub balance: Option<String>,
 }
 
 // Includes prompts, tools and space to call compact.
@@ -931,7 +1064,13 @@ pub struct AgentReasoningRawContentDeltaEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AgentReasoningSectionBreakEvent {}
+pub struct AgentReasoningSectionBreakEvent {
+    // load with default value so it's backward compatible with the old format.
+    #[serde(default)]
+    pub item_id: String,
+    #[serde(default)]
+    pub summary_index: i64,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentReasoningDeltaEvent {
@@ -1066,6 +1205,29 @@ pub enum SubAgentSource {
     Other(String),
 }
 
+impl fmt::Display for SessionSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SessionSource::Cli => f.write_str("cli"),
+            SessionSource::VSCode => f.write_str("vscode"),
+            SessionSource::Exec => f.write_str("exec"),
+            SessionSource::Mcp => f.write_str("mcp"),
+            SessionSource::SubAgent(sub_source) => write!(f, "subagent_{sub_source}"),
+            SessionSource::Unknown => f.write_str("unknown"),
+        }
+    }
+}
+
+impl fmt::Display for SubAgentSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SubAgentSource::Review => f.write_str("review"),
+            SubAgentSource::Compact => f.write_str("compact"),
+            SubAgentSource::Other(other) => f.write_str(other),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
     pub id: ConversationId,
@@ -1115,6 +1277,8 @@ pub enum RolloutItem {
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct CompactedItem {
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_history: Option<Vec<ResponseItem>>,
 }
 
 impl From<CompactedItem> for ResponseItem {
@@ -1160,11 +1324,47 @@ pub struct GitInfo {
     pub repository_url: Option<String>,
 }
 
-/// Review request sent to the review session.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDelivery {
+    Inline,
+    Detached,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+pub enum ReviewTarget {
+    /// Review the working tree: staged, unstaged, and untracked files.
+    UncommittedChanges,
+
+    /// Review changes between the current branch and the given base branch.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    BaseBranch { branch: String },
+
+    /// Review the changes introduced by a specific commit.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Commit {
+        sha: String,
+        /// Optional human-readable label (e.g., commit subject) for UIs.
+        title: Option<String>,
+    },
+
+    /// Arbitrary instructions provided by the user.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Custom { instructions: String },
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+/// Review request sent to the review session.
 pub struct ReviewRequest {
-    pub prompt: String,
-    pub user_facing_hint: String,
+    pub target: ReviewTarget,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_facing_hint: Option<String>,
 }
 
 /// Structured review result produced by a child review session.
@@ -1211,25 +1411,68 @@ pub struct ReviewLineRange {
     pub end: u32,
 }
 
+#[derive(Debug, Clone, Copy, Display, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecCommandSource {
+    Agent,
+    UserShell,
+    UnifiedExecStartup,
+    UnifiedExecInteraction,
+}
+
+impl Default for ExecCommandSource {
+    fn default() -> Self {
+        Self::Agent
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
     pub call_id: String,
+    /// Identifier for the underlying PTY process (when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub process_id: Option<String>,
+    /// Turn ID that this command belongs to.
+    pub turn_id: String,
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
     pub cwd: PathBuf,
     pub parsed_cmd: Vec<ParsedCommand>,
-    /// True when this exec was initiated directly by the user (e.g. bang command),
-    /// not by the agent/model. Defaults to false for backwards compatibility.
+    /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
-    pub is_user_shell_command: bool,
+    pub source: ExecCommandSource,
+    /// Raw input sent to a unified exec session (if this is an interaction event).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub interaction_input: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecCommandEndEvent {
     /// Identifier for the ExecCommandBegin that finished.
     pub call_id: String,
+    /// Identifier for the underlying PTY process (when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub process_id: Option<String>,
+    /// Turn ID that this command belongs to.
+    pub turn_id: String,
+    /// The command that was executed.
+    pub command: Vec<String>,
+    /// The command's working directory if not the default cwd for the agent.
+    pub cwd: PathBuf,
+    pub parsed_cmd: Vec<ParsedCommand>,
+    /// Where the command originated. Defaults to Agent for backward compatibility.
+    #[serde(default)]
+    pub source: ExecCommandSource,
+    /// Raw input sent to a unified exec session (if this is an interaction event).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub interaction_input: Option<String>,
+
     /// Captured stdout
     pub stdout: String,
     /// Captured stderr
@@ -1275,6 +1518,17 @@ pub struct ExecCommandOutputDeltaEvent {
     pub chunk: Vec<u8>,
 }
 
+#[serde_as]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct TerminalInteractionEvent {
+    /// Identifier for the ExecCommandBegin that produced this chunk.
+    pub call_id: String,
+    /// Process id associated with the running command.
+    pub process_id: String,
+    /// Stdin sent to the running session.
+    pub stdin: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct BackgroundEventEvent {
     pub message: String,
@@ -1305,6 +1559,8 @@ pub struct UndoCompletedEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct StreamErrorEvent {
     pub message: String,
+    #[serde(default)]
+    pub codex_error_info: Option<CodexErrorInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1316,6 +1572,10 @@ pub struct StreamInfoEvent {
 pub struct PatchApplyBeginEvent {
     /// Identifier so this can be paired with the PatchApplyEnd event.
     pub call_id: String,
+    /// Turn ID that this patch belongs to.
+    /// Uses `#[serde(default)]` for backwards compatibility.
+    #[serde(default)]
+    pub turn_id: String,
     /// If true, there was no ApplyPatchApprovalRequest for this patch.
     pub auto_approved: bool,
     /// The changes to be applied.
@@ -1326,12 +1586,19 @@ pub struct PatchApplyBeginEvent {
 pub struct PatchApplyEndEvent {
     /// Identifier for the PatchApplyBegin that finished.
     pub call_id: String,
+    /// Turn ID that this patch belongs to.
+    /// Uses `#[serde(default)]` for backwards compatibility.
+    #[serde(default)]
+    pub turn_id: String,
     /// Captured stdout (summary printed by apply_patch).
     pub stdout: String,
     /// Captured stderr (parser errors, IO failures, etc.).
     pub stderr: String,
     /// Whether the patch was applied successfully.
     pub success: bool,
+    /// The changes that were applied (mirrors PatchApplyBeginEvent::changes).
+    #[serde(default)]
+    pub changes: HashMap<PathBuf, FileChange>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1358,6 +1625,37 @@ pub struct McpListToolsResponseEvent {
     pub resource_templates: std::collections::HashMap<String, Vec<McpResourceTemplate>>,
     /// Authentication status for each configured MCP server.
     pub auth_statuses: std::collections::HashMap<String, McpAuthStatus>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct McpStartupUpdateEvent {
+    /// Server name being started.
+    pub server: String,
+    /// Current startup status.
+    pub status: McpStartupStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case", tag = "state")]
+#[ts(rename_all = "snake_case", tag = "state")]
+pub enum McpStartupStatus {
+    Starting,
+    Ready,
+    Failed { error: String },
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, Default)]
+pub struct McpStartupCompleteEvent {
+    pub ready: Vec<String>,
+    pub failed: Vec<McpStartupFailure>,
+    pub cancelled: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct McpStartupFailure {
+    pub server: String,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -1388,13 +1686,61 @@ pub struct ListCustomPromptsResponseEvent {
     pub custom_prompts: Vec<CustomPrompt>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize, JsonSchema, TS)]
+/// Response payload for `Op::ListSkills`.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ListSkillsResponseEvent {
+    pub skills: Vec<SkillsListEntry>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SkillScope {
+    User,
+    Repo,
+    Public,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SkillMetadata {
+    pub name: String,
+    pub description: String,
+    pub path: PathBuf,
+    pub scope: SkillScope,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SkillErrorInfo {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SkillsListEntry {
+    pub cwd: PathBuf,
+    pub skills: Vec<SkillMetadata>,
+    pub errors: Vec<SkillErrorInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
     /// Name left as session_id instead of conversation_id for backwards compatibility.
     pub session_id: ConversationId,
 
     /// Tell the client what model is being queried.
     pub model: String,
+
+    pub model_provider_id: String,
+
+    /// When to escalate for approval for execution
+    pub approval_policy: AskForApproval,
+
+    /// How to sandbox commands executed in the system
+    pub sandbox_policy: SandboxPolicy,
+
+    /// Working directory that should be treated as the *root* of the
+    /// session.
+    pub cwd: PathBuf,
 
     /// The effort the model is putting into reasoning about the user's request.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1415,13 +1761,17 @@ pub struct SessionConfiguredEvent {
 }
 
 /// User's decision in response to an ExecApprovalRequest.
-#[derive(
-    Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Display, JsonSchema, TS,
-)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewDecision {
     /// User has approved this command and the agent should execute it.
     Approved,
+
+    /// User has approved this command and wants to apply the proposed execpolicy
+    /// amendment so future matching commands are permitted.
+    ApprovedExecpolicyAmendment {
+        proposed_execpolicy_amendment: ExecPolicyAmendment,
+    },
 
     /// User has approved this command and wants to automatically approve any
     /// future identical instances (`command` and `cwd` match exactly) for the
@@ -1439,7 +1789,8 @@ pub enum ReviewDecision {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type")]
 pub enum FileChange {
     Add {
         content: String,
@@ -1480,6 +1831,7 @@ mod tests {
     use crate::items::UserMessageItem;
     use crate::items::WebSearchItem;
     use anyhow::Result;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::NamedTempFile;
 
@@ -1524,6 +1876,10 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: "codex-mini-latest".to_string(),
+                model_provider_id: "openai".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -1538,6 +1894,12 @@ mod tests {
                 "type": "session_configured",
                 "session_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
                 "model": "codex-mini-latest",
+                "model_provider_id": "openai",
+                "approval_policy": "never",
+                "sandbox_policy": {
+                    "type": "read-only"
+                },
+                "cwd": "/home/user/project",
                 "reasoning_effort": "medium",
                 "history_log_id": 0,
                 "history_entry_count": 0,
@@ -1563,6 +1925,49 @@ mod tests {
 
         let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized)?;
         assert_eq!(deserialized, event);
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_mcp_startup_update_event() -> Result<()> {
+        let event = Event {
+            id: "init".to_string(),
+            msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+                server: "srv".to_string(),
+                status: McpStartupStatus::Failed {
+                    error: "boom".to_string(),
+                },
+            }),
+        };
+
+        let value = serde_json::to_value(&event)?;
+        assert_eq!(value["msg"]["type"], "mcp_startup_update");
+        assert_eq!(value["msg"]["server"], "srv");
+        assert_eq!(value["msg"]["status"]["state"], "failed");
+        assert_eq!(value["msg"]["status"]["error"], "boom");
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_mcp_startup_complete_event() -> Result<()> {
+        let event = Event {
+            id: "init".to_string(),
+            msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent {
+                ready: vec!["a".to_string()],
+                failed: vec![McpStartupFailure {
+                    server: "b".to_string(),
+                    error: "bad".to_string(),
+                }],
+                cancelled: vec!["c".to_string()],
+            }),
+        };
+
+        let value = serde_json::to_value(&event)?;
+        assert_eq!(value["msg"]["type"], "mcp_startup_complete");
+        assert_eq!(value["msg"]["ready"][0], "a");
+        assert_eq!(value["msg"]["failed"][0]["server"], "b");
+        assert_eq!(value["msg"]["failed"][0]["error"], "bad");
+        assert_eq!(value["msg"]["cancelled"][0], "c");
         Ok(())
     }
 }
