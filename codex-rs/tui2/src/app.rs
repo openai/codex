@@ -19,6 +19,9 @@ use crate::render::renderable::Renderable;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
+use crate::tui::scrolling::MouseScrollState;
+use crate::tui::scrolling::ScrollDirection;
+use crate::tui::scrolling::ScrollTuning;
 use crate::tui::scrolling::TranscriptLineMeta;
 use crate::tui::scrolling::TranscriptScroll;
 use crate::update_action::UpdateAction;
@@ -42,6 +45,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
+use codex_core::terminal::terminal_info;
 use codex_protocol::ConversationId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -336,6 +340,9 @@ pub(crate) struct App {
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
 
+    scroll_tuning: ScrollTuning,
+    scroll_state: MouseScrollState,
+
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
     pub(crate) feedback: codex_feedback::CodexFeedback,
@@ -371,6 +378,7 @@ struct TranscriptSelectionPoint {
     line_index: usize,
     column: u16,
 }
+
 impl App {
     async fn shutdown_current_conversation(&mut self) {
         if let Some(conversation_id) = self.chat_widget.conversation_id() {
@@ -478,6 +486,7 @@ impl App {
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
+        let scroll_tuning = ScrollTuning::for_terminal(&terminal_info());
 
         let mut app = Self {
             server: conversation_manager.clone(),
@@ -498,6 +507,8 @@ impl App {
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            scroll_tuning,
+            scroll_state: MouseScrollState::default(),
             backtrack: BacktrackState::default(),
             feedback: feedback.clone(),
             pending_update_action: None,
@@ -810,7 +821,8 @@ impl App {
 
     /// Handle mouse interaction in the main transcript view.
     ///
-    /// - Mouse wheel movement scrolls the conversation history by small, fixed increments,
+    /// - Mouse wheel movement scrolls the conversation history by small increments tuned
+    ///   by terminal-specific timing heuristics,
     ///   independent of the terminal's own scrollback.
     /// - Mouse clicks and drags adjust a text selection defined in terms of
     ///   flattened transcript lines and columns, so the selection is anchored
@@ -875,20 +887,26 @@ impl App {
 
         match mouse_event.kind {
             MouseEventKind::ScrollUp => {
-                self.scroll_transcript(
-                    tui,
-                    -3,
-                    transcript_area.height as usize,
-                    transcript_area.width,
-                );
+                let delta_lines = self.mouse_scroll_delta(ScrollDirection::Up);
+                if delta_lines != 0 {
+                    self.scroll_transcript(
+                        tui,
+                        delta_lines,
+                        transcript_area.height as usize,
+                        transcript_area.width,
+                    );
+                }
             }
             MouseEventKind::ScrollDown => {
-                self.scroll_transcript(
-                    tui,
-                    3,
-                    transcript_area.height as usize,
-                    transcript_area.width,
-                );
+                let delta_lines = self.mouse_scroll_delta(ScrollDirection::Down);
+                if delta_lines != 0 {
+                    self.scroll_transcript(
+                        tui,
+                        delta_lines,
+                        transcript_area.height as usize,
+                        transcript_area.width,
+                    );
+                }
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(point) = self.transcript_point_from_coordinates(
@@ -931,7 +949,11 @@ impl App {
         }
     }
 
-    /// Scroll the transcript by a fixed number of visual lines.
+    fn mouse_scroll_delta(&mut self, direction: ScrollDirection) -> i32 {
+        self.scroll_state.delta_lines(direction, self.scroll_tuning)
+    }
+
+    /// Scroll the transcript by a number of visual lines.
     ///
     /// This is the shared implementation behind mouse wheel movement and PgUp/PgDn keys in
     /// the main view. Scroll state is expressed in terms of transcript cells and their
@@ -2177,6 +2199,8 @@ mod tests {
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            scroll_tuning: ScrollTuning::default(),
+            scroll_state: MouseScrollState::default(),
             backtrack: BacktrackState::default(),
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
@@ -2221,6 +2245,8 @@ mod tests {
                 has_emitted_history_lines: false,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
+                scroll_tuning: ScrollTuning::default(),
+                scroll_state: MouseScrollState::default(),
                 backtrack: BacktrackState::default(),
                 feedback: codex_feedback::CodexFeedback::new(),
                 pending_update_action: None,
