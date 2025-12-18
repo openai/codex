@@ -150,8 +150,25 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_pre_build_hook(|home| {
+        let system_skill_path = home.join("skills/.system/plan/SKILL.md");
+        assert!(
+            !system_skill_path.exists(),
+            "expected embedded system skills not yet installed, but {system_skill_path:?} exists"
+        );
+    });
     let test = builder.build(&server).await?;
+
+    let system_skill_path = test.codex_home_path().join("skills/.system/plan/SKILL.md");
+    assert!(
+        system_skill_path.exists(),
+        "expected embedded system skills installed to {system_skill_path:?}"
+    );
+    let system_skill_contents = fs::read_to_string(&system_skill_path)?;
+    assert!(
+        system_skill_contents.contains("name: plan"),
+        "expected embedded system skill file, got:\n{system_skill_contents}"
+    );
 
     test.codex
         .submit(Op::ListSkills {
@@ -176,12 +193,12 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
 
     let skill = skills
         .iter()
-        .find(|skill| skill.name == "example")
+        .find(|skill| skill.name == "plan")
         .expect("expected system skill to be present");
     assert_eq!(skill.scope, codex_protocol::protocol::SkillScope::System);
     let path_str = skill.path.to_string_lossy().replace('\\', "/");
     assert!(
-        path_str.ends_with("/skills/.system/example/SKILL.md"),
+        path_str.ends_with("/skills/.system/plan/SKILL.md"),
         "unexpected skill path: {path_str}"
     );
 

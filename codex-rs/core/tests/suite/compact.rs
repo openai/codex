@@ -589,7 +589,36 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         .body_json::<serde_json::Value>()
         .unwrap();
     let input = body.get("input").and_then(|v| v.as_array()).unwrap();
-    let environment_message = input[0]["content"][0]["text"].as_str().unwrap();
+
+    fn normalize_inputs(values: &[serde_json::Value]) -> Vec<serde_json::Value> {
+        values
+            .iter()
+            .filter(|value| {
+                if value
+                    .get("type")
+                    .and_then(|ty| ty.as_str())
+                    .is_some_and(|ty| ty == "function_call_output")
+                {
+                    return false;
+                }
+
+                let text = value
+                    .get("content")
+                    .and_then(|content| content.as_array())
+                    .and_then(|content| content.first())
+                    .and_then(|item| item.get("text"))
+                    .and_then(|text| text.as_str());
+
+                // Ignore the cached UI prefix (project docs + skills) since it is not relevant to
+                // compaction behavior and can change as bundled skills evolve.
+                !text.is_some_and(|text| text.starts_with("# AGENTS.md instructions for "))
+            })
+            .cloned()
+            .collect()
+    }
+
+    let initial_input = normalize_inputs(input);
+    let environment_message = initial_input[0]["content"][0]["text"].as_str().unwrap();
 
     // test 1: after compaction, we should have one environment message, one user message, and one user message with summary prefix
     let compaction_indices = [2, 4, 6];
@@ -603,6 +632,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
             .body_json::<serde_json::Value>()
             .unwrap();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
+        let input = normalize_inputs(input);
         assert_eq!(input.len(), 3);
         let environment_message = input[0]["content"][0]["text"].as_str().unwrap();
         let user_message_received = input[1]["content"][0]["text"].as_str().unwrap();
@@ -961,20 +991,6 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
       }
     ]
     ]);
-
-    // ignore local shell calls output because it differs from OS to another and it's out of the scope of this test.
-    fn normalize_inputs(values: &[serde_json::Value]) -> Vec<serde_json::Value> {
-        values
-            .iter()
-            .filter(|value| {
-                value
-                    .get("type")
-                    .and_then(|ty| ty.as_str())
-                    .is_none_or(|ty| ty != "function_call_output")
-            })
-            .cloned()
-            .collect()
-    }
 
     for (i, request) in requests_payloads.iter().enumerate() {
         let body = request.body_json::<serde_json::Value>().unwrap();

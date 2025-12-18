@@ -50,25 +50,25 @@ Create and manage plan documents on disk. Plans stored on disk are markdown file
 
 ## Scripts (low-freedom helpers)
 
-Create a plan file (body only; frontmatter is written for you):
+Create a plan file (body only; frontmatter is written for you). Run from the plan skill directory:
 
 ```bash
-python codex/skills/plan/scripts/create_plan.py \
+python ./scripts/create_plan.py \
   --name codex-rate-limit-overview \
   --description "Scope and update plan for Codex rate limiting" \
   --body-file /tmp/plan-body.md
 ```
 
-Read frontmatter summary for a plan:
+Read frontmatter summary for a plan (run from the plan skill directory):
 
 ```bash
-python codex/skills/plan/scripts/read_plan_frontmatter.py ~/.codex/plans/codex-rate-limit-overview.md
+python ./scripts/read_plan_frontmatter.py ~/.codex/plans/codex-rate-limit-overview.md
 ```
 
-List plan summaries (optional filter):
+List plan summaries (optional filter; run from the plan skill directory):
 
 ```bash
-python codex/skills/plan/scripts/list_plans.py --query "rate limit"
+python ./scripts/list_plans.py --query "rate limit"
 ```
 
 ## Plan file format
