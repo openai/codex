@@ -177,9 +177,9 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             is_default: false,
         },
         Model {
-            id: "caribou".to_string(),
-            model: "caribou".to_string(),
-            display_name: "caribou".to_string(),
+            id: "gpt-5.2-codex".to_string(),
+            model: "gpt-5.2-codex".to_string(),
+            display_name: "gpt-5.2-codex".to_string(),
             description: "Latest Codex-optimized flagship for deep and fast reasoning.".to_string(),
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
@@ -347,7 +347,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(sixth_response)?;
 
     assert_eq!(sixth_items.len(), 1);
-    assert_eq!(sixth_items[0].id, "caribou");
+    assert_eq!(sixth_items[0].id, "gpt-5.2-codex");
     assert!(sixth_cursor.is_none());
     Ok(())
 }

@@ -55,7 +55,7 @@ fn expected_models_for_chatgpt() -> Vec<ModelPreset> {
     let mut gpt_5_1_codex_max = gpt_5_1_codex_max();
     gpt_5_1_codex_max.is_default = false;
     vec![
-        caribou(),
+        gpt_52_codex(),
         gpt_5_1_codex_max,
         gpt_5_1_codex(),
         gpt_5_1_codex_mini(),
@@ -64,11 +64,11 @@ fn expected_models_for_chatgpt() -> Vec<ModelPreset> {
     ]
 }
 
-fn caribou() -> ModelPreset {
+fn gpt_52_codex() -> ModelPreset {
     ModelPreset {
-        id: "caribou".to_string(),
-        model: "caribou".to_string(),
-        display_name: "caribou".to_string(),
+        id: "gpt-5.2-codex".to_string(),
+        model: "gpt-5.2-codex".to_string(),
+        display_name: "gpt-5.2-codex".to_string(),
         description: "Latest Codex-optimized flagship for deep and fast reasoning.".to_string(),
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: vec![
@@ -122,7 +122,7 @@ fn gpt_5_1_codex_max() -> ModelPreset {
             ),
         ],
         is_default: true,
-        upgrade: Some(caribou_upgrade()),
+        upgrade: Some(gpt52_codex_upgrade()),
         show_in_picker: true,
         supported_in_api: true,
     }
@@ -150,7 +150,7 @@ fn gpt_5_1_codex() -> ModelPreset {
             ),
         ],
         is_default: false,
-        upgrade: Some(caribou_upgrade()),
+        upgrade: Some(gpt52_codex_upgrade()),
         show_in_picker: true,
         supported_in_api: true,
     }
@@ -174,7 +174,7 @@ fn gpt_5_1_codex_mini() -> ModelPreset {
             ),
         ],
         is_default: false,
-        upgrade: Some(caribou_upgrade()),
+        upgrade: Some(gpt52_codex_upgrade()),
         show_in_picker: true,
         supported_in_api: true,
     }
@@ -208,7 +208,7 @@ fn gpt_5_2() -> ModelPreset {
             ),
         ],
         is_default: false,
-        upgrade: Some(caribou_upgrade()),
+        upgrade: Some(gpt52_codex_upgrade()),
         show_in_picker: true,
         supported_in_api: true,
     }
@@ -236,18 +236,18 @@ fn gpt_5_1() -> ModelPreset {
             ),
         ],
         is_default: false,
-        upgrade: Some(caribou_upgrade()),
+        upgrade: Some(gpt52_codex_upgrade()),
         show_in_picker: true,
         supported_in_api: true,
     }
 }
 
-fn caribou_upgrade() -> codex_protocol::openai_models::ModelUpgrade {
+fn gpt52_codex_upgrade() -> codex_protocol::openai_models::ModelUpgrade {
     codex_protocol::openai_models::ModelUpgrade {
-        id: "caribou".to_string(),
+        id: "gpt-5.2-codex".to_string(),
         reasoning_effort_mapping: None,
-        migration_config_key: "caribou".to_string(),
-        model_link: Some("https://www.codex.com/models/caribou".to_string()),
+        migration_config_key: "gpt-5.2-codex".to_string(),
+        model_link: Some("https://openai.com/index/introducing-gpt-5-2-codex".to_string()),
     }
 }
 

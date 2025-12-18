@@ -58,6 +58,7 @@ pub enum ResponseEvent {
     ReasoningSummaryPartAdded {
         summary_index: i64,
     },
+    ModelsEtag(String),
     RateLimits(RateLimitSnapshot),
 }
 

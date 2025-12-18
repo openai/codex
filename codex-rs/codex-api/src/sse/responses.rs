@@ -24,6 +24,8 @@ use tokio_util::io::ReaderStream;
 use tracing::debug;
 use tracing::trace;
 
+const MODELS_ETAG_HEADER: &str = "x-models-etag";
+
 /// Streams SSE events from an on-disk fixture for tests.
 pub fn stream_from_fixture(
     path: impl AsRef<Path>,
@@ -50,9 +52,19 @@ pub fn spawn_response_stream(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
 ) -> ResponseStream {
+    let models_etag = stream_response
+        .headers
+        .get(MODELS_ETAG_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|etag| !etag.is_empty())
+        .map(str::to_string);
     let rate_limits = parse_rate_limit(&stream_response.headers);
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(async move {
+        if let Some(etag) = models_etag {
+            let _ = tx_event.send(Ok(ResponseEvent::ModelsEtag(etag))).await;
+        }
         if let Some(snapshot) = rate_limits {
             let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
         }

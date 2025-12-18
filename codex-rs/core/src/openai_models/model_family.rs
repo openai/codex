@@ -294,7 +294,7 @@ pub(super) fn find_family_for_model(slug: &str) -> ModelFamily {
         )
 
     // Production models.
-    } else if slug.starts_with("caribou") {
+    } else if slug.starts_with("gpt-5.2-codex") {
         // Same as gpt-5.1-codex-max.
         model_family!(
             slug, slug,
