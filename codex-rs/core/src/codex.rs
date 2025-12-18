@@ -897,7 +897,7 @@ impl Session {
 
     async fn new_turn_from_configuration(
         &self,
-        agent_id: &str,
+        agent_id: &AgentId,
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
@@ -936,7 +936,7 @@ impl Session {
             per_turn_config,
             model_family,
             self.conversation_id,
-            agent_id.to_string(),
+            agent_id.clone(),
             sub_id,
         );
         if let Some(final_schema) = final_output_json_schema {
@@ -1760,7 +1760,7 @@ mod handlers {
 
     pub async fn override_turn_context(
         sess: &Session,
-        agent_id: &str,
+        agent_id: &AgentId,
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) {
@@ -1778,7 +1778,7 @@ mod handlers {
 
     pub async fn user_input_or_turn(
         sess: &Arc<Session>,
-        agent_id: &str,
+        agent_id: &AgentId,
         sub_id: String,
         op: Op,
         previous_context: &mut Option<Arc<TurnContext>>,
@@ -1835,7 +1835,7 @@ mod handlers {
 
     pub async fn run_user_shell_command(
         sess: &Arc<Session>,
-        agent_id: &str,
+        agent_id: &AgentId,
         sub_id: String,
         command: String,
         previous_context: &mut Option<Arc<TurnContext>>,
@@ -1914,7 +1914,7 @@ mod handlers {
 
     pub async fn add_to_history(
         sess: &Arc<Session>,
-        agent_id: &str,
+        agent_id: &AgentId,
         config: &Arc<Config>,
         text: String,
     ) {
@@ -1929,7 +1929,7 @@ mod handlers {
 
     pub async fn get_history_entry_request(
         sess: &Arc<Session>,
-        agent_id: &str,
+        agent_id: &AgentId,
         config: &Arc<Config>,
         sub_id: String,
         offset: usize,
@@ -1967,7 +1967,7 @@ mod handlers {
 
     pub async fn list_mcp_tools(
         sess: &Session,
-        agent_id: &str,
+        agent_id: &AgentId,
         config: &Arc<Config>,
         sub_id: String,
     ) {
@@ -2007,7 +2007,7 @@ mod handlers {
 
     pub async fn list_skills(
         sess: &Session,
-        agent_id: &str,
+        agent_id: &AgentId,
         sub_id: String,
         cwds: Vec<PathBuf>,
         force_reload: bool,
@@ -2105,7 +2105,7 @@ mod handlers {
 
     pub async fn review(
         sess: &Arc<Session>,
-        agent_id: &str,
+        agent_id: &AgentId,
         config: &Arc<Config>,
         sub_id: String,
         review_request: ReviewRequest,
