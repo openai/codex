@@ -893,7 +893,19 @@ impl ChatWidget {
                 self.request_redraw();
                 return;
             }
-            self.flush_active_cell();
+            let has_non_wait_active = matches!(
+                self.active_cell.as_ref(),
+                Some(active)
+                    if active
+                        .as_any()
+                        .downcast_ref::<history_cell::UnifiedExecWaitCell>()
+                        .is_none()
+            );
+            if has_non_wait_active {
+                // Do not preempt non-wait active cells with a wait entry.
+                return;
+            }
+            self.flush_wait_cell();
             self.active_cell = Some(Box::new(history_cell::new_unified_exec_wait_live(
                 command_display,
                 self.config.animations,
