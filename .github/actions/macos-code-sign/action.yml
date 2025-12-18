@@ -4,6 +4,17 @@ inputs:
   target:
     description: Rust compilation target triple (e.g. aarch64-apple-darwin).
     required: true
+  sign-binaries:
+    description: Whether to sign and notarize the macOS binaries.
+    required: false
+    default: "true"
+  sign-dmg:
+    description: Whether to sign and notarize the macOS DMG.
+    required: false
+    default: "true"
+  dmg-path:
+    description: Path to the DMG to sign and notarize (defaults to codex-rs/target/<target>/release/codex-<target>.dmg).
+    required: false
   apple-certificate:
     description: Base64-encoded Apple signing certificate (P12).
     required: true
@@ -107,6 +118,7 @@ runs:
         echo "::add-mask::$APPLE_CODESIGN_IDENTITY"
 
     - name: Sign macOS binaries
+      if: ${{ inputs.sign-binaries == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
@@ -127,6 +139,7 @@ runs:
         done
 
     - name: Notarize macOS binaries
+      if: ${{ inputs.sign-binaries == 'true' }}
       shell: bash
       env:
         APPLE_NOTARIZATION_KEY_P8: ${{ inputs.apple-notarization-key-p8 }}
@@ -197,66 +210,88 @@ runs:
           notarize_submission "$binary" "$archive_path"
         }
 
-        build_dmg() {
-          local target="${{ inputs.target }}"
-          local release_dir="codex-rs/target/${target}/release"
-          local dmg_root="${RUNNER_TEMP}/codex-dmg-root"
-          local volname="Codex (${target})"
-          local dmg_path="${release_dir}/codex-${target}.dmg"
-
-          rm -rf "$dmg_root"
-          mkdir -p "$dmg_root"
-
-          for binary in codex codex-responses-api-proxy; do
-            local bin_path="${release_dir}/${binary}"
-            if [[ ! -f "$bin_path" ]]; then
-              echo "Binary $bin_path not found"
-              exit 1
-            fi
-            ditto "$bin_path" "${dmg_root}/${binary}"
-          done
-
-          rm -f "$dmg_path"
-          hdiutil create \
-            -volname "$volname" \
-            -srcfolder "$dmg_root" \
-            -format UDZO \
-            -ov \
-            "$dmg_path"
-
-          export CODEX_DMG_PATH="$dmg_path"
-          echo "CODEX_DMG_PATH=$dmg_path" >> "$GITHUB_ENV"
-        }
-
-        sign_dmg() {
-          local dmg_path="$1"
-
-          if [[ -z "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
-            echo "APPLE_CODESIGN_IDENTITY is required for macOS signing"
-            exit 1
-          fi
-
-          keychain_args=()
-          if [[ -n "${APPLE_CODESIGN_KEYCHAIN:-}" && -f "${APPLE_CODESIGN_KEYCHAIN}" ]]; then
-            keychain_args+=(--keychain "${APPLE_CODESIGN_KEYCHAIN}")
-          fi
-
-          codesign --force --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$dmg_path"
-        }
-
         notarize_binary "codex"
         notarize_binary "codex-responses-api-proxy"
 
-        build_dmg
+    - name: Sign and notarize macOS DMG
+      if: ${{ inputs.sign-dmg == 'true' }}
+      shell: bash
+      env:
+        APPLE_NOTARIZATION_KEY_P8: ${{ inputs.apple-notarization-key-p8 }}
+        APPLE_NOTARIZATION_KEY_ID: ${{ inputs.apple-notarization-key-id }}
+        APPLE_NOTARIZATION_ISSUER_ID: ${{ inputs.apple-notarization-issuer-id }}
+      run: |
+        set -euo pipefail
 
-        if [[ -z "${CODEX_DMG_PATH:-}" ]]; then
-          echo "CODEX_DMG_PATH not set after building DMG"
+        if [[ -z "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
+          echo "APPLE_CODESIGN_IDENTITY is required for macOS signing"
           exit 1
         fi
 
-        sign_dmg "$CODEX_DMG_PATH"
-        notarize_submission "codex-${{ inputs.target }}.dmg" "$CODEX_DMG_PATH"
-        xcrun stapler staple "$CODEX_DMG_PATH"
+        for var in APPLE_NOTARIZATION_KEY_P8 APPLE_NOTARIZATION_KEY_ID APPLE_NOTARIZATION_ISSUER_ID; do
+          if [[ -z "${!var:-}" ]]; then
+            echo "$var is required for notarization"
+            exit 1
+          fi
+        done
+
+        notary_key_path="${RUNNER_TEMP}/notarytool.key.p8"
+        echo "$APPLE_NOTARIZATION_KEY_P8" | base64 -d > "$notary_key_path"
+        cleanup_notary() {
+          rm -f "$notary_key_path"
+        }
+        trap cleanup_notary EXIT
+
+        notarize_submission() {
+          local label="$1"
+          local path="$2"
+
+          if [[ ! -f "$path" ]]; then
+            echo "Notarization payload $path not found"
+            exit 1
+          fi
+
+          submission_json=$(xcrun notarytool submit "$path" \
+            --key "$notary_key_path" \
+            --key-id "$APPLE_NOTARIZATION_KEY_ID" \
+            --issuer "$APPLE_NOTARIZATION_ISSUER_ID" \
+            --output-format json \
+            --wait)
+
+          status=$(printf '%s\n' "$submission_json" | jq -r '.status // "Unknown"')
+          submission_id=$(printf '%s\n' "$submission_json" | jq -r '.id // ""')
+
+          if [[ -z "$submission_id" ]]; then
+            echo "Failed to retrieve submission ID for $label"
+            exit 1
+          fi
+
+          echo "::notice title=Notarization::$label submission ${submission_id} completed with status ${status}"
+
+          if [[ "$status" != "Accepted" ]]; then
+            echo "Notarization failed for ${label} (submission ${submission_id}, status ${status})"
+            exit 1
+          fi
+        }
+
+        dmg_path="${{ inputs.dmg-path }}"
+        if [[ -z "$dmg_path" ]]; then
+          dmg_path="codex-rs/target/${{ inputs.target }}/release/codex-${{ inputs.target }}.dmg"
+        fi
+
+        if [[ ! -f "$dmg_path" ]]; then
+          echo "DMG $dmg_path not found"
+          exit 1
+        fi
+
+        keychain_args=()
+        if [[ -n "${APPLE_CODESIGN_KEYCHAIN:-}" && -f "${APPLE_CODESIGN_KEYCHAIN}" ]]; then
+          keychain_args+=(--keychain "${APPLE_CODESIGN_KEYCHAIN}")
+        fi
+
+        codesign --force --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$dmg_path"
+        notarize_submission "codex-${{ inputs.target }}.dmg" "$dmg_path"
+        xcrun stapler staple "$dmg_path"
 
     - name: Remove signing keychain
       if: ${{ always() }}
