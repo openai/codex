@@ -222,7 +222,15 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 ts_msg!(self, "{}", message.style(self.dimmed));
             }
-            EventMsg::StreamError(StreamErrorEvent { message, .. }) => {
+            EventMsg::StreamError(StreamErrorEvent {
+                message,
+                cause_message,
+                ..
+            }) => {
+                let message = match cause_message {
+                    Some(cause) if !cause.trim().is_empty() => format!("{message} ({cause})"),
+                    _ => message,
+                };
                 ts_msg!(self, "{}", message.style(self.dimmed));
             }
             EventMsg::TaskStarted(_) => {
