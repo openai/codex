@@ -66,9 +66,3 @@ fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
 
     Ok(())
 }
-
-#[test]
-fn intentionally_fails_for_ci_autofix_demo() {
-    // Intentional failure to exercise CI autofix flow.
-    assert_eq!(1, 2);
-}
