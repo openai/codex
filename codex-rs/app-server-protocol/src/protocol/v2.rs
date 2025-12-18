@@ -1815,6 +1815,16 @@ pub struct AccountLoginCompletedNotification {
     pub error: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DeprecationNoticeNotification {
+    /// Concise summary of what is deprecated.
+    pub summary: String,
+    /// Optional extra guidance, such as migration steps or rationale.
+    pub details: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
