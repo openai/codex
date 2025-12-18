@@ -27,6 +27,7 @@ tokio = { workspace = true, features = [
 ] }
 tracing = { workspace = true, features = ["log"] }
 wiremock = { workspace = true }
+semver = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }

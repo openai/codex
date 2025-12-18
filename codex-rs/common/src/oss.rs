@@ -2,6 +2,7 @@
 
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
+use codex_core::WireApi;
 use codex_core::config::Config;
 
 /// Returns the default model for a given OSS provider.
@@ -16,7 +17,7 @@ pub fn get_default_model_for_oss_provider(provider_id: &str) -> Option<&'static 
 /// Ensures the specified OSS provider is ready (models downloaded, service reachable).
 pub async fn ensure_oss_provider_ready(
     provider_id: &str,
-    config: &Config,
+    config: &mut Config,
 ) -> Result<(), std::io::Error> {
     match provider_id {
         LMSTUDIO_OSS_PROVIDER_ID => {
@@ -25,6 +26,15 @@ pub async fn ensure_oss_provider_ready(
                 .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
         }
         OLLAMA_OSS_PROVIDER_ID => {
+            if config.model_provider.wire_api == WireApi::Responses {
+                match codex_ollama::detect_wire_api(&config.model_provider).await {
+                    Ok(Some(detection)) if detection.wire_api == WireApi::Chat => {
+                        config.model_provider.wire_api = WireApi::Chat;
+                    }
+                    Ok(_) | Err(_) => {}
+                }
+            }
+
             codex_ollama::ensure_oss_ready(config)
                 .await
                 .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;

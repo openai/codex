@@ -221,7 +221,7 @@ pub async fn run_main(
         additional_writable_roots: additional_dirs,
     };
 
-    let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
+    let mut config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
 
     if let Some(warning) = add_dir_warning_message(&cli.add_dir, &config.sandbox_policy) {
         #[allow(clippy::print_stderr)]
@@ -294,7 +294,7 @@ pub async fn run_main(
                 ));
             }
         };
-        ensure_oss_provider_ready(provider_id, &config).await?;
+        ensure_oss_provider_ready(provider_id, &mut config).await?;
     }
 
     let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));

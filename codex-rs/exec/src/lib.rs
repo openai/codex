@@ -202,7 +202,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         additional_writable_roots: add_dir,
     };
 
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
+    let mut config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
 
     if let Err(err) = enforce_login_restrictions(&config).await {
         eprintln!("{err}");
@@ -251,7 +251,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 ));
             }
         };
-        ensure_oss_provider_ready(provider_id, &config)
+        ensure_oss_provider_ready(provider_id, &mut config)
             .await
             .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?;
     }
