@@ -30,7 +30,7 @@ use crate::openai_models::model_presets::builtin_model_presets;
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const OPENAI_DEFAULT_API_MODEL: &str = "gpt-5.1-codex-max";
-const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "gpt-5.2-codex";
+const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "caribou";
 const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
 
 /// Coordinates remote model discovery plus cached metadata on disk.
@@ -105,23 +105,6 @@ impl ModelsManager {
         *self.etag.write().await = etag.clone();
         self.persist_cache(&models, etag).await;
         Ok(())
-    }
-
-    pub(crate) async fn refresh_available_models_if_etag_changed(
-        &self,
-        config: &Config,
-        models_etag: &str,
-    ) -> CoreResult<()> {
-        if models_etag.is_empty() {
-            return Ok(());
-        }
-
-        let cached_etag = self.etag.read().await.clone();
-        if cached_etag.as_deref() == Some(models_etag) {
-            return Ok(());
-        }
-
-        self.refresh_available_models(config).await
     }
 
     pub async fn list_models(&self, config: &Config) -> Vec<ModelPreset> {
