@@ -115,6 +115,10 @@ impl PlanRequestOverlay {
         Line::from(vec![
             key_hint::plain(KeyCode::Enter).into(),
             " submit, ".into(),
+            key_hint::shift(KeyCode::Enter).into(),
+            "/".into(),
+            key_hint::ctrl(KeyCode::Char('j')).into(),
+            " newline, ".into(),
             key_hint::plain(KeyCode::Esc).into(),
             " cancel".into(),
         ])
@@ -235,5 +239,31 @@ mod tests {
         let mut overlay = PlanRequestOverlay::new(AppEventSender::new(app_event_tx));
         overlay.error = Some("Goal cannot be empty.".to_string());
         assert_eq!(overlay.cursor_pos(Rect::new(0, 0, 80, 10)), Some((4, 5)));
+    }
+
+    #[test]
+    fn plan_request_overlay_supports_multiline_goal_entry() {
+        let (app_event_tx, mut app_event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut overlay = PlanRequestOverlay::new(AppEventSender::new(app_event_tx));
+
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+
+        assert_eq!(overlay.goal_text(), "a\nb\nc");
+        assert!(!overlay.is_complete());
+
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(overlay.is_complete());
+
+        let ev = app_event_rx.try_recv().expect("plan op");
+        match ev {
+            AppEvent::CodexOp(Op::Plan { plan_request }) => {
+                assert_eq!(plan_request.goal, "a\nb\nc");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 }

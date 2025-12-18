@@ -255,6 +255,34 @@ fn fmt_variant_duration(elapsed: Duration) -> String {
     format!("{minutes}m {seconds:02}s")
 }
 
+fn fmt_exec_activity_command(command: &[String]) -> String {
+    if command.is_empty() {
+        return "shell".to_string();
+    }
+
+    let cmd = if let Some((_shell, script)) = crate::parse_command::extract_shell_command(command) {
+        let script = script.trim();
+        if script.is_empty() {
+            "shell".to_string()
+        } else {
+            script
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+    } else {
+        crate::parse_command::shlex_join(command)
+    };
+
+    if cmd.is_empty() {
+        "shell".to_string()
+    } else {
+        cmd
+    }
+}
+
 fn activity_for_event(msg: &EventMsg) -> Option<String> {
     match msg {
         EventMsg::TaskStarted(_) => Some("starting".to_string()),
@@ -265,14 +293,7 @@ fn activity_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::AgentReasoningRawContentDelta(_)
         | EventMsg::AgentReasoningSectionBreak(_) => Some("thinking".to_string()),
         EventMsg::AgentMessage(_) | EventMsg::AgentMessageDelta(_) => Some("writing".to_string()),
-        EventMsg::ExecCommandBegin(ev) => {
-            let command = ev.command.join(" ");
-            if command.is_empty() {
-                Some("shell".to_string())
-            } else {
-                Some(command)
-            }
-        }
+        EventMsg::ExecCommandBegin(ev) => Some(fmt_exec_activity_command(&ev.command)),
         EventMsg::McpToolCallBegin(ev) => Some(format!(
             "mcp {}/{}",
             ev.invocation.server.trim(),
@@ -461,6 +482,32 @@ fn parse_plan_output_event(idx: usize, total: usize, text: &str) -> PlanOutputEv
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exec_activity_command_strips_powershell_wrapper() {
+        let shell = if cfg!(windows) {
+            "C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        } else {
+            "/usr/local/bin/powershell.exe"
+        };
+        let cmd = vec![
+            shell.to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "rg --version".to_string(),
+        ];
+        assert_eq!(fmt_exec_activity_command(&cmd), "rg --version");
+    }
+
+    #[test]
+    fn exec_activity_command_strips_bash_lc_wrapper() {
+        let cmd = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "rg --version".to_string(),
+        ];
+        assert_eq!(fmt_exec_activity_command(&cmd), "rg --version");
+    }
 
     #[test]
     fn plan_variant_titles_are_stable() {
