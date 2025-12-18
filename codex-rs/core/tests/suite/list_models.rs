@@ -69,7 +69,7 @@ fn gpt_52_codex() -> ModelPreset {
         id: "gpt-5.2-codex".to_string(),
         model: "gpt-5.2-codex".to_string(),
         display_name: "gpt-5.2-codex".to_string(),
-        description: "Latest Codex-optimized flagship for deep and fast reasoning.".to_string(),
+        description: "Latest frontier agentic coding model.".to_string(),
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: vec![
             effort(
