@@ -573,7 +573,7 @@ async fn load_config_or_exit(
     overrides: ConfigOverrides,
 ) -> Config {
     #[allow(clippy::print_stderr)]
-    match Config::load_with_cli_overrides(cli_kv_overrides, overrides).await {
+    match Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await {
         Ok(mut config) => {
             detect_ollama_wire_api_if_needed(&mut config).await;
             config

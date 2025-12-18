@@ -203,7 +203,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         additional_writable_roots: add_dir,
     };
 
-    let mut config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
+    let mut config =
+        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
 
     if !oss {
         detect_ollama_wire_api_if_needed(&mut config).await;
