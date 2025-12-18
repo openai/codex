@@ -42,7 +42,7 @@ pub struct ExecCommand {
     )]
     pub attempts: usize,
 
-    /// Git branch to run in Codex Cloud (defaults to repo default/current branch).
+    /// Git branch to run in Codex Cloud (defaults to current branch).
     #[arg(long = "branch", value_name = "BRANCH")]
     pub branch: Option<String>,
 }
