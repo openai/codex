@@ -631,7 +631,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     ..Default::default()
                 };
 
-                let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
+                let config = Config::load_with_cli_overrides_and_harness_overrides(
+                    cli_kv_overrides,
+                    overrides,
+                )
+                .await?;
                 for def in codex_core::features::FEATURES.iter() {
                     let name = def.key;
                     let stage = stage_str(def.stage);

@@ -651,7 +651,7 @@ async fn includes_user_instructions_message_in_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn skills_append_to_instructions_when_feature_enabled() {
+async fn skills_append_to_instructions() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
@@ -673,8 +673,8 @@ async fn skills_append_to_instructions_when_feature_enabled() {
 
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
-    config.features.enable(Feature::Skills);
     config.cwd = codex_home.path().to_path_buf();
+    config.features.enable(Feature::Skills);
 
     let conversation_manager = ConversationManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
@@ -762,7 +762,7 @@ async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_default_effort_in_request() -> anyhow::Result<()> {
+async fn includes_no_effort_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
@@ -791,7 +791,7 @@ async fn includes_default_effort_in_request() -> anyhow::Result<()> {
             .get("reasoning")
             .and_then(|t| t.get("effort"))
             .and_then(|v| v.as_str()),
-        Some("medium")
+        None
     );
 
     Ok(())

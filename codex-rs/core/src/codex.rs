@@ -219,11 +219,10 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let loaded_skills = if config.features.enabled(Feature::Skills) {
-            Some(skills_manager.skills_for_cwd(&config.cwd))
-        } else {
-            None
-        };
+        let loaded_skills = config
+            .features
+            .enabled(Feature::Skills)
+            .then(|| skills_manager.skills_for_cwd(&config.cwd));
 
         if let Some(outcome) = &loaded_skills {
             for err in &outcome.errors {
@@ -732,30 +731,6 @@ impl Session {
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
-
-        if sess.enabled(Feature::Skills) {
-            let mut rx = sess
-                .services
-                .skills_manager
-                .subscribe_skills_update_notifications();
-            let sess = Arc::downgrade(&sess);
-            tokio::spawn(async move {
-                loop {
-                    match rx.recv().await {
-                        Ok(()) => {
-                            let Some(sess) = sess.upgrade() else {
-                                break;
-                            };
-                            let turn_context = sess.new_default_turn().await;
-                            sess.send_event(turn_context.as_ref(), EventMsg::SkillsUpdateAvailable)
-                                .await;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
-        }
 
         Ok(sess)
     }
@@ -2266,15 +2241,11 @@ pub(crate) async fn run_task(
     });
     sess.send_event(&turn_context, event).await;
 
-    let skills_outcome = if sess.enabled(Feature::Skills) {
-        Some(
-            sess.services
-                .skills_manager
-                .skills_for_cwd(&turn_context.cwd),
-        )
-    } else {
-        None
-    };
+    let skills_outcome = sess.enabled(Feature::Skills).then(|| {
+        sess.services
+            .skills_manager
+            .skills_for_cwd(&turn_context.cwd)
+    });
 
     let SkillInjections {
         items: skill_items,

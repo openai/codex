@@ -14,8 +14,6 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::ResumeSelection;
-use crate::skill_error_prompt::SkillErrorPromptOutcome;
-use crate::skill_error_prompt::run_skill_error_prompt;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -37,7 +35,6 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
-use codex_core::skills::SkillError;
 use codex_protocol::ConversationId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -89,16 +86,6 @@ fn session_summary(
     })
 }
 
-fn skill_errors_from_info(errors: &[SkillErrorInfo]) -> Vec<SkillError> {
-    errors
-        .iter()
-        .map(|err| SkillError {
-            path: err.path.clone(),
-            message: err.message.clone(),
-        })
-        .collect()
-}
-
 fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
     response
         .skills
@@ -106,6 +93,27 @@ fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillEr
         .find(|entry| entry.cwd.as_path() == cwd)
         .map(|entry| entry.errors.clone())
         .unwrap_or_default()
+}
+
+fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorInfo]) {
+    if errors.is_empty() {
+        return;
+    }
+
+    let error_count = errors.len();
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        crate::history_cell::new_warning_event(format!(
+            "Skipped loading {error_count} skill(s) due to invalid SKILL.md files."
+        )),
+    )));
+
+    for error in errors {
+        let path = error.path.display();
+        let message = error.message.as_str();
+        app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            crate::history_cell::new_warning_event(format!("{path}: {message}")),
+        )));
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,6 +194,8 @@ async fn handle_model_migration_prompt_if_needed(
         id: target_model,
         reasoning_effort_mapping,
         migration_config_key,
+        model_link,
+        upgrade_copy,
     }) = upgrade
     {
         if migration_prompt_hidden(config, migration_config_key.as_str()) {
@@ -217,6 +227,8 @@ async fn handle_model_migration_prompt_if_needed(
         let prompt_copy = migration_copy_for_models(
             model,
             &target_model,
+            model_link.clone(),
+            upgrade_copy.clone(),
             heading_label,
             target_description,
             can_opt_out,
@@ -703,18 +715,7 @@ impl App {
                 if let EventMsg::ListSkillsResponse(response) = &event.msg {
                     let cwd = self.chat_widget.config_ref().cwd.clone();
                     let errors = errors_for_cwd(&cwd, response);
-                    if errors.is_empty() {
-                        self.chat_widget.handle_codex_event(event);
-                        return Ok(true);
-                    }
-                    let errors = skill_errors_from_info(&errors);
-                    match run_skill_error_prompt(tui, &errors).await {
-                        SkillErrorPromptOutcome::Exit => {
-                            self.chat_widget.submit_op(Op::Shutdown);
-                            return Ok(false);
-                        }
-                        SkillErrorPromptOutcome::Continue => {}
-                    }
+                    emit_skill_load_warnings(&self.app_event_tx, &errors);
                 }
                 self.chat_widget.handle_codex_event(event);
             }
@@ -1398,6 +1399,8 @@ mod tests {
             id: "missing-target".to_string(),
             reasoning_effort_mapping: None,
             migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG.to_string(),
+            model_link: None,
+            upgrade_copy: None,
         });
         available.retain(|preset| preset.model != "gpt-5-codex");
         available.push(current.clone());

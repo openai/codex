@@ -52,6 +52,8 @@ pub struct ModelUpgrade {
     pub id: String,
     pub reasoning_effort_mapping: Option<HashMap<ReasoningEffort, ReasoningEffort>>,
     pub migration_config_key: String,
+    pub model_link: Option<String>,
+    pub upgrade_copy: Option<String>,
 }
 
 /// Metadata describing a Codex-supported model.
@@ -75,6 +77,8 @@ pub struct ModelPreset {
     pub upgrade: Option<ModelUpgrade>,
     /// Whether this preset should appear in the picker UI.
     pub show_in_picker: bool,
+    /// whether this model is supported in the api
+    pub supported_in_api: bool,
 }
 
 /// Visibility of a model in the picker or APIs.
@@ -214,8 +218,12 @@ impl From<ModelInfo> for ModelPreset {
                     &info.supported_reasoning_levels,
                 ),
                 migration_config_key: info.slug.clone(),
+                // todo(aibrahim): add the model link here.
+                model_link: None,
+                upgrade_copy: None,
             }),
             show_in_picker: info.visibility == ModelVisibility::List,
+            supported_in_api: info.supported_in_api,
         }
     }
 }

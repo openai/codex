@@ -2191,7 +2191,7 @@ impl ChatWidget {
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let models = self.models_manager.try_list_models().ok()?;
+        let models = self.models_manager.try_list_models(&self.config).ok()?;
         models
             .iter()
             .find(|preset| preset.model == NUDGE_MODEL_SLUG)
@@ -2300,7 +2300,7 @@ impl ChatWidget {
         let current_model = self.model_family.get_model_slug().to_string();
         let presets: Vec<ModelPreset> =
             // todo(aibrahim): make this async function
-            match self.models_manager.try_list_models() {
+            match self.models_manager.try_list_models(&self.config) {
                 Ok(models) => models,
                 Err(_) => {
                     self.add_info_message(
@@ -2730,10 +2730,11 @@ impl ChatWidget {
         let features: Vec<BetaFeatureItem> = FEATURES
             .iter()
             .filter_map(|spec| {
+                let name = spec.stage.beta_menu_name()?;
                 let description = spec.stage.beta_menu_description()?;
                 Some(BetaFeatureItem {
                     feature: spec.id,
-                    name: feature_label_from_key(spec.key),
+                    name: name.to_string(),
                     description: description.to_string(),
                     enabled: self.config.features.enabled(spec.id),
                 })
@@ -3425,23 +3426,6 @@ impl ChatWidget {
         );
         RenderableItem::Owned(Box::new(flex))
     }
-}
-
-fn feature_label_from_key(key: &str) -> String {
-    let mut out = String::with_capacity(key.len());
-    let mut capitalize = true;
-    for ch in key.chars() {
-        if ch == '_' || ch == '-' {
-            out.push(' ');
-            capitalize = true;
-        } else if capitalize {
-            out.push(ch.to_ascii_uppercase());
-            capitalize = false;
-        } else {
-            out.push(ch);
-        }
-    }
-    out
 }
 
 impl Drop for ChatWidget {

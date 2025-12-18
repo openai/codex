@@ -925,7 +925,7 @@ fn active_blob(chat: &ChatWidget) -> String {
 fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
     let models = chat
         .models_manager
-        .try_list_models()
+        .try_list_models(&chat.config)
         .expect("models lock available");
     models
         .iter()
@@ -1906,6 +1906,7 @@ fn single_reasoning_option_skips_selection() {
         is_default: false,
         upgrade: None,
         show_in_picker: true,
+        supported_in_api: true,
     };
     chat.open_reasoning_popup(preset);
 
@@ -1952,10 +1953,10 @@ fn feedback_upload_consent_popup_snapshot() {
 
 #[test]
 fn reasoning_popup_escape_returns_to_model_popup() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1"));
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max"));
     chat.open_model_popup();
 
-    let preset = get_available_model(&chat, "gpt-5.1-codex");
+    let preset = get_available_model(&chat, "gpt-5.1-codex-max");
     chat.open_reasoning_popup(preset);
 
     let before_escape = render_bottom_popup(&chat, 80);

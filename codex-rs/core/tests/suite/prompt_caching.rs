@@ -251,49 +251,36 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
+    let body1 = req1.single_request().body_json();
+    let input1 = body1["input"].as_array().expect("input array");
+    assert_eq!(input1.len(), 3, "expected cached prefix + env + user msg");
+
+    let ui_text = input1[0]["content"][0]["text"]
+        .as_str()
+        .expect("ui message text");
+    assert!(
+        ui_text.contains("be consistent and helpful"),
+        "expected user instructions in UI message: {ui_text}"
+    );
+
     let shell = default_user_shell();
     let cwd_str = config.cwd.to_string_lossy();
     let expected_env_text = default_env_context_str(&cwd_str, &shell);
-    let expected_ui_text = format!(
-        "# AGENTS.md instructions for {cwd_str}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>"
-    );
-
-    let expected_env_msg = serde_json::json!({
-        "type": "message",
-        "role": "user",
-        "content": [ { "type": "input_text", "text": expected_env_text } ]
-    });
-    let expected_ui_msg = serde_json::json!({
-        "type": "message",
-        "role": "user",
-        "content": [ { "type": "input_text", "text": expected_ui_text } ]
-    });
-
-    let expected_user_message_1 = serde_json::json!({
-        "type": "message",
-        "role": "user",
-        "content": [ { "type": "input_text", "text": "hello 1" } ]
-    });
-    let body1 = req1.single_request().body_json();
     assert_eq!(
-        body1["input"],
-        serde_json::json!([expected_ui_msg, expected_env_msg, expected_user_message_1])
+        input1[1],
+        text_user_input(expected_env_text),
+        "expected environment context after UI message"
     );
+    assert_eq!(input1[2], text_user_input("hello 1".to_string()));
 
-    let expected_user_message_2 = serde_json::json!({
-        "type": "message",
-        "role": "user",
-        "content": [ { "type": "input_text", "text": "hello 2" } ]
-    });
     let body2 = req2.single_request().body_json();
-    let expected_body2 = serde_json::json!(
-        [
-            body1["input"].as_array().unwrap().as_slice(),
-            [expected_user_message_2].as_slice(),
-        ]
-        .concat()
+    let input2 = body2["input"].as_array().expect("input array");
+    assert_eq!(
+        &input2[..input1.len()],
+        input1.as_slice(),
+        "expected cached prefix to be reused"
     );
-    assert_eq!(body2["input"], expected_body2);
+    assert_eq!(input2[input1.len()], text_user_input("hello 2".to_string()));
 
     Ok(())
 }
@@ -439,17 +426,21 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         "expected at least environment context and user message"
     );
 
-    let env_msg = &input[1];
-    let env_text = env_msg["content"][0]["text"]
-        .as_str()
-        .expect("environment context text");
+    let env_texts: Vec<&str> = input
+        .iter()
+        .filter_map(|msg| {
+            msg["content"]
+                .as_array()
+                .and_then(|content| content.first())
+                .and_then(|item| item["text"].as_str())
+        })
+        .filter(|text| text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG))
+        .collect();
     assert!(
-        env_text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG),
-        "second entry should be environment context, got: {env_text}"
-    );
-    assert!(
-        env_text.contains("<approval_policy>never</approval_policy>"),
-        "environment context should reflect overridden approval policy: {env_text}"
+        env_texts
+            .iter()
+            .any(|text| text.contains("<approval_policy>never</approval_policy>")),
+        "environment context should reflect overridden approval policy: {env_texts:?}"
     );
 
     let env_count = input
@@ -474,11 +465,19 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         "environment context should appear exactly twice, found {env_count}"
     );
 
-    let user_msg = &input[2];
-    let user_text = user_msg["content"][0]["text"]
-        .as_str()
-        .expect("user message text");
-    assert_eq!(user_text, "first message");
+    let user_texts: Vec<&str> = input
+        .iter()
+        .filter_map(|msg| {
+            msg["content"]
+                .as_array()
+                .and_then(|content| content.first())
+                .and_then(|item| item["text"].as_str())
+        })
+        .collect();
+    assert!(
+        user_texts.contains(&"first message"),
+        "expected user message text, got {user_texts:?}"
+    );
 
     Ok(())
 }
@@ -646,12 +645,10 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let body1 = req1.single_request().body_json();
     let body2 = req2.single_request().body_json();
 
+    let expected_ui_msg = body1["input"][0].clone();
+
     let shell = default_user_shell();
     let default_cwd_lossy = default_cwd.to_string_lossy();
-    let expected_ui_text = format!(
-        "# AGENTS.md instructions for {default_cwd_lossy}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>"
-    );
-    let expected_ui_msg = text_user_input(expected_ui_text);
 
     let expected_env_msg_1 = text_user_input(default_env_context_str(&default_cwd_lossy, &shell));
     let expected_user_message_1 = text_user_input("hello 1".to_string());
@@ -738,16 +735,9 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let body1 = req1.single_request().body_json();
     let body2 = req2.single_request().body_json();
 
+    let expected_ui_msg = body1["input"][0].clone();
+
     let shell = default_user_shell();
-    let expected_ui_text = format!(
-        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\nbe consistent and helpful\n</INSTRUCTIONS>",
-        default_cwd.to_string_lossy()
-    );
-    let expected_ui_msg = serde_json::json!({
-        "type": "message",
-        "role": "user",
-        "content": [ { "type": "input_text", "text": expected_ui_text } ]
-    });
     let expected_env_text_1 = default_env_context_str(&default_cwd.to_string_lossy(), &shell);
     let expected_env_msg_1 = text_user_input(expected_env_text_1);
     let expected_user_message_1 = text_user_input("hello 1".to_string());

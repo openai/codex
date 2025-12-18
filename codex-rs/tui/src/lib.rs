@@ -68,7 +68,6 @@ mod resume_picker;
 mod selection_list;
 mod session_log;
 mod shimmer;
-mod skill_error_prompt;
 mod slash_command;
 mod status;
 mod status_indicator_widget;
@@ -206,20 +205,15 @@ pub async fn run_main(
 
     let overrides = ConfigOverrides {
         model,
-        review_model: None,
         approval_policy,
         sandbox_mode,
         cwd,
         model_provider: model_provider_override.clone(),
         config_profile: cli.config_profile.clone(),
         codex_linux_sandbox_exe,
-        base_instructions: None,
-        developer_instructions: None,
-        compact_prompt: None,
-        include_apply_patch_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
-        tools_web_search_request: None,
         additional_writable_roots: additional_dirs,
+        ..Default::default()
     };
 
     let mut config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
