@@ -23,14 +23,6 @@ In the `codex-rs` folder where the Rust code lives:
 - When cutting a release, update the release and upstream baseline SHAs in `CHANGELOG.md`,
   then rerun the generator.
 
-## Interactive questions (AskUserQuestion)
-
-When you need user input mid-run, use the `ask_user_question` tool instead of asking questions in plain text.
-
-- Put up to 4 questions in a single tool call.
-- Don’t include an explicit “Other” choice; the UI provides it automatically.
-- Don’t put numbering into option labels (the UI adds numbering).
-
 ## Formatting, lint, tests
 
 Run `just fmt` (in `codex-rs` directory) automatically after making Rust code changes; do not ask for approval to run it.
@@ -144,3 +136,4 @@ If you don’t have the tool:
 
 - Do not run `git restore` or `git checkout` unless the user explicitly asks.
 - After executing an approved plan, if `git status` shows changes, create a `git commit` (ask for a commit message only if unclear).
+
