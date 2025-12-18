@@ -1,4 +1,5 @@
 use super::LoaderOverrides;
+#[cfg(target_os = "macos")]
 use super::macos::load_managed_admin_config_layer;
 use super::overrides::default_empty_table;
 use crate::config::CONFIG_TOML_FILE;
@@ -45,7 +46,7 @@ pub(super) async fn load_config_layers_internal(
         load_managed_admin_config_layer(managed_preferences_base64.as_deref()).await?;
 
     #[cfg(not(target_os = "macos"))]
-    let managed_preferences = load_managed_admin_config_layer(None).await?;
+    let managed_preferences = None;
 
     Ok(LoadedConfigLayers {
         base: user_config.unwrap_or_else(default_empty_table),
@@ -54,28 +55,28 @@ pub(super) async fn load_config_layers_internal(
     })
 }
 
-pub(super) async fn read_config_from_path(
-    path: &Path,
+pub(super) async fn read_config_from_path<P: AsRef<Path>>(
+    path: P,
     log_missing_as_info: bool,
 ) -> io::Result<Option<TomlValue>> {
-    match fs::read_to_string(path).await {
+    match fs::read_to_string(path.as_ref()).await {
         Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
             Ok(value) => Ok(Some(value)),
             Err(err) => {
-                tracing::error!("Failed to parse {}: {err}", path.display());
+                tracing::error!("Failed to parse {}: {err}", path.as_ref().display());
                 Err(io::Error::new(io::ErrorKind::InvalidData, err))
             }
         },
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             if log_missing_as_info {
-                tracing::info!("{} not found, using defaults", path.display());
+                tracing::info!("{} not found, using defaults", path.as_ref().display());
             } else {
-                tracing::debug!("{} not found", path.display());
+                tracing::debug!("{} not found", path.as_ref().display());
             }
             Ok(None)
         }
         Err(err) => {
-            tracing::error!("Failed to read {}: {err}", path.display());
+            tracing::error!("Failed to read {}: {err}", path.as_ref().display());
             Err(err)
         }
     }
