@@ -2640,36 +2640,27 @@ impl CodexMessageProcessor {
     }
 
     async fn skills_list(&self, request_id: RequestId, params: SkillsListParams) {
-        let SkillsListParams { cwds } = params;
+        let SkillsListParams { cwds, force_reload } = params;
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.clone()]
         } else {
             cwds
         };
 
-        let data = if self.config.features.enabled(Feature::Skills) {
-            let skills_manager = self.conversation_manager.skills_manager();
-            cwds.into_iter()
-                .map(|cwd| {
-                    let outcome = skills_manager.skills_for_cwd(&cwd);
-                    let errors = errors_to_info(&outcome.errors);
-                    let skills = skills_to_info(&outcome.skills);
-                    codex_app_server_protocol::SkillsListEntry {
-                        cwd,
-                        skills,
-                        errors,
-                    }
-                })
-                .collect()
-        } else {
-            cwds.into_iter()
-                .map(|cwd| codex_app_server_protocol::SkillsListEntry {
+        let skills_manager = self.conversation_manager.skills_manager();
+        let data = cwds
+            .into_iter()
+            .map(|cwd| {
+                let outcome = skills_manager.skills_for_cwd_with_options(&cwd, force_reload);
+                let errors = errors_to_info(&outcome.errors);
+                let skills = skills_to_info(&outcome.skills);
+                codex_app_server_protocol::SkillsListEntry {
                     cwd,
-                    skills: Vec::new(),
-                    errors: Vec::new(),
-                })
-                .collect()
-        };
+                    skills,
+                    errors,
+                }
+            })
+            .collect();
         self.outgoing
             .send_response(request_id, SkillsListResponse { data })
             .await;

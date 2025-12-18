@@ -1,6 +1,5 @@
 ---
 source: tui/src/model_migration.rs
-assertion_line: 440
 expression: terminal.backend()
 ---
 
@@ -10,5 +9,7 @@ expression: terminal.backend()
   gpt-5.1-codex-mini.
 
   Optimized for codex. Cheaper, faster, but less capable.
+  Learn more about gpt-5.1-codex-mini at
+  https://www.codex.com/models/gpt-5.1-codex-mini
 
   Press enter to continue

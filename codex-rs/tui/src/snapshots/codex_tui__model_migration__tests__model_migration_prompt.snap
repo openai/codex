@@ -1,6 +1,5 @@
 ---
 source: tui/src/model_migration.rs
-assertion_line: 368
 expression: terminal.backend()
 ---
 

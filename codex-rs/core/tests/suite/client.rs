@@ -15,7 +15,6 @@ use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::error::CodexErr;
-use codex_core::features::Feature;
 use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -651,7 +650,7 @@ async fn includes_user_instructions_message_in_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn skills_append_to_instructions_when_feature_enabled() {
+async fn skills_append_to_instructions() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
@@ -673,7 +672,6 @@ async fn skills_append_to_instructions_when_feature_enabled() {
 
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
-    config.features.enable(Feature::Skills);
     config.cwd = codex_home.path().to_path_buf();
 
     let conversation_manager = ConversationManager::with_models_provider_and_home(

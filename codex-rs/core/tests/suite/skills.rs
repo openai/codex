@@ -2,7 +2,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
-use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
@@ -27,33 +26,15 @@ fn write_skill(home: &Path, name: &str, description: &str, body: &str) -> std::p
     path
 }
 
-fn write_public_skill(
-    home: &Path,
-    name: &str,
-    description: &str,
-    body: &str,
-) -> std::path::PathBuf {
-    let skill_dir = home.join("skills").join(".public").join(name);
-    fs::create_dir_all(&skill_dir).unwrap();
-    let contents = format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n");
-    let path = skill_dir.join("SKILL.md");
-    fs::write(&path, contents).unwrap();
-    path
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_includes_skill_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let skill_body = "skill body";
-    let mut builder = test_codex()
-        .with_config(|cfg| {
-            cfg.features.enable(Feature::Skills);
-        })
-        .with_pre_build_hook(|home| {
-            write_skill(home, "demo", "demo skill", skill_body);
-        });
+    let mut builder = test_codex().with_pre_build_hook(|home| {
+        write_skill(home, "demo", "demo skill", skill_body);
+    });
     let test = builder.build(&server).await?;
 
     let skill_path = test.codex_home_path().join("skills/demo/SKILL.md");
@@ -117,15 +98,11 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_config(|cfg| {
-            cfg.features.enable(Feature::Skills);
-        })
-        .with_pre_build_hook(|home| {
-            let skill_dir = home.join("skills").join("broken");
-            fs::create_dir_all(&skill_dir).unwrap();
-            fs::write(skill_dir.join("SKILL.md"), "not yaml").unwrap();
-        });
+    let mut builder = test_codex().with_pre_build_hook(|home| {
+        let skill_dir = home.join("skills").join("broken");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "not yaml").unwrap();
+    });
     let test = builder.build(&server).await?;
 
     test.codex
@@ -169,18 +146,29 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_skills_includes_public_cache_entries() -> Result<()> {
+async fn list_skills_includes_system_cache_entries() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_config(|cfg| {
-            cfg.features.enable(Feature::Skills);
-        })
-        .with_pre_build_hook(|home| {
-            write_public_skill(home, "public-demo", "public skill", "public body");
-        });
+    let mut builder = test_codex().with_pre_build_hook(|home| {
+        let system_skill_path = home.join("skills/.system/plan/SKILL.md");
+        assert!(
+            !system_skill_path.exists(),
+            "expected embedded system skills not yet installed, but {system_skill_path:?} exists"
+        );
+    });
     let test = builder.build(&server).await?;
+
+    let system_skill_path = test.codex_home_path().join("skills/.system/plan/SKILL.md");
+    assert!(
+        system_skill_path.exists(),
+        "expected embedded system skills installed to {system_skill_path:?}"
+    );
+    let system_skill_contents = fs::read_to_string(&system_skill_path)?;
+    assert!(
+        system_skill_contents.contains("name: plan"),
+        "expected embedded system skill file, got:\n{system_skill_contents}"
+    );
 
     test.codex
         .submit(Op::ListSkills {
@@ -205,12 +193,12 @@ async fn list_skills_includes_public_cache_entries() -> Result<()> {
 
     let skill = skills
         .iter()
-        .find(|skill| skill.name == "public-demo")
-        .expect("expected public skill to be present");
-    assert_eq!(skill.scope, codex_protocol::protocol::SkillScope::Public);
+        .find(|skill| skill.name == "plan")
+        .expect("expected system skill to be present");
+    assert_eq!(skill.scope, codex_protocol::protocol::SkillScope::System);
     let path_str = skill.path.to_string_lossy().replace('\\', "/");
     assert!(
-        path_str.ends_with("/skills/.public/public-demo/SKILL.md"),
+        path_str.ends_with("/skills/.system/plan/SKILL.md"),
         "unexpected skill path: {path_str}"
     );
 
