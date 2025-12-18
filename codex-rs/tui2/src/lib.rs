@@ -625,21 +625,23 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::config::ConfigOverrides;
-    use codex_core::config::ConfigToml;
+    use codex_core::config::ConfigBuilder;
     use codex_core::config::ProjectConfig;
     use serial_test::serial;
     use tempfile::TempDir;
 
-    #[test]
+    async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
+        ConfigBuilder::default()
+            .codex_home(temp_dir.path().to_path_buf())
+            .build()
+            .await
+    }
+
+    #[tokio::test]
     #[serial]
-    fn windows_skips_trust_prompt_without_sandbox() -> std::io::Result<()> {
+    async fn windows_skips_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            temp_dir.path().to_path_buf(),
-        )?;
+        let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
         config.set_windows_sandbox_globally(false);
@@ -658,15 +660,11 @@ mod tests {
         }
         Ok(())
     }
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
+    async fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            temp_dir.path().to_path_buf(),
-        )?;
+        let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
         config.set_windows_sandbox_globally(true);
@@ -685,15 +683,11 @@ mod tests {
         }
         Ok(())
     }
-    #[test]
-    fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
+    #[tokio::test]
+    async fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
         use codex_protocol::config_types::TrustLevel;
         let temp_dir = TempDir::new()?;
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            temp_dir.path().to_path_buf(),
-        )?;
+        let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig {
             trust_level: Some(TrustLevel::Untrusted),
