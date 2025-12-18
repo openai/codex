@@ -305,28 +305,40 @@ pub struct Config {
 }
 
 impl Config {
+    /// This is the preferred way to create an instance of [Config].
     pub async fn load_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
-        overrides: ConfigOverrides,
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
-
-        let root_value = load_resolved_config(
-            &codex_home,
-            cli_overrides,
-            crate::config_loader::LoaderOverrides::default(),
+        let config_toml =
+            load_config_as_toml_with_cli_overrides(&codex_home, cli_overrides).await?;
+        Self::load_from_base_config_with_overrides(
+            config_toml,
+            ConfigOverrides::default(),
+            codex_home,
         )
-        .await?;
+    }
 
-        let cfg = deserialize_config_toml_with_base(root_value, &codex_home).map_err(|e| {
-            tracing::error!("Failed to deserialize overridden config: {e}");
-            e
-        })?;
-
-        Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)
+    /// This is a secondary way of creating [Config], which is appropriate when
+    /// the harness is meant to be used with a specific configuration that
+    /// ignores user settings. For example, the `codex exec` subcommand is
+    /// designed to use [AskForApproval::Never] exclusively.
+    ///
+    /// Further, [ConfigOverrides] contains some options that are not supported
+    /// in [ConfigToml], such as `cwd` and `codex_linux_sandbox_exe`.
+    pub async fn load_with_cli_overrides_and_harness_overrides(
+        cli_overrides: Vec<(String, TomlValue)>,
+        harness_overrides: ConfigOverrides,
+    ) -> std::io::Result<Self> {
+        let codex_home = find_codex_home()?;
+        let config_toml =
+            load_config_as_toml_with_cli_overrides(&codex_home, cli_overrides).await?;
+        Self::load_from_base_config_with_overrides(config_toml, harness_overrides, codex_home)
     }
 }
 
+/// DEPRECATED: Use [Config::load_with_cli_overrides()] instead because this
+/// codepath is not guaranteed to honor [ConfigRequirements].
 pub async fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
     cli_overrides: Vec<(String, TomlValue)>,
@@ -927,8 +939,8 @@ pub fn resolve_oss_provider(
 }
 
 impl Config {
-    /// Meant to be used exclusively for tests: `load_with_overrides()` should
-    /// be used in all other cases.
+    /// Meant to be used exclusively for tests:
+    /// [Config::load_with_cli_overrides()] should be used in all other cases.
     pub fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
         overrides: ConfigOverrides,

@@ -282,7 +282,7 @@ impl CodexMessageProcessor {
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
-        Config::load_with_cli_overrides(self.cli_overrides.clone(), ConfigOverrides::default())
+        Config::load_with_cli_overrides(self.cli_overrides.clone())
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -3348,7 +3348,7 @@ fn errors_to_info(
 
 async fn derive_config_from_params(
     overrides: ConfigOverrides,
-    cli_overrides: Option<std::collections::HashMap<String, serde_json::Value>>,
+    cli_overrides: Option<HashMap<String, serde_json::Value>>,
 ) -> std::io::Result<Config> {
     let cli_overrides = cli_overrides
         .unwrap_or_default()
@@ -3356,7 +3356,7 @@ async fn derive_config_from_params(
         .map(|(k, v)| (k, json_to_toml(v)))
         .collect();
 
-    Config::load_with_cli_overrides(cli_overrides, overrides).await
+    Config::load_with_cli_overrides_and_harness_overrides(cli_overrides, overrides).await
 }
 
 async fn read_summary_from_rollout(

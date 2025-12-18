@@ -174,7 +174,7 @@ fn gpt_5_1_codex_mini() -> ModelPreset {
             ),
         ],
         is_default: false,
-        upgrade: None,
+        upgrade: Some(caribou_upgrade()),
         show_in_picker: true,
         supported_in_api: true,
     }
@@ -247,6 +247,7 @@ fn caribou_upgrade() -> codex_protocol::openai_models::ModelUpgrade {
         id: "caribou".to_string(),
         reasoning_effort_mapping: None,
         migration_config_key: "caribou".to_string(),
+        model_link: Some("https://www.codex.com/models/caribou".to_string()),
     }
 }
 
