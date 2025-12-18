@@ -311,13 +311,8 @@ model = "gpt-old"
     )
     .await??;
     let write: ConfigWriteResponse = to_response(write_resp)?;
-    let expected_file_path = codex_home
-        .path()
-        .join("config.toml")
-        .canonicalize()
-        .unwrap()
-        .display()
-        .to_string();
+    let expected_file_path =
+        AbsolutePathBuf::resolve_path_against_base("config.toml", codex_home).unwrap();
 
     assert_eq!(write.status, WriteStatus::Ok);
     assert_eq!(write.file_path, expected_file_path);
@@ -415,13 +410,8 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     .await??;
     let batch_write: ConfigWriteResponse = to_response(batch_resp)?;
     assert_eq!(batch_write.status, WriteStatus::Ok);
-    let expected_file_path = codex_home
-        .path()
-        .join("config.toml")
-        .canonicalize()
-        .unwrap()
-        .display()
-        .to_string();
+    let expected_file_path =
+        AbsolutePathBuf::resolve_path_against_base("config.toml", codex_home).unwrap();
     assert_eq!(batch_write.file_path, expected_file_path);
 
     let read_id = mcp
