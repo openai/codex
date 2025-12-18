@@ -40,7 +40,7 @@ impl UnifiedExecFooter {
             return Vec::new();
         }
 
-        let label = "Background terminal running:";
+        let label = "  Background terminal running:";
         let mut spans = Vec::new();
         spans.push(label.dim());
         spans.push(" ".into());

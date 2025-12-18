@@ -15,6 +15,7 @@ use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::error::CodexErr;
+use codex_core::features::Feature;
 use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -673,6 +674,7 @@ async fn skills_append_to_instructions() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
     config.cwd = codex_home.path().to_path_buf();
+    config.features.enable(Feature::Skills);
 
     let conversation_manager = ConversationManager::with_models_provider_and_home(
         CodexAuth::from_api_key("Test API Key"),
