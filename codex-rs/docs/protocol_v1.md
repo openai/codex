@@ -242,7 +242,7 @@ Starting a planning session that runs in a dedicated planning context, optionall
 Notes:
 - When a plan is approved, the daemon emits `Event::ExitedPlanMode` with a `PlanOutputEvent` that includes the approved `title`, `summary`, and `plan` (including `explanation` + step list). UIs may render this directly.
 - The daemon also records an assistant message summarizing the approved plan (title/summary/explanation/steps) so it appears in normal chat history.
-- To make execution robust to conversation-history compaction, the daemon pins the approved plan into the next normal turn’s developer instructions (consumed once) for interactive session sources (CLI/VSCode).
+- To make execution robust to conversation-history compaction, the daemon pins the approved plan into the next normal turn's developer instructions (consumed once) for interactive session sources (CLI/VSCode).
 - Some clients may automatically start a follow-up normal turn after plan approval to execute the approved plan.
 
 ```mermaid
