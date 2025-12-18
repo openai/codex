@@ -5,7 +5,7 @@ expression: sanitized
 /status
 
 ╭────────────────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.0.0)                                                  │
+│  >_ Codexel (v0.0.0)                                                  │
 │                                                                            │
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date              │
 │ information on rate limits and credits                                     │
@@ -20,3 +20,4 @@ expression: sanitized
 │  Context window:   100% left (1.2K used / 272K)                            │
 │  Monthly limit:    [██████████████████░░] 88% left (resets 07:08 on 7 May) │
 ╰────────────────────────────────────────────────────────────────────────────╯
+
