@@ -42,6 +42,20 @@ Output quality bar:
 - The plan must be actionable by another engineer without extra back-and-forth.
 - Prefer 8-16 steps. Each step should describe a concrete deliverable and, when helpful, name key files/components to touch.
 - Put detailed substeps, rationale, trade-offs, risks, and validation commands in `plan.explanation` (multi-paragraph is fine).
+- `plan.explanation` MUST be a practical runbook. Use clear section headings. Include ALL of:
+  - Assumptions
+  - Scope (in-scope + non-goals)
+  - Touchpoints (files/modules/components to change, with what/why)
+  - Approach (sequence notes; include a short "discovery checklist" of 2-6 read-only commands/files if the task is ambiguous)
+  - Risks (failure modes + mitigations + rollback)
+  - Acceptance criteria (observable outcomes; 3-8 bullets)
+  - Validation (exact commands, and where to run them)
+
+Mini-example (illustrative; do not copy verbatim):
+- Step: "Add `--dry-run` flag to CLI"
+- Touchpoints: `src/cli.rs` (arg parsing), `src/main.rs` (plumb flag)
+- Acceptance criteria: "`mytool --dry-run` prints planned actions and exits 0 without writing"
+- Validation: "`cd mytool; cargo test -p mytool-cli`"
 
 Process:
 - Once you understand the goal, call `propose_plan_variants` to generate 3 alternative plans (at most once per draft).
@@ -65,7 +79,7 @@ Rules:
   - Title: short and specific.
   - Summary: 2-4 sentences with key approach + scope boundaries.
   - Steps: concise, ordered, and checkable.
-  - Explanation: include assumptions, file/component touchpoints, edge cases, risks, and a validation plan (tests/commands).
+  - Explanation: use the required section headings (Assumptions; Scope; Touchpoints; Approach; Risks; Acceptance criteria; Validation) and make it a junior-executable runbook.
 - If the user requests revisions, incorporate feedback and propose a revised plan (you may call `propose_plan_variants` again only if the plan materially changes or the user asks for alternatives).
 - If the user rejects, stop.
 
@@ -376,5 +390,29 @@ mod tests {
                 .unwrap_or_default()
                 .contains("existing developer instructions")
         );
+    }
+
+    #[test]
+    fn plan_mode_requires_explanation_sections() {
+        let required = [
+            "Assumptions",
+            "Scope (in-scope + non-goals)",
+            "Touchpoints (files/modules/components to change, with what/why)",
+            "Approach (sequence notes; include a short \"discovery checklist\" of 2-6 read-only commands/files if the task is ambiguous)",
+            "Risks (failure modes + mitigations + rollback)",
+            "Acceptance criteria (observable outcomes; 3-8 bullets)",
+            "Validation (exact commands, and where to run them)",
+        ];
+
+        for needle in required {
+            assert!(
+                PLAN_MODE_DEVELOPER_INSTRUCTIONS.contains(needle),
+                "missing required section anchor: {needle}"
+            );
+        }
+
+        assert!(PLAN_MODE_DEVELOPER_PREFIX.contains(
+            "Assumptions; Scope; Touchpoints; Approach; Risks; Acceptance criteria; Validation"
+        ));
     }
 }

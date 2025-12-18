@@ -46,16 +46,27 @@ Hard rules:
 
 Quality bar:
 - Prefer 8-16 steps that are checkable and ordered.
-- Use `plan.explanation` to add: rationale, key files/components, edge cases, risks, and a validation plan (tests/commands).
+- `plan.explanation` MUST be a practical runbook with clear section headings. Include ALL of:
+  - Assumptions
+  - Scope (in-scope + non-goals)
+  - Touchpoints (files/modules/components to change, with what/why)
+  - Approach (sequence notes; include a short "discovery checklist" of 2-6 read-only commands/files if the task is ambiguous)
+  - Risks (failure modes + mitigations + rollback)
+  - Acceptance criteria (observable outcomes; 3-8 bullets)
+  - Validation (exact commands, and where to run them)
 - Make this variant meaningfully different from other plausible variants (trade-offs, sequencing, scope, risk posture).
 "#;
 
 fn plan_variant_focus(idx: usize) -> &'static str {
     match idx {
-        1 => "Variant 1: minimal-risk, minimal-diff path (pragmatic, incremental).",
-        2 => "Variant 2: correctness-first path (tests, invariants, edge cases, clear rollback).",
+        1 => {
+            "Variant 1: minimal-risk, minimal-diff path (pragmatic, incremental; avoid refactors)."
+        }
+        2 => {
+            "Variant 2: correctness-first path (tests, invariants, edge cases, careful validation/rollback)."
+        }
         3 => {
-            "Variant 3: architecture/DX-first path (refactors that pay down tech debt, better abstractions)."
+            "Variant 3: architecture/DX-first path (refactors that pay down tech debt, clearer abstractions, better ergonomics)."
         }
         _ => "Use a distinct angle and trade-offs.",
     }
@@ -456,5 +467,25 @@ mod tests {
                 .unwrap_or_default()
                 .contains("existing developer instructions")
         );
+    }
+
+    #[test]
+    fn plan_variants_require_explanation_sections() {
+        let required = [
+            "Assumptions",
+            "Scope (in-scope + non-goals)",
+            "Touchpoints (files/modules/components to change, with what/why)",
+            "Approach (sequence notes; include a short \"discovery checklist\" of 2-6 read-only commands/files if the task is ambiguous)",
+            "Risks (failure modes + mitigations + rollback)",
+            "Acceptance criteria (observable outcomes; 3-8 bullets)",
+            "Validation (exact commands, and where to run them)",
+        ];
+
+        for needle in required {
+            assert!(
+                PLAN_VARIANT_PROMPT.contains(needle),
+                "missing required section anchor: {needle}"
+            );
+        }
     }
 }
