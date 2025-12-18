@@ -1227,9 +1227,8 @@ impl ChatWidget {
                 event: ev,
                 host: request.host.clone(),
             });
-            self.bottom_pane
-                .push_approval_request(ApprovalRequest::Network { request }, &self.config.features);
-            self.request_redraw();
+            self.app_event_tx
+                .send(AppEvent::NetworkProxyApprovalRequest(request));
             return;
         }
 
@@ -1285,6 +1284,14 @@ impl ChatWidget {
             return;
         }
         self.network_proxy_session_allow.insert(host);
+    }
+
+    pub(crate) fn network_session_allow(&self) -> HashSet<String> {
+        self.network_proxy_session_allow.clone()
+    }
+
+    pub(crate) fn set_network_session_allow(&mut self, allowed: HashSet<String>) {
+        self.network_proxy_session_allow = allowed;
     }
 
     pub(crate) fn is_network_session_allowed(&self, host: &str) -> bool {

@@ -570,6 +570,7 @@ impl App {
             .await;
         match event {
             AppEvent::NewSession => {
+                let session_allow = self.chat_widget.network_session_allow();
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
                     self.chat_widget.conversation_id(),
@@ -589,6 +590,7 @@ impl App {
                     model_family: model_family.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
+                self.chat_widget.set_network_session_allow(session_allow);
                 self.current_model = model_family.get_model_slug().to_string();
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
@@ -601,6 +603,7 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenResumePicker => {
+                let session_allow = self.chat_widget.network_session_allow();
                 match crate::resume_picker::run_resume_picker(
                     tui,
                     &self.config.codex_home,
@@ -643,6 +646,7 @@ impl App {
                                     resumed.conversation,
                                     resumed.session_configured,
                                 );
+                                self.chat_widget.set_network_session_allow(session_allow);
                                 self.current_model = model_family.get_model_slug().to_string();
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
@@ -1186,7 +1190,25 @@ impl App {
                 if host.is_empty() || self.network_proxy_pending.contains(&host) {
                     return Ok(true);
                 }
-                if request.reason.trim().eq_ignore_ascii_case("denied") {
+                let reason = request.reason.trim();
+                if reason.eq_ignore_ascii_case("not_allowed") {
+                    if let Ok(config_path) = codex_config_path() {
+                        match network_proxy::preflight_host(&config_path, &host) {
+                            Ok(None) => {
+                                self.chat_widget.resume_pending_exec_approval();
+                                return Ok(true);
+                            }
+                            Ok(Some(_)) => {}
+                            Err(err) => {
+                                tracing::debug!(
+                                    error = %err,
+                                    "network proxy preflight host check failed"
+                                );
+                            }
+                        }
+                    }
+                }
+                if reason.eq_ignore_ascii_case("denied") {
                     self.chat_widget.add_error_message(format!(
                         "Network access to {host} is denied by the denylist."
                     ));
@@ -1261,6 +1283,7 @@ impl App {
                         match network_proxy::set_domain_state(&config_path, &host, allow_state) {
                             Ok(changed) => {
                                 reload_needed |= changed;
+                                self.chat_widget.add_network_session_allow(host.clone());
                             }
                             Err(err) => {
                                 self.chat_widget.add_error_message(format!(
