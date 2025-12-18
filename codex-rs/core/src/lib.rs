@@ -35,7 +35,7 @@ pub mod mcp;
 mod mcp_connection_manager;
 pub mod openai_models;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_CAPABILITY;
-pub use mcp_connection_manager::MCP_SANDBOX_STATE_NOTIFICATION;
+pub use mcp_connection_manager::MCP_SANDBOX_STATE_METHOD;
 pub use mcp_connection_manager::SandboxState;
 mod mcp_tool_call;
 mod message_history;
