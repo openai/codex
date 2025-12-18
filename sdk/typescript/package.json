@@ -1,10 +1,10 @@
 {
-  "name": "@openai/codex-sdk",
+  "name": "@ixe1/codexel-sdk",
   "version": "0.0.0-dev",
   "description": "TypeScript SDK for Codex APIs.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openai/codex.git",
+    "url": "git+https://github.com/Ixe1/codexel.git",
     "directory": "sdk/typescript"
   },
   "keywords": [

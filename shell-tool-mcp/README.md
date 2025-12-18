@@ -1,8 +1,8 @@
-# @openai/codex-shell-tool-mcp
+# @ixe1/codexel-shell-tool-mcp
 
 **Note: This MCP server is still experimental. When using it with Codexel, ensure the CLI version matches the MCP server version.**
 
-`@openai/codex-shell-tool-mcp` is an MCP server that provides a tool named `shell` that runs a shell command inside a sandboxed instance of Bash. This special instance of Bash intercepts requests to spawn new processes (specifically, [`execve(2)`](https://man7.org/linux/man-pages/man2/execve.2.html) calls). For each call, it makes a request back to the MCP server to determine whether to allow the proposed command to execute. It also has the option of _escalating_ the command to run unprivileged outside of the sandbox governing the Bash process.
+`@ixe1/codexel-shell-tool-mcp` is an MCP server that provides a tool named `shell` that runs a shell command inside a sandboxed instance of Bash. This special instance of Bash intercepts requests to spawn new processes (specifically, [`execve(2)`](https://man7.org/linux/man-pages/man2/execve.2.html) calls). For each call, it makes a request back to the MCP server to determine whether to allow the proposed command to execute. It also has the option of _escalating_ the command to run unprivileged outside of the sandbox governing the Bash process.
 
 The user can use [Codex `.rules`](https://developers.openai.com/codex/local-config#rules-preview) files to define how a command should be handled. The action to take is determined by the `decision` parameter of a matching rule as follows:
 
@@ -19,21 +19,21 @@ When a software agent asks if it is safe to run a command like `ls`, without mor
 - There could be another executable named `ls` that appears before `/bin/ls` on the `$PATH`.
 - `ls` could be mapped to a shell alias or function.
 
-Because `@openai/codex-shell-tool-mcp` intercepts `execve(2)` calls directly, it _always_ knows the full path to the program being executed. In turn, this makes it possible to provide stronger guarantees on how [Codex `.rules`](https://developers.openai.com/codex/local-config#rules-preview) are enforced.
+Because `@ixe1/codexel-shell-tool-mcp` intercepts `execve(2)` calls directly, it _always_ knows the full path to the program being executed. In turn, this makes it possible to provide stronger guarantees on how [Codex `.rules`](https://developers.openai.com/codex/local-config#rules-preview) are enforced.
 
 ## Usage
 
 First, verify that you can download and run the MCP executable:
 
 ```bash
-npx -y @openai/codex-shell-tool-mcp --version
+npx -y @ixe1/codexel-shell-tool-mcp --version
 ```
 
 To test out the MCP with a one-off invocation of Codexel, it is important to _disable_ the default shell tool in addition to enabling the MCP so Codexel has exactly one shell-like tool available to it:
 
 ```bash
 codexel --disable shell_tool \
-  --config 'mcp_servers.bash={command = "npx", args = ["-y", "@openai/codex-shell-tool-mcp"]}'
+  --config 'mcp_servers.bash={command = "npx", args = ["-y", "@ixe1/codexel-shell-tool-mcp"]}'
 ```
 
 To configure this permanently so you can use the MCP while running `codexel` without additional command-line flags, add the following to your `~/.codexel/config.toml`:
@@ -44,10 +44,10 @@ shell_tool = false
 
 [mcp_servers.shell-tool]
 command = "npx"
-args = ["-y", "@openai/codex-shell-tool-mcp"]
+args = ["-y", "@ixe1/codexel-shell-tool-mcp"]
 ```
 
-Note when the `@openai/codex-shell-tool-mcp` launcher runs, it selects the appropriate native binary to run based on the host OS/architecture. For the Bash wrapper, it inspects `/etc/os-release` on Linux or the Darwin major version on macOS to try to find the best match it has available. See `shell-tool-mcp/src/bashSelection.ts` for details.
+Note when the `@ixe1/codexel-shell-tool-mcp` launcher runs, it selects the appropriate native binary to run based on the host OS/architecture. For the Bash wrapper, it inspects `/etc/os-release` on Linux or the Darwin major version on macOS to try to find the best match it has available. See `shell-tool-mcp/src/bashSelection.ts` for details.
 
 ## MCP Client Requirements
 
@@ -86,7 +86,7 @@ The Codexel harness (used by the CLI and the VS Code extension) sends such notif
 
 ## Package Contents
 
-This package wraps the `codex-exec-mcp-server` binary and its helpers so that the shell MCP can be invoked via `npx -y @openai/codex-shell-tool-mcp`. It bundles:
+This package wraps the `codex-exec-mcp-server` binary and its helpers so that the shell MCP can be invoked via `npx -y @ixe1/codexel-shell-tool-mcp`. It bundles:
 
 - `codex-exec-mcp-server` and `codex-execve-wrapper` built for macOS (arm64, x64) and Linux (musl arm64, musl x64).
 - A patched Bash that honors `BASH_EXEC_WRAPPER`, built for multiple glibc baselines (Ubuntu 24.04/22.04/20.04, Debian 12/11, CentOS-like 9) and macOS (15/14/13).

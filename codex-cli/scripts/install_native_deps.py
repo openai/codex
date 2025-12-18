@@ -18,7 +18,8 @@ from urllib.request import urlopen
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODEX_CLI_ROOT = SCRIPT_DIR.parent
-DEFAULT_WORKFLOW_URL = "https://github.com/openai/codex/actions/runs/17952349351"  # rust-v0.40.0
+DEFAULT_WORKFLOW_URL = ""
+DEFAULT_REPO = "Ixe1/codexel"
 VENDOR_DIR_NAME = "vendor"
 RG_MANIFEST = CODEX_CLI_ROOT / "bin" / "rg"
 BINARY_TARGETS = (
@@ -81,10 +82,17 @@ DEFAULT_RG_TARGETS = [target for target, _ in RG_TARGET_PLATFORM_PAIRS]
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Install native Codex binaries.")
     parser.add_argument(
+        "--repo",
+        default=DEFAULT_REPO,
+        help=(
+            "GitHub repo in OWNER/NAME form to download release artifacts from. "
+            f"Defaults to {DEFAULT_REPO}."
+        ),
+    )
+    parser.add_argument(
         "--workflow-url",
         help=(
-            "GitHub Actions workflow URL that produced the artifacts. Defaults to a "
-            "known good run when omitted."
+            "GitHub Actions workflow URL that produced the artifacts. Required for forks."
         ),
     )
     parser.add_argument(
@@ -126,14 +134,14 @@ def main() -> int:
 
     workflow_url = (args.workflow_url or DEFAULT_WORKFLOW_URL).strip()
     if not workflow_url:
-        workflow_url = DEFAULT_WORKFLOW_URL
+        raise SystemExit("Missing --workflow-url (no default is configured for this fork).")
 
     workflow_id = workflow_url.rstrip("/").split("/")[-1]
     print(f"Downloading native artifacts from workflow {workflow_id}...")
 
     with tempfile.TemporaryDirectory(prefix="codex-native-artifacts-") as artifacts_dir_str:
         artifacts_dir = Path(artifacts_dir_str)
-        _download_artifacts(workflow_id, artifacts_dir)
+        _download_artifacts(workflow_id, artifacts_dir, repo=args.repo)
         install_binary_components(
             artifacts_dir,
             vendor_dir,
@@ -209,7 +217,7 @@ def fetch_rg(
     return [results[target] for target in targets]
 
 
-def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
+def _download_artifacts(workflow_id: str, dest_dir: Path, *, repo: str) -> None:
     cmd = [
         "gh",
         "run",
@@ -217,7 +225,7 @@ def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
         "--dir",
         str(dest_dir),
         "--repo",
-        "openai/codex",
+        repo,
         workflow_id,
     ]
     subprocess.check_call(cmd)

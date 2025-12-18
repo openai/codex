@@ -1,4 +1,4 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codexel</code></p>
+<p align="center"><code>npm i -g @ixe1/codexel</code><br />or <code>brew install --cask codexel</code></p>
 
 <p align="center"><strong>Codexel</strong> is a coding agent from OpenAI that runs locally on your computer.
 </br>
@@ -18,7 +18,7 @@
 Install globally with your preferred package manager. If you use npm:
 
 ```shell
-npm install -g @openai/codex
+npm install -g @ixe1/codexel
 ```
 
 Alternatively, if you use Homebrew:
@@ -59,7 +59,7 @@ Each archive contains a single entry with the platform baked into the name (e.g.
 
 Run `codexel` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codexel as part of your Plus, Pro, Team, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
 
-You can also use Codexel with an API key, but this requires [additional setup](./docs/authentication.md#usage-based-billing-alternative-use-an-openai-api-key). If you previously used an API key for usage-based billing, see the [migration steps](./docs/authentication.md#migrating-from-usage-based-billing-api-key). If you're having trouble with login, please comment on [this issue](https://github.com/openai/codex/issues/1243).
+You can also use Codexel with an API key, but this requires [additional setup](./docs/authentication.md#usage-based-billing-alternative-use-an-openai-api-key). If you previously used an API key for usage-based billing, see the [migration steps](./docs/authentication.md#migrating-from-usage-based-billing-api-key). If you're having trouble with login, please open an issue on GitHub.
 
 ### Model Context Protocol (MCP)
 

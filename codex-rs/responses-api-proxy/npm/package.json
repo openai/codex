@@ -1,5 +1,5 @@
 {
-  "name": "@openai/codex-responses-api-proxy",
+  "name": "@ixe1/codexel-responses-api-proxy",
   "version": "0.0.0-dev",
   "license": "Apache-2.0",
   "bin": {
@@ -15,7 +15,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openai/codex.git",
+    "url": "git+https://github.com/Ixe1/codexel.git",
     "directory": "codex-rs/responses-api-proxy/npm"
   }
 }

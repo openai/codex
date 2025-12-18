@@ -7,7 +7,7 @@ The TypeScript SDK wraps the bundled `codexel` binary. It spawns the CLI and exc
 ## Installation
 
 ```bash
-npm install @openai/codex-sdk
+npm install @ixe1/codexel-sdk
 ```
 
 Requires Node.js 18+.
@@ -15,7 +15,7 @@ Requires Node.js 18+.
 ## Quickstart
 
 ```typescript
-import { Codex } from "@openai/codex-sdk";
+import { Codex } from "@ixe1/codexel-sdk";
 
 const codex = new Codex();
 const thread = codex.startThread();

@@ -1,5 +1,5 @@
 {
-  "name": "@openai/codex-shell-tool-mcp",
+  "name": "@ixe1/codexel-shell-tool-mcp",
   "version": "0.0.0-dev",
   "description": "Codex MCP server for the shell tool with patched Bash and exec wrappers.",
   "license": "Apache-2.0",
@@ -16,7 +16,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openai/codex.git",
+    "url": "git+https://github.com/Ixe1/codexel.git",
     "directory": "shell-tool-mcp"
   },
   "scripts": {

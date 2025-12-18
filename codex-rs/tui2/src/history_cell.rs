@@ -307,7 +307,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         } else {
             line![
                 "See ",
-                "https://github.com/openai/codex".cyan().underlined(),
+                "https://github.com/Ixe1/codexel".cyan().underlined(),
                 " for installation options."
             ]
         };
@@ -322,7 +322,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             update_instruction,
             "",
             "See full release notes:",
-            "https://github.com/openai/codex/releases/latest"
+            "https://github.com/Ixe1/codexel/releases/latest"
                 .cyan()
                 .underlined(),
         ];
@@ -1113,7 +1113,8 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         "  • No MCP servers configured.".italic().into(),
         Line::from(vec![
             "    See the ".into(),
-            "\u{1b}]8;;https://github.com/openai/codex/blob/main/docs/config.md#mcp_servers\u{7}MCP docs\u{1b}]8;;\u{7}".underlined(),
+            "\u{1b}]8;;https://github.com/Ixe1/codexel/blob/main/docs/config.md#mcp_servers\u{7}MCP docs\u{1b}]8;;\u{7}"
+                .underlined(),
             " to configure them.".into(),
         ])
         .style(Style::default().add_modifier(Modifier::DIM)),

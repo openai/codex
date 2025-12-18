@@ -27,8 +27,7 @@ use super::popup_consts::standard_popup_hint_line;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
-const BASE_BUG_ISSUE_URL: &str =
-    "https://github.com/openai/codex/issues/new?template=2-bug-report.yml";
+const BASE_BUG_ISSUE_URL: &str = "https://github.com/Ixe1/codexel/issues/new";
 
 /// Minimal input overlay to collect an optional feedback note, then upload
 /// both logs and rollout with classification + metadata.
@@ -338,7 +337,7 @@ fn feedback_classification(category: FeedbackCategory) -> &'static str {
 fn issue_url_for_category(category: FeedbackCategory, thread_id: &str) -> Option<String> {
     match category {
         FeedbackCategory::Bug | FeedbackCategory::BadResult | FeedbackCategory::Other => Some(
-            format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}"),
+            format!("{BASE_BUG_ISSUE_URL}?steps=Uploaded%20thread:%20{thread_id}"),
         ),
         FeedbackCategory::GoodResult => None,
     }
@@ -545,7 +544,7 @@ mod tests {
         assert!(
             bug_url
                 .as_deref()
-                .is_some_and(|url| url.contains("template=2-bug-report"))
+                .is_some_and(|url| url.starts_with(BASE_BUG_ISSUE_URL))
         );
 
         let bad_result_url = issue_url_for_category(FeedbackCategory::BadResult, "thread-2");

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage and optionally package the @openai/codex npm module."""
+"""Stage and optionally package the @ixe1/codexel npm module."""
 
 import argparse
 import json

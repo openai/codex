@@ -7,7 +7,7 @@ We provide Codexel as a standalone, native executable to ensure a zero-dependenc
 Today, the easiest way to install Codexel is via `npm`:
 
 ```shell
-npm i -g @openai/codex
+npm i -g @ixe1/codexel
 codexel
 ```
 

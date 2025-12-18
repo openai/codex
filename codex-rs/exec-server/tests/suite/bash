@@ -1,7 +1,7 @@
 #!/usr/bin/env dotslash
 
 // This is an instance of the fork of Bash that we bundle with
-// https://www.npmjs.com/package/@openai/codex-shell-tool-mcp.
+// https://www.npmjs.com/package/@ixe1/codexel-shell-tool-mcp.
 // Fetching the prebuilt version via DotSlash makes it easier to write
 // integration tests for the MCP server.
 //

@@ -204,7 +204,7 @@ impl WidgetRef for &UpdatePromptScreen {
         column.push(
             Line::from(vec![
                 "Release notes: ".dim(),
-                "https://github.com/openai/codex/releases/latest"
+                "https://github.com/Ixe1/codexel/releases/latest"
                     .dim()
                     .underlined(),
             ])
@@ -253,7 +253,7 @@ mod tests {
         UpdatePromptScreen::new(
             FrameRequester::test_dummy(),
             "9.9.9".into(),
-            UpdateAction::NpmGlobalLatest,
+            UpdateAction::BrewUpgrade,
         )
     }
 

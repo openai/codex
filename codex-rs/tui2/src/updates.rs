@@ -58,7 +58,7 @@ const VERSION_FILENAME: &str = "version.json";
 // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
 const HOMEBREW_CASK_URL: &str =
     "https://raw.githubusercontent.com/Homebrew/homebrew-cask/HEAD/Casks/c/codex.rb";
-const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
+const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/Ixe1/codexel/releases/latest";
 
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {
