@@ -219,7 +219,10 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let loaded_skills = Some(skills_manager.skills_for_cwd(&config.cwd));
+        let loaded_skills = config
+            .features
+            .enabled(Feature::Skills)
+            .then(|| skills_manager.skills_for_cwd(&config.cwd));
 
         if let Some(outcome) = &loaded_skills {
             for err in &outcome.errors {
@@ -1691,6 +1694,7 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
+    use crate::features::Feature;
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::review_prompts::resolve_review_request;
@@ -1970,20 +1974,29 @@ mod handlers {
         } else {
             cwds
         };
-        let skills_manager = &sess.services.skills_manager;
-        let skills = cwds
-            .into_iter()
-            .map(|cwd| {
-                let outcome = skills_manager.skills_for_cwd_with_options(&cwd, force_reload);
-                let errors = super::errors_to_info(&outcome.errors);
-                let skills = super::skills_to_info(&outcome.skills);
-                SkillsListEntry {
+        let skills = if sess.enabled(Feature::Skills) {
+            let skills_manager = &sess.services.skills_manager;
+            cwds.into_iter()
+                .map(|cwd| {
+                    let outcome = skills_manager.skills_for_cwd_with_options(&cwd, force_reload);
+                    let errors = super::errors_to_info(&outcome.errors);
+                    let skills = super::skills_to_info(&outcome.skills);
+                    SkillsListEntry {
+                        cwd,
+                        skills,
+                        errors,
+                    }
+                })
+                .collect()
+        } else {
+            cwds.into_iter()
+                .map(|cwd| SkillsListEntry {
                     cwd,
-                    skills,
-                    errors,
-                }
-            })
-            .collect();
+                    skills: Vec::new(),
+                    errors: Vec::new(),
+                })
+                .collect()
+        };
         let event = Event {
             id: sub_id,
             msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
@@ -2228,11 +2241,11 @@ pub(crate) async fn run_task(
     });
     sess.send_event(&turn_context, event).await;
 
-    let skills_outcome = Some(
+    let skills_outcome = sess.enabled(Feature::Skills).then(|| {
         sess.services
             .skills_manager
-            .skills_for_cwd(&turn_context.cwd),
-    );
+            .skills_for_cwd(&turn_context.cwd)
+    });
 
     let SkillInjections {
         items: skill_items,

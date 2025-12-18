@@ -83,6 +83,8 @@ pub enum Feature {
     ShellSnapshot,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
+    /// Enable discovery and injection of skills.
+    Skills,
 }
 
 impl Feature {
@@ -378,6 +380,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Skills,
+        key: "skills",
         stage: Stage::Experimental,
         default_enabled: false,
     },
