@@ -1,11 +1,10 @@
 class BaseClass:
-    def method():
+    def method(self):
         # to_remove
         pass
 
 
 class OtherClass:
-    def method():
+    def method(self):
         # untouched
         pass
-

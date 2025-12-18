@@ -1,0 +1,12 @@
+*** Begin Patch
+*** Update File: first.py
+@@ class BaseClass:
+@@     def method(self):
+-        # to_remove
++        # to_add
+*** Update File: second.py
+@@ class OtherClass:
+@@     def method(self):
+-        # to_remove
++        # to_add
+*** End Patch

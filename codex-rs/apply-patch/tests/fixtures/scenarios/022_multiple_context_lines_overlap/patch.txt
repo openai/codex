@@ -1,0 +1,7 @@
+*** Begin Patch
+*** Update File: foo.txt
+@@ bar
+@@ bar
+-baz
++new
+*** End Patch
