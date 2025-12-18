@@ -66,13 +66,24 @@ async fn returns_empty_when_all_layers_missing() {
     let layers = load_config_layers_state(tmp.path(), &[] as &[(String, TomlValue)], overrides)
         .await
         .expect("load layers");
-    let base_table = layers.user.config.as_table().expect("base table expected");
+    assert!(
+        layers.get_user_layer().is_none(),
+        "no user layer when CODEX_HOME/config.toml does not exist"
+    );
+
+    let binding = layers.effective_config();
+    let base_table = binding.as_table().expect("base table expected");
     assert!(
         base_table.is_empty(),
         "expected empty base layer when configs missing"
     );
-    assert!(
-        layers.system.is_none(),
+    let num_system_layers = layers
+        .layers_high_to_low()
+        .iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::System { .. }))
+        .count();
+    assert_eq!(
+        num_system_layers, 0,
         "managed config layer should be absent when file missing"
     );
 
