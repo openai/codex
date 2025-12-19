@@ -606,6 +606,8 @@ pub struct ConfigToml {
     pub model: Option<String>,
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
+    /// Show startup tooltips in the TUI welcome screen.
+    pub show_tooltips: Option<bool>,
 
     /// Provider to use from the model_providers map.
     pub model_provider: Option<String>,
@@ -959,6 +961,8 @@ pub struct ConfigOverrides {
     pub include_apply_patch_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    /// Show startup tooltips in the TUI welcome screen.
+    pub show_tooltips: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1027,6 +1031,7 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            show_tooltips: show_tooltips_override,
             additional_writable_roots,
         } = overrides;
 
@@ -1326,7 +1331,10 @@ impl Config {
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
-            show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            show_tooltips: show_tooltips_override
+                .or(cfg.show_tooltips)
+                .or(cfg.tui.as_ref().map(|t| t.show_tooltips))
+                .unwrap_or(true),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1692,6 +1700,60 @@ trust_level = "trusted"
                 other => panic!("expected workspace-write policy, got {other:?}"),
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn config_honors_show_tooltips_overrides() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        // 1. Default should be true
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+        assert!(config.show_tooltips);
+
+        // 2. Top-level show_tooltips = false
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                show_tooltips: Some(false),
+                ..Default::default()
+            },
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+        assert!(!config.show_tooltips);
+
+        // 3. Nested tui.show_tooltips = false
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                tui: Some(Tui {
+                    show_tooltips: false,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+        assert!(!config.show_tooltips);
+
+        // 4. CLI override (takes precedence)
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                show_tooltips: Some(true),
+                ..Default::default()
+            },
+            ConfigOverrides {
+                show_tooltips: Some(false),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+        assert!(!config.show_tooltips);
 
         Ok(())
     }

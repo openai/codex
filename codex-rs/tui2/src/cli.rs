@@ -85,6 +85,10 @@ pub struct Cli {
     #[arg(long = "add-dir", value_name = "DIR", value_hint = ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
 
+    /// Disable startup tips in the TUI welcome screen.
+    #[arg(long = "no-tips", default_value_t = false)]
+    pub no_tips: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
@@ -109,6 +113,7 @@ impl From<codex_tui::Cli> for Cli {
             cwd: cli.cwd,
             web_search: cli.web_search,
             add_dir: cli.add_dir,
+            no_tips: cli.no_tips,
             config_overrides: cli.config_overrides,
         }
     }

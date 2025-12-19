@@ -760,6 +760,9 @@ fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
     if let Some(prompt) = resume_cli.prompt {
         interactive.prompt = Some(prompt);
     }
+    if resume_cli.no_tips {
+        interactive.no_tips = true;
+    }
 
     interactive
         .config_overrides
