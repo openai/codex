@@ -41,8 +41,9 @@ impl RetryConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RequestCompression {
+    #[default]
     None,
     Zstd,
 }
@@ -59,7 +60,6 @@ pub struct Provider {
     pub wire: WireApi,
     pub headers: HeaderMap,
     pub retry: RetryConfig,
-    pub request_compression: RequestCompression,
     pub stream_idle_timeout: Duration,
 }
 

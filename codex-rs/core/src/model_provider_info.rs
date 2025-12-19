@@ -49,15 +49,6 @@ pub enum WireApi {
     Chat,
 }
 
-/// Body compression to use for outbound requests.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RequestCompression {
-    #[default]
-    None,
-    Zstd,
-}
-
 /// Serializable representation of a provider definition.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ModelProviderInfo {
@@ -80,10 +71,6 @@ pub struct ModelProviderInfo {
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
-
-    /// Compression applied to request bodies.
-    #[serde(default)]
-    pub request_compression: RequestCompression,
 
     /// Optional query parameters to append to the base URL.
     pub query_params: Option<HashMap<String, String>>,
@@ -145,7 +132,6 @@ impl ModelProviderInfo {
     pub(crate) fn to_api_provider(
         &self,
         auth_mode: Option<AuthMode>,
-        features: &Features,
     ) -> crate::error::Result<ApiProvider> {
         let default_base_url = if matches!(auth_mode, Some(AuthMode::ChatGPT)) {
             "https://chatgpt.com/backend-api/codex"
@@ -176,10 +162,6 @@ impl ModelProviderInfo {
             },
             headers,
             retry,
-            request_compression: match self.request_compression_for(auth_mode, features) {
-                RequestCompression::None => codex_api::provider::RequestCompression::None,
-                RequestCompression::Zstd => codex_api::provider::RequestCompression::Zstd,
-            },
             stream_idle_timeout: self.stream_idle_timeout(),
         })
     }
@@ -245,7 +227,6 @@ impl ModelProviderInfo {
             env_key_instructions: None,
             experimental_bearer_token: None,
             wire_api: WireApi::Responses,
-            request_compression: RequestCompression::None,
             query_params: None,
             http_headers: Some(
                 [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
@@ -279,14 +260,14 @@ impl ModelProviderInfo {
         &self,
         auth_mode: Option<AuthMode>,
         features: &Features,
-    ) -> RequestCompression {
+    ) -> codex_api::provider::RequestCompression {
         if self.is_openai()
             && matches!(auth_mode, Some(AuthMode::ChatGPT))
             && features.enabled(Feature::RequestCompression)
         {
-            RequestCompression::Zstd
+            codex_api::provider::RequestCompression::Zstd
         } else {
-            RequestCompression::None
+            codex_api::provider::RequestCompression::None
         }
     }
 }
@@ -349,7 +330,6 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api,
-        request_compression: RequestCompression::None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -378,7 +358,6 @@ base_url = "http://localhost:11434/v1"
             env_key_instructions: None,
             experimental_bearer_token: None,
             wire_api: WireApi::Chat,
-            request_compression: RequestCompression::None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -407,7 +386,6 @@ query_params = { api-version = "2025-04-01-preview" }
             env_key_instructions: None,
             experimental_bearer_token: None,
             wire_api: WireApi::Chat,
-            request_compression: RequestCompression::None,
             query_params: Some(maplit::hashmap! {
                 "api-version".to_string() => "2025-04-01-preview".to_string(),
             }),
@@ -439,7 +417,6 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             env_key_instructions: None,
             experimental_bearer_token: None,
             wire_api: WireApi::Chat,
-            request_compression: RequestCompression::None,
             query_params: None,
             http_headers: Some(maplit::hashmap! {
                 "X-Example-Header".to_string() => "example-value".to_string(),
@@ -475,7 +452,6 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 env_key_instructions: None,
                 experimental_bearer_token: None,
                 wire_api: WireApi::Responses,
-                request_compression: RequestCompression::None,
                 query_params: None,
                 http_headers: None,
                 env_http_headers: None,
@@ -484,9 +460,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
             };
-            let api = provider
-                .to_api_provider(None, &Features::with_defaults())
-                .expect("api provider");
+            let api = provider.to_api_provider(None).expect("api provider");
             assert!(
                 api.is_azure_responses_endpoint(),
                 "expected {base_url} to be detected as Azure"
@@ -500,7 +474,6 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             env_key_instructions: None,
             experimental_bearer_token: None,
             wire_api: WireApi::Responses,
-            request_compression: RequestCompression::None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -509,9 +482,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
         };
-        let named_api = named_provider
-            .to_api_provider(None, &Features::with_defaults())
-            .expect("api provider");
+        let named_api = named_provider.to_api_provider(None).expect("api provider");
         assert!(named_api.is_azure_responses_endpoint());
 
         let negative_cases = [
@@ -527,7 +498,6 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 env_key_instructions: None,
                 experimental_bearer_token: None,
                 wire_api: WireApi::Responses,
-                request_compression: RequestCompression::None,
                 query_params: None,
                 http_headers: None,
                 env_http_headers: None,
@@ -536,9 +506,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
             };
-            let api = provider
-                .to_api_provider(None, &Features::with_defaults())
-                .expect("api provider");
+            let api = provider.to_api_provider(None).expect("api provider");
             assert!(
                 !api.is_azure_responses_endpoint(),
                 "expected {base_url} not to be detected as Azure"

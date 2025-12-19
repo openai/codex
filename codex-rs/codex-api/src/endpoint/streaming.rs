@@ -62,12 +62,11 @@ impl<T: HttpTransport, A: AuthProvider> StreamingClient<T, A> {
         path: &str,
         body: Value,
         extra_headers: HeaderMap,
+        request_compression: RequestCompression,
         spawner: fn(StreamResponse, Duration, Option<Arc<dyn SseTelemetry>>) -> ResponseStream,
     ) -> Result<ResponseStream, ApiError> {
-        let content_encoding =
-            matches!(self.provider.request_compression, RequestCompression::Zstd);
-        let encoded_body =
-            encode_body(&body, self.provider.request_compression).map_err(ApiError::Stream)?;
+        let content_encoding = matches!(request_compression, RequestCompression::Zstd);
+        let encoded_body = encode_body(&body, request_compression).map_err(ApiError::Stream)?;
 
         let builder = || {
             let mut req = self.provider.build_request(Method::POST, path);

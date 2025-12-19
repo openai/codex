@@ -6,6 +6,7 @@ use crate::common::ResponseStream;
 use crate::endpoint::streaming::StreamingClient;
 use crate::error::ApiError;
 use crate::provider::Provider;
+use crate::provider::RequestCompression;
 use crate::provider::WireApi;
 use crate::sse::chat::spawn_chat_stream;
 use crate::telemetry::SseTelemetry;
@@ -45,8 +46,13 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         }
     }
 
-    pub async fn stream_request(&self, request: ChatRequest) -> Result<ResponseStream, ApiError> {
-        self.stream(request.body, request.headers).await
+    pub async fn stream_request(
+        &self,
+        request: ChatRequest,
+        request_compression: RequestCompression,
+    ) -> Result<ResponseStream, ApiError> {
+        self.stream(request.body, request.headers, request_compression)
+            .await
     }
 
     pub async fn stream_prompt(
@@ -55,6 +61,7 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         prompt: &ApiPrompt,
         conversation_id: Option<String>,
         session_source: Option<SessionSource>,
+        request_compression: RequestCompression,
     ) -> Result<ResponseStream, ApiError> {
         use crate::requests::ChatRequestBuilder;
 
@@ -64,7 +71,7 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
                 .session_source(session_source)
                 .build(self.streaming.provider())?;
 
-        self.stream_request(request).await
+        self.stream_request(request, request_compression).await
     }
 
     fn path(&self) -> &'static str {
@@ -78,9 +85,16 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         &self,
         body: Value,
         extra_headers: HeaderMap,
+        request_compression: RequestCompression,
     ) -> Result<ResponseStream, ApiError> {
         self.streaming
-            .stream(self.path(), body, extra_headers, spawn_chat_stream)
+            .stream(
+                self.path(),
+                body,
+                extra_headers,
+                request_compression,
+                spawn_chat_stream,
+            )
             .await
     }
 }

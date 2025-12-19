@@ -9,7 +9,6 @@ use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::Prompt;
-use codex_core::RequestCompression;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
@@ -1127,7 +1126,6 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: WireApi::Responses,
-        request_compression: RequestCompression::None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -1626,7 +1624,6 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         )])),
         env_key_instructions: None,
         wire_api: WireApi::Responses,
-        request_compression: RequestCompression::None,
         http_headers: Some(std::collections::HashMap::from([(
             "Custom-Header".to_string(),
             "Value".to_string(),
@@ -1710,7 +1707,6 @@ async fn env_var_overrides_loaded_auth() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: WireApi::Responses,
-        request_compression: RequestCompression::None,
         http_headers: Some(std::collections::HashMap::from([(
             "Custom-Header".to_string(),
             "Value".to_string(),

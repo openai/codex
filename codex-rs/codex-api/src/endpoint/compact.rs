@@ -90,7 +90,7 @@ struct CompactHistoryResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::RequestCompression;
+
     use crate::provider::RetryConfig;
     use async_trait::async_trait;
     use codex_client::Request;
@@ -137,7 +137,6 @@ mod tests {
                 retry_5xx: true,
                 retry_transport: true,
             },
-            request_compression: RequestCompression::None,
             stream_idle_timeout: Duration::from_secs(1),
         }
     }

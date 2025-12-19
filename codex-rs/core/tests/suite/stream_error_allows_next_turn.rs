@@ -1,5 +1,4 @@
 use codex_core::ModelProviderInfo;
-use codex_core::RequestCompression;
 use codex_core::WireApi;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -67,7 +66,6 @@ async fn continue_after_stream_error() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         wire_api: WireApi::Responses,
-        request_compression: RequestCompression::None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

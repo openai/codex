@@ -98,9 +98,7 @@ impl ModelsManager {
             return Ok(());
         }
         let auth = self.auth_manager.auth();
-        let api_provider = self
-            .provider
-            .to_api_provider(Some(AuthMode::ChatGPT), &config.features)?;
+        let api_provider = self.provider.to_api_provider(Some(AuthMode::ChatGPT))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let client = ModelsClient::new(transport, api_provider, api_auth);
@@ -327,7 +325,6 @@ mod tests {
     use super::cache::ModelsCache;
     use super::*;
     use crate::CodexAuth;
-    use crate::RequestCompression;
     use crate::auth::AuthCredentialsStoreMode;
     use crate::config::ConfigBuilder;
     use crate::features::Feature;
@@ -382,7 +379,6 @@ mod tests {
             env_key_instructions: None,
             experimental_bearer_token: None,
             wire_api: WireApi::Responses,
-            request_compression: RequestCompression::None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,

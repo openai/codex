@@ -6,6 +6,7 @@ use crate::common::TextControls;
 use crate::endpoint::streaming::StreamingClient;
 use crate::error::ApiError;
 use crate::provider::Provider;
+use crate::provider::RequestCompression;
 use crate::provider::WireApi;
 use crate::requests::ResponsesRequest;
 use crate::requests::ResponsesRequestBuilder;
@@ -33,6 +34,7 @@ pub struct ResponsesOptions {
     pub conversation_id: Option<String>,
     pub session_source: Option<SessionSource>,
     pub extra_headers: HeaderMap,
+    pub request_compression: RequestCompression,
 }
 
 impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
@@ -55,8 +57,10 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
     pub async fn stream_request(
         &self,
         request: ResponsesRequest,
+        request_compression: RequestCompression,
     ) -> Result<ResponseStream, ApiError> {
-        self.stream(request.body, request.headers).await
+        self.stream(request.body, request.headers, request_compression)
+            .await
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -75,6 +79,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             conversation_id,
             session_source,
             extra_headers,
+            request_compression,
         } = options;
 
         let request = ResponsesRequestBuilder::new(model, &prompt.instructions, &prompt.input)
@@ -90,7 +95,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             .extra_headers(extra_headers)
             .build(self.streaming.provider())?;
 
-        self.stream_request(request).await
+        self.stream_request(request, request_compression).await
     }
 
     fn path(&self) -> &'static str {
@@ -104,9 +109,16 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         &self,
         body: Value,
         extra_headers: HeaderMap,
+        request_compression: RequestCompression,
     ) -> Result<ResponseStream, ApiError> {
         self.streaming
-            .stream(self.path(), body, extra_headers, spawn_response_stream)
+            .stream(
+                self.path(),
+                body,
+                extra_headers,
+                request_compression,
+                spawn_response_stream,
+            )
             .await
     }
 }
