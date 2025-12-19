@@ -2459,6 +2459,34 @@ async fn run_turn(
             Err(e @ CodexErr::InvalidRequest(_)) => return Err(e),
             Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
             Err(e) => {
+                // Refresh models if we got an outdated models error
+                if matches!(e, CodexErr::OutdatedModels) {
+                    let config = {
+                        let state = sess.state.lock().await;
+                        state
+                            .session_configuration
+                            .original_config_do_not_use
+                            .clone()
+                    };
+                    if let Err(err) = sess
+                        .services
+                        .models_manager
+                        .refresh_available_models(&config)
+                        .await
+                    {
+                        error!("failed to refresh models after outdated models error: {err}");
+                    }
+                    let models_etag = sess.services.models_manager.get_models_etag().await;
+                    let model = turn_context.client.get_model();
+                    let model_family = sess
+                        .services
+                        .models_manager
+                        .construct_model_family(&model, &config)
+                        .await;
+                    turn_context.client.update_model_family(model_family);
+                    turn_context.client.update_models_etag(models_etag);
+                }
+
                 // Use the configured provider-specific stream retry budget.
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
                 if retries < max_retries {
@@ -2543,7 +2571,6 @@ async fn try_run_turn(
     sess.persist_rollout_items(&[rollout_item]).await;
     let mut stream = turn_context
         .client
-        .clone()
         .stream(prompt)
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)

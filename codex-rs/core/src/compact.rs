@@ -290,7 +290,7 @@ async fn drain_to_completed(
     turn_context: &TurnContext,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut stream = turn_context.client.clone().stream(prompt).await?;
+    let mut stream = turn_context.client.stream(prompt).await?;
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {
