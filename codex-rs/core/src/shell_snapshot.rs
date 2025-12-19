@@ -24,7 +24,7 @@ const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 impl ShellSnapshot {
     pub async fn try_new(codex_home: &Path, shell: &Shell) -> Option<Self> {
         let extension = match shell.shell_type {
-            ShellType::PowerShell => "ps1",
+            ShellType::PowerShell { .. } => "ps1",
             _ => "sh",
         };
         let path =
@@ -59,8 +59,11 @@ impl Drop for ShellSnapshot {
 }
 
 pub async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> Result<PathBuf> {
-    if shell_type == ShellType::PowerShell || shell_type == ShellType::Cmd {
-        bail!("Shell snapshot not supported yet for {shell_type:?}");
+    match shell_type {
+        ShellType::PowerShell { .. } | ShellType::Cmd => {
+            bail!("Shell snapshot not supported yet for {shell_type:?}");
+        }
+        _ => {}
     }
     let shell = get_shell(shell_type.clone(), None)
         .with_context(|| format!("No available shell for {shell_type:?}"))?;
@@ -89,7 +92,7 @@ async fn capture_snapshot(shell: &Shell) -> Result<String> {
         ShellType::Zsh => run_shell_script(shell, zsh_snapshot_script()).await,
         ShellType::Bash => run_shell_script(shell, bash_snapshot_script()).await,
         ShellType::Sh => run_shell_script(shell, sh_snapshot_script()).await,
-        ShellType::PowerShell => run_shell_script(shell, powershell_snapshot_script()).await,
+        ShellType::PowerShell { .. } => run_shell_script(shell, powershell_snapshot_script()).await,
         ShellType::Cmd => bail!("Shell snapshotting is not yet supported for {shell_type:?}"),
     }
 }
@@ -112,7 +115,7 @@ async fn run_shell_script_with_timeout(
     script: &str,
     snapshot_timeout: Duration,
 ) -> Result<String> {
-    let args = shell.derive_exec_args(script, true, false);
+    let args = shell.derive_exec_args(script, true);
     let shell_name = shell.name();
 
     // Handler is kept as guard to control the drop. The `mut` pattern is required because .args()

@@ -70,11 +70,9 @@ impl SessionTask for UserShellCommandTask {
         // We do not source rc files or otherwise reformat the script.
         let use_login_shell = true;
         let powershell_utf8_enabled = session.features().enabled(Feature::PowershellUtf8);
-        let command = session.user_shell().derive_exec_args(
-            &self.command,
-            use_login_shell,
-            powershell_utf8_enabled,
-        );
+        let command = session
+            .user_shell()
+            .derive_exec_args(&self.command, use_login_shell);
 
         let call_id = Uuid::new_v4().to_string();
         let raw_command = self.command.clone();

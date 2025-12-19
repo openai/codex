@@ -10,7 +10,7 @@ use crate::shell_snapshot::ShellSnapshot;
 pub enum ShellType {
     Zsh,
     Bash,
-    PowerShell,
+    PowerShell { utf8_enabled: bool },
     Sh,
     Cmd,
 }
@@ -28,7 +28,7 @@ impl Shell {
         match self.shell_type {
             ShellType::Zsh => "zsh",
             ShellType::Bash => "bash",
-            ShellType::PowerShell => "powershell",
+            ShellType::PowerShell { .. } => "powershell",
             ShellType::Sh => "sh",
             ShellType::Cmd => "cmd",
         }
@@ -36,12 +36,7 @@ impl Shell {
 
     /// Takes a string of shell and returns the full list of command args to
     /// use with `exec()` to run the shell command.
-    pub fn derive_exec_args(
-        &self,
-        command: &str,
-        use_login_shell: bool,
-        powershell_utf8_enabled: bool,
-    ) -> Vec<String> {
+    pub fn derive_exec_args(&self, command: &str, use_login_shell: bool) -> Vec<String> {
         match self.shell_type {
             ShellType::Zsh | ShellType::Bash | ShellType::Sh => {
                 let arg = if use_login_shell { "-lc" } else { "-c" };
@@ -51,14 +46,14 @@ impl Shell {
                     command.to_string(),
                 ]
             }
-            ShellType::PowerShell => {
+            ShellType::PowerShell { utf8_enabled } => {
                 let mut args = vec![self.shell_path.to_string_lossy().to_string()];
                 if !use_login_shell {
                     args.push("-NoProfile".to_string());
                 }
 
                 args.push("-Command".to_string());
-                if powershell_utf8_enabled {
+                if utf8_enabled {
                     args.push(prefix_utf8_output(command));
                 } else {
                     args.push(command.to_string());
@@ -173,17 +168,24 @@ fn get_sh_shell(path: Option<&PathBuf>) -> Option<Shell> {
     })
 }
 
-fn get_powershell_shell(path: Option<&PathBuf>) -> Option<Shell> {
+fn get_powershell_shell(path: Option<&PathBuf>, utf8_enabled: bool) -> Option<Shell> {
     let shell_path = get_shell_path(
-        ShellType::PowerShell,
+        ShellType::PowerShell { utf8_enabled },
         path,
         "pwsh",
         vec!["/usr/local/bin/pwsh"],
     )
-    .or_else(|| get_shell_path(ShellType::PowerShell, path, "powershell", vec![]));
+    .or_else(|| {
+        get_shell_path(
+            ShellType::PowerShell { utf8_enabled },
+            path,
+            "powershell",
+            vec![],
+        )
+    });
 
     shell_path.map(|shell_path| Shell {
-        shell_type: ShellType::PowerShell,
+        shell_type: ShellType::PowerShell { utf8_enabled },
         shell_path,
         shell_snapshot: None,
     })
@@ -225,26 +227,30 @@ pub fn get_shell(shell_type: ShellType, path: Option<&PathBuf>) -> Option<Shell>
     match shell_type {
         ShellType::Zsh => get_zsh_shell(path),
         ShellType::Bash => get_bash_shell(path),
-        ShellType::PowerShell => get_powershell_shell(path),
+        ShellType::PowerShell { utf8_enabled } => get_powershell_shell(path, utf8_enabled),
         ShellType::Sh => get_sh_shell(path),
         ShellType::Cmd => get_cmd_shell(path),
     }
 }
 
-pub fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
+pub fn detect_shell_type(command: &[String]) -> Option<ShellType> {
     match shell_path.as_os_str().to_str() {
         Some("zsh") => Some(ShellType::Zsh),
         Some("sh") => Some(ShellType::Sh),
         Some("cmd") => Some(ShellType::Cmd),
         Some("bash") => Some(ShellType::Bash),
-        Some("pwsh") => Some(ShellType::PowerShell),
-        Some("powershell") => Some(ShellType::PowerShell),
+        Some("pwsh") => Some(ShellType::PowerShell {
+            utf8_enabled: powershell_utf8_enabled,
+        }),
+        Some("powershell") => Some(ShellType::PowerShell {
+            utf8_enabled: powershell_utf8_enabled,
+        }),
         _ => {
             let shell_name = shell_path.file_stem();
             if let Some(shell_name) = shell_name
                 && shell_name != shell_path
             {
-                detect_shell_type(&PathBuf::from(shell_name))
+                detect_shell_type(&PathBuf::from(shell_name), powershell_utf8_enabled)
             } else {
                 None
             }
@@ -252,16 +258,25 @@ pub fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
     }
 }
 
-pub fn default_user_shell() -> Shell {
-    default_user_shell_from_path(get_user_shell_path())
+pub fn default_user_shell(powershell_utf8_enabled: bool) -> Shell {
+    default_user_shell_from_path(get_user_shell_path(), powershell_utf8_enabled)
 }
 
-fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> Shell {
+fn default_user_shell_from_path(
+    user_shell_path: Option<PathBuf>,
+    powershell_utf8_enabled: bool,
+) -> Shell {
     if cfg!(windows) {
-        get_shell(ShellType::PowerShell, None).unwrap_or(ultimate_fallback_shell())
+        get_shell(
+            ShellType::PowerShell {
+                utf8_enabled: powershell_utf8_enabled,
+            },
+            None,
+        )
+        .unwrap_or(ultimate_fallback_shell())
     } else {
         let user_default_shell = user_shell_path
-            .and_then(|shell| detect_shell_type(&shell))
+            .and_then(|shell| detect_shell_type(&shell, powershell_utf8_enabled))
             .and_then(|shell_type| get_shell(shell_type, None));
 
         let shell_with_fallback = if cfg!(target_os = "macos") {
@@ -418,7 +433,7 @@ mod tests {
 
     fn shell_works(shell: Option<Shell>, command: &str, required: bool) -> bool {
         if let Some(shell) = shell {
-            let args = shell.derive_exec_args(command, false, false);
+            let args = shell.derive_exec_args(command, false);
             let output = Command::new(args[0].clone())
                 .args(&args[1..])
                 .output()
@@ -439,11 +454,11 @@ mod tests {
             shell_snapshot: None,
         };
         assert_eq!(
-            test_bash_shell.derive_exec_args("echo hello", false, false),
+            test_bash_shell.derive_exec_args("echo hello", false),
             vec!["/bin/bash", "-c", "echo hello"]
         );
         assert_eq!(
-            test_bash_shell.derive_exec_args("echo hello", true, false),
+            test_bash_shell.derive_exec_args("echo hello", true),
             vec!["/bin/bash", "-lc", "echo hello"]
         );
 
@@ -453,11 +468,11 @@ mod tests {
             shell_snapshot: None,
         };
         assert_eq!(
-            test_zsh_shell.derive_exec_args("echo hello", false, false),
+            test_zsh_shell.derive_exec_args("echo hello", false),
             vec!["/bin/zsh", "-c", "echo hello"]
         );
         assert_eq!(
-            test_zsh_shell.derive_exec_args("echo hello", true, false),
+            test_zsh_shell.derive_exec_args("echo hello", true),
             vec!["/bin/zsh", "-lc", "echo hello"]
         );
 
@@ -467,7 +482,7 @@ mod tests {
             shell_snapshot: None,
         };
         assert_eq!(
-            test_powershell_shell.derive_exec_args("echo hello", false, false),
+            test_powershell_shell.derive_exec_args("echo hello", false),
             vec![
                 "pwsh.exe".to_string(),
                 "-NoProfile".to_string(),
@@ -476,7 +491,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            test_powershell_shell.derive_exec_args("echo hello", true, false),
+            test_powershell_shell.derive_exec_args("echo hello", true),
             vec![
                 "pwsh.exe".to_string(),
                 "-Command".to_string(),
@@ -484,7 +499,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            test_powershell_shell.derive_exec_args("echo hello", false, true),
+            test_powershell_shell.derive_exec_args("echo hello", false),
             vec![
                 "pwsh.exe".to_string(),
                 "-NoProfile".to_string(),
@@ -493,7 +508,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            test_powershell_shell.derive_exec_args("echo hello", true, true),
+            test_powershell_shell.derive_exec_args("echo hello", true),
             vec![
                 "pwsh.exe".to_string(),
                 "-Command".to_string(),

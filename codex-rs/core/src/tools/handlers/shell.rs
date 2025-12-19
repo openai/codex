@@ -44,14 +44,9 @@ impl ShellHandler {
 }
 
 impl ShellCommandHandler {
-    fn base_command(
-        shell: &Shell,
-        command: &str,
-        login: Option<bool>,
-        powershell_utf8_enabled: bool,
-    ) -> Vec<String> {
+    fn base_command(shell: &Shell, command: &str, login: Option<bool>) -> Vec<String> {
         let use_login_shell = login.unwrap_or(true);
-        shell.derive_exec_args(command, use_login_shell, powershell_utf8_enabled)
+        shell.derive_exec_args(command, use_login_shell)
     }
 
     fn to_exec_params(
@@ -60,12 +55,7 @@ impl ShellCommandHandler {
         turn_context: &TurnContext,
     ) -> ExecParams {
         let shell = session.user_shell();
-        let command = Self::base_command(
-            shell.as_ref(),
-            &params.command,
-            params.login,
-            session.features().enabled(Feature::PowershellUtf8),
-        );
+        let command = Self::base_command(shell.as_ref(), &params.command, params.login);
 
         ExecParams {
             command,
@@ -172,8 +162,7 @@ impl ToolHandler for ShellCommandHandler {
         serde_json::from_str::<ShellCommandToolCallParams>(arguments)
             .map(|params| {
                 let shell = invocation.session.user_shell();
-                let command =
-                    Self::base_command(shell.as_ref(), &params.command, params.login, false);
+                let command = Self::base_command(shell.as_ref(), &params.command, params.login);
                 !is_known_safe_command(&command)
             })
             .unwrap_or(true)
@@ -362,18 +351,18 @@ mod tests {
     }
 
     fn assert_safe(shell: &Shell, command: &str) {
-        assert!(is_known_safe_command(&shell.derive_exec_args(
-            command, /* use_login_shell */ true, false
-        )));
-        assert!(is_known_safe_command(&shell.derive_exec_args(
-            command, /* use_login_shell */ false, false
-        )));
-        assert!(is_known_safe_command(&shell.derive_exec_args(
-            command, /* use_login_shell */ true, true
-        )));
-        assert!(is_known_safe_command(&shell.derive_exec_args(
-            command, /* use_login_shell */ false, true
-        )));
+        assert!(is_known_safe_command(
+            &shell.derive_exec_args(command, /* use_login_shell */ true)
+        ));
+        assert!(is_known_safe_command(
+            &shell.derive_exec_args(command, /* use_login_shell */ false)
+        ));
+        assert!(is_known_safe_command(
+            &shell.derive_exec_args(command, /* use_login_shell */ true)
+        ));
+        assert!(is_known_safe_command(
+            &shell.derive_exec_args(command, /* use_login_shell */ false)
+        ));
     }
 
     #[tokio::test]
@@ -387,7 +376,7 @@ mod tests {
         let sandbox_permissions = SandboxPermissions::RequireEscalated;
         let justification = Some("because tests".to_string());
 
-        let expected_command = session.user_shell().derive_exec_args(&command, true, false);
+        let expected_command = session.user_shell().derive_exec_args(&command, true);
         let expected_cwd = turn_context.resolve_path(workdir.clone());
         let expected_env = create_env(&turn_context.shell_environment_policy);
 
@@ -423,17 +412,17 @@ mod tests {
         };
 
         let login_command =
-            ShellCommandHandler::base_command(&shell, "echo login shell", Some(true), false);
+            ShellCommandHandler::base_command(&shell, "echo login shell", Some(true));
         assert_eq!(
             login_command,
-            shell.derive_exec_args("echo login shell", true, false)
+            shell.derive_exec_args("echo login shell", true)
         );
 
         let non_login_command =
-            ShellCommandHandler::base_command(&shell, "echo non login shell", Some(false), false);
+            ShellCommandHandler::base_command(&shell, "echo non login shell", Some(false));
         assert_eq!(
             non_login_command,
-            shell.derive_exec_args("echo non login shell", false, false)
+            shell.derive_exec_args("echo non login shell", false)
         );
     }
 }
