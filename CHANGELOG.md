@@ -11,18 +11,19 @@ edited between the markers.
 
 ### Highlights
 
-- _No fork-only changes yet._
+- Update release metadata in the changelog.
 
 ### Details
 
-<!-- BEGIN GENERATED DETAILS: range=a0947895c7a906deccbbe7a57e6e0b1c4ea66fcb..HEAD -->
-_No fork-only changes yet._
+<!-- BEGIN GENERATED DETAILS: range=79d019672838ccc532247588d31d2eda81fb42d8..HEAD -->
+#### Other
+- Update changelog for 0.1.2 release
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.2] - 2025-12-19
 
 Upstream baseline: openai/codex@be274cbe6273cb17d756a6cda729d537f15ae49a
-Release commit: a0947895c7a906deccbbe7a57e6e0b1c4ea66fcb
+Release commit: 79d019672838ccc532247588d31d2eda81fb42d8
 
 ### Highlights
 
@@ -31,7 +32,7 @@ Release commit: a0947895c7a906deccbbe7a57e6e0b1c4ea66fcb
 
 ### Details
 
-<!-- BEGIN GENERATED DETAILS: range=d02343f99e3260308b2355f26e382ae04b14d7e7..a0947895c7a906deccbbe7a57e6e0b1c4ea66fcb -->
+<!-- BEGIN GENERATED DETAILS: range=d02343f99e3260308b2355f26e382ae04b14d7e7..79d019672838ccc532247588d31d2eda81fb42d8 -->
 #### Plan Mode
 - Deduplicate plan updates in history
 
@@ -48,7 +49,6 @@ Release commit: a0947895c7a906deccbbe7a57e6e0b1c4ea66fcb
 - Avoid working status on resume replay
 - Prevent resume from auto-executing plans
 - Release 0.1.2
-- Update changelog for 0.1.2 release
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.1] - 2025-12-19
