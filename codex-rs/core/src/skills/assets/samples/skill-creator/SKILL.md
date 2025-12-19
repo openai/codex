@@ -216,7 +216,7 @@ Follow these steps in order, skipping only if there is a clear reason why they a
 ### Skill Naming
 
 - Use lowercase letters, digits, and hyphens only; normalize user-provided titles to hyphen-case (e.g., "Plan Mode" -> `plan-mode`).
-- When generating names, generate a name under 30 characters (letters, digits, hyphens).
+- When generating names, generate a name under 64 characters (letters, digits, hyphens).
 - Prefer short, verb-led phrases that describe the action.
 - Namespace by tool when it improves clarity or triggering (e.g., `gh-address-comments`, `linear-address-issue`).
 - Name the skill folder exactly after the skill name.
