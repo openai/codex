@@ -1106,8 +1106,7 @@ impl ChatWidget {
         if self.retry_status_header.is_none() {
             self.retry_status_header = Some(self.current_status_header.clone());
         }
-        self.set_status_header(message);
-        self.bottom_pane.update_status_details(cause_message);
+        self.set_status(message, cause_message);
     }
 
     /// Periodic tick to commit at most one queued line to history with a small delay,
