@@ -73,7 +73,7 @@ pub(crate) fn start_streaming_output(
                             lagged_count += lag_count as u64;
 
                             // Log every 10 seconds if we're losing messages
-                            if last_log_time.elapsed() > std::time::Duration::from_secs(10) {
+                            if last_log_time.elapsed() > Duration::from_secs(10) {
                                 if lagged_count > 0 {
                                     tracing::warn!(
                                         "Unified exec output channel lagging, dropped {} messages for call_id {}",
