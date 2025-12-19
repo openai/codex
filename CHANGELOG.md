@@ -15,8 +15,38 @@ edited between the markers.
 
 ### Details
 
-<!-- BEGIN GENERATED DETAILS: range=d02343f99e3260308b2355f26e382ae04b14d7e7..HEAD -->
-_No fork-only changes yet._
+<!-- BEGIN GENERATED DETAILS: range=8b35db50ec4c5291b3b6ddc91d56346a7fbcb5b7..HEAD -->
+#### Other
+- Release 0.1.2
+<!-- END GENERATED DETAILS -->
+
+## [0.1.2] - 2025-12-19
+
+Upstream baseline: openai/codex@be274cbe6273cb17d756a6cda729d537f15ae49a
+Release commit: 8b35db50ec4c5291b3b6ddc91d56346a7fbcb5b7
+
+### Highlights
+
+- Prevent resume replay from auto-executing plans or showing a working status.
+- Deduplicate plan updates in history and delay rate-limit polling until user input.
+
+### Details
+
+<!-- BEGIN GENERATED DETAILS: range=d02343f99e3260308b2355f26e382ae04b14d7e7..8b35db50ec4c5291b3b6ddc91d56346a7fbcb5b7 -->
+#### Plan Mode
+- Deduplicate plan updates in history
+
+
+#### Branding & Packaging
+- Fix Codexel update actions
+
+
+#### Other
+- Update changelog for 0.1.1 (mac build)
+- Update status snapshots
+- Delay rate limit polling until user input
+- Avoid working status on resume replay
+- Prevent resume from auto-executing plans
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.1] - 2025-12-19
@@ -32,10 +62,6 @@ Release commit: d02343f99e3260308b2355f26e382ae04b14d7e7
 ### Details
 
 <!-- BEGIN GENERATED DETAILS: range=3e57f558eff5b400292a6ad3c9df2721648aed6f..d02343f99e3260308b2355f26e382ae04b14d7e7 -->
-#### Other
-- Skip macOS in npm publish workflow
-
-
 #### Documentation
 - Document changelog workflow in AGENTS
 - Remove interactive questions from AGENTS
@@ -49,6 +75,7 @@ Release commit: d02343f99e3260308b2355f26e382ae04b14d7e7
 #### Other
 - Update changelog for 0.1.1
 - Fix npm publish workflow yaml
+- Skip macOS in npm publish workflow
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.0] - 2025-12-18
