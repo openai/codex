@@ -2370,7 +2370,7 @@ pub(crate) async fn run_task(
     last_agent_message
 }
 
-async fn refresh_models_and_reset_turn_context(
+pub(crate) async fn refresh_models_and_reset_turn_context(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
 ) {

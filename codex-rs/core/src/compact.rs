@@ -6,6 +6,7 @@ use crate::client_common::ResponseEvent;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::get_last_assistant_message_from_turn;
+use crate::codex::refresh_models_and_reset_turn_context;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
@@ -132,6 +133,10 @@ async fn run_compact_task_inner(
             Err(e) => {
                 if retries < max_retries {
                     retries += 1;
+                    if matches!(e, CodexErr::OutdatedModels) {
+                        refresh_models_and_reset_turn_context(&sess, &turn_context).await;
+                        continue;
+                    }
                     let delay = backoff(retries);
                     sess.notify_stream_error(
                         turn_context.as_ref(),
