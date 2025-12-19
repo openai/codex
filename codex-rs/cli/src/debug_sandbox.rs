@@ -140,7 +140,7 @@ async fn run_command_under_sandbox(
             use codex_windows_sandbox::run_windows_sandbox_capture;
             use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
 
-            let policy_str = serde_json::to_string(&config.sandbox_policy)?;
+            let policy_str = serde_json::to_string(config.sandbox_policy.get())?;
 
             let sandbox_cwd = sandbox_policy_cwd.clone();
             let cwd_clone = cwd.clone();
@@ -216,7 +216,7 @@ async fn run_command_under_sandbox(
             spawn_command_under_seatbelt(
                 command,
                 cwd,
-                &config.sandbox_policy,
+                config.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
                 stdio_policy,
                 env,
@@ -232,7 +232,7 @@ async fn run_command_under_sandbox(
                 codex_linux_sandbox_exe,
                 command,
                 cwd,
-                &config.sandbox_policy,
+                config.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
                 stdio_policy,
                 env,
