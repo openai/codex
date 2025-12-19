@@ -31,8 +31,8 @@ prompt_on_block = true
 poll_interval_ms = 1000
 
 [network_proxy.policy]
-allowedDomains = ["example.com", "*.github.com"]
-deniedDomains = ["metadata.google.internal", "169.254.*"]
+allowed_domains = ["example.com", "*.github.com"]
+denied_domains = ["metadata.google.internal", "169.254.*"]
 
 [network_proxy.mitm]
 enabled = false

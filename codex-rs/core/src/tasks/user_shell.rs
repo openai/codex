@@ -93,13 +93,12 @@ impl SessionTask for UserShellCommandTask {
             )
             .await;
 
-        let sandbox_policy = SandboxPolicy::DangerFullAccess;
         let exec_env = ExecEnv {
             command: command.clone(),
             cwd: cwd.clone(),
             env: create_env(
                 &turn_context.shell_environment_policy,
-                &sandbox_policy,
+                &turn_context.sandbox_policy,
                 &turn_context.network_proxy,
             ),
             expiration: USER_SHELL_TIMEOUT_MS.into(),
@@ -115,7 +114,7 @@ impl SessionTask for UserShellCommandTask {
             tx_event: session.get_tx_event(),
         });
 
-        let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream)
+        let exec_result = execute_exec_env(exec_env, &turn_context.sandbox_policy, stdout_stream)
             .or_cancel(&cancellation_token)
             .await;
 

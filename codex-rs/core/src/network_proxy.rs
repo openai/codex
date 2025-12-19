@@ -23,8 +23,8 @@ use wildmatch::WildMatchPattern;
 
 const NETWORK_PROXY_TABLE: &str = "network_proxy";
 const NETWORK_PROXY_POLICY_TABLE: &str = "policy";
-const ALLOWED_DOMAINS_KEY: &str = "allowedDomains";
-const DENIED_DOMAINS_KEY: &str = "deniedDomains";
+const ALLOWED_DOMAINS_KEY: &str = "allowed_domains";
+const DENIED_DOMAINS_KEY: &str = "denied_domains";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct NetworkProxyBlockedRequest {
@@ -421,13 +421,13 @@ struct NetworkProxySection {
 
 #[derive(Default, Deserialize)]
 pub(crate) struct NetworkPolicy {
-    #[serde(default, rename = "allowedDomains")]
+    #[serde(default, rename = "allowed_domains", alias = "allowedDomains")]
     allowed_domains: Vec<String>,
-    #[serde(default, rename = "deniedDomains")]
+    #[serde(default, rename = "denied_domains", alias = "deniedDomains")]
     denied_domains: Vec<String>,
-    #[serde(default, rename = "allowUnixSockets")]
+    #[serde(default, rename = "allow_unix_sockets", alias = "allowUnixSockets")]
     pub(crate) allow_unix_sockets: Vec<String>,
-    #[serde(default, rename = "allowLocalBinding")]
+    #[serde(default, rename = "allow_local_binding", alias = "allowLocalBinding")]
     pub(crate) allow_local_binding: bool,
 }
 

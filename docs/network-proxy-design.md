@@ -45,7 +45,7 @@ flowchart LR
 The proxy reads `~/.codex/config.toml`:
 
 - `[network_proxy]` for endpoints, mode, and toggles.
-- `[network_proxy.policy]` for `allowedDomains` / `deniedDomains`.
+- `[network_proxy.policy]` for `allowed_domains` / `denied_domains`.
 - `[network_proxy.mitm]` for MITM CA paths and inspection settings.
 
 Codex is the source of truth. Approval actions update the config and trigger a proxy reload.

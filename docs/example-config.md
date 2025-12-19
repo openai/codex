@@ -131,12 +131,12 @@ poll_interval_ms = 1000
 
 [network_proxy.policy]
 # Allow localhost binds inside the sandbox (macOS only). Default: false
-allowLocalBinding = false
+allow_local_binding = false
 # Allow Unix socket paths inside the sandbox (macOS only). Default: []
-allowUnixSockets = []
+allow_unix_sockets = []
 # Optional domain allow/deny lists (denylist wins)
-allowedDomains = []
-deniedDomains = []
+allowed_domains = []
+denied_domains = []
 
 ################################################################################
 # Shell Environment Policy for spawned processes
