@@ -20,6 +20,7 @@ use codex_core::terminal::TerminalInfo;
 use codex_core::terminal::TerminalName;
 use std::time::Duration;
 use std::time::Instant;
+use tracing::trace;
 
 /// Number of inter-event intervals used for burst detection.
 const INTERVAL_WINDOW: usize = 3;
@@ -104,7 +105,8 @@ impl ScrollTuning {
             TerminalName::AppleTerminal => Self::default(),
             // Wheel: often single event, but slower than frame cadence.
             // Trackpad: cadence clusters around ~16-17ms.
-            // Outcome: frame events stay at 1 line; slower events map to 3 lines for wheel steps.
+            // Outcome: frame events stay at 1 line; slower events map to 3 lines when a short
+            // sequence is detected, while isolated slow events stay at 1 line.
             TerminalName::Iterm2 => Self {
                 fast_threshold: Duration::from_millis(5),
                 frame_threshold: Duration::from_millis(20),
@@ -168,6 +170,9 @@ pub(crate) struct MouseScrollState {
 
     /// Next insertion index for the rolling interval buffer.
     interval_index: usize,
+
+    /// Number of consecutive intervals within the sequence window.
+    sequence_count: usize,
 }
 
 impl MouseScrollState {
@@ -196,11 +201,21 @@ impl MouseScrollState {
             let total = self.fast_remainder + tuning.fast_lines;
             let lines = total / tuning.fast_divisor;
             self.fast_remainder = total % tuning.fast_divisor;
-            return if lines == 0 {
+            let signed_lines = if lines == 0 {
                 0
             } else {
                 direction.signed_lines(lines)
             };
+            self.trace_scroll(
+                direction,
+                tuning,
+                cadence,
+                total,
+                lines,
+                signed_lines,
+                "burst",
+            );
+            return signed_lines;
         }
 
         self.fast_remainder = 0;
@@ -208,11 +223,22 @@ impl MouseScrollState {
         let elapsed = cadence.elapsed.unwrap_or(Duration::MAX);
         let lines = if elapsed <= tuning.frame_threshold {
             tuning.frame_lines
-        } else {
+        } else if cadence.has_sequence {
             tuning.slow_lines
+        } else {
+            1
         };
 
-        direction.signed_lines(lines)
+        let signed_lines = direction.signed_lines(lines);
+        let reason = if elapsed <= tuning.frame_threshold {
+            "frame"
+        } else if cadence.has_sequence {
+            "sequence"
+        } else {
+            "single"
+        };
+        self.trace_scroll(direction, tuning, cadence, 0, lines, signed_lines, reason);
+        signed_lines
     }
 
     /// Updates the cadence buffer and returns elapsed/burst classification for the new event.
@@ -233,11 +259,20 @@ impl MouseScrollState {
         };
 
         if let Some(elapsed) = elapsed {
+            let sequence_window = tuning.frame_threshold.saturating_mul(4);
+            if elapsed <= sequence_window {
+                self.sequence_count = self.sequence_count.saturating_add(1);
+            } else {
+                self.sequence_count = 0;
+            }
+
             if elapsed <= tuning.frame_threshold {
                 self.push_interval(elapsed);
             } else {
                 self.reset_intervals();
             }
+        } else {
+            self.sequence_count = 0;
         }
 
         self.last_event_at = Some(now);
@@ -247,8 +282,13 @@ impl MouseScrollState {
             && self
                 .median_interval()
                 .is_some_and(|median| median <= tuning.fast_threshold);
+        let has_sequence = self.sequence_count >= 2;
 
-        Cadence { elapsed, is_burst }
+        Cadence {
+            elapsed,
+            is_burst,
+            has_sequence,
+        }
     }
 
     fn reset_intervals(&mut self) {
@@ -273,6 +313,34 @@ impl MouseScrollState {
         intervals[..count].sort_unstable();
         Some(intervals[count / 2])
     }
+
+    fn trace_scroll(
+        &self,
+        direction: ScrollDirection,
+        tuning: ScrollTuning,
+        cadence: Cadence,
+        burst_total: i32,
+        lines: i32,
+        signed_lines: i32,
+        reason: &'static str,
+    ) {
+        trace!(
+            target: "tui2::scrolling",
+            direction = ?direction,
+            reason,
+            elapsed_ms = cadence.elapsed.map(|elapsed| elapsed.as_millis()),
+            fast_threshold_ms = tuning.fast_threshold.as_millis(),
+            frame_threshold_ms = tuning.frame_threshold.as_millis(),
+            interval_count = self.interval_count,
+            sequence_count = self.sequence_count,
+            is_burst = cadence.is_burst,
+            has_sequence = cadence.has_sequence,
+            burst_total,
+            lines,
+            signed_lines,
+            "scroll cadence",
+        );
+    }
 }
 
 /// Cadence details for the most recent event.
@@ -282,6 +350,8 @@ struct Cadence {
     elapsed: Option<Duration>,
     /// Whether the rolling window indicates a sustained burst.
     is_burst: bool,
+    /// Whether recent events form a short sequence that supports wheel inference.
+    has_sequence: bool,
 }
 
 #[cfg(test)]
@@ -347,6 +417,25 @@ mod tests {
 
         assert_eq!(frame_delta, 1);
         assert_eq!(slow_delta, 3);
+    }
+
+    #[test]
+    fn iterm_single_slow_event_stays_one_line() {
+        let tuning = ScrollTuning::for_terminal(&terminal_info_named(TerminalName::Iterm2));
+        let base = Instant::now();
+        let mut state = MouseScrollState {
+            last_event_at: Some(base),
+            last_direction: Some(ScrollDirection::Down),
+            ..MouseScrollState::default()
+        };
+
+        let slow_delta = state.delta_lines_at(
+            base + Duration::from_millis(40),
+            ScrollDirection::Down,
+            tuning,
+        );
+
+        assert_eq!(slow_delta, 1);
     }
 
     #[test]
