@@ -113,7 +113,7 @@ pub struct Config {
     /// Approval policy for executing commands.
     pub approval_policy: Constrained<AskForApproval>,
 
-    pub sandbox_policy: SandboxPolicy,
+    pub sandbox_policy: Constrained<SandboxPolicy>,
 
     /// True if the user passed in an override or set a value in config.toml
     /// for either of approval_policy or sandbox_mode.
@@ -1235,10 +1235,14 @@ impl Config {
         // Config.
         let ConfigRequirements {
             approval_policy: mut constrained_approval_policy,
+            sandbox_policy: mut constrained_sandbox_policy,
         } = requirements;
 
         constrained_approval_policy
             .set(approval_policy)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
+        constrained_sandbox_policy
+            .set(sandbox_policy)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
         let config = Self {
@@ -1250,7 +1254,7 @@ impl Config {
             model_provider,
             cwd: resolved_cwd,
             approval_policy: constrained_approval_policy,
-            sandbox_policy,
+            sandbox_policy: constrained_sandbox_policy,
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
@@ -1672,12 +1676,12 @@ trust_level = "trusted"
                 config.forced_auto_mode_downgraded_on_windows,
                 "expected workspace-write request to be downgraded on Windows"
             );
-            match config.sandbox_policy {
-                SandboxPolicy::ReadOnly => {}
+            match config.sandbox_policy.get() {
+                &SandboxPolicy::ReadOnly => {}
                 other => panic!("expected read-only policy on Windows, got {other:?}"),
             }
         } else {
-            match config.sandbox_policy {
+            match config.sandbox_policy.get() {
                 SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
                     assert_eq!(
                         writable_roots
@@ -1809,8 +1813,8 @@ trust_level = "trusted"
         )?;
 
         assert!(matches!(
-            config.sandbox_policy,
-            SandboxPolicy::DangerFullAccess
+            config.sandbox_policy.get(),
+            &SandboxPolicy::DangerFullAccess
         ));
         assert!(config.did_user_set_custom_approval_policy_or_sandbox_mode);
 
@@ -1846,11 +1850,14 @@ trust_level = "trusted"
         )?;
 
         if cfg!(target_os = "windows") {
-            assert!(matches!(config.sandbox_policy, SandboxPolicy::ReadOnly));
+            assert!(matches!(
+                config.sandbox_policy.get(),
+                SandboxPolicy::ReadOnly
+            ));
             assert!(config.forced_auto_mode_downgraded_on_windows);
         } else {
             assert!(matches!(
-                config.sandbox_policy,
+                config.sandbox_policy.get(),
                 SandboxPolicy::WorkspaceWrite { .. }
             ));
             assert!(!config.forced_auto_mode_downgraded_on_windows);
@@ -3048,7 +3055,7 @@ model_verbosity = "high"
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3123,7 +3130,7 @@ model_verbosity = "high"
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3213,7 +3220,7 @@ model_verbosity = "high"
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3289,7 +3296,7 @@ model_verbosity = "high"
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3634,12 +3641,15 @@ trust_level = "untrusted"
         // Verify that untrusted projects still get WorkspaceWrite sandbox (or ReadOnly on Windows)
         if cfg!(target_os = "windows") {
             assert!(
-                matches!(config.sandbox_policy, SandboxPolicy::ReadOnly),
+                matches!(config.sandbox_policy.get(), SandboxPolicy::ReadOnly),
                 "Expected ReadOnly on Windows"
             );
         } else {
             assert!(
-                matches!(config.sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }),
+                matches!(
+                    config.sandbox_policy.get(),
+                    SandboxPolicy::WorkspaceWrite { .. }
+                ),
                 "Expected WorkspaceWrite sandbox for untrusted project"
             );
         }
