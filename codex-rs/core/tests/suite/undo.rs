@@ -533,10 +533,7 @@ async fn undo_preserves_unrelated_staged_changes() -> Result<()> {
     // The second column will likely be 'M' because the worktree was reverted to v1 while index has v2.
     // So "MM user_file.txt" is expected.
     if !status_after.contains("MM user_file.txt") && !status_after.contains("M  user_file.txt") {
-        bail!(
-            "Status should contain staged change (M in first col), but was: '{}'",
-            status_after
-        );
+        bail!("Status should contain staged change (M in first col), but was: '{status_after}'");
     }
 
     // Disk content is reverted to v1 (snapshot state)
