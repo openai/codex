@@ -2177,10 +2177,11 @@ impl ChatWidget {
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TaskStarted(_) => self.on_task_started(),
-            EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
+            EventMsg::TaskStarted(_) if !from_replay => self.on_task_started(),
+            EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) if !from_replay => {
                 self.on_task_complete(last_agent_message)
             }
+            EventMsg::TaskStarted(_) | EventMsg::TaskComplete(_) => {}
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
@@ -2241,14 +2242,15 @@ impl ChatWidget {
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::DeprecationNotice(ev) => self.on_deprecation_notice(ev),
-            EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
+            EventMsg::BackgroundEvent(BackgroundEventEvent { message }) if !from_replay => {
                 self.on_background_event(message)
             }
-            EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
+            EventMsg::UndoStarted(ev) if !from_replay => self.on_undo_started(ev),
             EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
-            EventMsg::StreamError(StreamErrorEvent { message, .. }) => {
+            EventMsg::StreamError(StreamErrorEvent { message, .. }) if !from_replay => {
                 self.on_stream_error(message)
             }
+            EventMsg::BackgroundEvent(_) | EventMsg::UndoStarted(_) | EventMsg::StreamError(_) => {}
             EventMsg::UserMessage(ev) => {
                 if from_replay {
                     self.on_user_message_event(ev);
