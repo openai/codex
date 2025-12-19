@@ -29,7 +29,7 @@ metrics.histogram("codex.request_latency", 83, &buckets, &[("route", "chat")])?;
 - `with_timeout(duration)` to override the HTTP timeout (default 10s).
 - `with_user_agent(agent)` to override the user agent.
 
-Use `MetricsClient::with_capacity(config, capacity)` to override the default queue capacity.
+The queue capacity is fixed at 1024 entries.
 
 ## Buckets
 
@@ -47,7 +47,8 @@ metrics.counter("codex.session_started", 1, &[("source", "tui")])?;
 ```
 
 Histograms are translated into bucket counters by adding an `le` tag for each
-bound that is greater than or equal to the value (or `inf` if none match), following the statsd standards:
+bound that is greater than or equal to the value, plus a final `le=inf` bucket
+so the histogram is cumulative per the statsd `le` convention:
 
 ```rust
 metrics.histogram("codex.request_latency", 83, &buckets, &[("route", "chat")])?;
@@ -88,7 +89,7 @@ metrics.record_duration(
 
 ## Batching
 
-Batching reduces network requests. Build a batch and send it once:
+Batching reduces network requests and ensure metrics have the same timestamp.
 
 ```rust
 let mut batch = metrics.batch();
@@ -103,8 +104,7 @@ The client uses a bounded queue (default capacity 1024). Enqueueing returns a
 `MetricsError::QueueFull` error if the queue is full or `MetricsError::WorkerUnavailable`
 if the worker is no longer running.
 
-`shutdown` waits up to 500ms for the worker to stop. Use `shutdown_with_timeout`
-to override the timeout.
+`shutdown` waits up to 500ms for the worker to stop.
 
 Uploads are best-effort; if the worker encounters a send error, the metric is
 dropped (if in `alpha`, or debug mode, the worker will panic on errors).

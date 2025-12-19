@@ -1,11 +1,10 @@
+use crate::STATSD_CONTENT_TYPE;
 use crate::error::MetricsError;
 use crate::error::Result;
 use crate::validation::validate_metric_name;
 use crate::validation::validate_tag_component;
 use sentry::types::Dsn;
 use std::collections::BTreeMap;
-
-const STATSD_CONTENT_TYPE: &str = "text/plain";
 
 pub(crate) struct StatsdLine {
     name: String,

@@ -1,11 +1,9 @@
+use crate::DEFAULT_TIMEOUT;
+use crate::SENTRY_DSN;
 use crate::error::Result;
 use crate::validation::validate_tag_component;
 use std::collections::BTreeMap;
 use std::time::Duration;
-
-const SENTRY_DSN: &str =
-    "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug)]
 pub struct MetricsConfig {

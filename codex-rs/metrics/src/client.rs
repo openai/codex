@@ -1,3 +1,7 @@
+use crate::DEFAULT_QUEUE_CAPACITY;
+use crate::DEFAULT_SHUTDOWN_TIMEOUT;
+use crate::ENVELOPE_CONTENT_TYPE;
+use crate::SHUTDOWN_POLL_INTERVAL;
 use crate::batch::HistogramBuckets;
 use crate::batch::MetricsBatch;
 use crate::config::MetricsConfig;
@@ -18,11 +22,6 @@ use std::sync::mpsc::TrySendError;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
-
-const ENVELOPE_CONTENT_TYPE: &str = "application/x-sentry-envelope";
-const DEFAULT_QUEUE_CAPACITY: usize = 1024;
-const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(500);
-const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 enum WorkerMessage {
     Batch(MetricsBatch),
@@ -89,11 +88,8 @@ pub struct MetricsClient {
 impl MetricsClient {
     /// Build a metrics client from configuration and validate defaults.
     pub fn new(config: MetricsConfig) -> Result<Self> {
-        Self::with_capacity(config, DEFAULT_QUEUE_CAPACITY)
-    }
+        let capacity = DEFAULT_QUEUE_CAPACITY;
 
-    /// Build a metrics client with a bounded queue capacity.
-    pub fn with_capacity(config: MetricsConfig, capacity: usize) -> Result<Self> {
         if capacity == 0 {
             return Err(MetricsError::QueueCapacityZero);
         }
@@ -233,11 +229,10 @@ impl MetricsClient {
 
     /// Flush queued metrics and stop the worker thread.
     pub fn shutdown(&self) -> Result<()> {
-        self.shutdown_with_timeout(DEFAULT_SHUTDOWN_TIMEOUT)
+        self.shutdown_inner(DEFAULT_SHUTDOWN_TIMEOUT)
     }
 
-    /// Flush queued metrics and stop the worker thread, waiting up to `timeout`.
-    pub fn shutdown_with_timeout(&self, timeout: Duration) -> Result<()> {
+    fn shutdown_inner(&self, timeout: Duration) -> Result<()> {
         let sender = self
             .state
             .sender
@@ -280,7 +275,7 @@ impl MetricsClient {
 impl Drop for MetricsClient {
     fn drop(&mut self) {
         if Arc::strong_count(&self.state) == 1 {
-            let _ = self.shutdown_with_timeout(DEFAULT_SHUTDOWN_TIMEOUT);
+            let _ = self.shutdown_inner(DEFAULT_SHUTDOWN_TIMEOUT);
         }
     }
 }

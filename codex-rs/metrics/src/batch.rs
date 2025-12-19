@@ -131,18 +131,14 @@ impl MetricsBatch {
         tags: &[(&str, &str)],
     ) -> Result<()> {
         let base_tags = collect_tags(tags)?;
-        let mut matched = false;
         for bound in buckets.bounds.iter().filter(|bound| value <= **bound) {
             let mut tags = base_tags.clone();
             tags.push(("le".to_string(), bound.to_string()));
             self.lines.push(StatsdLine::counter(name, 1, tags)?);
-            matched = true;
         }
-        if !matched {
-            let mut tags = base_tags;
-            tags.push(("le".to_string(), "inf".to_string()));
-            self.lines.push(StatsdLine::counter(name, 1, tags)?);
-        }
+        let mut tags = base_tags;
+        tags.push(("le".to_string(), "inf".to_string()));
+        self.lines.push(StatsdLine::counter(name, 1, tags)?);
         Ok(())
     }
 

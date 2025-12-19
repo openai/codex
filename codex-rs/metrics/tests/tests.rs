@@ -202,7 +202,7 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
     );
 
     let lines: Vec<&str> = envelope.payload.split('\n').collect();
-    assert_eq!(lines.len(), 4);
+    assert_eq!(lines.len(), 5);
 
     let line = parse_statsd_line(lines[0]);
     assert_eq!(line.name, "codex.turns");
@@ -215,7 +215,7 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
     assert_eq!(line.tags.get("env").map(String::as_str), Some("dev"));
     assert_eq!(line.tags.get("model").map(String::as_str), Some("gpt-5.1"));
 
-    for (line, expected_le) in lines.iter().skip(1).zip(["25", "50", "100"]) {
+    for (line, expected_le) in lines.iter().skip(1).zip(["25", "50", "100", "inf"]) {
         let line = parse_statsd_line(line);
         assert_eq!(line.name, "codex.tool_latency");
         assert_eq!(line.value, 1);
@@ -272,12 +272,15 @@ fn record_duration_uses_matching_bucket() -> Result<()> {
     let captured = handle.join().expect("server thread");
     let envelope = parse_envelope(&captured.body);
     let lines: Vec<&str> = envelope.payload.split('\n').collect();
-    assert_eq!(lines.len(), 1);
+    assert_eq!(lines.len(), 2);
 
     let line = parse_statsd_line(lines[0]);
     assert_eq!(line.name, "codex.request_latency");
     assert_eq!(line.tags.get("route").map(String::as_str), Some("chat"));
     assert_eq!(line.tags.get("le").map(String::as_str), Some("20"));
+
+    let line = parse_statsd_line(lines[1]);
+    assert_eq!(line.tags.get("le").map(String::as_str), Some("inf"));
 
     Ok(())
 }
@@ -302,8 +305,13 @@ fn time_result_records_success() -> Result<()> {
     let envelope = parse_envelope(&captured.body);
     let lines: Vec<&str> = envelope.payload.split('\n').collect();
     assert!(!lines.is_empty());
-    for line in lines {
-        let line = parse_statsd_line(line);
+    let parsed: Vec<ParsedStatsdLine> = lines.iter().map(parse_statsd_line).collect();
+    assert!(
+        parsed
+            .iter()
+            .any(|line| { line.tags.get("le").map(String::as_str) == Some("inf") })
+    );
+    for line in parsed {
         assert_eq!(line.name, "codex.request_latency");
         assert_eq!(line.tags.get("route").map(String::as_str), Some("chat"));
         assert!(line.tags.contains_key("le"));
@@ -334,8 +342,13 @@ fn time_result_records_on_error() -> Result<()> {
     let envelope = parse_envelope(&captured.body);
     let lines: Vec<&str> = envelope.payload.split('\n').collect();
     assert!(!lines.is_empty());
-    for line in lines {
-        let line = parse_statsd_line(line);
+    let parsed: Vec<ParsedStatsdLine> = lines.iter().map(parse_statsd_line).collect();
+    assert!(
+        parsed
+            .iter()
+            .any(|line| { line.tags.get("le").map(String::as_str) == Some("inf") })
+    );
+    for line in parsed {
         assert_eq!(line.name, "codex.request_latency");
         assert_eq!(line.tags.get("route").map(String::as_str), Some("chat"));
         assert!(line.tags.contains_key("le"));
@@ -348,7 +361,7 @@ fn time_result_records_on_error() -> Result<()> {
 #[test]
 fn client_sends_enqueued_batch() -> Result<()> {
     let (dsn, handle) = spawn_server(200);
-    let metrics = MetricsClient::with_capacity(MetricsConfig::new(dsn), 8)?;
+    let metrics = MetricsClient::new(MetricsConfig::new(dsn))?;
 
     let mut batch = metrics.batch();
     batch.counter("codex.turns", 1, &[("model", "gpt-5.1")])?;
