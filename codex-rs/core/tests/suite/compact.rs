@@ -1229,6 +1229,106 @@ async fn auto_compact_runs_after_token_limit_hit() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_uses_estimate_when_usage_is_zero() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let large_user_msg = "x".repeat(40_000);
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", AUTO_SUMMARY_TEXT),
+        ev_completed("r2"),
+    ]);
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed("r3"),
+    ]);
+
+    let follow_up_msg = POST_AUTO_USER_MSG;
+    let large_user_msg_fragment = large_user_msg.clone();
+    let first_matcher = move |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(&large_user_msg_fragment)
+            && !body_contains_text(body, follow_up_msg)
+            && !body_contains_text(body, SUMMARIZATION_PROMPT)
+    };
+    mount_sse_once_match(&server, first_matcher, sse1).await;
+
+    let auto_compact_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body_contains_text(body, SUMMARIZATION_PROMPT)
+    };
+    mount_sse_once_match(&server, auto_compact_matcher, sse2).await;
+
+    let follow_up_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body_contains_text(body, follow_up_msg) && !body_contains_text(body, SUMMARIZATION_PROMPT)
+    };
+    mount_sse_once_match(&server, follow_up_matcher, sse3).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home).await;
+    config.model_provider = model_provider;
+    set_test_compact_prompt(&mut config);
+    config.model_auto_compact_token_limit = Some(15_000);
+    let conversation_manager = ConversationManager::with_models_provider(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+    );
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: large_user_msg.clone(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: follow_up_msg.to_string(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = get_responses_requests(&server).await;
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected user turn, auto compact, and follow-up request"
+    );
+    let auto_compact_index = requests
+        .iter()
+        .enumerate()
+        .find_map(|(idx, req)| {
+            let body = std::str::from_utf8(&req.body).unwrap_or("");
+            body_contains_text(body, SUMMARIZATION_PROMPT).then_some(idx)
+        })
+        .expect("auto compact request missing");
+    assert_eq!(
+        auto_compact_index, 1,
+        "auto compact should run before the follow-up turn when usage is zero",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_persists_rollout_entries() {
     skip_if_no_network!();
 
