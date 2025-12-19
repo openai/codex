@@ -953,7 +953,9 @@ impl App {
             self.transcript_scroll
                 .scrolled_by(delta_lines, &line_meta, visible_lines);
 
-        tui.frame_requester().schedule_frame();
+        // Delay redraws slightly so scroll bursts coalesce into a single frame.
+        tui.frame_requester()
+            .schedule_frame_in(Duration::from_millis(16));
     }
 
     /// Convert a `ToBottom` (auto-follow) scroll state into a fixed anchor at the current view.
