@@ -2,6 +2,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as vscode from "vscode";
+import { parse as shellParse } from "shell-quote";
 import { BackendManager } from "./backend/manager";
 import type { AnyServerNotification } from "./backend/types";
 import type { RateLimitSnapshot } from "./generated/v2/RateLimitSnapshot";
@@ -89,6 +90,7 @@ export function activate(context: vscode.ExtensionContext): void {
     saveSessions(context, sessions!);
     sessionTree?.refresh();
     setActiveSession(s.id);
+    refreshCustomPromptsFromDisk();
     void showCodexMineViewContainer();
   };
   backendManager.onApprovalRequest = async (session, req) => {
@@ -352,6 +354,7 @@ export function activate(context: vscode.ExtensionContext): void {
         const res = await backendManager.resumeSession(session);
         hydrateRuntimeFromThread(session.id, res.thread);
         setActiveSession(session.id);
+        refreshCustomPromptsFromDisk();
         await showCodexMineViewContainer();
         output.show(true);
       },
@@ -563,34 +566,19 @@ function parseSlashName(line: string): { name: string; rest: string } | null {
 
 function splitArgs(input: string): string[] {
   const out: string[] = [];
-  let cur = "";
-  let inQuotes = false;
-  let escape = false;
-  for (let i = 0; i < input.length; i += 1) {
-    const ch = input[i] ?? "";
-    if (escape) {
-      cur += ch;
-      escape = false;
+  const parts = shellParse(input);
+  for (const part of parts) {
+    if (typeof part === "string") {
+      if (part) out.push(part);
       continue;
     }
-    if (ch === "\\") {
-      escape = true;
+    if (part && typeof part === "object" && "op" in part) {
+      const op = (part as { op?: unknown }).op;
+      if (typeof op === "string" && op) out.push(op);
       continue;
     }
-    if (ch === "\"") {
-      inQuotes = !inQuotes;
-      continue;
-    }
-    if (!inQuotes && /\s/.test(ch)) {
-      if (cur) {
-        out.push(cur);
-        cur = "";
-      }
-      continue;
-    }
-    cur += ch;
+    if (part != null) out.push(String(part));
   }
-  if (cur) out.push(cur);
   return out;
 }
 
@@ -751,12 +739,6 @@ async function handleSlashCommand(
 
   const [cmd, ...rest] = trimmed.slice(1).split(/\s+/);
   const arg = rest.join(" ").trim();
-
-  if (cmd === "compact") {
-    if (!backendManager) throw new Error("backendManager is not initialized");
-    await backendManager.compactSession(session);
-    return true;
-  }
 
   const expandedPrompt = expandCustomPromptIfAny(trimmed, customPrompts);
   if (expandedPrompt.kind === "expanded") {

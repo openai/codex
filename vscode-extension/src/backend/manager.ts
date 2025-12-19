@@ -109,6 +109,7 @@ export class BackendManager implements vscode.Disposable {
       config: null,
       baseInstructions: null,
       developerInstructions: null,
+      experimentalRawEvents: false,
     };
     const res = await proc.threadStart(params);
 
@@ -177,23 +178,6 @@ export class BackendManager implements vscode.Disposable {
       throw new Error("Backend is not running for this workspace folder");
 
     await proc.threadArchive({ threadId: session.threadId });
-  }
-
-  public async compactSession(session: Session): Promise<void> {
-    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
-    if (!folder) {
-      throw new Error(
-        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
-      );
-    }
-
-    await this.startForWorkspaceFolder(folder);
-    const proc = this.processes.get(session.backendKey);
-    if (!proc)
-      throw new Error("Backend is not running for this workspace folder");
-
-    this.output.appendLine(`\n>> (${session.title}) /compact`);
-    await proc.threadCompact({ threadId: session.threadId });
   }
 
   public latestDiff(session: Session): string | null {

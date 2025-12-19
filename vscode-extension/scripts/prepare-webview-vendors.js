@@ -5,13 +5,14 @@ const path = require("node:path");
 
 function main() {
   const repoRoot = path.resolve(__dirname, "..");
-  const src = path.join(
-    repoRoot,
-    "node_modules",
-    "markdown-it",
-    "dist",
-    "markdown-it.min.js",
-  );
+  const src = (() => {
+    const rel = path.join("markdown-it", "dist", "markdown-it.min.js");
+    try {
+      return require.resolve(rel, { paths: [repoRoot] });
+    } catch {
+      return require.resolve(rel, { paths: [path.resolve(repoRoot, "..")] });
+    }
+  })();
   const destDir = path.resolve(__dirname, "../resources/vendor");
   const dest = path.join(destDir, "markdown-it.min.js");
 

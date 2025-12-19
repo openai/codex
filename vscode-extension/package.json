@@ -1,6 +1,6 @@
 {
   "name": "codex-ui-vscode-extension",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "displayName": "Codex UI",
   "publisher": "harukary7518",
   "description": "Use Codex CLI (app-server) inside VS Code: sessions, chat, tools, diffs.",
@@ -152,8 +152,12 @@
     "vsix:package": "pnpm run compile && npx --yes @vscode/vsce package",
     "regen:protocol": "node ./scripts/regen-protocol.js"
   },
+  "dependencies": {
+    "shell-quote": "^1.8.1"
+  },
   "devDependencies": {
     "@types/node": "^20.19.18",
+    "@types/shell-quote": "^1.7.5",
     "@types/vscode": "^1.90.0",
     "markdown-it": "^14.1.0",
     "prettier": "^3.6.2",

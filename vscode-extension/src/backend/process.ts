@@ -14,8 +14,6 @@ import type { TurnStartParams } from "../generated/v2/TurnStartParams";
 import type { TurnStartResponse } from "../generated/v2/TurnStartResponse";
 import type { ThreadArchiveParams } from "../generated/v2/ThreadArchiveParams";
 import type { ThreadArchiveResponse } from "../generated/v2/ThreadArchiveResponse";
-import type { ThreadCompactParams } from "../generated/v2/ThreadCompactParams";
-import type { ThreadCompactResponse } from "../generated/v2/ThreadCompactResponse";
 import type { ApprovalDecision } from "../generated/v2/ApprovalDecision";
 import type { CommandExecutionRequestApprovalResponse } from "../generated/v2/CommandExecutionRequestApprovalResponse";
 import type { FileChangeRequestApprovalResponse } from "../generated/v2/FileChangeRequestApprovalResponse";
@@ -119,15 +117,6 @@ export class BackendProcess implements vscode.Disposable {
   ): Promise<ThreadArchiveResponse> {
     return this.rpc.request<ThreadArchiveResponse>({
       method: "thread/archive",
-      params,
-    });
-  }
-
-  public async threadCompact(
-    params: ThreadCompactParams,
-  ): Promise<ThreadCompactResponse> {
-    return this.rpc.request<ThreadCompactResponse>({
-      method: "thread/compact",
       params,
     });
   }

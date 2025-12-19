@@ -84,6 +84,8 @@ Custom prompts:
 - If the backend sends `list_custom_prompts_response`, the list is replaced with that payload
 - Commands are invoked as `/prompts:<prompt-name>`
 - The prompt body is expanded before sending (supports `$1..$9`, `$ARGUMENTS`, and `$NAME` placeholders)
+- Prompts are reloaded when a session is created or selected in the extension
+- Prompt arguments are parsed with `shell-quote` (shlex-like quoting support)
 
 Unknown commands are passed through to the backend (no local error).
 Custom prompts only execute via `/prompts:<name>`; UI commands (`/new`, `/diff`, `/rename`, `/help`)
