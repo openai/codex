@@ -7,11 +7,15 @@ use crate::tools::handlers::APPROVE_PLAN_TOOL_NAME;
 use crate::tools::handlers::ASK_USER_QUESTION_TOOL_NAME;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::PROPOSE_PLAN_VARIANTS_TOOL_NAME;
+use crate::tools::handlers::SPAWN_SUBAGENT_LABEL_PREFIX;
+use crate::tools::handlers::SPAWN_SUBAGENT_TOOL_NAME;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::registry::ToolRegistryBuilder;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -28,6 +32,14 @@ Use `ask_user_question` when you need the user to make a decision or clarify req
 - Do not include an "Other" option; the UI provides it automatically.
 - Do not include numbering in option labels (e.g. "1:", "2.", "A)"); the UI provides numbering.
 - If you recommend an option, put it first and add "(Recommended)" to its label.
+"#;
+
+pub(crate) const SPAWN_SUBAGENT_DEVELOPER_INSTRUCTIONS: &str = r#"## SpawnSubagent
+Use `spawn_subagent` to delegate short, read-only research tasks. Subagents cannot edit files, cannot ask the user questions, and should return a concise plain-text response.
+
+- Use for parallel exploration or focused research when the main agent should not block.
+- Provide a clear, self-contained prompt; subagents do not see hidden context.
+- Keep prompts small and scoped; avoid large file dumps.
 "#;
 
 pub(crate) fn prepend_ask_user_question_developer_instructions(
@@ -47,18 +59,37 @@ pub(crate) fn prepend_ask_user_question_developer_instructions(
     }
 }
 
+pub(crate) fn prepend_spawn_subagent_developer_instructions(
+    developer_instructions: Option<String>,
+) -> Option<String> {
+    if let Some(existing) = developer_instructions.as_deref()
+        && (existing.contains(SPAWN_SUBAGENT_TOOL_NAME) || existing.contains("SpawnSubagent"))
+    {
+        return developer_instructions;
+    }
+
+    match developer_instructions {
+        Some(existing) => Some(format!(
+            "{SPAWN_SUBAGENT_DEVELOPER_INSTRUCTIONS}\n{existing}"
+        )),
+        None => Some(SPAWN_SUBAGENT_DEVELOPER_INSTRUCTIONS.to_string()),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
+    pub include_spawn_subagent_tool: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_family: &'a ModelFamily,
     pub(crate) features: &'a Features,
+    pub(crate) session_source: &'a SessionSource,
 }
 
 impl ToolsConfig {
@@ -66,8 +97,16 @@ impl ToolsConfig {
         let ToolsConfigParams {
             model_family,
             features,
+            session_source,
         } = params;
-        let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
+        let disable_apply_patch_tool = matches!(
+            session_source,
+            SessionSource::SubAgent(SubAgentSource::Other(label))
+                if label.starts_with(SPAWN_SUBAGENT_LABEL_PREFIX)
+        );
+        let allow_apply_patch_tool = !disable_apply_patch_tool;
+        let include_apply_patch_tool =
+            allow_apply_patch_tool && features.enabled(Feature::ApplyPatchFreeform);
         let include_web_search_request = features.enabled(Feature::WebSearchRequest);
         let include_view_image_tool = features.enabled(Feature::ViewImageTool);
 
@@ -85,8 +124,12 @@ impl ToolsConfig {
         };
 
         let apply_patch_tool_type = match model_family.apply_patch_tool_type {
-            Some(ApplyPatchToolType::Freeform) => Some(ApplyPatchToolType::Freeform),
-            Some(ApplyPatchToolType::Function) => Some(ApplyPatchToolType::Function),
+            Some(ApplyPatchToolType::Freeform) => {
+                allow_apply_patch_tool.then_some(ApplyPatchToolType::Freeform)
+            }
+            Some(ApplyPatchToolType::Function) => {
+                allow_apply_patch_tool.then_some(ApplyPatchToolType::Function)
+            }
             None => {
                 if include_apply_patch_tool {
                     Some(ApplyPatchToolType::Freeform)
@@ -101,6 +144,7 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_request: include_web_search_request,
             include_view_image_tool,
+            include_spawn_subagent_tool: !matches!(session_source, SessionSource::SubAgent(_)),
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
@@ -474,6 +518,38 @@ fn create_propose_plan_variants_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties: root_props,
             required: Some(vec!["goal".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_spawn_subagent_tool() -> ToolSpec {
+    let mut root_props = BTreeMap::new();
+    root_props.insert(
+        "prompt".to_string(),
+        JsonSchema::String {
+            description: Some("Prompt to send to the read-only subagent.".to_string()),
+        },
+    );
+    root_props.insert(
+        "label".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional short label for the subagent session (letters, numbers, _ or -)."
+                    .to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: SPAWN_SUBAGENT_TOOL_NAME.to_string(),
+        description:
+            "Spawn a read-only subagent to handle a focused prompt and return its response."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties: root_props,
+            required: Some(vec!["prompt".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1215,6 +1291,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
+    use crate::tools::handlers::SpawnSubagentHandler;
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
@@ -1230,6 +1307,7 @@ pub(crate) fn build_specs(
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
     let ask_user_question_handler = Arc::new(AskUserQuestionHandler);
+    let spawn_subagent_handler = Arc::new(SpawnSubagentHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
@@ -1281,6 +1359,11 @@ pub(crate) fn build_specs(
 
     builder.push_spec(create_propose_plan_variants_tool());
     builder.register_handler(PROPOSE_PLAN_VARIANTS_TOOL_NAME, plan_variants_handler);
+
+    if config.include_spawn_subagent_tool {
+        builder.push_spec_with_parallel_support(create_spawn_subagent_tool(), true);
+        builder.register_handler(SPAWN_SUBAGENT_TOOL_NAME, spawn_subagent_handler);
+    }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
@@ -1366,6 +1449,8 @@ mod tests {
     use crate::config::test_config;
     use crate::openai_models::models_manager::ModelsManager;
     use crate::tools::registry::ConfiguredToolSpec;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
     use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
 
@@ -1457,6 +1542,15 @@ mod tests {
         }
     }
 
+    fn tools_config_for(model_family: &ModelFamily, features: &Features) -> ToolsConfig {
+        let session_source = SessionSource::Exec;
+        ToolsConfig::new(&ToolsConfigParams {
+            model_family,
+            features,
+            session_source: &session_source,
+        })
+    }
+
     #[test]
     fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         let config = test_config();
@@ -1465,11 +1559,8 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
         features.enable(Feature::ViewImageTool);
-        let config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            features: &features,
-        });
-        let (tools, _) = build_specs(&config, None).build();
+        let tools_config = tools_config_for(&model_family, &features);
+        let (tools, _) = build_specs(&tools_config, None).build();
 
         // Build actual map name -> spec
         use std::collections::BTreeMap;
@@ -1499,6 +1590,7 @@ mod tests {
             create_ask_user_question_tool(),
             create_approve_plan_tool(),
             create_propose_plan_variants_tool(),
+            create_spawn_subagent_tool(),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {},
             create_view_image_tool(),
@@ -1524,10 +1616,7 @@ mod tests {
     fn assert_model_tools(model_slug: &str, features: &Features, expected_tools: &[&str]) {
         let config = test_config();
         let model_family = ModelsManager::construct_model_family_offline(model_slug, &config);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            features,
-        });
+        let tools_config = tools_config_for(&model_family, features);
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
         assert_eq!(&tool_names, &expected_tools,);
@@ -1547,6 +1636,7 @@ mod tests {
                 "ask_user_question",
                 "approve_plan",
                 "propose_plan_variants",
+                "spawn_subagent",
                 "apply_patch",
                 "view_image",
             ],
@@ -1567,6 +1657,7 @@ mod tests {
                 "ask_user_question",
                 "approve_plan",
                 "propose_plan_variants",
+                "spawn_subagent",
                 "apply_patch",
                 "view_image",
             ],
@@ -1590,6 +1681,7 @@ mod tests {
                 "ask_user_question",
                 "approve_plan",
                 "propose_plan_variants",
+                "spawn_subagent",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1614,6 +1706,7 @@ mod tests {
                 "ask_user_question",
                 "approve_plan",
                 "propose_plan_variants",
+                "spawn_subagent",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1635,6 +1728,7 @@ mod tests {
                 "ask_user_question",
                 "approve_plan",
                 "propose_plan_variants",
+                "spawn_subagent",
                 "view_image",
             ],
         );
@@ -1654,6 +1748,7 @@ mod tests {
                 "ask_user_question",
                 "approve_plan",
                 "propose_plan_variants",
+                "spawn_subagent",
                 "apply_patch",
                 "view_image",
             ],
@@ -1674,6 +1769,7 @@ mod tests {
                 "ask_user_question",
                 "approve_plan",
                 "propose_plan_variants",
+                "spawn_subagent",
                 "view_image",
             ],
         );
@@ -1693,10 +1789,30 @@ mod tests {
                 "ask_user_question",
                 "approve_plan",
                 "propose_plan_variants",
+                "spawn_subagent",
                 "apply_patch",
                 "view_image",
             ],
         );
+    }
+
+    #[test]
+    fn test_subagent_tools_exclude_spawn_subagent_and_apply_patch() {
+        let config = test_config();
+        let model_family = ModelsManager::construct_model_family_offline("gpt-5-codex", &config);
+        let features = Features::with_defaults();
+        let session_source = SessionSource::SubAgent(SubAgentSource::Other(format!(
+            "{SPAWN_SUBAGENT_LABEL_PREFIX}_test"
+        )));
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            features: &features,
+            session_source: &session_source,
+        });
+        let (tools, _) = build_specs(&tools_config, None).build();
+        let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
+        assert!(!tool_names.contains(&"spawn_subagent"));
+        assert!(!tool_names.contains(&"apply_patch"));
     }
 
     #[test]
@@ -1714,6 +1830,7 @@ mod tests {
                 "ask_user_question",
                 "approve_plan",
                 "propose_plan_variants",
+                "spawn_subagent",
                 "apply_patch",
                 "view_image",
             ],
@@ -1737,6 +1854,7 @@ mod tests {
                 "ask_user_question",
                 "approve_plan",
                 "propose_plan_variants",
+                "spawn_subagent",
                 "web_search",
                 "view_image",
             ],
@@ -1750,10 +1868,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::WebSearchRequest);
         features.enable(Feature::UnifiedExec);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            features: &features,
-        });
+        let tools_config = tools_config_for(&model_family, &features);
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
 
         // Only check the shell variant and a couple of core tools.
@@ -1772,10 +1887,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.disable(Feature::ViewImageTool);
         features.enable(Feature::UnifiedExec);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            features: &features,
-        });
+        let tools_config = tools_config_for(&model_family, &features);
         let (tools, _) = build_specs(&tools_config, None).build();
 
         assert!(!find_tool(&tools, "exec_command").supports_parallel_tool_calls);
@@ -1792,10 +1904,7 @@ mod tests {
             ModelsManager::construct_model_family_offline("test-gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.disable(Feature::ViewImageTool);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            features: &features,
-        });
+        let tools_config = tools_config_for(&model_family, &features);
         let (tools, _) = build_specs(&tools_config, None).build();
 
         assert!(
@@ -1823,10 +1932,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            features: &features,
-        });
+        let tools_config = tools_config_for(&model_family, &features);
         let (tools, _) = build_specs(
             &tools_config,
             Some(HashMap::from([(
@@ -1917,10 +2023,7 @@ mod tests {
         let model_family = ModelsManager::construct_model_family_offline("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            features: &features,
-        });
+        let tools_config = tools_config_for(&model_family, &features);
 
         // Intentionally construct a map with keys that would sort alphabetically.
         let tools_map: HashMap<String, mcp_types::Tool> = HashMap::from([
@@ -1994,10 +2097,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            features: &features,
-        });
+        let tools_config = tools_config_for(&model_family, &features);
 
         let (tools, _) = build_specs(
             &tools_config,
@@ -2051,10 +2151,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            features: &features,
-        });
+        let tools_config = tools_config_for(&model_family, &features);
 
         let (tools, _) = build_specs(
             &tools_config,
@@ -2105,10 +2202,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
         features.enable(Feature::ApplyPatchFreeform);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            features: &features,
-        });
+        let tools_config = tools_config_for(&model_family, &features);
 
         let (tools, _) = build_specs(
             &tools_config,
@@ -2161,10 +2255,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            features: &features,
-        });
+        let tools_config = tools_config_for(&model_family, &features);
 
         let (tools, _) = build_specs(
             &tools_config,
@@ -2273,10 +2364,7 @@ Examples of valid command strings:
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::WebSearchRequest);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            features: &features,
-        });
+        let tools_config = tools_config_for(&model_family, &features);
         let (tools, _) = build_specs(
             &tools_config,
             Some(HashMap::from([(

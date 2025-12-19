@@ -124,6 +124,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "ask_user_question",
         "approve_plan",
         "propose_plan_variants",
+        "spawn_subagent",
         "apply_patch",
         "view_image",
     ];

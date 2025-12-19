@@ -208,6 +208,35 @@ sequenceDiagram
     task->>-user: Event::AgentMessage
 ```
 
+### SpawnSubagent (read-only subagent)
+
+Spawning a read-only subagent to answer a focused prompt, then returning its response
+as tool output.
+
+```mermaid
+sequenceDiagram
+    box UI
+    participant user as User
+    end
+    box Daemon
+    participant session as Session
+    participant task as Task
+    end
+    box Rest API
+    participant agent as Model
+    participant subagent as Subagent Model
+    end
+    user->>session: Op::UserInput
+    session-->>+task: start task
+    task->>agent: prompt
+    agent->>task: response (tool call: spawn_subagent)
+    task->>subagent: subagent prompt
+    subagent->>task: response
+    task->>agent: tool output (label + response)
+    agent->>task: response (continue)
+    task->>-user: Event::AgentMessage
+```
+
 ### PlanApproval (interactive prompt)
 
 Pausing a task to ask the user to approve a proposed plan, then resuming after the decision is provided.

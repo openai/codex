@@ -541,6 +541,7 @@ impl Session {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &per_turn_config.features,
+            session_source: &session_configuration.session_source,
         });
 
         TurnContext {
@@ -551,8 +552,12 @@ impl Session {
             cwd: session_configuration.cwd.clone(),
             developer_instructions: match session_configuration.session_source {
                 SessionSource::Cli | SessionSource::VSCode => {
-                    crate::tools::spec::prepend_ask_user_question_developer_instructions(
-                        session_configuration.developer_instructions.clone(),
+                    let developer_instructions =
+                        crate::tools::spec::prepend_ask_user_question_developer_instructions(
+                            session_configuration.developer_instructions.clone(),
+                        );
+                    crate::tools::spec::prepend_spawn_subagent_developer_instructions(
+                        developer_instructions,
                     )
                 }
                 SessionSource::Exec
@@ -2377,9 +2382,11 @@ async fn spawn_review_thread(
     review_features
         .disable(crate::features::Feature::WebSearchRequest)
         .disable(crate::features::Feature::ViewImageTool);
+    let session_source = parent_turn_context.client.get_session_source();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
         features: &review_features,
+        session_source: &session_source,
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();
@@ -2409,7 +2416,7 @@ async fn spawn_review_thread(
         per_turn_config.model_reasoning_effort,
         per_turn_config.model_reasoning_summary,
         sess.conversation_id,
-        parent_turn_context.client.get_session_source(),
+        session_source,
     );
 
     let review_turn_context = TurnContext {

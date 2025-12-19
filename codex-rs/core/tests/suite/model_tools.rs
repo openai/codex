@@ -61,6 +61,7 @@ async fn model_selects_expected_tools() {
             "ask_user_question".to_string(),
             "approve_plan".to_string(),
             "propose_plan_variants".to_string(),
+            "spawn_subagent".to_string(),
             "view_image".to_string()
         ],
         "codex-mini-latest should expose the local shell tool",
@@ -78,6 +79,7 @@ async fn model_selects_expected_tools() {
             "ask_user_question".to_string(),
             "approve_plan".to_string(),
             "propose_plan_variants".to_string(),
+            "spawn_subagent".to_string(),
             "apply_patch".to_string(),
             "view_image".to_string()
         ],
@@ -96,6 +98,7 @@ async fn model_selects_expected_tools() {
             "ask_user_question".to_string(),
             "approve_plan".to_string(),
             "propose_plan_variants".to_string(),
+            "spawn_subagent".to_string(),
             "apply_patch".to_string(),
             "view_image".to_string()
         ],
@@ -114,6 +117,7 @@ async fn model_selects_expected_tools() {
             "ask_user_question".to_string(),
             "approve_plan".to_string(),
             "propose_plan_variants".to_string(),
+            "spawn_subagent".to_string(),
             "view_image".to_string()
         ],
         "gpt-5 should expose the apply_patch tool",
@@ -131,6 +135,7 @@ async fn model_selects_expected_tools() {
             "ask_user_question".to_string(),
             "approve_plan".to_string(),
             "propose_plan_variants".to_string(),
+            "spawn_subagent".to_string(),
             "apply_patch".to_string(),
             "view_image".to_string()
         ],
@@ -149,6 +154,7 @@ async fn model_selects_expected_tools() {
             "ask_user_question".to_string(),
             "approve_plan".to_string(),
             "propose_plan_variants".to_string(),
+            "spawn_subagent".to_string(),
             "apply_patch".to_string(),
             "view_image".to_string()
         ],

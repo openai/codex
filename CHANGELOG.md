@@ -11,6 +11,7 @@ edited between the markers.
 
 ### Highlights
 
+- Add a read-only spawn_subagent tool for parallel exploration and research.
 - Skip macOS rust-ci jobs on pull requests to avoid flaky PR runs.
 - Skip upstream npm package staging in CI for forks.
 - Fix sdk workflow to build the codexel binary.
@@ -23,12 +24,17 @@ edited between the markers.
 - Fix sdk workflow codexel build
 
 
+#### Chores
+- Update login flow and tui snapshots
+
+
 #### Other
 - Update changelog for 0.1.2 release
 - Adjust changelog release metadata
 - Skip macOS rust-ci jobs on PRs
 - Skip upstream npm staging in CI for forks
 - Format markdown and workflow files
+- Fix update checks and codex home isolation
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.2] - 2025-12-19
