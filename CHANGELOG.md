@@ -15,8 +15,32 @@ edited between the markers.
 
 ### Details
 
-<!-- BEGIN GENERATED DETAILS: range=3e57f558eff5b400292a6ad3c9df2721648aed6f..HEAD -->
-_No fork-only changes yet._
+<!-- BEGIN GENERATED DETAILS: range=76bfcfd7221cf489616d4fe2d1abf7bd8d3bd893..HEAD -->
+#### Other
+- Update changelog for 0.1.1
+<!-- END GENERATED DETAILS -->
+
+## [0.1.1] - 2025-12-19
+
+Upstream baseline: openai/codex@be274cbe6273cb17d756a6cda729d537f15ae49a
+Release commit: 76bfcfd7221cf489616d4fe2d1abf7bd8d3bd893
+
+### Highlights
+
+- Guard npm publishes when vendor binaries are missing.
+- Add Codexel npm publish workflow and release docs.
+
+### Details
+
+<!-- BEGIN GENERATED DETAILS: range=3e57f558eff5b400292a6ad3c9df2721648aed6f..76bfcfd7221cf489616d4fe2d1abf7bd8d3bd893 -->
+#### Documentation
+- Document changelog workflow in AGENTS
+- Remove interactive questions from AGENTS
+
+
+#### Branding & Packaging
+- Add Codexel changelog and generator
+- Prepare Codexel npm 0.1.1 release
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.0] - 2025-12-18
