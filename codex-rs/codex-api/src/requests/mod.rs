@@ -1,3 +1,4 @@
+pub(crate) mod body;
 pub mod chat;
 pub(crate) mod headers;
 pub mod responses;

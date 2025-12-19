@@ -10,7 +10,9 @@ use codex_api::ChatClient;
 use codex_api::Provider;
 use codex_api::ResponsesClient;
 use codex_api::ResponsesOptions;
+use codex_api::ResponsesRequest;
 use codex_api::WireApi;
+use codex_client::Body;
 use codex_client::HttpTransport;
 use codex_client::Request;
 use codex_client::Response;
@@ -136,6 +138,13 @@ fn provider(name: &str, wire: WireApi) -> Provider {
     }
 }
 
+fn responses_request(body: Value) -> ResponsesRequest {
+    ResponsesRequest {
+        body: Body::Json(body),
+        headers: HeaderMap::new(),
+    }
+}
+
 #[derive(Clone)]
 struct FlakyTransport {
     state: Arc<Mutex<i64>>,
@@ -232,10 +241,8 @@ async fn responses_client_uses_responses_path_for_responses_wire() -> Result<()>
     let transport = RecordingTransport::new(state.clone());
     let client = ResponsesClient::new(transport, provider("openai", WireApi::Responses), NoAuth);
 
-    let body = serde_json::json!({ "echo": true });
-    let _stream = client
-        .stream(body, HeaderMap::new(), Default::default())
-        .await?;
+    let request = responses_request(serde_json::json!({ "echo": true }));
+    let _stream = client.stream(request).await?;
 
     let requests = state.take_stream_requests();
     assert_path_ends_with(&requests, "/responses");
@@ -248,10 +255,8 @@ async fn responses_client_uses_chat_path_for_chat_wire() -> Result<()> {
     let transport = RecordingTransport::new(state.clone());
     let client = ResponsesClient::new(transport, provider("openai", WireApi::Chat), NoAuth);
 
-    let body = serde_json::json!({ "echo": true });
-    let _stream = client
-        .stream(body, HeaderMap::new(), Default::default())
-        .await?;
+    let request = responses_request(serde_json::json!({ "echo": true }));
+    let _stream = client.stream(request).await?;
 
     let requests = state.take_stream_requests();
     assert_path_ends_with(&requests, "/chat/completions");
@@ -265,10 +270,8 @@ async fn streaming_client_adds_auth_headers() -> Result<()> {
     let auth = StaticAuth::new("secret-token", "acct-1");
     let client = ResponsesClient::new(transport, provider("openai", WireApi::Responses), auth);
 
-    let body = serde_json::json!({ "model": "gpt-test" });
-    let _stream = client
-        .stream(body, HeaderMap::new(), Default::default())
-        .await?;
+    let request = responses_request(serde_json::json!({ "model": "gpt-test" }));
+    let _stream = client.stream(request).await?;
 
     let requests = state.take_stream_requests();
     assert_eq!(requests.len(), 1);

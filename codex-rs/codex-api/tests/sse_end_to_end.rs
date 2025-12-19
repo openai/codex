@@ -8,7 +8,9 @@ use codex_api::AuthProvider;
 use codex_api::Provider;
 use codex_api::ResponseEvent;
 use codex_api::ResponsesClient;
+use codex_api::ResponsesRequest;
 use codex_api::WireApi;
+use codex_client::Body;
 use codex_client::HttpTransport;
 use codex_client::Request;
 use codex_client::Response;
@@ -94,6 +96,13 @@ fn build_responses_body(events: Vec<Value>) -> String {
     body
 }
 
+fn responses_request(body: Value) -> ResponsesRequest {
+    ResponsesRequest {
+        body: Body::Json(body),
+        headers: HeaderMap::new(),
+    }
+}
+
 #[tokio::test]
 async fn responses_stream_parses_items_and_completed_end_to_end() -> Result<()> {
     let item1 = serde_json::json!({
@@ -123,13 +132,8 @@ async fn responses_stream_parses_items_and_completed_end_to_end() -> Result<()> 
     let transport = FixtureSseTransport::new(body);
     let client = ResponsesClient::new(transport, provider("openai", WireApi::Responses), NoAuth);
 
-    let mut stream = client
-        .stream(
-            serde_json::json!({"echo": true}),
-            HeaderMap::new(),
-            Default::default(),
-        )
-        .await?;
+    let request = responses_request(serde_json::json!({"echo": true}));
+    let mut stream = client.stream(request).await?;
 
     let mut events = Vec::new();
     while let Some(ev) = stream.next().await {
@@ -192,13 +196,8 @@ async fn responses_stream_aggregates_output_text_deltas() -> Result<()> {
     let transport = FixtureSseTransport::new(body);
     let client = ResponsesClient::new(transport, provider("openai", WireApi::Responses), NoAuth);
 
-    let stream = client
-        .stream(
-            serde_json::json!({"echo": true}),
-            HeaderMap::new(),
-            Default::default(),
-        )
-        .await?;
+    let request = responses_request(serde_json::json!({"echo": true}));
+    let stream = client.stream(request).await?;
 
     let mut stream = stream.aggregate();
     let mut events = Vec::new();

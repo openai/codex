@@ -16,7 +16,6 @@ use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
 use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
-use serde_json::Value;
 use std::sync::Arc;
 use tracing::instrument;
 
@@ -57,10 +56,8 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
     pub async fn stream_request(
         &self,
         request: ResponsesRequest,
-        request_compression: RequestCompression,
     ) -> Result<ResponseStream, ApiError> {
-        self.stream(request.body, request.headers, request_compression)
-            .await
+        self.stream(request).await
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -93,9 +90,10 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             .session_source(session_source)
             .store_override(store_override)
             .extra_headers(extra_headers)
+            .request_compression(request_compression)
             .build(self.streaming.provider())?;
 
-        self.stream_request(request, request_compression).await
+        self.stream_request(request).await
     }
 
     fn path(&self) -> &'static str {
@@ -105,18 +103,12 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         }
     }
 
-    pub async fn stream(
-        &self,
-        body: Value,
-        extra_headers: HeaderMap,
-        request_compression: RequestCompression,
-    ) -> Result<ResponseStream, ApiError> {
+    pub async fn stream(&self, request: ResponsesRequest) -> Result<ResponseStream, ApiError> {
         self.streaming
             .stream(
                 self.path(),
-                body,
-                extra_headers,
-                request_compression,
+                request.body,
+                request.headers,
                 spawn_response_stream,
             )
             .await

@@ -3,9 +3,13 @@ use crate::common::ResponsesApiRequest;
 use crate::common::TextControls;
 use crate::error::ApiError;
 use crate::provider::Provider;
+use crate::provider::RequestCompression;
+use crate::requests::body::encode_body;
+use crate::requests::body::insert_compression_headers;
 use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
+use codex_client::Body;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
@@ -13,7 +17,7 @@ use serde_json::Value;
 
 /// Assembled request body plus headers for a Responses stream request.
 pub struct ResponsesRequest {
-    pub body: Value,
+    pub body: Body,
     pub headers: HeaderMap,
 }
 
@@ -32,6 +36,7 @@ pub struct ResponsesRequestBuilder<'a> {
     session_source: Option<SessionSource>,
     store_override: Option<bool>,
     headers: HeaderMap,
+    request_compression: RequestCompression,
 }
 
 impl<'a> ResponsesRequestBuilder<'a> {
@@ -94,6 +99,11 @@ impl<'a> ResponsesRequestBuilder<'a> {
         self
     }
 
+    pub fn request_compression(mut self, request_compression: RequestCompression) -> Self {
+        self.request_compression = request_compression;
+        self
+    }
+
     pub fn build(self, provider: &Provider) -> Result<ResponsesRequest, ApiError> {
         let model = self
             .model
@@ -137,6 +147,8 @@ impl<'a> ResponsesRequestBuilder<'a> {
         if let Some(subagent) = subagent_header(&self.session_source) {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
+        insert_compression_headers(&mut headers, self.request_compression);
+        let body = encode_body(&body, self.request_compression)?;
 
         Ok(ResponsesRequest { body, headers })
     }
@@ -175,6 +187,7 @@ mod tests {
 
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
+    use codex_client::Body;
     use codex_protocol::protocol::SubAgentSource;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
@@ -220,10 +233,12 @@ mod tests {
             .build(&provider)
             .expect("request");
 
-        assert_eq!(request.body.get("store"), Some(&Value::Bool(true)));
+        let Body::Json(body) = &request.body else {
+            panic!("expected json body for responses request");
+        };
+        assert_eq!(body.get("store"), Some(&Value::Bool(true)));
 
-        let ids: Vec<Option<String>> = request
-            .body
+        let ids: Vec<Option<String>> = body
             .get("input")
             .and_then(|v| v.as_array())
             .into_iter()

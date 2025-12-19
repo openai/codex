@@ -8,6 +8,8 @@ use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::provider::RequestCompression;
 use crate::provider::WireApi;
+use crate::requests::body::encode_body;
+use crate::requests::body::insert_compression_headers;
 use crate::sse::chat::spawn_chat_stream;
 use crate::telemetry::SseTelemetry;
 use codex_client::HttpTransport;
@@ -87,14 +89,11 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         extra_headers: HeaderMap,
         request_compression: RequestCompression,
     ) -> Result<ResponseStream, ApiError> {
+        let mut headers = extra_headers;
+        insert_compression_headers(&mut headers, request_compression);
+        let encoded_body = encode_body(&body, request_compression)?;
         self.streaming
-            .stream(
-                self.path(),
-                body,
-                extra_headers,
-                request_compression,
-                spawn_chat_stream,
-            )
+            .stream(self.path(), encoded_body, headers, spawn_chat_stream)
             .await
     }
 }
