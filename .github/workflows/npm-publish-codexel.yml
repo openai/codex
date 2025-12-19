@@ -1,0 +1,309 @@
+name: npm-publish-codexel
+
+on:
+  push:
+    tags:
+      - "codexel-v*"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  tag-check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+      npm_tag: ${{ steps.validate.outputs.npm_tag }}
+      should_publish: ${{ steps.validate.outputs.should_publish }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate tag matches codex-cli package version
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::group::Tag validation"
+
+          [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
+            || { echo "Not a tag push"; exit 1; }
+          [[ "${GITHUB_REF_NAME}" =~ ^codexel-v[0-9]+\.[0-9]+\.[0-9]+(-((alpha|beta)\.[0-9]+))?$ ]] \
+            || { echo "Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
+
+          tag_version="${GITHUB_REF_NAME#codexel-v}"
+          package_version=$(python - <<'PY'
+import json
+with open("codex-cli/package.json", "r", encoding="utf-8") as f:
+    print(json.load(f)["version"])
+PY
+          )
+
+          if [[ "${package_version}" == *-dev ]]; then
+            echo "codex-cli/package.json version is ${package_version}; release tags require a non-dev version."
+            exit 1
+          fi
+
+          [[ "${tag_version}" == "${package_version}" ]] \
+            || { echo "Tag ${tag_version} does not match package.json ${package_version}"; exit 1; }
+
+          npm_tag=""
+          should_publish="true"
+          if [[ "${tag_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
+            npm_tag="alpha"
+          elif [[ "${tag_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+            npm_tag="beta"
+          fi
+
+          echo "version=${tag_version}" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=${npm_tag}" >> "$GITHUB_OUTPUT"
+          echo "should_publish=${should_publish}" >> "$GITHUB_OUTPUT"
+          echo "Tag and package.json agree (${tag_version})"
+          echo "::endgroup::"
+
+  build:
+    needs: tag-check
+    name: Build - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            install_musl: true
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            install_musl: true
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.90
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ${{ github.workspace }}/codex-rs/target/
+          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
+
+      - if: ${{ matrix.install_musl }}
+        name: Install musl build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools pkg-config
+
+      - name: Cargo build
+        shell: bash
+        run: cargo build --target ${{ matrix.target }} --release --bin codexel
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="${GITHUB_WORKSPACE}/artifacts/vendor/${{ matrix.target }}/codex"
+          mkdir -p "$dest"
+
+          binary_name="codexel"
+          if [[ "${{ contains(matrix.target, 'windows') }}" == 'true' ]]; then
+            binary_name="codexel.exe"
+          fi
+
+          cp "target/${{ matrix.target }}/release/${binary_name}" "$dest/${binary_name}"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: codexel-${{ matrix.target }}
+          path: artifacts/**
+          if-no-files-found: error
+
+  package:
+    name: Package npm module
+    needs:
+      - tag-check
+      - build
+    runs-on: ubuntu-latest
+    env:
+      PACKAGE_VERSION: ${{ needs.tag-check.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Assemble staging directory
+        id: staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          staging="${STAGING_DIR}"
+          mkdir -p "$staging" "$staging/vendor"
+          cp codex-cli/package.json "$staging/"
+          cp -R codex-cli/bin "$staging/"
+          cp README.md "$staging/"
+          cp LICENSE "$staging/"
+
+          found_vendor="false"
+          shopt -s nullglob
+          for vendor_dir in artifacts/*/vendor; do
+            rsync -av "$vendor_dir/" "$staging/vendor/"
+            found_vendor="true"
+          done
+          if [[ "$found_vendor" == "false" ]]; then
+            echo "No vendor payloads were downloaded."
+            exit 1
+          fi
+
+          node - <<'NODE'
+            import fs from "node:fs";
+            import path from "node:path";
+
+            const stagingDir = process.env.STAGING_DIR;
+            const version = process.env.PACKAGE_VERSION;
+            const pkgPath = path.join(stagingDir, "package.json");
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+            pkg.version = version;
+            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+          NODE
+
+          echo "dir=$staging" >> "$GITHUB_OUTPUT"
+        env:
+          STAGING_DIR: ${{ runner.temp }}/codexel-npm
+
+      - name: Ensure binaries are executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          staging="${{ steps.staging.outputs.dir }}"
+          chmod +x "$staging"/vendor/*/codex/codexel
+
+      - name: Validate vendor payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          staging="${{ steps.staging.outputs.dir }}"
+          targets=(
+            "aarch64-apple-darwin"
+            "x86_64-apple-darwin"
+            "aarch64-unknown-linux-musl"
+            "x86_64-unknown-linux-musl"
+            "aarch64-pc-windows-msvc"
+            "x86_64-pc-windows-msvc"
+          )
+
+          for target in "${targets[@]}"; do
+            if [[ "$target" == *windows* ]]; then
+              test -f "$staging/vendor/$target/codex/codexel.exe"
+            else
+              test -f "$staging/vendor/$target/codex/codexel"
+            fi
+          done
+
+      - name: Create npm tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/npm
+          staging="${{ steps.staging.outputs.dir }}"
+          pack_info=$(cd "$staging" && npm pack --ignore-scripts --json --pack-destination "${GITHUB_WORKSPACE}/dist/npm")
+          filename=$(PACK_INFO="$pack_info" node -e 'const data = JSON.parse(process.env.PACK_INFO); console.log(data[0].filename);')
+          mv "dist/npm/${filename}" "dist/npm/codexel-npm-${PACKAGE_VERSION}.tgz"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: codexel-npm
+          path: dist/npm/codexel-npm-${{ env.PACKAGE_VERSION }}.tgz
+          if-no-files-found: error
+
+  smoke-test:
+    name: Smoke test tarball
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Download npm tarball
+        uses: actions/download-artifact@v7
+        with:
+          name: codexel-npm
+          path: dist/npm
+
+      - name: Install and run codexel
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball=$(ls dist/npm/*.tgz)
+          prefix="$(mktemp -d)"
+          npm config set prefix "$prefix"
+          export PATH="$prefix/bin:$PATH"
+          npm install -g "$tarball"
+          codexel --help >/dev/null
+
+  publish:
+    name: Publish npm package
+    needs:
+      - tag-check
+      - package
+      - smoke-test
+    if: ${{ needs.tag-check.outputs.should_publish == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          scope: "@ixe1"
+
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Download npm tarball
+        uses: actions/download-artifact@v7
+        with:
+          name: codexel-npm
+          path: dist/npm
+
+      - name: Publish to npm
+        env:
+          VERSION: ${{ needs.tag-check.outputs.version }}
+          NPM_TAG: ${{ needs.tag-check.outputs.npm_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_args=()
+          if [[ -n "${NPM_TAG}" ]]; then
+            tag_args+=(--tag "${NPM_TAG}")
+          fi
+          npm publish "dist/npm/codexel-npm-${VERSION}.tgz" --access public --provenance "${tag_args[@]}"

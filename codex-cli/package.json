@@ -1,6 +1,6 @@
 {
   "name": "@ixe1/codexel",
-  "version": "0.0.0-dev",
+  "version": "0.1.1",
   "license": "Apache-2.0",
   "bin": {
     "codexel": "bin/codexel.js"
@@ -9,10 +9,16 @@
   "engines": {
     "node": ">=16"
   },
+  "scripts": {
+    "prepack": "node ./scripts/verify-vendor.mjs"
+  },
   "files": [
     "bin",
     "vendor"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Ixe1/codexel.git",
