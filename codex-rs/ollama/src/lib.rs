@@ -94,7 +94,10 @@ mod tests {
 
     #[test]
     fn test_wire_api_for_version_dev_zero_keeps_responses() {
-        assert_eq!(wire_api_for_version(&Version::new(0, 0, 0)), WireApi::Responses);
+        assert_eq!(
+            wire_api_for_version(&Version::new(0, 0, 0)),
+            WireApi::Responses
+        );
     }
 
     #[test]
@@ -104,7 +107,13 @@ mod tests {
 
     #[test]
     fn test_wire_api_for_version_at_or_after_cutoff_is_responses() {
-        assert_eq!(wire_api_for_version(&Version::new(0, 13, 4)), WireApi::Responses);
-        assert_eq!(wire_api_for_version(&Version::new(0, 14, 0)), WireApi::Responses);
+        assert_eq!(
+            wire_api_for_version(&Version::new(0, 13, 4)),
+            WireApi::Responses
+        );
+        assert_eq!(
+            wire_api_for_version(&Version::new(0, 14, 0)),
+            WireApi::Responses
+        );
     }
 }

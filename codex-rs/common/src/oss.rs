@@ -14,6 +14,24 @@ pub fn get_default_model_for_oss_provider(provider_id: &str) -> Option<&'static 
     }
 }
 
+/// Detect whether the selected Ollama instance supports the responses API and, if not, downgrade
+/// to the chat completions wire API. This should run whenever the Ollama provider is selected,
+/// even when `--oss` is not in use, so older servers remain compatible.
+pub async fn detect_ollama_wire_api_if_needed(config: &mut Config) {
+    if config.model_provider_id != OLLAMA_OSS_PROVIDER_ID
+        || config.model_provider.wire_api != WireApi::Responses
+    {
+        return;
+    }
+
+    match codex_ollama::detect_wire_api(&config.model_provider).await {
+        Ok(Some(detection)) if detection.wire_api == WireApi::Chat => {
+            config.model_provider.wire_api = WireApi::Chat;
+        }
+        Ok(_) | Err(_) => {}
+    }
+}
+
 /// Ensures the specified OSS provider is ready (models downloaded, service reachable).
 pub async fn ensure_oss_provider_ready(
     provider_id: &str,
@@ -26,14 +44,7 @@ pub async fn ensure_oss_provider_ready(
                 .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
         }
         OLLAMA_OSS_PROVIDER_ID => {
-            if config.model_provider.wire_api == WireApi::Responses {
-                match codex_ollama::detect_wire_api(&config.model_provider).await {
-                    Ok(Some(detection)) if detection.wire_api == WireApi::Chat => {
-                        config.model_provider.wire_api = WireApi::Chat;
-                    }
-                    Ok(_) | Err(_) => {}
-                }
-            }
+            detect_ollama_wire_api_if_needed(config).await;
 
             codex_ollama::ensure_oss_ready(config)
                 .await
