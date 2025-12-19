@@ -1,0 +1,26 @@
+# Exclude everything by default, then opt-in.
+**/*
+
+# Required extension files
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE
+!dist/**
+!resources/**
+!docs/spec.md
+
+# Keep source maps out of the VSIX
+**/*.map
+
+# Exclude dev files
+node_modules/**
+src/**
+scripts/**
+.vscode/**
+.git/**
+.gitignore
+.prettier*
+tsconfig.json
+pnpm-lock.yaml
+codex-ui-vscode-extension-*.vsix
