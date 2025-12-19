@@ -187,6 +187,58 @@ fn resumed_session_does_not_start_rate_limit_poller_until_input() {
     );
 }
 
+#[test]
+fn resumed_session_does_not_auto_execute_plan() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None);
+    set_chatgpt_auth(&mut chat);
+
+    let conversation_id = ConversationId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![EventMsg::ExitedPlanMode(ExitedPlanModeEvent {
+            plan_output: Some(PlanOutputEvent {
+                title: "Example".to_string(),
+                summary: "Summary".to_string(),
+                plan: UpdatePlanArgs {
+                    explanation: None,
+                    plan: vec![PlanItemArg {
+                        step: "Step 1".to_string(),
+                        status: StepStatus::Pending,
+                    }],
+                },
+            }),
+        })]),
+        rollout_path: rollout_file.path().to_path_buf(),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    let mut saw_user_turn = false;
+    while let Ok(op) = op_rx.try_recv() {
+        if matches!(op, Op::UserTurn { .. } | Op::UserInput { .. }) {
+            saw_user_turn = true;
+            break;
+        }
+    }
+
+    assert!(
+        !saw_user_turn,
+        "expected no auto-execute user turn after resume replay"
+    );
+}
+
 /// Entering review mode uses the hint provided by the review request.
 #[test]
 fn entered_review_mode_uses_request_hint() {

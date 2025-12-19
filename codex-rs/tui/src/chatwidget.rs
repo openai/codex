@@ -2352,7 +2352,13 @@ impl ChatWidget {
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::EnteredPlanMode(request) => self.on_entered_plan_mode(request),
-            EventMsg::ExitedPlanMode(ev) => self.on_exited_plan_mode(ev),
+            EventMsg::ExitedPlanMode(ev) => {
+                if from_replay {
+                    self.on_exited_plan_mode_replay(ev);
+                } else {
+                    self.on_exited_plan_mode(ev);
+                }
+            }
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
@@ -2434,6 +2440,19 @@ impl ChatWidget {
             });
         } else {
             self.add_info_message("<< Plan mode ended <<".to_string(), None);
+        }
+        self.request_redraw();
+    }
+
+    fn on_exited_plan_mode_replay(&mut self, ev: ExitedPlanModeEvent) {
+        if ev.plan_output.is_some() {
+            self.add_info_message(
+                "<< Plan mode finished; send 'Proceed with the approved plan.' to continue >>"
+                    .to_string(),
+                None,
+            );
+        } else {
+            self.add_info_message("<< Plan mode ended >>".to_string(), None);
         }
         self.request_redraw();
     }
