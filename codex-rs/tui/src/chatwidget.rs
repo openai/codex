@@ -411,7 +411,7 @@ impl ChatWidget {
         }
     }
 
-    /// Update the status indicator header and (optionally) details.
+    /// Update the status indicator header and details.
     ///
     /// Passing `None` clears any existing details.
     fn set_status(&mut self, header: String, details: Option<String>) {
@@ -419,7 +419,8 @@ impl ChatWidget {
         self.bottom_pane.update_status(header, details);
     }
 
-    /// Update the status indicator header only and clear any existing details.
+    /// Convenience wrapper around [`Self::set_status`];
+    /// updates the status indicator header and clears any existing details.
     fn set_status_header(&mut self, header: String) {
         self.set_status(header, None);
     }

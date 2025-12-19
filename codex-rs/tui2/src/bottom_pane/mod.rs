@@ -266,7 +266,7 @@ impl BottomPane {
         self.composer.current_text()
     }
 
-    /// Update the status indicator header (defaults to "Working") and (optionally) the details below it.
+    /// Update the status indicator header (defaults to "Working") and details below it.
     ///
     /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
     pub(crate) fn update_status(&mut self, header: String, details: Option<String>) {
