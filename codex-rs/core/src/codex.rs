@@ -17,7 +17,7 @@ use crate::exec_policy::load_exec_policy_for_features;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::models_manager::model_family::ModelFamily;
-use crate::models_manager::models_manager::ModelsManager;
+use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::stream_events_utils::HandleOutputCtx;

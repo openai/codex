@@ -259,7 +259,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::config::test_config;
-    use crate::models_manager::models_manager::ModelsManager;
+    use crate::models_manager::manager::ModelsManager;
 
     use super::*;
 
