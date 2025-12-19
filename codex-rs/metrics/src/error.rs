@@ -27,6 +27,8 @@ pub enum MetricsError {
     EmptyTagComponent { label: String },
     #[error("{label} contains invalid characters: {value}")]
     InvalidTagComponent { label: String, value: String },
+    #[error("tag key is reserved: {key}")]
+    ReservedTagKey { key: String },
 
     // Client.
     #[error("invalid sentry dsn: {dsn}")]

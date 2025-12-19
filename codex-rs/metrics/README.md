@@ -123,6 +123,7 @@ Tag keys and values:
 
 - Must be non-empty.
 - Allowed characters: ASCII letters/digits plus `.`, `_`, `-`, `/`.
+- The tag key `le` is reserved for histogram bucketing.
 
 ## Error handling
 

@@ -29,6 +29,17 @@ fn invalid_tag_component_is_rejected() -> Result<()> {
     Ok(())
 }
 
+// Ensures the reserved histogram bucketing tag key is rejected in config defaults.
+#[test]
+fn reserved_tag_key_is_rejected_in_config() -> Result<()> {
+    let err = MetricsConfig::default().with_tag("le", "10").unwrap_err();
+    assert!(matches!(
+        err,
+        MetricsError::ReservedTagKey { key } if key == "le"
+    ));
+    Ok(())
+}
+
 // Ensures per-metric tag keys are validated.
 #[test]
 fn counter_rejects_invalid_tag_key() {
@@ -40,6 +51,19 @@ fn counter_rejects_invalid_tag_key() {
         err,
         MetricsError::InvalidTagComponent { label, value }
             if label == "tag key" && value == "bad key"
+    ));
+}
+
+// Ensures per-metric tag keys cannot use reserved histogram bucketing keys.
+#[test]
+fn counter_rejects_reserved_tag_key() {
+    let mut batch = MetricsBatch::new();
+    let err = batch
+        .counter("codex.turns", 1, &[("le", "10")])
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        MetricsError::ReservedTagKey { key } if key == "le"
     ));
 }
 
@@ -60,6 +84,21 @@ fn histogram_rejects_invalid_tag_value() -> Result<()> {
         err,
         MetricsError::InvalidTagComponent { label, value }
             if label == "tag value" && value == "bad value"
+    ));
+    Ok(())
+}
+
+// Ensures histogram calls reject reserved tag keys even though they internally add `le`.
+#[test]
+fn histogram_rejects_reserved_tag_key() -> Result<()> {
+    let mut batch = MetricsBatch::new();
+    let buckets = HistogramBuckets::from_values(&[10])?;
+    let err = batch
+        .histogram("codex.request_latency", 3, &buckets, &[("le", "10")])
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        MetricsError::ReservedTagKey { key } if key == "le"
     ));
     Ok(())
 }

@@ -2,7 +2,8 @@ use crate::STATSD_CONTENT_TYPE;
 use crate::error::MetricsError;
 use crate::error::Result;
 use crate::validation::validate_metric_name;
-use crate::validation::validate_tag_component;
+use crate::validation::validate_tag_key;
+use crate::validation::validate_tag_value;
 use sentry::types::Dsn;
 use std::collections::BTreeMap;
 
@@ -82,8 +83,8 @@ pub(crate) fn build_statsd_envelope(dsn: &Dsn, payload: &str) -> Result<Vec<u8>>
 pub(crate) fn collect_tags(tags: &[(&str, &str)]) -> Result<Vec<(String, String)>> {
     tags.iter()
         .map(|(key, value)| {
-            validate_tag_component(key, "tag key")?;
-            validate_tag_component(value, "tag value")?;
+            validate_tag_key(key)?;
+            validate_tag_value(value)?;
             Ok(((*key).to_string(), (*value).to_string()))
         })
         .collect()

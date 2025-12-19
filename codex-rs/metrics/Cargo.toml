@@ -5,9 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-pretty_assertions = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 sentry = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

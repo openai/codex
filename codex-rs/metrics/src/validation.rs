@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 
 pub(crate) fn validate_tags(tags: &BTreeMap<String, String>) -> Result<()> {
     for (key, value) in tags {
-        validate_tag_component(key, "tag key")?;
-        validate_tag_component(value, "tag value")?;
+        validate_tag_key(key)?;
+        validate_tag_value(value)?;
     }
     Ok(())
 }
@@ -22,7 +22,21 @@ pub(crate) fn validate_metric_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn validate_tag_component(value: &str, label: &str) -> Result<()> {
+pub(crate) fn validate_tag_key(key: &str) -> Result<()> {
+    validate_tag_component(key, "tag key")?;
+    if key == "le" {
+        return Err(MetricsError::ReservedTagKey {
+            key: key.to_string(),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_tag_value(value: &str) -> Result<()> {
+    validate_tag_component(value, "tag value")
+}
+
+fn validate_tag_component(value: &str, label: &str) -> Result<()> {
     if value.is_empty() {
         return Err(MetricsError::EmptyTagComponent {
             label: label.to_string(),

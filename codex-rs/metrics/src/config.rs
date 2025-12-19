@@ -1,7 +1,8 @@
 use crate::DEFAULT_TIMEOUT;
 use crate::SENTRY_DSN;
 use crate::error::Result;
-use crate::validation::validate_tag_component;
+use crate::validation::validate_tag_key;
+use crate::validation::validate_tag_value;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -28,8 +29,8 @@ impl MetricsConfig {
     pub fn with_tag(mut self, key: impl Into<String>, value: impl Into<String>) -> Result<Self> {
         let key = key.into();
         let value = value.into();
-        validate_tag_component(&key, "tag key")?;
-        validate_tag_component(&value, "tag value")?;
+        validate_tag_key(&key)?;
+        validate_tag_value(&value)?;
         self.default_tags.insert(key, value);
         Ok(self)
     }
