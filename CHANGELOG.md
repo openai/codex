@@ -12,6 +12,7 @@ edited between the markers.
 ### Highlights
 
 - Skip macOS rust-ci jobs on pull requests to avoid flaky PR runs.
+- Skip upstream npm package staging in CI for forks.
 
 ### Details
 

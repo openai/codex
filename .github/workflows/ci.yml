@@ -29,9 +29,11 @@ jobs:
 
       # stage_npm_packages.py requires DotSlash when staging releases.
       - uses: facebook/install-dotslash@v2
+        if: ${{ github.repository == 'openai/codex' }}
 
       - name: Stage npm package
         id: stage_npm_package
+        if: ${{ github.repository == 'openai/codex' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -47,6 +49,7 @@ jobs:
           echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"
 
       - name: Upload staged npm package artifact
+        if: ${{ github.repository == 'openai/codex' }}
         uses: actions/upload-artifact@v6
         with:
           name: codex-npm-staging
