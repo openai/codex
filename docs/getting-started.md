@@ -8,24 +8,24 @@ Looking for something specific? Jump ahead:
 
 ### CLI usage
 
-| Command            | Purpose                            | Example                         |
-| ------------------ | ---------------------------------- | ------------------------------- |
-| `codexel`          | Interactive TUI                    | `codexel`                       |
-| `codexel "..."`    | Initial prompt for interactive TUI | `codexel "fix lint errors"`     |
-| `codexel exec "..."` | Non-interactive "automation mode" | `codexel exec "explain utils.ts"` |
+| Command              | Purpose                            | Example                           |
+| -------------------- | ---------------------------------- | --------------------------------- |
+| `codexel`            | Interactive TUI                    | `codexel`                         |
+| `codexel "..."`      | Initial prompt for interactive TUI | `codexel "fix lint errors"`       |
+| `codexel exec "..."` | Non-interactive "automation mode"  | `codexel exec "explain utils.ts"` |
 
 Key flags: `--model/-m`, `--ask-for-approval/-a`.
 
 ### Resuming interactive sessions
- 
+
 - Run `codexel resume` to display the session picker UI
 - Resume most recent: `codexel resume --last`
 - Resume by id: `codexel resume <SESSION_ID>` (You can get session ids from /status or `~/.codexel/sessions/`)
 - The picker shows the session's recorded Git branch when available.
 - To show the session's original working directory (CWD), run `codexel resume --all` (this also disables cwd filtering and adds a `CWD` column).
- 
- Examples:
- 
+
+Examples:
+
 ```shell
 # Open a picker of recent sessions
 codexel resume
@@ -49,15 +49,15 @@ codexel "explain this codebase to me"
 
 Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task.
 
-| ✨  | What you type                                                                   | What happens                                                               |
-| --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 1   | `codexel "Refactor the Dashboard component to React Hooks"`                     | Codexel rewrites the class component, runs `npm test`, and shows the diff. |
-| 2   | `codexel "Generate SQL migrations for adding a users table"`                    | Infers your ORM, creates migration files, and runs them in a sandboxed DB. |
-| 3   | `codexel "Write unit tests for utils/date.ts"`                                  | Generates tests, executes them, and iterates until they pass.              |
-| 4   | `codexel "Bulk-rename *.jpeg -> *.jpg with git mv"`                             | Safely renames files and updates imports/usages.                           |
-| 5   | `codexel "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                    | Outputs a step-by-step human explanation.                                  |
-| 6   | `codexel "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                          |
-| 7   | `codexel "Look for vulnerabilities and create a security review report"`        | Finds and explains security bugs.                                          |
+| ✨  | What you type                                                                     | What happens                                                               |
+| --- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| 1   | `codexel "Refactor the Dashboard component to React Hooks"`                       | Codexel rewrites the class component, runs `npm test`, and shows the diff. |
+| 2   | `codexel "Generate SQL migrations for adding a users table"`                      | Infers your ORM, creates migration files, and runs them in a sandboxed DB. |
+| 3   | `codexel "Write unit tests for utils/date.ts"`                                    | Generates tests, executes them, and iterates until they pass.              |
+| 4   | `codexel "Bulk-rename *.jpeg -> *.jpg with git mv"`                               | Safely renames files and updates imports/usages.                           |
+| 5   | `codexel "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step-by-step human explanation.                                  |
+| 6   | `codexel "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
+| 7   | `codexel "Look for vulnerabilities and create a security review report"`          | Finds and explains security bugs.                                          |
 
 Looking to reuse your own instructions? Create slash commands with [custom prompts](./prompts.md).
 

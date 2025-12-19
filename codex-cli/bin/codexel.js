@@ -61,7 +61,8 @@ if (!targetTriple) {
 
 const vendorRoot = path.join(__dirname, "..", "vendor");
 const archRoot = path.join(vendorRoot, targetTriple);
-const codexelBinaryName = process.platform === "win32" ? "codexel.exe" : "codexel";
+const codexelBinaryName =
+  process.platform === "win32" ? "codexel.exe" : "codexel";
 const binaryPath = path.join(archRoot, "codex", codexelBinaryName);
 
 // Use an asynchronous spawn instead of spawnSync so that Node is able to
@@ -94,7 +95,6 @@ function detectPackageManager() {
   if (execPath.includes("bun")) {
     return "bun";
   }
-
 
   if (
     __dirname.includes(".bun/install/global") ||

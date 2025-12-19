@@ -136,4 +136,3 @@ If you don’t have the tool:
 
 - Do not run `git restore` or `git checkout` unless the user explicitly asks.
 - After executing an approved plan, if `git status` shows changes, create a `git commit` (ask for a commit message only if unclear).
-
