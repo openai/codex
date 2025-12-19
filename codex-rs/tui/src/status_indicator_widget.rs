@@ -14,17 +14,20 @@ use ratatui::text::Text;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use textwrap::Options;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::exec_cell::spinner;
 use crate::key_hint;
+use crate::render::line_utils::prefix_lines;
 use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
+use crate::text_formatting::capitalize_first;
 use crate::tui::FrameRequester;
 
 const DETAILS_MAX_LINES: usize = 3;
-const DETAILS_PREFIX: &str = "  ";
+const DETAILS_PREFIX: &str = "  └ ";
 
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
@@ -88,7 +91,9 @@ impl StatusIndicatorWidget {
 
     /// Update the details text shown below the header.
     pub(crate) fn update_details(&mut self, details: Option<String>) {
-        self.details = details.filter(|details| !details.is_empty());
+        self.details = details
+            .filter(|details| !details.is_empty())
+            .map(|details| capitalize_first(details.trim_start()));
     }
 
     #[cfg(test)]
@@ -160,9 +165,9 @@ impl StatusIndicatorWidget {
             return Vec::new();
         }
 
-        let wrap_width = usize::from(width)
-            .saturating_sub(DETAILS_PREFIX.len())
-            .max(1);
+        let prefix_width = UnicodeWidthStr::width(DETAILS_PREFIX);
+        let subsequent_prefix = " ".repeat(prefix_width);
+        let wrap_width = usize::from(width).saturating_sub(prefix_width).max(1);
 
         let opts = Options::new(wrap_width).break_words(true);
         let mut out: Vec<Line<'static>> = Vec::new();
@@ -173,22 +178,22 @@ impl StatusIndicatorWidget {
                     truncated = true;
                     break 'outer;
                 }
-                out.push(vec![DETAILS_PREFIX.into(), wrapped.to_string().dim()].into());
+                out.push(vec![wrapped.to_string().dim()].into());
             }
         }
 
-        // Each details line is constructed as two spans
+        // Each details line is constructed as one span
         if truncated
             && let Some(last) = out.last_mut()
-            && last.spans.len() >= 2
+            && let Some(span) = last.spans.first()
         {
-            let last_text = last.spans[1].content.to_string();
+            let last_text = span.content.to_string();
             let max_base_len = wrap_width.saturating_sub(1);
             let trimmed: String = last_text.chars().take(max_base_len).collect();
-            last.spans[1] = format!("{trimmed}…").dim();
+            last.spans[0] = format!("{trimmed}…").dim();
         }
 
-        out
+        prefix_lines(out, DETAILS_PREFIX.dim(), subsequent_prefix.dim())
     }
 }
 
