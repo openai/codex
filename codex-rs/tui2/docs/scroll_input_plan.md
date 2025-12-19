@@ -9,6 +9,9 @@ Replace the prior cadence-based scroll heuristics with a stream-based normalizat
 stable across terminals and devices, using the data-derived constants and per-terminal overrides
 from the scroll-probe logs.
 
+Additionally, enforce the UX requirement that a mouse wheel scrolls ~3 lines per physical wheel
+tick (classic feel), while trackpads remain higher fidelity.
+
 ## Data findings (from probe logs)
 - Logs analyzed: 16 (13,734 events) across Apple Terminal, Warp, WezTerm, Alacritty, Ghostty,
   iTerm2, VS Code, Kitty.
@@ -18,16 +21,17 @@ from the scroll-probe logs.
   ignored for vertical scrolling.
 - Discrete vs continuous is best classified by event count + burst duration.
 
-Data-derived constants (implemented in TUI2):
+Data-derived constants (implemented in TUI2, with minor UX-driven additions):
 - STREAM_GAP_MS = 80
-- DISCRETE_MAX_EVENTS = 10
-- DISCRETE_MAX_DURATION_MS = 250
 - REDRAW_CADENCE_MS = 16
-- DEFAULT_EVENTS_PER_LINE = 3
+- DEFAULT_EVENTS_PER_TICK = 3
 - DEFAULT_WHEEL_LINES_PER_TICK = 3 (classic wheel feel; UX choice)
+- DEFAULT_TRACKPAD_LINES_PER_TICK = 1 (trackpad fidelity; UX choice)
+- DEFAULT_WHEEL_TICK_DETECT_MAX_MS = 12 (heuristic tuning; can be overridden)
+- DEFAULT_WHEEL_LIKE_MAX_DURATION_MS = 200 (heuristic fallback for 1-event-per-tick terminals)
 - MAX_EVENTS_PER_STREAM = 256
 - MAX_ACCUMULATED_LINES = 256
-- MIN_LINES_PER_DISCRETE_STREAM = 1
+- MIN_LINES_PER_WHEEL_STREAM = 1 (guardrail; trackpad streams do not use a minimum)
 
 Per-terminal events-per-line overrides (implemented in TUI2, keyed by TerminalName):
 - AppleTerminal = 3
@@ -49,10 +53,13 @@ Full TL;DR, cross-terminal comparison table, and pseudocode are preserved verbat
 - Replaced cadence-based scroll tuning with stream-based normalization in
   `codex-rs/tui2/src/tui/scrolling/mouse.rs`.
   - Streams close on gap > 80 ms or direction flip.
-  - Discrete streams apply accumulated lines on close; minimum +/-1 line when rounding to zero.
-  - Discrete streams are scaled by `DEFAULT_WHEEL_LINES_PER_TICK` (default 3) to restore classic
-    wheel speed; configurable via `tui.scroll_wheel_lines`.
-  - Continuous streams accumulate fractional lines and flush at 60 Hz cadence.
+  - Wheel speed: wheel-like streams scroll `tui.scroll_wheel_lines` lines per physical wheel tick,
+    independent of terminal event density.
+  - Trackpad fidelity: trackpad-like streams scroll `tui.scroll_trackpad_lines` lines per
+    tick-equivalent and carry fractional remainders across streams.
+  - Auto device inference: streams begin trackpad-like and are promoted to wheel-like if the first
+    tick-worth of events arrives quickly. There is an end-of-stream fallback for 1-event-per-tick
+    terminals (applied only to very small bursts).
   - Guard rails: event count and accumulated lines are clamped.
   - Horizontal scroll events are ignored.
 - App integration in `codex-rs/tui2/src/app.rs`:
@@ -61,6 +68,10 @@ Full TL;DR, cross-terminal comparison table, and pseudocode are preserved verbat
 - New config hooks (TUI2-only):
   - `tui.scroll_events_per_line` (override normalization factor).
   - `tui.scroll_wheel_lines` (override lines applied per wheel tick).
+  - `tui.scroll_trackpad_lines` (override trackpad sensitivity).
+  - `tui.scroll_mode` (`auto`/`wheel`/`trackpad`).
+  - `tui.scroll_wheel_tick_detect_max_ms` (auto-mode heuristic tuning).
+  - `tui.scroll_wheel_like_max_duration_ms` (auto-mode heuristic tuning).
   - `tui.scroll_invert` (invert direction).
   - Wiring in `codex-rs/core/src/config/types.rs` and `codex-rs/core/src/config/mod.rs`.
 - Docs:
@@ -72,33 +83,63 @@ Full TL;DR, cross-terminal comparison table, and pseudocode are preserved verbat
   - Config default tests updated for new fields in `codex-rs/core/src/config/mod.rs`.
 
 ## Current status
-- Working copy commit: `feat(tui2): implement stream-based scrolling` (jj @).
-- Changes are in the files listed in the previous section.
+- Baseline: stream-based scrolling is implemented and wired into TUI2.
+- Current work ("take into account some better statistics") is implemented in the working tree.
+  It addresses the two primary UX complaints:
+  - Mouse wheel is too slow (often ~3x; ~9x in Warp/Ghostty): fixed by guaranteeing a wheel tick maps
+    to `tui.scroll_wheel_lines` lines (default 3) independent of terminal event density, and applying
+    that scaling to multi-tick wheel bursts (wheel_small/wheel_long), not just single-tick bursts.
+  - Trackpad has a stop-lag / overshoot (notably VS Code + Terminal.app): reduced by removing the
+    "minimum +/-1 line" behavior for trackpad-like streams and carrying fractional scroll remainder
+    across stream boundaries.
+
+Implementation highlights (current working tree):
+- `codex-rs/tui2/src/tui/scrolling/mouse.rs`
+  - Normalization is now expressed as events-per-tick (still configured via the historic
+    `tui.scroll_events_per_line` key).
+  - Auto wheel-vs-trackpad inference is heuristic:
+    - Streams start trackpad-like by default (safer: avoids end-of-stream jumps).
+    - Promote a stream to wheel-like when the first tick-worth of events arrives quickly
+      (`tui.scroll_wheel_tick_detect_max_ms`, default 12ms).
+    - For terminals that emit ~1 event per tick (WezTerm/iTerm/VS Code), there is no "tick completion"
+      signal, so we use a small end-of-stream fallback for very small bursts
+      (`tui.scroll_wheel_like_max_duration_ms`, default 200ms).
+    - Users can force behavior with `tui.scroll_mode` when the heuristic is wrong.
+  - Wheel-like streams flush immediately (not cadence-gated) so the wheel feels snappy.
+  - Trackpad-like streams still coalesce redraw to ~60Hz and carry fractional remainder across streams.
+- `codex-rs/core/src/config/types.rs`, `codex-rs/core/src/config/mod.rs`, `docs/config.md`
+  - Added config knobs (see below) and updated documentation.
 
 ## Tests and tooling run
-- `just fmt` (warnings about `imports_granularity` on stable; formatting still applied).
 - `cargo check -p codex-tui2` (passed).
-- `just fix -p codex-tui2 --allow-no-vcs` (passed; required because `jj` has no VCS metadata).
-- `just fmt` (re-run after `just fix`).
-- `cargo test -p codex-tui2` (failed; see below).
-- `cargo test --all-features` (failed; see below).
+- `just fmt` (runs with stable warnings about `imports_granularity`; formatting still applied).
+- `just fix -p codex-tui2 --allow-no-vcs` (passed).
+- `cargo test -p codex-tui2`:
+  - New/updated scroll tests pass.
+  - Remaining failures are VT100 color expectations in `insert_history` (see below); these are the
+    same class of flaky failures previously observed and explicitly deprioritized for this task.
 
-Test failures (unchanged files, likely unrelated to scroll changes; user flagged as flaky to ignore):
+VT100 test failures (flaky; ignored for this task):
 - `insert_history::tests::vt100_blockquote_line_emits_green_fg`
 - `insert_history::tests::vt100_blockquote_wrap_preserves_color_on_all_wrapped_lines`
 - `insert_history::tests::vt100_colored_prefix_then_plain_text_resets_color`
 - `insert_history::tests::vt100_deep_nested_mixed_list_third_level_marker_is_colored`
 
-Each failure reports missing non-default foreground colors in VT100 output. The user indicated these
-are flaky; no fix was attempted.
-
-Additional full-suite failure (likely unrelated to scroll changes):
-- `suite::send_message::test_send_message_raw_notifications_opt_in` in `codex-app-server` failed.
-  The test expected the developer instruction message, but received the environment context message
-  first. Error from `app-server/tests/suite/send_message.rs:324`.
+Each failure reports missing non-default foreground colors in VT100 output. No fix was attempted.
 
 ## Remaining tasks / next steps
-- Optionally re-run `cargo test -p codex-tui2` if we need to confirm the flaky VT100 tests.
-- Decide whether to re-run or adjust for the `codex-app-server` raw notification test failure.
-- Re-run `cargo check -p codex-tui2` if additional fixes are made.
-- Collect more scroll probe data from additional terminals and versions; update overrides as needed.
+- Run `just fmt` in `codex-rs/` after code changes.
+- Run `cargo check -p codex-tui2` and `cargo test -p codex-tui2` to validate.
+- Run `just fix -p codex-tui2 --allow-no-vcs` before landing to address clippy/lints.
+- Validate feel in at least: Terminal.app + VS Code (trackpad overshoot), and Warp/Ghostty (wheel speed).
+- Collect more scroll probe data from additional terminals/versions (and non-macOS) and update overrides
+  or heuristics as needed.
+
+Config knobs (TUI2-only):
+- `tui.scroll_events_per_line`: override events-per-tick normalization factor (historic name).
+- `tui.scroll_wheel_lines`: lines per wheel tick (classic feel; default 3).
+- `tui.scroll_trackpad_lines`: trackpad sensitivity (lines per tick-equivalent; default 1).
+- `tui.scroll_mode`: `auto`/`wheel`/`trackpad`.
+- `tui.scroll_wheel_tick_detect_max_ms`: auto-mode promotion threshold (default 12ms).
+- `tui.scroll_wheel_like_max_duration_ms`: auto-mode fallback for 1-event-per-tick terminals (default 200ms).
+- `tui.scroll_invert`: invert direction.

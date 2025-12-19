@@ -22,6 +22,7 @@
 pub(crate) mod mouse;
 pub(crate) use mouse::MouseScrollState;
 pub(crate) use mouse::ScrollConfig;
+pub(crate) use mouse::ScrollConfigOverrides;
 pub(crate) use mouse::ScrollDirection;
 pub(crate) use mouse::ScrollUpdate;
 

@@ -4,27 +4,103 @@ This document captures the scroll probe findings and the TUI2 implementation der
 The probe data came from a small harness run across a limited set of terminals and devices; we
 need more data from other terminals, operating systems, and input hardware.
 
-## Implementation in codex-tui2 (derived from the probe)
+## Implementation in codex-tui2 (derived from the probe, plus UX requirements)
+
+TUI2's goal is:
+- Mouse wheel: scroll **3 lines per physical wheel tick** (classic feel), regardless of how many raw
+  events the terminal emits for that tick.
+- Trackpad: remain **higher fidelity**, meaning small movements can accumulate fractionally and
+  should not be artificially accelerated to wheel speed.
+
+The implementation (see `codex-rs/tui2/src/tui/scrolling/mouse.rs`) follows this model:
 - Streams: scroll input is grouped into short streams separated by `STREAM_GAP_MS` or direction flips.
-- Normalization: per-terminal `EVENTS_PER_LINE` factors normalize raw events into line deltas; config overrides via `tui.scroll_events_per_line`.
-- Terminal overrides are currently keyed by terminal family (TerminalName), not exact version; the probe data is version-specific, so re-validate as more data arrives.
-- Classification: streams with `event_count <= DISCRETE_MAX_EVENTS` and `duration <= DISCRETE_MAX_DURATION_MS` are discrete; others are continuous.
-- Discrete behavior: apply the accumulated line delta when the stream ends; if the total rounds to 0 but events occurred, apply a minimum of 1 line in the stream direction.
-- Continuous behavior: accumulate fractional lines and flush at `REDRAW_CADENCE_MS` (~60 Hz); flush any remainder on stream end with the same minimum line rule.
-- Wheel line scaling: discrete streams are multiplied by `DEFAULT_WHEEL_LINES_PER_TICK` (default 3) to restore classic wheel speed; configurable via `tui.scroll_wheel_lines`.
-- Direction: use raw event direction; user inversion is controlled by `tui.scroll_invert` rather than inferred from timing.
-- Horizontal events: ignored for vertical scrolling.
-- Guard rails: cap events per stream and accumulated line deltas to avoid floods.
+- Normalization: per-terminal `EVENTS_PER_TICK` factors convert raw events into "tick-equivalents".
+  Note: config key `tui.scroll_events_per_line` has a historic name; it is treated as an events-per-tick
+  factor for TUI2.
+- Wheel vs trackpad: device type is not directly observable from terminal scroll events, so TUI2 uses
+  a heuristic in `tui.scroll_mode = "auto"`:
+  - Start by treating a stream as trackpad-like (to avoid overshoot).
+  - Promote a stream to wheel-like if the first tick-worth of events arrives quickly.
+  - For 1-event-per-tick terminals, use an end-of-stream fallback only for very small bursts.
+  - Users can force `wheel` or `trackpad` behavior with `tui.scroll_mode` if auto misclassifies.
+- Scaling:
+  - Wheel-like: each event contributes `scroll_wheel_lines / events_per_tick` lines.
+  - Trackpad-like: each event contributes `scroll_trackpad_lines / events_per_tick` lines, with
+    fractional accumulation carried across streams.
+- Redraw coalescing: apply whole-line deltas at `REDRAW_CADENCE_MS` (~60 Hz) while input is active.
+- Direction: use raw event direction; user inversion is controlled by `tui.scroll_invert` rather than inferred.
+- Horizontal events: ignored for vertical scrolling (TUI2 currently receives only vertical scroll in the main app event loop).
+- Guard rails: cap events per stream and clamp accumulated lines to avoid floods.
 
 ## Differences from the prior cadence-based approach
 - Previous approach relied on rolling inter-event timing thresholds (fast burst, frame cadence, slow events)
   plus per-terminal tuning to guess wheel vs trackpad behavior.
-- The new approach groups events into streams and normalizes by events-per-line, which is more stable
-  across terminals and input devices.
-- Stream classification is based on event count and burst duration, not timing-only heuristics.
-- Redraw coalescing is explicit and bounded, and discrete streams always produce at least one line.
-- Discrete streams are scaled by a configurable wheel line multiplier so a single tick feels like a classic multi-line scroll.
-- This reduces terminal-specific tuning and makes behavior data-driven and easier to update.
+- The stream approach groups related events into bounded streams and redraws at a fixed cadence.
+- Normalization is explicit: `events_per_tick` is a data-derived per-terminal factor, and wheel/trackpad
+  scaling is expressed directly as lines-per-tick.
+- Wheel speed is guaranteed for multi-tick wheel bursts (not just "wheel_single") by applying wheel scaling
+  to wheel-like streams regardless of stream length.
+- Trackpad overshoot is reduced by (a) defaulting to trackpad-like behavior until a wheel signal is observed,
+  and (b) not forcing a minimum +/- 1 line on trackpad-like stream finalization.
+
+## Follow-up analysis (latest log per terminal; 2025-12-20)
+
+This section is derived from a "latest log per terminal" subset analysis. The exact event count is
+not significant; it is included only as a note about which subset was used.
+
+Key takeaways:
+- Burst length overlaps heavily between wheel and trackpad. Simple "event count <= N" classifiers perform poorly.
+- Burst span (duration) is more separable: wheel bursts typically complete in < ~180-200 ms, while trackpad
+  bursts are often hundreds of milliseconds.
+- Conclusion: explicit wheel vs trackpad classification is inherently weak from these events; prefer a
+  stream model, plus a small heuristic and a config override (`tui.scroll_mode`) for edge cases.
+
+Data notes (latest per terminal label):
+- Logs used (one per terminal, by filename timestamp):
+  - mouse_scroll_log_Apple_Terminal_2025-12-19T19-53-54Z.jsonl
+  - mouse_scroll_log_WarpTerminal_2025-12-19T19-59-38Z.jsonl
+  - mouse_scroll_log_WezTerm_2025-12-19T20-00-36Z.jsonl
+  - mouse_scroll_log_alacritty_2025-12-19T19-56-45Z.jsonl
+  - mouse_scroll_log_ghostty_2025-12-19T19-52-44Z.jsonl
+  - mouse_scroll_log_iTerm_app_2025-12-19T19-55-08Z.jsonl
+  - mouse_scroll_log_vscode_2025-12-19T19-51-20Z.jsonl
+  - mouse_scroll_log_xterm-kitty_2025-12-19T19-58-19Z.jsonl
+
+Per-terminal burst separability (wheel vs trackpad), summarized as median and p90:
+- Apple Terminal:
+  - Wheel: length median 9.5 (p90 49), span median 94 ms (p90 136)
+  - Trackpad: length median 13.5 (p90 104), span median 238 ms (p90 616)
+- Warp:
+  - Wheel: length median 43 (p90 169), span median 88 ms (p90 178)
+  - Trackpad: length median 60 (p90 82), span median 358 ms (p90 721)
+- WezTerm:
+  - Wheel: length median 4 (p90 10), span median 91 ms (p90 156)
+  - Trackpad: length median 10.5 (p90 36), span median 270 ms (p90 348)
+- alacritty:
+  - Wheel: length median 14 (p90 63), span median 109 ms (p90 158)
+  - Trackpad: length median 12.5 (p90 63), span median 372 ms (p90 883)
+- ghostty:
+  - Wheel: length median 32.5 (p90 163), span median 99 ms (p90 157)
+  - Trackpad: length median 14.5 (p90 60), span median 366 ms (p90 719)
+- iTerm:
+  - Wheel: length median 4 (p90 9), span median 91 ms (p90 230)
+  - Trackpad: length median 9 (p90 36), span median 223 ms (p90 540)
+- VS Code:
+  - Wheel: length median 3 (p90 9), span median 94 ms (p90 120)
+  - Trackpad: length median 3 (p90 12), span median 192 ms (p90 468)
+- Kitty:
+  - Wheel: length median 15.5 (p90 59), span median 87 ms (p90 233)
+  - Trackpad: length median 15.5 (p90 68), span median 292 ms (p90 563)
+
+Wheel_single medians (events per tick) in the latest logs:
+- Apple: 3
+- Warp: 9
+- WezTerm: 1
+- alacritty: 3
+- ghostty: 9
+- iTerm: 1
+- VS Code: 1
+- Kitty: 3
 
 ## Scroll probe findings (authoritative)
 ## 1. TL;DR

@@ -886,11 +886,22 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 # Defaults to true.
 animations = false
 
-# Override scroll normalization (events per line). TUI2 only.
+# Override scroll normalization (events per wheel tick). TUI2 only.
 scroll_events_per_line = 3
 
 # Override wheel scroll lines per tick (classic feel). TUI2 only.
 scroll_wheel_lines = 3
+
+# Override trackpad scroll sensitivity (lines per tick-equivalent). TUI2 only.
+scroll_trackpad_lines = 1
+
+# Force scroll interpretation. TUI2 only.
+# Valid values: "auto" (default), "wheel", "trackpad"
+scroll_mode = "auto"
+
+# Auto-mode heuristic tuning. TUI2 only.
+scroll_wheel_tick_detect_max_ms = 12
+scroll_wheel_like_max_duration_ms = 200
 
 # Invert scroll direction for mouse wheel/trackpad. TUI2 only.
 scroll_invert = false
@@ -901,7 +912,7 @@ scroll_invert = false
 
 > [!NOTE] > `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
 
-Scroll settings (`tui.scroll_events_per_line`, `tui.scroll_wheel_lines`, `tui.scroll_invert`) currently apply to the TUI2 viewport scroll implementation.
+Scroll settings (`tui.scroll_events_per_line`, `tui.scroll_wheel_lines`, `tui.scroll_trackpad_lines`, `tui.scroll_mode`, `tui.scroll_invert`) currently apply to the TUI2 viewport scroll implementation.
 
 ## Authentication and authorization
 
@@ -986,8 +997,12 @@ Valid values:
 | `file_opener`                                    | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`).                                                                         |
 | `tui`                                            | table                                                             | TUI‑specific options.                                                                                                           |
 | `tui.notifications`                              | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: true).                                                                        |
-| `tui.scroll_events_per_line`                     | number                                                            | Override events-per-line normalization for TUI2 scrolling (default: terminal-specific; fallback: 3).                            |
+| `tui.scroll_events_per_line`                     | number                                                            | Override events-per-tick normalization for TUI2 scrolling (default: terminal-specific; fallback: 3).                            |
 | `tui.scroll_wheel_lines`                         | number                                                            | Lines to apply per wheel tick for TUI2 scrolling (default: 3).                                                                  |
+| `tui.scroll_trackpad_lines`                      | number                                                            | Lines per tick-equivalent for trackpad scrolling in TUI2 (default: 1).                                                          |
+| `tui.scroll_mode`                                | `auto` \| `wheel` \| `trackpad`                                    | How to interpret scroll input in TUI2 (default: `auto`).                                                                        |
+| `tui.scroll_wheel_tick_detect_max_ms`            | number                                                            | Auto-mode threshold (ms) for promoting a stream to wheel-like behavior (default: 12).                                           |
+| `tui.scroll_wheel_like_max_duration_ms`          | number                                                            | Auto-mode fallback duration (ms) used for 1-event-per-tick terminals (default: 200).                                            |
 | `tui.scroll_invert`                              | boolean                                                           | Invert mouse scroll direction in TUI2 (default: false).                                                                         |
 | `hide_agent_reasoning`                           | boolean                                                           | Hide model reasoning events.                                                                                                    |
 | `check_for_update_on_startup`                    | boolean                                                           | Check for Codex updates on startup (default: true). Set to `false` only if updates are centrally managed.                       |

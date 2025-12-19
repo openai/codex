@@ -21,6 +21,7 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::tui::scrolling::MouseScrollState;
 use crate::tui::scrolling::ScrollConfig;
+use crate::tui::scrolling::ScrollConfigOverrides;
 use crate::tui::scrolling::ScrollDirection;
 use crate::tui::scrolling::ScrollUpdate;
 use crate::tui::scrolling::TranscriptLineMeta;
@@ -489,9 +490,15 @@ impl App {
         let upgrade_version = crate::updates::get_upgrade_version(&config);
         let scroll_config = ScrollConfig::from_terminal(
             &terminal_info(),
-            config.tui_scroll_events_per_line,
-            config.tui_scroll_wheel_lines,
-            config.tui_scroll_invert,
+            ScrollConfigOverrides {
+                events_per_tick: config.tui_scroll_events_per_line,
+                wheel_lines_per_tick: config.tui_scroll_wheel_lines,
+                trackpad_lines_per_tick: config.tui_scroll_trackpad_lines,
+                mode: Some(config.tui_scroll_mode),
+                wheel_tick_detect_max_ms: config.tui_scroll_wheel_tick_detect_max_ms,
+                wheel_like_max_duration_ms: config.tui_scroll_wheel_like_max_duration_ms,
+                invert_direction: config.tui_scroll_invert,
+            },
         );
 
         let mut app = Self {

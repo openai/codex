@@ -3,16 +3,21 @@
 //! Terminal scroll events vary widely in event counts per wheel tick, and inter-event timing
 //! overlaps heavily between wheel and trackpad input. We normalize scroll input by treating
 //! events as short streams separated by gaps, converting events into line deltas with a
-//! per-terminal events-per-line factor, and classifying streams as discrete or continuous
-//! after they end.
+//! per-terminal events-per-tick factor, and coalescing redraw to a fixed cadence.
 //!
-//! Discrete streams apply their total line delta when the stream closes (with a minimum of
-//! one line when rounding to zero), scaled by a per-tick wheel multiplier so a single
-//! wheel notch retains the classic multi-line feel. Continuous streams accumulate fractional
-//! lines and flush them at a ~60 Hz cadence while the stream is active.
+//! A mouse wheel "tick" (one notch) is expected to scroll by a fixed number of lines (default: 3)
+//! regardless of the terminal's raw event density. Trackpad scrolling should remain higher
+//! fidelity (small movements can result in sub-line accumulation that only scrolls once whole
+//! lines are reached).
+//!
+//! Because terminal mouse scroll events do not encode magnitude (only direction), wheel-vs-trackpad
+//! detection is heuristic. We bias toward treating input as trackpad-like (to avoid overshoot) and
+//! "promote" to wheel-like when the first tick-worth of events arrives quickly. A user can always
+//! force wheel/trackpad behavior via config if the heuristic is wrong for their setup.
 //!
 //! See `codex-rs/tui2/docs/scroll_input_model.md` for the data-derived constants and analysis.
 
+use codex_core::config::types::ScrollInputMode;
 use codex_core::terminal::TerminalInfo;
 use codex_core::terminal::TerminalName;
 use std::time::Duration;
@@ -20,15 +25,24 @@ use std::time::Instant;
 
 const STREAM_GAP_MS: u64 = 80;
 const STREAM_GAP: Duration = Duration::from_millis(STREAM_GAP_MS);
-const DISCRETE_MAX_EVENTS: usize = 10;
-const DISCRETE_MAX_DURATION_MS: u64 = 250;
 const REDRAW_CADENCE_MS: u64 = 16;
 const REDRAW_CADENCE: Duration = Duration::from_millis(REDRAW_CADENCE_MS);
-const DEFAULT_EVENTS_PER_LINE: u16 = 3;
+const DEFAULT_EVENTS_PER_TICK: u16 = 3;
 const DEFAULT_WHEEL_LINES_PER_TICK: u16 = 3;
+const DEFAULT_TRACKPAD_LINES_PER_TICK: u16 = 1;
+const DEFAULT_SCROLL_MODE: ScrollInputMode = ScrollInputMode::Auto;
+const DEFAULT_WHEEL_TICK_DETECT_MAX_MS: u64 = 12;
+const DEFAULT_WHEEL_LIKE_MAX_DURATION_MS: u64 = 200;
 const MAX_EVENTS_PER_STREAM: usize = 256;
 const MAX_ACCUMULATED_LINES: i32 = 256;
-const MIN_LINES_PER_DISCRETE_STREAM: i32 = 1;
+const MIN_LINES_PER_WHEEL_STREAM: i32 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScrollStreamKind {
+    Unknown,
+    Wheel,
+    Trackpad,
+}
 
 /// High-level scroll direction used to sign line deltas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,23 +84,67 @@ impl ScrollDirection {
 /// - `tui.scroll_invert`
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ScrollConfig {
-    /// Per-terminal normalization factor ("events per line").
+    /// Per-terminal normalization factor ("events per wheel tick").
     ///
-    /// Each raw scroll event contributes `1 / events_per_line` visual lines before any other
-    /// scaling. Larger values make scrolling slower; smaller values make it faster.
-    events_per_line: u16,
-    /// Lines applied per mouse wheel tick for discrete streams.
+    /// Terminals can emit anywhere from ~1 to ~9+ raw events for the same physical wheel notch.
+    /// We use this factor to convert raw event counts into a "ticks" estimate.
     ///
-    /// This multiplier is only applied when a stream is classified as *discrete* (wheel-like burst)
-    /// to avoid accelerating continuous scrolling (trackpads).
+    /// Each raw scroll event contributes `1 / events_per_tick` ticks. That tick value is then
+    /// scaled to lines depending on the active scroll mode (wheel vs trackpad).
     ///
-    /// Note: very small trackpad gestures that look like discrete bursts may also be affected.
+    /// User-facing name: `tui.scroll_events_per_line` (historic name; see docs).
+    events_per_tick: u16,
+
+    /// Lines applied per mouse wheel tick.
+    ///
+    /// When the input is interpreted as wheel-like, one physical wheel notch maps to this many
+    /// transcript lines. Default is 3 to match typical "classic terminal" scrolling.
     wheel_lines_per_tick: u16,
+
+    /// Lines applied per tick-equivalent for trackpad scrolling.
+    ///
+    /// Trackpads do not have discrete "ticks", but terminals still emit discrete up/down events.
+    /// We interpret trackpad-like streams as `trackpad_lines_per_tick / events_per_tick` lines per
+    /// event and accumulate fractions until they cross a whole line.
+    trackpad_lines_per_tick: u16,
+
+    /// Force wheel/trackpad behavior, or infer it per stream.
+    mode: ScrollInputMode,
+
+    /// Auto-mode threshold: how quickly the first wheel tick must complete to be considered wheel.
+    ///
+    /// This uses the time between the first event of a stream and the moment we have seen
+    /// `events_per_tick` events. If the first tick completes faster than this, we promote the
+    /// stream to wheel-like. If not, we keep treating it as trackpad-like.
+    wheel_tick_detect_max: Duration,
+
+    /// Auto-mode fallback: maximum duration that is still considered "wheel-like".
+    ///
+    /// If a stream ends before this duration and we couldn't confidently classify it, we treat it
+    /// as wheel-like so wheel notches in 1-event-per-tick terminals (WezTerm/iTerm/VS Code) still
+    /// get classic multi-line behavior.
+    wheel_like_max_duration: Duration,
+
     /// Invert the sign of vertical scroll direction.
     ///
     /// We do not attempt to infer terminal-level inversion settings; this is an explicit
     /// application-level toggle.
     invert_direction: bool,
+}
+
+/// Optional user overrides for scroll configuration.
+///
+/// Most callers should construct this from the merged [`codex_core::config::Config`] fields so
+/// TUI2 inherits terminal defaults and only overrides what the user configured.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ScrollConfigOverrides {
+    pub(crate) events_per_tick: Option<u16>,
+    pub(crate) wheel_lines_per_tick: Option<u16>,
+    pub(crate) trackpad_lines_per_tick: Option<u16>,
+    pub(crate) mode: Option<ScrollInputMode>,
+    pub(crate) wheel_tick_detect_max_ms: Option<u64>,
+    pub(crate) wheel_like_max_duration_ms: Option<u64>,
+    pub(crate) invert_direction: bool,
 }
 
 impl ScrollConfig {
@@ -95,13 +153,8 @@ impl ScrollConfig {
     /// This uses [`TerminalInfo`] (in particular [`TerminalName`]) to pick an empirically derived
     /// `events_per_line` default. Users can override both `events_per_line` and the per-wheel-tick
     /// multiplier via `config.toml` (see [`ScrollConfig`] docs).
-    pub(crate) fn from_terminal(
-        terminal: &TerminalInfo,
-        events_per_line_override: Option<u16>,
-        wheel_lines_override: Option<u16>,
-        invert_direction: bool,
-    ) -> Self {
-        let mut events_per_line = match terminal.name {
+    pub(crate) fn from_terminal(terminal: &TerminalInfo, overrides: ScrollConfigOverrides) -> Self {
+        let mut events_per_tick = match terminal.name {
             TerminalName::AppleTerminal => 3,
             TerminalName::WarpTerminal => 9,
             TerminalName::WezTerm => 1,
@@ -110,31 +163,55 @@ impl ScrollConfig {
             TerminalName::Iterm2 => 1,
             TerminalName::VsCode => 1,
             TerminalName::Kitty => 3,
-            _ => DEFAULT_EVENTS_PER_LINE,
+            _ => DEFAULT_EVENTS_PER_TICK,
         };
 
-        if let Some(override_value) = events_per_line_override {
-            events_per_line = override_value.max(1);
+        if let Some(override_value) = overrides.events_per_tick {
+            events_per_tick = override_value.max(1);
         }
 
         let mut wheel_lines_per_tick = DEFAULT_WHEEL_LINES_PER_TICK;
-        if let Some(override_value) = wheel_lines_override {
+        if let Some(override_value) = overrides.wheel_lines_per_tick {
             wheel_lines_per_tick = override_value.max(1);
         }
 
+        let mut trackpad_lines_per_tick = DEFAULT_TRACKPAD_LINES_PER_TICK;
+        if let Some(override_value) = overrides.trackpad_lines_per_tick {
+            trackpad_lines_per_tick = override_value.max(1);
+        }
+
+        let wheel_tick_detect_max = Duration::from_millis(
+            overrides
+                .wheel_tick_detect_max_ms
+                .unwrap_or(DEFAULT_WHEEL_TICK_DETECT_MAX_MS),
+        );
+        let wheel_like_max_duration = Duration::from_millis(
+            overrides
+                .wheel_like_max_duration_ms
+                .unwrap_or(DEFAULT_WHEEL_LIKE_MAX_DURATION_MS),
+        );
+
         Self {
-            events_per_line,
+            events_per_tick,
             wheel_lines_per_tick,
-            invert_direction,
+            trackpad_lines_per_tick,
+            mode: overrides.mode.unwrap_or(DEFAULT_SCROLL_MODE),
+            wheel_tick_detect_max,
+            wheel_like_max_duration,
+            invert_direction: overrides.invert_direction,
         }
     }
 
-    fn events_per_line_f32(self) -> f32 {
-        self.events_per_line.max(1) as f32
+    fn events_per_tick_f32(self) -> f32 {
+        self.events_per_tick.max(1) as f32
     }
 
-    fn wheel_lines_per_tick_i32(self) -> i32 {
-        self.wheel_lines_per_tick.max(1) as i32
+    fn wheel_lines_per_tick_f32(self) -> f32 {
+        self.wheel_lines_per_tick.max(1) as f32
+    }
+
+    fn trackpad_lines_per_tick_f32(self) -> f32 {
+        self.trackpad_lines_per_tick.max(1) as f32
     }
 
     fn apply_direction(self, direction: ScrollDirection) -> ScrollDirection {
@@ -149,8 +226,12 @@ impl ScrollConfig {
 impl Default for ScrollConfig {
     fn default() -> Self {
         Self {
-            events_per_line: DEFAULT_EVENTS_PER_LINE,
+            events_per_tick: DEFAULT_EVENTS_PER_TICK,
             wheel_lines_per_tick: DEFAULT_WHEEL_LINES_PER_TICK,
+            trackpad_lines_per_tick: DEFAULT_TRACKPAD_LINES_PER_TICK,
+            mode: DEFAULT_SCROLL_MODE,
+            wheel_tick_detect_max: Duration::from_millis(DEFAULT_WHEEL_TICK_DETECT_MAX_MS),
+            wheel_like_max_duration: Duration::from_millis(DEFAULT_WHEEL_LIKE_MAX_DURATION_MS),
             invert_direction: false,
         }
     }
@@ -178,6 +259,8 @@ pub(crate) struct ScrollUpdate {
 pub(crate) struct MouseScrollState {
     stream: Option<ScrollStream>,
     last_redraw_at: Instant,
+    carry_lines: f32,
+    carry_direction: Option<ScrollDirection>,
 }
 
 impl MouseScrollState {
@@ -185,6 +268,8 @@ impl MouseScrollState {
         Self {
             stream: None,
             last_redraw_at: now,
+            carry_lines: 0.0,
+            carry_direction: None,
         }
     }
 
@@ -216,13 +301,28 @@ impl MouseScrollState {
             }
         }
 
-        let stream = self.stream.get_or_insert_with(|| {
-            ScrollStream::new(now, direction, config.wheel_lines_per_tick_i32())
-        });
-        stream.push_event(now, direction, config.events_per_line_f32());
+        if self.stream.is_none() {
+            if self.carry_direction != Some(direction) {
+                self.carry_lines = 0.0;
+                self.carry_direction = Some(direction);
+            }
+            self.stream = Some(ScrollStream::new(now, direction, config));
+        }
+        let carry_lines = self.carry_lines;
+        let Some(stream) = self.stream.as_mut() else {
+            unreachable!("stream inserted above");
+        };
+        stream.push_event(now, direction);
+        stream.maybe_promote_kind(now);
 
-        if now.duration_since(self.last_redraw_at) >= REDRAW_CADENCE {
-            lines += Self::flush_lines_at(&mut self.last_redraw_at, now, stream);
+        // Wheel-like scrolling should feel immediate; trackpad-like streams are coalesced to a
+        // fixed redraw cadence to avoid floods in very dense terminals.
+        if stream.is_wheel_like()
+            || now.duration_since(self.last_redraw_at) >= REDRAW_CADENCE
+            || stream.just_promoted
+        {
+            lines += Self::flush_lines_at(&mut self.last_redraw_at, carry_lines, now, stream);
+            stream.just_promoted = false;
         }
 
         ScrollUpdate {
@@ -248,7 +348,12 @@ impl MouseScrollState {
                 // apply additional whole lines. Flushing on a fixed cadence prevents a "late jump"
                 // when the stream finally closes (which users perceive as overshoot).
                 if now.duration_since(self.last_redraw_at) >= REDRAW_CADENCE {
-                    lines = Self::flush_lines_at(&mut self.last_redraw_at, now, &mut stream);
+                    lines = Self::flush_lines_at(
+                        &mut self.last_redraw_at,
+                        self.carry_lines,
+                        now,
+                        &mut stream,
+                    );
                 }
                 self.stream = Some(stream);
             }
@@ -261,52 +366,42 @@ impl MouseScrollState {
     }
 
     fn finalize_stream_at(&mut self, now: Instant, stream: &mut ScrollStream) -> i32 {
-        let duration_ms = stream.last.duration_since(stream.start).as_millis() as u64;
-        let discrete =
-            stream.event_count <= DISCRETE_MAX_EVENTS && duration_ms <= DISCRETE_MAX_DURATION_MS;
-        if discrete {
-            Self::flush_discrete_at(&mut self.last_redraw_at, now, stream)
+        stream.finalize_kind();
+        let lines = Self::flush_lines_at(&mut self.last_redraw_at, self.carry_lines, now, stream);
+
+        // Preserve sub-line fractional scroll for trackpad-like streams across stream boundaries.
+        if stream.kind != ScrollStreamKind::Wheel && stream.config.mode != ScrollInputMode::Wheel {
+            self.carry_lines =
+                stream.desired_lines_f32(self.carry_lines) - stream.applied_lines as f32;
         } else {
-            Self::flush_lines_at(&mut self.last_redraw_at, now, stream)
+            self.carry_lines = 0.0;
         }
+
+        lines
     }
 
     fn flush_lines_at(
         last_redraw_at: &mut Instant,
+        carry_lines: f32,
         now: Instant,
         stream: &mut ScrollStream,
     ) -> i32 {
-        let mut lines = stream.accumulated_lines.trunc() as i32;
-        if lines == 0 {
-            return 0;
+        let desired_total = stream.desired_lines_f32(carry_lines);
+        let mut desired_lines = desired_total.trunc() as i32;
+
+        // For wheel-mode (or wheel-like streams), ensure at least one line for any non-zero input.
+        // This avoids "dead" wheel ticks when `events_per_tick` is mis-detected or overridden.
+        if stream.is_wheel_like() && desired_lines == 0 && stream.accumulated_events != 0 {
+            desired_lines = stream.accumulated_events.signum() * MIN_LINES_PER_WHEEL_STREAM;
         }
 
-        let clamped = lines.clamp(-MAX_ACCUMULATED_LINES, MAX_ACCUMULATED_LINES);
-        stream.applied_lines = stream.applied_lines.saturating_add(clamped);
-        stream.accumulated_lines -= clamped as f32;
-        *last_redraw_at = now;
-        clamped
-    }
-
-    fn flush_discrete_at(
-        last_redraw_at: &mut Instant,
-        now: Instant,
-        stream: &mut ScrollStream,
-    ) -> i32 {
-        let mut total_lines = stream.applied_lines + stream.accumulated_lines.trunc() as i32;
-        if total_lines == 0 && stream.accumulated_events != 0 {
-            total_lines = stream.accumulated_events.signum() * MIN_LINES_PER_DISCRETE_STREAM;
-        }
-
-        let scaled_total = total_lines.saturating_mul(stream.wheel_lines_per_tick);
-        let mut delta = scaled_total - stream.applied_lines;
+        let mut delta = desired_lines - stream.applied_lines;
         if delta == 0 {
             return 0;
         }
 
         delta = delta.clamp(-MAX_ACCUMULATED_LINES, MAX_ACCUMULATED_LINES);
         stream.applied_lines = stream.applied_lines.saturating_add(delta);
-        stream.accumulated_lines = 0.0;
         *last_redraw_at = now;
         delta
     }
@@ -323,7 +418,8 @@ impl MouseScrollState {
         // If we've accumulated at least one whole line but haven't flushed yet (because the last
         // event arrived before the redraw cadence elapsed), schedule an earlier tick so we can
         // flush promptly.
-        if stream.accumulated_lines.trunc() as i32 != 0 {
+        let desired_lines = stream.desired_lines_f32(self.carry_lines).trunc() as i32;
+        if desired_lines != stream.applied_lines {
             let since_redraw = now.duration_since(self.last_redraw_at);
             let until_redraw = if since_redraw >= REDRAW_CADENCE {
                 Duration::from_millis(0)
@@ -350,26 +446,30 @@ struct ScrollStream {
     direction: ScrollDirection,
     event_count: usize,
     accumulated_events: i32,
-    accumulated_lines: f32,
     applied_lines: i32,
-    wheel_lines_per_tick: i32,
+    config: ScrollConfig,
+    kind: ScrollStreamKind,
+    first_tick_completed_at: Option<Instant>,
+    just_promoted: bool,
 }
 
 impl ScrollStream {
-    fn new(now: Instant, direction: ScrollDirection, wheel_lines_per_tick: i32) -> Self {
+    fn new(now: Instant, direction: ScrollDirection, config: ScrollConfig) -> Self {
         Self {
             start: now,
             last: now,
             direction,
             event_count: 0,
             accumulated_events: 0,
-            accumulated_lines: 0.0,
             applied_lines: 0,
-            wheel_lines_per_tick: wheel_lines_per_tick.max(1),
+            config,
+            kind: ScrollStreamKind::Unknown,
+            first_tick_completed_at: None,
+            just_promoted: false,
         }
     }
 
-    fn push_event(&mut self, now: Instant, direction: ScrollDirection, events_per_line: f32) {
+    fn push_event(&mut self, now: Instant, direction: ScrollDirection) {
         self.last = now;
         self.direction = direction;
         self.event_count = self
@@ -380,11 +480,90 @@ impl ScrollStream {
             -(MAX_EVENTS_PER_STREAM as i32),
             MAX_EVENTS_PER_STREAM as i32,
         );
-        self.accumulated_lines =
-            (self.accumulated_lines + (direction.sign() as f32 / events_per_line)).clamp(
+    }
+
+    fn maybe_promote_kind(&mut self, now: Instant) {
+        if self.config.mode != ScrollInputMode::Auto {
+            return;
+        }
+        if self.kind != ScrollStreamKind::Unknown {
+            return;
+        }
+
+        let events_per_tick = self.config.events_per_tick.max(1) as usize;
+        if events_per_tick >= 2 && self.event_count >= events_per_tick {
+            self.first_tick_completed_at.get_or_insert(now);
+            let elapsed = now.duration_since(self.start);
+            if elapsed <= self.config.wheel_tick_detect_max {
+                self.kind = ScrollStreamKind::Wheel;
+                self.just_promoted = true;
+            }
+        }
+    }
+
+    fn finalize_kind(&mut self) {
+        match self.config.mode {
+            ScrollInputMode::Wheel => self.kind = ScrollStreamKind::Wheel,
+            ScrollInputMode::Trackpad => self.kind = ScrollStreamKind::Trackpad,
+            ScrollInputMode::Auto => {
+                if self.kind != ScrollStreamKind::Unknown {
+                    return;
+                }
+                // If we didn't see a fast-completing first tick, we keep treating the stream as
+                // trackpad-like. The only exception is terminals that emit 1 event per wheel tick:
+                // we can't observe a "tick completion time" there, so we use a conservative
+                // end-of-stream fallback for *very small* bursts.
+                let duration = self.last.duration_since(self.start);
+                if self.config.events_per_tick <= 1
+                    && self.event_count <= 2
+                    && duration <= self.config.wheel_like_max_duration
+                {
+                    self.kind = ScrollStreamKind::Wheel;
+                } else {
+                    self.kind = ScrollStreamKind::Trackpad;
+                }
+            }
+        }
+    }
+
+    fn is_wheel_like(&self) -> bool {
+        match self.config.mode {
+            ScrollInputMode::Wheel => true,
+            ScrollInputMode::Trackpad => false,
+            ScrollInputMode::Auto => matches!(self.kind, ScrollStreamKind::Wheel),
+        }
+    }
+
+    fn effective_lines_per_tick_f32(&self) -> f32 {
+        match self.config.mode {
+            ScrollInputMode::Wheel => self.config.wheel_lines_per_tick_f32(),
+            ScrollInputMode::Trackpad => self.config.trackpad_lines_per_tick_f32(),
+            ScrollInputMode::Auto => match self.kind {
+                ScrollStreamKind::Wheel => self.config.wheel_lines_per_tick_f32(),
+                ScrollStreamKind::Trackpad | ScrollStreamKind::Unknown => {
+                    self.config.trackpad_lines_per_tick_f32()
+                }
+            },
+        }
+    }
+
+    fn desired_lines_f32(&self, carry_lines: f32) -> f32 {
+        let events_per_tick = self.config.events_per_tick_f32();
+        let lines_per_tick = self.effective_lines_per_tick_f32();
+
+        // Note: clamping here is a guardrail; the primary protection is limiting event_count.
+        let mut total = (self.accumulated_events as f32 * (lines_per_tick / events_per_tick))
+            .clamp(
                 -(MAX_ACCUMULATED_LINES as f32),
                 MAX_ACCUMULATED_LINES as f32,
             );
+        if !self.is_wheel_like() {
+            total = (total + carry_lines).clamp(
+                -(MAX_ACCUMULATED_LINES as f32),
+                MAX_ACCUMULATED_LINES as f32,
+            );
+        }
+        total
     }
 }
 
@@ -407,120 +586,155 @@ mod tests {
     fn terminal_overrides_match_probe_defaults() {
         let wezterm = ScrollConfig::from_terminal(
             &terminal_info_named(TerminalName::WezTerm),
-            None,
-            None,
-            false,
+            ScrollConfigOverrides::default(),
         );
         let warp = ScrollConfig::from_terminal(
             &terminal_info_named(TerminalName::WarpTerminal),
-            None,
-            None,
-            false,
+            ScrollConfigOverrides::default(),
         );
         let unknown = ScrollConfig::from_terminal(
             &terminal_info_named(TerminalName::Unknown),
-            None,
-            None,
-            false,
+            ScrollConfigOverrides::default(),
         );
 
-        assert_eq!(wezterm.events_per_line, 1);
+        assert_eq!(wezterm.events_per_tick, 1);
         assert_eq!(wezterm.wheel_lines_per_tick, DEFAULT_WHEEL_LINES_PER_TICK);
-        assert_eq!(warp.events_per_line, 9);
-        assert_eq!(unknown.events_per_line, DEFAULT_EVENTS_PER_LINE);
+        assert_eq!(warp.events_per_tick, 9);
+        assert_eq!(unknown.events_per_tick, DEFAULT_EVENTS_PER_TICK);
     }
 
     #[test]
-    fn discrete_stream_applies_min_line_after_gap() {
+    fn wheel_tick_scrolls_three_lines_even_when_terminal_emits_three_events() {
         let config = ScrollConfig::from_terminal(
             &terminal_info_named(TerminalName::AppleTerminal),
-            Some(3),
-            None,
-            false,
+            ScrollConfigOverrides {
+                events_per_tick: Some(3),
+                mode: Some(ScrollInputMode::Auto),
+                ..ScrollConfigOverrides::default()
+            },
         );
         let base = Instant::now();
         let mut state = MouseScrollState::new_at(base);
 
-        let update = state.on_scroll_event_at(
+        // Simulate a single wheel notch in terminals that emit 3 raw events per tick.
+        let _ = state.on_scroll_event_at(
             base + Duration::from_millis(1),
             ScrollDirection::Down,
             config,
         );
-        assert_eq!(
-            update,
-            ScrollUpdate {
-                lines: 0,
-                next_tick_in: Some(Duration::from_millis(STREAM_GAP_MS)),
-            }
+        let _ = state.on_scroll_event_at(
+            base + Duration::from_millis(2),
+            ScrollDirection::Down,
+            config,
+        );
+        let update = state.on_scroll_event_at(
+            base + Duration::from_millis(3),
+            ScrollDirection::Down,
+            config,
         );
 
-        let update = state.on_tick_at(base + Duration::from_millis(STREAM_GAP_MS + 2));
         assert_eq!(
             update,
             ScrollUpdate {
                 lines: 3,
-                next_tick_in: None,
+                next_tick_in: Some(Duration::from_millis(STREAM_GAP_MS)),
             }
         );
     }
 
     #[test]
-    fn wheel_lines_override_scales_discrete_stream() {
+    fn wheel_tick_scrolls_three_lines_when_terminal_emits_nine_events() {
         let config = ScrollConfig::from_terminal(
-            &terminal_info_named(TerminalName::AppleTerminal),
-            Some(3),
-            Some(2),
-            false,
+            &terminal_info_named(TerminalName::WarpTerminal),
+            ScrollConfigOverrides {
+                events_per_tick: Some(9),
+                mode: Some(ScrollInputMode::Auto),
+                ..ScrollConfigOverrides::default()
+            },
         );
         let base = Instant::now();
         let mut state = MouseScrollState::new_at(base);
 
-        let update = state.on_scroll_event_at(
+        let mut update = ScrollUpdate::default();
+        for idx in 0..9u64 {
+            update = state.on_scroll_event_at(
+                base + Duration::from_millis(idx + 1),
+                ScrollDirection::Down,
+                config,
+            );
+        }
+        assert_eq!(update.lines, 3);
+    }
+
+    #[test]
+    fn wheel_lines_override_scales_wheel_ticks() {
+        let config = ScrollConfig::from_terminal(
+            &terminal_info_named(TerminalName::AppleTerminal),
+            ScrollConfigOverrides {
+                events_per_tick: Some(3),
+                wheel_lines_per_tick: Some(2),
+                mode: Some(ScrollInputMode::Wheel),
+                ..ScrollConfigOverrides::default()
+            },
+        );
+        let base = Instant::now();
+        let mut state = MouseScrollState::new_at(base);
+
+        let first = state.on_scroll_event_at(
             base + Duration::from_millis(1),
             ScrollDirection::Down,
             config,
         );
-        assert_eq!(
-            update,
-            ScrollUpdate {
-                lines: 0,
-                next_tick_in: Some(Duration::from_millis(STREAM_GAP_MS)),
-            }
+        let second = state.on_scroll_event_at(
+            base + Duration::from_millis(2),
+            ScrollDirection::Down,
+            config,
+        );
+        let third = state.on_scroll_event_at(
+            base + Duration::from_millis(3),
+            ScrollDirection::Down,
+            config,
         );
 
-        let update = state.on_tick_at(base + Duration::from_millis(STREAM_GAP_MS + 2));
-        assert_eq!(
-            update,
-            ScrollUpdate {
-                lines: 2,
-                next_tick_in: None,
-            }
-        );
+        assert_eq!(first.lines + second.lines + third.lines, 2);
     }
 
     #[test]
     fn direction_flip_closes_previous_stream() {
         let config = ScrollConfig::from_terminal(
             &terminal_info_named(TerminalName::AppleTerminal),
-            Some(3),
-            None,
-            false,
+            ScrollConfigOverrides {
+                events_per_tick: Some(3),
+                mode: Some(ScrollInputMode::Auto),
+                ..ScrollConfigOverrides::default()
+            },
         );
         let base = Instant::now();
         let mut state = MouseScrollState::new_at(base);
 
         let _ =
             state.on_scroll_event_at(base + Duration::from_millis(1), ScrollDirection::Up, config);
-        let update = state.on_scroll_event_at(
-            base + Duration::from_millis(2),
+        let _ =
+            state.on_scroll_event_at(base + Duration::from_millis(2), ScrollDirection::Up, config);
+        let up =
+            state.on_scroll_event_at(base + Duration::from_millis(3), ScrollDirection::Up, config);
+        let down = state.on_scroll_event_at(
+            base + Duration::from_millis(4),
             ScrollDirection::Down,
             config,
         );
 
         assert_eq!(
-            update,
+            up,
             ScrollUpdate {
                 lines: -3,
+                next_tick_in: Some(Duration::from_millis(STREAM_GAP_MS)),
+            }
+        );
+        assert_eq!(
+            down,
+            ScrollUpdate {
+                lines: 0,
                 next_tick_in: Some(Duration::from_millis(STREAM_GAP_MS)),
             }
         );
@@ -530,9 +744,11 @@ mod tests {
     fn continuous_stream_coalesces_redraws() {
         let config = ScrollConfig::from_terminal(
             &terminal_info_named(TerminalName::AppleTerminal),
-            Some(1),
-            None,
-            false,
+            ScrollConfigOverrides {
+                events_per_tick: Some(1),
+                mode: Some(ScrollInputMode::Trackpad),
+                ..ScrollConfigOverrides::default()
+            },
         );
         let base = Instant::now();
         let mut state = MouseScrollState::new_at(base);
@@ -580,9 +796,11 @@ mod tests {
     fn invert_direction_flips_sign() {
         let config = ScrollConfig::from_terminal(
             &terminal_info_named(TerminalName::AppleTerminal),
-            Some(1),
-            None,
-            true,
+            ScrollConfigOverrides {
+                events_per_tick: Some(1),
+                invert_direction: true,
+                ..ScrollConfigOverrides::default()
+            },
         );
         let base = Instant::now();
         let mut state = MouseScrollState::new_at(base);

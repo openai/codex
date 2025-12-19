@@ -363,6 +363,28 @@ impl Default for Notifications {
     }
 }
 
+/// How TUI2 should interpret mouse scroll events.
+///
+/// Terminals generally encode both mouse wheels and trackpads as the same "scroll up/down" mouse
+/// button events, without a magnitude. This setting controls whether Codex uses a heuristic to
+/// infer wheel vs trackpad per stream, or forces a specific behavior.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollInputMode {
+    /// Infer wheel vs trackpad behavior per scroll stream.
+    Auto,
+    /// Always treat scroll events as mouse-wheel input (fixed lines per tick).
+    Wheel,
+    /// Always treat scroll events as trackpad input (fractional accumulation).
+    Trackpad,
+}
+
+impl Default for ScrollInputMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {
@@ -383,18 +405,56 @@ pub struct Tui {
 
     /// Override the events-per-line factor used to normalize mouse scrolling in TUI2.
     ///
-    /// This controls how many raw scroll events are treated as one logical line. Larger values
-    /// slow down scrolling; smaller values speed it up. Defaults are derived per terminal from
-    /// [`crate::terminal::TerminalInfo`] when TUI2 starts (see
+    /// Historic name: this value actually represents an "events per wheel tick" factor.
+    ///
+    /// Different terminals emit different numbers of raw scroll events for the same physical wheel
+    /// notch (often 1, 3, or 9). TUI2 uses this factor to normalize raw event density into a
+    /// consistent per-tick scroll speed while still keeping trackpad scrolling high fidelity.
+    ///
+    /// Larger values slow down scrolling; smaller values speed it up. Defaults are derived per
+    /// terminal from [`crate::terminal::TerminalInfo`] when TUI2 starts (see
     /// `codex-rs/tui2/docs/scroll_input_model.md` for the data-driven defaults).
     pub scroll_events_per_line: Option<u16>,
 
     /// Override the number of lines applied per wheel tick in TUI2.
     ///
-    /// This only affects discrete (wheel-like) scroll streams; continuous trackpad streams still
-    /// use fractional line accumulation. See `codex-rs/tui2/docs/scroll_input_model.md` for the
-    /// stream model and classification rules.
+    /// This controls how many transcript lines a single physical wheel notch should scroll.
+    /// Defaults to 3 for a classic terminal feel.
+    ///
+    /// See `codex-rs/tui2/docs/scroll_input_model.md` for details on how wheel-like vs trackpad-like
+    /// streams are inferred.
     pub scroll_wheel_lines: Option<u16>,
+
+    /// Override the number of lines per "tick-equivalent" used for trackpad scrolling in TUI2.
+    ///
+    /// Trackpads do not have discrete notches, but terminals still deliver discrete scroll
+    /// up/down events. TUI2 interprets trackpad-like streams as fractional scrolling by treating
+    /// each event as `scroll_trackpad_lines / scroll_events_per_line` lines and accumulating until
+    /// whole lines are reached.
+    ///
+    /// Defaults to 1, meaning one tick-equivalent maps to one transcript line.
+    pub scroll_trackpad_lines: Option<u16>,
+
+    /// Select how TUI2 interprets mouse scroll input.
+    ///
+    /// - `auto` (default): infer wheel vs trackpad per scroll stream.
+    /// - `wheel`: always use wheel behavior (fixed lines per tick).
+    /// - `trackpad`: always use trackpad behavior (fractional accumulation).
+    #[serde(default)]
+    pub scroll_mode: ScrollInputMode,
+
+    /// Auto-mode threshold: maximum time (ms) for the first tick-worth of events to arrive.
+    ///
+    /// When set, this tweaks the heuristic used to promote a stream to wheel-like behavior. Most
+    /// users should leave this unset; it is primarily for terminals that emit unusually slow
+    /// wheel event bursts.
+    pub scroll_wheel_tick_detect_max_ms: Option<u64>,
+
+    /// Auto-mode fallback: maximum duration (ms) that a small stream is still treated as wheel-like.
+    ///
+    /// This is only used for terminals that emit 1 event per wheel tick, where the "first tick
+    /// completion time" signal does not exist.
+    pub scroll_wheel_like_max_duration_ms: Option<u64>,
 
     /// Invert mouse scroll direction in TUI2.
     ///
