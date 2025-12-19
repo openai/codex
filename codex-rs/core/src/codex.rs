@@ -2387,8 +2387,14 @@ async fn refresh_models_and_reset_turn_context(
     {
         error!("failed to refresh models after outdated models error: {err}");
     }
+    let session_configuration = sess.state.lock().await.session_configuration.clone();
     *turn_context = sess
-        .new_default_turn_with_sub_id(turn_context.sub_id.clone())
+        .new_turn_from_configuration(
+            turn_context.sub_id.clone(),
+            session_configuration,
+            Some(turn_context.final_output_json_schema.clone()),
+            false,
+        )
         .await;
 }
 
