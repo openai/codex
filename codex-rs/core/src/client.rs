@@ -158,7 +158,7 @@ impl ModelClient {
             let auth = auth_manager.as_ref().and_then(|m| m.auth());
             let api_provider = self
                 .provider
-                .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+                .to_api_provider(auth.as_ref().map(|a| a.mode), &self.config.features)?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
@@ -247,7 +247,7 @@ impl ModelClient {
             let auth = auth_manager.as_ref().and_then(|m| m.auth());
             let api_provider = self
                 .provider
-                .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+                .to_api_provider(auth.as_ref().map(|a| a.mode), &self.config.features)?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
@@ -332,7 +332,7 @@ impl ModelClient {
         let auth = auth_manager.as_ref().and_then(|m| m.auth());
         let api_provider = self
             .provider
-            .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+            .to_api_provider(auth.as_ref().map(|a| a.mode), &self.config.features)?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = self.build_request_telemetry();

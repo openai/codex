@@ -20,6 +20,8 @@ use http::header::CONTENT_TYPE;
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
+use tracing::info;
 use zstd::stream::encode_all;
 
 pub(crate) struct StreamingClient<T: HttpTransport, A: AuthProvider> {
@@ -105,8 +107,16 @@ fn encode_body(body: &Value, compression: RequestCompression) -> Result<Body, St
         RequestCompression::Zstd => {
             let json = serde_json::to_vec(body)
                 .map_err(|err| format!("failed to encode request body as json: {err}"))?;
+            let started_at = Instant::now();
             let compressed = encode_all(json.as_slice(), 0)
                 .map_err(|err| format!("failed to compress request body: {err}"))?;
+            let elapsed = started_at.elapsed();
+            info!(
+                input_bytes = json.len(),
+                output_bytes = compressed.len(),
+                elapsed_ms = elapsed.as_millis(),
+                "compressed request body"
+            );
             Ok(Body::Bytes(Bytes::from(compressed)))
         }
     }

@@ -19,6 +19,8 @@ use std::env::VarError;
 use std::time::Duration;
 
 use crate::error::EnvVarError;
+use crate::features::Features;
+use crate::features::RequestCompressionFeature;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
@@ -143,6 +145,7 @@ impl ModelProviderInfo {
     pub(crate) fn to_api_provider(
         &self,
         auth_mode: Option<AuthMode>,
+        features: &Features,
     ) -> crate::error::Result<ApiProvider> {
         let default_base_url = if matches!(auth_mode, Some(AuthMode::ChatGPT)) {
             "https://chatgpt.com/backend-api/codex"
@@ -173,7 +176,7 @@ impl ModelProviderInfo {
             },
             headers,
             retry,
-            request_compression: match self.request_compression {
+            request_compression: match self.request_compression_for(auth_mode, features) {
                 RequestCompression::None => codex_api::provider::RequestCompression::None,
                 RequestCompression::Zstd => codex_api::provider::RequestCompression::Zstd,
             },
@@ -270,6 +273,21 @@ impl ModelProviderInfo {
 
     pub fn is_openai(&self) -> bool {
         self.name == OPENAI_PROVIDER_NAME
+    }
+
+    pub fn request_compression_for(
+        &self,
+        auth_mode: Option<AuthMode>,
+        features: &Features,
+    ) -> RequestCompression {
+        if self.is_openai() && matches!(auth_mode, Some(AuthMode::ChatGPT)) {
+            match features.request_compression() {
+                RequestCompressionFeature::Zstd => RequestCompression::Zstd,
+                RequestCompressionFeature::Disabled => RequestCompression::None,
+            }
+        } else {
+            RequestCompression::None
+        }
     }
 }
 
@@ -466,7 +484,9 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
             };
-            let api = provider.to_api_provider(None).expect("api provider");
+            let api = provider
+                .to_api_provider(None, &Features::with_defaults())
+                .expect("api provider");
             assert!(
                 api.is_azure_responses_endpoint(),
                 "expected {base_url} to be detected as Azure"
@@ -489,7 +509,9 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
         };
-        let named_api = named_provider.to_api_provider(None).expect("api provider");
+        let named_api = named_provider
+            .to_api_provider(None, &Features::with_defaults())
+            .expect("api provider");
         assert!(named_api.is_azure_responses_endpoint());
 
         let negative_cases = [
@@ -514,7 +536,9 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
             };
-            let api = provider.to_api_provider(None).expect("api provider");
+            let api = provider
+                .to_api_provider(None, &Features::with_defaults())
+                .expect("api provider");
             assert!(
                 !api.is_azure_responses_endpoint(),
                 "expected {base_url} not to be detected as Azure"
