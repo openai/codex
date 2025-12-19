@@ -223,7 +223,7 @@ pub async fn run_main(
 
     let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
 
-    if let Some(warning) = add_dir_warning_message(&cli.add_dir, &config.sandbox_policy) {
+    if let Some(warning) = add_dir_warning_message(&cli.add_dir, config.sandbox_policy.get()) {
         #[allow(clippy::print_stderr)]
         {
             eprintln!("Error adding directories: {warning}");
