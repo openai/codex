@@ -26,8 +26,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.90
 
-      - name: build codex
-        run: cargo build --bin codex
+      - name: build codexel
+        run: cargo build --bin codexel
         working-directory: codex-rs
 
       - name: Install dependencies

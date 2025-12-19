@@ -13,6 +13,7 @@ edited between the markers.
 
 - Skip macOS rust-ci jobs on pull requests to avoid flaky PR runs.
 - Skip upstream npm package staging in CI for forks.
+- Fix sdk workflow to build the codexel binary.
 
 ### Details
 
