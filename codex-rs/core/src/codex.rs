@@ -2412,7 +2412,7 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
     skip_all,
     fields(
         turn_id = %turn_context.sub_id,
-        model = %turn_context.client.get_model().await,
+        model = tracing::field::Empty,
         cwd = %turn_context.cwd.display()
     )
 )]
@@ -2423,6 +2423,8 @@ async fn run_turn(
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
+    let model = turn_context.client.get_model().await;
+    tracing::Span::current().record("model", field::display(&model));
     let mcp_tools = sess
         .services
         .mcp_connection_manager
@@ -2492,7 +2494,7 @@ async fn run_turn(
                     retries += 1;
                     // Refresh models if we got an outdated models error
                     if matches!(e, CodexErr::OutdatedModels) {
-                        refresh_models_and_reset_turn_context(&sess, &turn_context).await;
+                        refresh_models_and_reset_turn_context(&sess, turn_context).await;
                         continue;
                     }
                     let delay = match e {
@@ -2552,7 +2554,7 @@ async fn drain_in_flight(
     skip_all,
     fields(
         turn_id = %turn_context.sub_id,
-        model = %turn_context.client.get_model().await,
+        model = tracing::field::Empty,
     )
 )]
 async fn try_run_turn(
@@ -2563,11 +2565,13 @@ async fn try_run_turn(
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
+    let model = turn_context.client.get_model().await;
+    tracing::Span::current().record("model", field::display(&model));
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
-        model: turn_context.client.get_model().await,
+        model,
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
     });
