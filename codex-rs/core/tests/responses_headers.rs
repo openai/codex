@@ -12,7 +12,7 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::models_manager::manager::ModelsManager;
-use codex_core::features::RequestCompressionFeature;
+use codex_core::features::Feature;
 use codex_otel::otel_manager::OtelManager;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningSummary;
@@ -356,9 +356,7 @@ async fn responses_request_body_is_zstd_encoded() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
-    config
-        .features
-        .set_request_compression(RequestCompressionFeature::Zstd);
+    config.features.enable(Feature::RequestCompression);
     let effort = config.model_reasoning_effort;
     let summary = config.model_reasoning_summary;
     let model = ModelsManager::get_model_offline(config.model.as_deref());

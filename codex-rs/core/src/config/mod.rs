@@ -1972,10 +1972,7 @@ trust_level = "trusted"
     fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let mut entries = BTreeMap::new();
-        entries.insert(
-            "apply_patch_freeform".to_string(),
-            crate::features::FeatureValue::Bool(false),
-        );
+        entries.insert("apply_patch_freeform".to_string(), false);
         let cfg = ConfigToml {
             features: Some(crate::features::FeaturesToml { entries }),
             ..Default::default()

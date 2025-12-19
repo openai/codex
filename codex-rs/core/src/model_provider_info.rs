@@ -19,8 +19,8 @@ use std::env::VarError;
 use std::time::Duration;
 
 use crate::error::EnvVarError;
+use crate::features::Feature;
 use crate::features::Features;
-use crate::features::RequestCompressionFeature;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
@@ -280,11 +280,11 @@ impl ModelProviderInfo {
         auth_mode: Option<AuthMode>,
         features: &Features,
     ) -> RequestCompression {
-        if self.is_openai() && matches!(auth_mode, Some(AuthMode::ChatGPT)) {
-            match features.request_compression() {
-                RequestCompressionFeature::Zstd => RequestCompression::Zstd,
-                RequestCompressionFeature::Disabled => RequestCompression::None,
-            }
+        if self.is_openai()
+            && matches!(auth_mode, Some(AuthMode::ChatGPT))
+            && features.enabled(Feature::RequestCompression)
+        {
+            RequestCompression::Zstd
         } else {
             RequestCompression::None
         }

@@ -8,7 +8,6 @@
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
 use serde::Deserialize;
-use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
@@ -130,7 +129,6 @@ pub struct LegacyFeatureUsage {
 pub struct Features {
     enabled: BTreeSet<Feature>,
     legacy_usages: BTreeSet<LegacyFeatureUsage>,
-    request_compression: RequestCompressionFeature,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -156,7 +154,6 @@ impl Features {
         let mut features = Self {
             enabled: BTreeSet::new(),
             legacy_usages: BTreeSet::new(),
-            request_compression: RequestCompressionFeature::Disabled,
         };
         for spec in FEATURES {
             if spec.default_enabled {
@@ -172,17 +169,11 @@ impl Features {
 
     pub fn enable(&mut self, f: Feature) -> &mut Self {
         self.enabled.insert(f);
-        if matches!(f, Feature::RequestCompression) {
-            self.request_compression = RequestCompressionFeature::Zstd;
-        }
         self
     }
 
     pub fn disable(&mut self, f: Feature) -> &mut Self {
         self.enabled.remove(&f);
-        if matches!(f, Feature::RequestCompression) {
-            self.request_compression = RequestCompressionFeature::Disabled;
-        }
         self
     }
 
@@ -206,62 +197,18 @@ impl Features {
             .map(|usage| (usage.alias.as_str(), usage.feature))
     }
 
-    pub fn request_compression(&self) -> RequestCompressionFeature {
-        self.request_compression
-    }
-
-    pub fn set_request_compression(
-        &mut self,
-        request_compression: RequestCompressionFeature,
-    ) -> &mut Self {
-        self.request_compression = request_compression;
-        if self.request_compression == RequestCompressionFeature::Disabled {
-            self.enabled.remove(&Feature::RequestCompression);
-        } else {
-            self.enabled.insert(Feature::RequestCompression);
-        }
-        self
-    }
-
     /// Apply a table of key -> value toggles (e.g. from TOML).
-    pub fn apply_map(&mut self, m: &BTreeMap<String, FeatureValue>) {
+    pub fn apply_map(&mut self, m: &BTreeMap<String, bool>) {
         for (k, v) in m {
             match feature_for_key(k) {
                 Some(feat) => {
                     if k != feat.key() {
                         self.record_legacy_usage(k.as_str(), feat);
                     }
-                    if feat == Feature::RequestCompression {
-                        match v {
-                            FeatureValue::Bool(enabled) => {
-                                let request_compression = if *enabled {
-                                    RequestCompressionFeature::Zstd
-                                } else {
-                                    RequestCompressionFeature::Disabled
-                                };
-                                self.set_request_compression(request_compression);
-                            }
-                            FeatureValue::String(value) => {
-                                match RequestCompressionFeature::parse(value) {
-                                    Some(request_compression) => {
-                                        self.set_request_compression(request_compression);
-                                    }
-                                    None => {
-                                        tracing::warn!(
-                                            "unknown request_compression feature value in config: {value}"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    } else if let FeatureValue::Bool(enabled) = v {
-                        if *enabled {
-                            self.enable(feat);
-                        } else {
-                            self.disable(feat);
-                        }
+                    if *v {
+                        self.enable(feat);
                     } else {
-                        tracing::warn!("feature key expects boolean value: {k}");
+                        self.disable(feat);
                     }
                 }
                 None => {
@@ -334,31 +281,7 @@ pub fn is_known_feature_key(key: &str) -> bool {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct FeaturesToml {
     #[serde(flatten)]
-    pub entries: BTreeMap<String, FeatureValue>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum FeatureValue {
-    Bool(bool),
-    String(String),
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum RequestCompressionFeature {
-    #[default]
-    Disabled,
-    Zstd,
-}
-
-impl RequestCompressionFeature {
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.to_ascii_lowercase().as_str() {
-            "none" | "disabled" => Some(Self::Disabled),
-            "zstd" => Some(Self::Zstd),
-            _ => None,
-        }
-    }
+    pub entries: BTreeMap<String, bool>,
 }
 
 /// Single, easy-to-read registry of all feature definitions.
