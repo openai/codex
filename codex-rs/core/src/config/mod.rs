@@ -178,6 +178,26 @@ pub struct Config {
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
 
+    /// Override the events-per-line factor for TUI2 scroll normalization.
+    ///
+    /// This is the same `tui.scroll_events_per_line` value from `config.toml`, plumbed through the
+    /// merged [`Config`] object (see [`Tui`]) so TUI2 can normalize scroll event density per
+    /// terminal.
+    pub tui_scroll_events_per_line: Option<u16>,
+
+    /// Override the number of lines applied per wheel tick in TUI2.
+    ///
+    /// This is the same `tui.scroll_wheel_lines` value from `config.toml` (see [`Tui`]). TUI2
+    /// applies it to discrete (wheel-like) scroll streams while leaving continuous (trackpad-like)
+    /// streams as fractional scrolling.
+    pub tui_scroll_wheel_lines: Option<u16>,
+
+    /// Invert mouse scroll direction for TUI2.
+    ///
+    /// This is the same `tui.scroll_invert` value from `config.toml` (see [`Tui`]) and is applied
+    /// consistently to both mouse wheels and trackpads.
+    pub tui_scroll_invert: bool,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -1346,6 +1366,9 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            tui_scroll_events_per_line: cfg.tui.as_ref().and_then(|t| t.scroll_events_per_line),
+            tui_scroll_wheel_lines: cfg.tui.as_ref().and_then(|t| t.scroll_wheel_lines),
+            tui_scroll_invert: cfg.tui.as_ref().map(|t| t.scroll_invert).unwrap_or(false),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -1520,6 +1543,9 @@ persistence = "none"
 
         assert_eq!(tui.notifications, Notifications::Enabled(true));
         assert!(tui.show_tooltips);
+        assert!(tui.scroll_events_per_line.is_none());
+        assert!(tui.scroll_wheel_lines.is_none());
+        assert!(!tui.scroll_invert);
     }
 
     #[test]
@@ -3119,6 +3145,9 @@ model_verbosity = "high"
                 tui_notifications: Default::default(),
                 animations: true,
                 show_tooltips: true,
+                tui_scroll_events_per_line: None,
+                tui_scroll_wheel_lines: None,
+                tui_scroll_invert: false,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -3194,6 +3223,9 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_scroll_events_per_line: None,
+            tui_scroll_wheel_lines: None,
+            tui_scroll_invert: false,
             otel: OtelConfig::default(),
         };
 
@@ -3284,6 +3316,9 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_scroll_events_per_line: None,
+            tui_scroll_wheel_lines: None,
+            tui_scroll_invert: false,
             otel: OtelConfig::default(),
         };
 
@@ -3360,6 +3395,9 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_scroll_events_per_line: None,
+            tui_scroll_wheel_lines: None,
+            tui_scroll_invert: false,
             otel: OtelConfig::default(),
         };
 

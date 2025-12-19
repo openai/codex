@@ -380,6 +380,28 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
+
+    /// Override the events-per-line factor used to normalize mouse scrolling in TUI2.
+    ///
+    /// This controls how many raw scroll events are treated as one logical line. Larger values
+    /// slow down scrolling; smaller values speed it up. Defaults are derived per terminal from
+    /// [`crate::terminal::TerminalInfo`] when TUI2 starts (see
+    /// `codex-rs/tui2/docs/scroll_input_model.md` for the data-driven defaults).
+    pub scroll_events_per_line: Option<u16>,
+
+    /// Override the number of lines applied per wheel tick in TUI2.
+    ///
+    /// This only affects discrete (wheel-like) scroll streams; continuous trackpad streams still
+    /// use fractional line accumulation. See `codex-rs/tui2/docs/scroll_input_model.md` for the
+    /// stream model and classification rules.
+    pub scroll_wheel_lines: Option<u16>,
+
+    /// Invert mouse scroll direction in TUI2.
+    ///
+    /// This flips the scroll sign after terminal detection. It is applied consistently to both
+    /// wheel and trackpad input.
+    #[serde(default)]
+    pub scroll_invert: bool,
 }
 
 const fn default_true() -> bool {

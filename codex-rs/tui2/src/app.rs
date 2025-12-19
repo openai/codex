@@ -20,8 +20,9 @@ use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::tui::scrolling::MouseScrollState;
+use crate::tui::scrolling::ScrollConfig;
 use crate::tui::scrolling::ScrollDirection;
-use crate::tui::scrolling::ScrollTuning;
+use crate::tui::scrolling::ScrollUpdate;
 use crate::tui::scrolling::TranscriptLineMeta;
 use crate::tui::scrolling::TranscriptScroll;
 use crate::update_action::UpdateAction;
@@ -340,7 +341,7 @@ pub(crate) struct App {
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
 
-    scroll_tuning: ScrollTuning,
+    scroll_config: ScrollConfig,
     scroll_state: MouseScrollState,
 
     // Esc-backtracking state grouped
@@ -486,7 +487,12 @@ impl App {
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
-        let scroll_tuning = ScrollTuning::for_terminal(&terminal_info());
+        let scroll_config = ScrollConfig::from_terminal(
+            &terminal_info(),
+            config.tui_scroll_events_per_line,
+            config.tui_scroll_wheel_lines,
+            config.tui_scroll_invert,
+        );
 
         let mut app = Self {
             server: conversation_manager.clone(),
@@ -507,7 +513,7 @@ impl App {
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
-            scroll_tuning,
+            scroll_config,
             scroll_state: MouseScrollState::default(),
             backtrack: BacktrackState::default(),
             feedback: feedback.clone(),
@@ -592,6 +598,10 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
+        if matches!(&event, TuiEvent::Draw) {
+            self.handle_scroll_tick(tui);
+        }
+
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -821,8 +831,8 @@ impl App {
 
     /// Handle mouse interaction in the main transcript view.
     ///
-    /// - Mouse wheel movement scrolls the conversation history by small increments tuned
-    ///   by terminal-specific timing heuristics,
+    /// - Mouse wheel movement scrolls the conversation history using stream-based
+    ///   normalization (events-per-line factor, discrete vs. continuous streams),
     ///   independent of the terminal's own scrollback.
     /// - Mouse clicks and drags adjust a text selection defined in terms of
     ///   flattened transcript lines and columns, so the selection is anchored
@@ -887,27 +897,26 @@ impl App {
 
         match mouse_event.kind {
             MouseEventKind::ScrollUp => {
-                let delta_lines = self.mouse_scroll_delta(ScrollDirection::Up);
-                if delta_lines != 0 {
-                    self.scroll_transcript(
-                        tui,
-                        delta_lines,
-                        transcript_area.height as usize,
-                        transcript_area.width,
-                    );
-                }
+                let update = self.mouse_scroll_update(ScrollDirection::Up);
+                self.apply_scroll_update(
+                    tui,
+                    update,
+                    transcript_area.height as usize,
+                    transcript_area.width,
+                    true,
+                );
             }
             MouseEventKind::ScrollDown => {
-                let delta_lines = self.mouse_scroll_delta(ScrollDirection::Down);
-                if delta_lines != 0 {
-                    self.scroll_transcript(
-                        tui,
-                        delta_lines,
-                        transcript_area.height as usize,
-                        transcript_area.width,
-                    );
-                }
+                let update = self.mouse_scroll_update(ScrollDirection::Down);
+                self.apply_scroll_update(
+                    tui,
+                    update,
+                    transcript_area.height as usize,
+                    transcript_area.width,
+                    true,
+                );
             }
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {}
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(point) = self.transcript_point_from_coordinates(
                     transcript_area,
@@ -949,8 +958,54 @@ impl App {
         }
     }
 
-    fn mouse_scroll_delta(&mut self, direction: ScrollDirection) -> i32 {
-        self.scroll_state.delta_lines(direction, self.scroll_tuning)
+    fn mouse_scroll_update(&mut self, direction: ScrollDirection) -> ScrollUpdate {
+        self.scroll_state
+            .on_scroll_event(direction, self.scroll_config)
+    }
+
+    fn apply_scroll_update(
+        &mut self,
+        tui: &mut tui::Tui,
+        update: ScrollUpdate,
+        visible_lines: usize,
+        width: u16,
+        schedule_frame: bool,
+    ) {
+        if update.lines != 0 {
+            self.scroll_transcript(tui, update.lines, visible_lines, width, schedule_frame);
+        }
+        if let Some(delay) = update.next_tick_in {
+            tui.frame_requester().schedule_frame_in(delay);
+        }
+    }
+
+    fn handle_scroll_tick(&mut self, tui: &mut tui::Tui) {
+        let Some((visible_lines, width)) = self.transcript_scroll_dimensions(tui) else {
+            return;
+        };
+        let update = self.scroll_state.on_tick();
+        self.apply_scroll_update(tui, update, visible_lines, width, false);
+    }
+
+    fn transcript_scroll_dimensions(&self, tui: &tui::Tui) -> Option<(usize, u16)> {
+        let size = tui.terminal.last_known_screen_size;
+        let width = size.width;
+        let height = size.height;
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let chat_height = self.chat_widget.desired_height(width);
+        if chat_height >= height {
+            return None;
+        }
+
+        let transcript_height = height.saturating_sub(chat_height);
+        if transcript_height == 0 {
+            return None;
+        }
+
+        Some((transcript_height as usize, width))
     }
 
     /// Scroll the transcript by a number of visual lines.
@@ -959,12 +1014,16 @@ impl App {
     /// the main view. Scroll state is expressed in terms of transcript cells and their
     /// internal line indices, so scrolling refers to logical conversation content and
     /// remains stable even as wrapping or streaming causes visual reflows.
+    ///
+    /// `schedule_frame` controls whether to request an extra draw; pass `false` when applying
+    /// scroll during a `TuiEvent::Draw` tick to avoid redundant frames.
     fn scroll_transcript(
         &mut self,
         tui: &mut tui::Tui,
         delta_lines: i32,
         visible_lines: usize,
         width: u16,
+        schedule_frame: bool,
     ) {
         if visible_lines == 0 {
             return;
@@ -975,9 +1034,11 @@ impl App {
             self.transcript_scroll
                 .scrolled_by(delta_lines, &line_meta, visible_lines);
 
-        // Delay redraws slightly so scroll bursts coalesce into a single frame.
-        tui.frame_requester()
-            .schedule_frame_in(Duration::from_millis(16));
+        if schedule_frame {
+            // Delay redraws slightly so scroll bursts coalesce into a single frame.
+            tui.frame_requester()
+                .schedule_frame_in(Duration::from_millis(16));
+        }
     }
 
     /// Convert a `ToBottom` (auto-follow) scroll state into a fixed anchor at the current view.
@@ -2033,6 +2094,7 @@ impl App {
                                 delta,
                                 usize::from(transcript_height),
                                 width,
+                                true,
                             );
                         }
                     }
@@ -2057,6 +2119,7 @@ impl App {
                                 delta,
                                 usize::from(transcript_height),
                                 width,
+                                true,
                             );
                         }
                     }
@@ -2199,7 +2262,7 @@ mod tests {
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
-            scroll_tuning: ScrollTuning::default(),
+            scroll_config: ScrollConfig::default(),
             scroll_state: MouseScrollState::default(),
             backtrack: BacktrackState::default(),
             feedback: codex_feedback::CodexFeedback::new(),
@@ -2245,7 +2308,7 @@ mod tests {
                 has_emitted_history_lines: false,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
-                scroll_tuning: ScrollTuning::default(),
+                scroll_config: ScrollConfig::default(),
                 scroll_state: MouseScrollState::default(),
                 backtrack: BacktrackState::default(),
                 feedback: codex_feedback::CodexFeedback::new(),

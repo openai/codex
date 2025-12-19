@@ -1,29 +1,34 @@
-//! Mouse scroll tuning based on terminal cadence.
+//! Scroll normalization for mouse wheel/trackpad input.
 //!
-//! The mouse wheel and trackpad can look wildly different once their events reach the terminal.
-//! This module keeps the logic local to tui2 and lets us adjust line deltas using timing
-//! heuristics and terminal-specific defaults.
+//! Terminal scroll events vary widely in event counts per wheel tick, and inter-event timing
+//! overlaps heavily between wheel and trackpad input. We normalize scroll input by treating
+//! events as short streams separated by gaps, converting events into line deltas with a
+//! per-terminal events-per-line factor, and classifying streams as discrete or continuous
+//! after they end.
 //!
-//! Heuristics:
-//! - Fast bursts (sub-5ms) are treated like mouse wheel bursts on some terminals and can be
-//!   divided down (Ghostty) so a single notch feels natural. Burst detection uses a short rolling
-//!   window (3 intervals) so a single quick event never suppresses scrolling.
-//! - Frame-rate cadence (roughly 16-20ms) is used as a proxy for trackpad-like scrolling in
-//!   terminals that clamp or batch events.
-//! - Slow events are treated as single-event trackpad gestures and map to one line, since a lone
-//!   event should not be amplified without stronger evidence of wheel input.
+//! Discrete streams apply their total line delta when the stream closes (with a minimum of
+//! one line when rounding to zero), scaled by a per-tick wheel multiplier so a single
+//! wheel notch retains the classic multi-line feel. Continuous streams accumulate fractional
+//! lines and flush them at a ~60 Hz cadence while the stream is active.
 //!
-//! The values are intentionally conservative and are meant to be refined as we learn more about
-//! each terminal's event patterns.
+//! See `codex-rs/tui2/docs/scroll_input_model.md` for the data-derived constants and analysis.
 
 use codex_core::terminal::TerminalInfo;
 use codex_core::terminal::TerminalName;
 use std::time::Duration;
 use std::time::Instant;
-use tracing::trace;
 
-/// Number of inter-event intervals used for burst detection.
-const INTERVAL_WINDOW: usize = 3;
+const STREAM_GAP_MS: u64 = 80;
+const STREAM_GAP: Duration = Duration::from_millis(STREAM_GAP_MS);
+const DISCRETE_MAX_EVENTS: usize = 10;
+const DISCRETE_MAX_DURATION_MS: u64 = 250;
+const REDRAW_CADENCE_MS: u64 = 16;
+const REDRAW_CADENCE: Duration = Duration::from_millis(REDRAW_CADENCE_MS);
+const DEFAULT_EVENTS_PER_LINE: u16 = 3;
+const DEFAULT_WHEEL_LINES_PER_TICK: u16 = 3;
+const MAX_EVENTS_PER_STREAM: usize = 256;
+const MAX_ACCUMULATED_LINES: i32 = 256;
+const MIN_LINES_PER_DISCRETE_STREAM: i32 = 1;
 
 /// High-level scroll direction used to sign line deltas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,325 +38,354 @@ pub(crate) enum ScrollDirection {
 }
 
 impl ScrollDirection {
-    fn signed_lines(self, lines: i32) -> i32 {
+    fn sign(self) -> i32 {
         match self {
-            ScrollDirection::Up => -lines,
-            ScrollDirection::Down => lines,
+            ScrollDirection::Up => -1,
+            ScrollDirection::Down => 1,
+        }
+    }
+
+    fn inverted(self) -> Self {
+        match self {
+            ScrollDirection::Up => ScrollDirection::Down,
+            ScrollDirection::Down => ScrollDirection::Up,
         }
     }
 }
 
-/// Terminal-specific tuning parameters for mouse scroll deltas.
+/// Scroll normalization settings derived from terminal metadata and user overrides.
 ///
-/// The tuning values are derived from observed terminal behavior:
-/// - `fast_threshold` gates burst detection for wheel-like events.
-/// - `frame_threshold` captures frame-rate cadence from clamped event streams.
-/// - `fast_lines` and `fast_divisor` determine how burst events are downscaled.
-/// - `frame_lines` and `slow_lines` define the line count for frame-rate and slower events
-///   respectively (used as trackpad vs. wheel heuristics).
+/// These are the knobs used by [`MouseScrollState`] to translate raw `ScrollUp`/`ScrollDown`
+/// events into deltas in *visual lines* for the transcript viewport.
+///
+/// - `events_per_line` normalizes per-terminal "event density" (how many raw events correspond to
+///   one unit of scroll movement).
+/// - `wheel_lines_per_tick` scales short, discrete streams so a single mouse wheel notch retains
+///   the classic multi-line feel.
+///
+/// See `codex-rs/tui2/docs/scroll_input_model.md` for the probe data and rationale.
+/// User-facing overrides are exposed via `config.toml` as:
+/// - `tui.scroll_events_per_line`
+/// - `tui.scroll_wheel_lines`
+/// - `tui.scroll_invert`
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ScrollTuning {
-    /// Duration that qualifies as a fast burst.
-    fast_threshold: Duration,
-
-    /// Duration threshold for frame-rate cadence detection.
-    frame_threshold: Duration,
-
-    /// Line count to accumulate during fast burst handling.
-    fast_lines: i32,
-
-    /// Divisor applied to accumulated fast burst lines.
-    fast_divisor: i32,
-
-    /// Line count for events within the frame-rate cadence window.
-    frame_lines: i32,
-
-    /// Line count for slower events outside the frame-rate cadence window.
-    slow_lines: i32,
+pub(crate) struct ScrollConfig {
+    /// Per-terminal normalization factor ("events per line").
+    ///
+    /// Each raw scroll event contributes `1 / events_per_line` visual lines before any other
+    /// scaling. Larger values make scrolling slower; smaller values make it faster.
+    events_per_line: u16,
+    /// Lines applied per mouse wheel tick for discrete streams.
+    ///
+    /// This multiplier is only applied when a stream is classified as *discrete* (wheel-like burst)
+    /// to avoid accelerating continuous scrolling (trackpads).
+    ///
+    /// Note: very small trackpad gestures that look like discrete bursts may also be affected.
+    wheel_lines_per_tick: u16,
+    /// Invert the sign of vertical scroll direction.
+    ///
+    /// We do not attempt to infer terminal-level inversion settings; this is an explicit
+    /// application-level toggle.
+    invert_direction: bool,
 }
 
-impl ScrollTuning {
-    /// Selects terminal-specific tuning based on detected terminal metadata.
+impl ScrollConfig {
+    /// Derive scroll normalization defaults from detected terminal metadata.
     ///
-    /// Defaults are used for unknown terminals. The goal is to keep the heuristics
-    /// understandable and easy to tweak as new observations come in.
-    pub(crate) fn for_terminal(terminal: &TerminalInfo) -> Self {
-        match terminal.name {
-            // Wheel: ~9 events in ~0.5-3ms bursts.
-            // Trackpad: closer to frame cadence.
-            // Outcome: divide fast bursts to avoid triple speed.
-            TerminalName::Ghostty => Self {
-                fast_threshold: Duration::from_millis(5),
-                frame_threshold: Duration::from_millis(20),
-                fast_lines: 1,
-                fast_divisor: 3,
-                frame_lines: 1,
-                slow_lines: 1,
-            },
-            // Wheel: clamped to ~16ms cadence.
-            // Trackpad: larger gaps than frame cadence.
-            // Outcome: upscale frame events; keep slower single events at 1 line.
-            TerminalName::VsCode => Self {
-                fast_threshold: Duration::from_millis(5),
-                frame_threshold: Duration::from_millis(20),
-                fast_lines: 1,
-                fast_divisor: 1,
-                frame_lines: 3,
-                slow_lines: 1,
-            },
-            // Wheel: 3 events per notch.
-            // Trackpad: typical cadence.
-            // Outcome: defaults yield natural 3-line steps and sane trackpad feel.
-            TerminalName::AppleTerminal => Self::default(),
-            // Wheel: often single event, but slower than frame cadence.
-            // Trackpad: cadence clusters around ~16-17ms.
-            // Outcome: frame events stay at 1 line; slower events map to 3 lines when a short
-            // sequence is detected, while isolated slow events stay at 1 line.
-            TerminalName::Iterm2 => Self {
-                fast_threshold: Duration::from_millis(5),
-                frame_threshold: Duration::from_millis(20),
-                fast_lines: 1,
-                fast_divisor: 1,
-                frame_lines: 1,
-                slow_lines: 3,
-            },
-            // Wheel: ~3+ event bursts.
-            // Trackpad: ~50ms slow, ~2-10ms fast (some effectively simultaneous).
-            // Outcome: defaults for now.
-            TerminalName::Kitty => Self::default(),
-            // Wheel: 2-3 sub-ms events.
-            // Trackpad: slow looks normal, fast batches around 7-8ms gaps.
-            // Outcome: defaults for now.
-            TerminalName::Alacritty => Self::default(),
-            // Wheel: single events, fast ~6-10ms.
-            // Trackpad: single events, fast ~1-10ms.
-            // Outcome: defaults; likely need config or upstream option to disambiguate.
-            TerminalName::WezTerm => Self::default(),
-            _ => Self::default(),
+    /// This uses [`TerminalInfo`] (in particular [`TerminalName`]) to pick an empirically derived
+    /// `events_per_line` default. Users can override both `events_per_line` and the per-wheel-tick
+    /// multiplier via `config.toml` (see [`ScrollConfig`] docs).
+    pub(crate) fn from_terminal(
+        terminal: &TerminalInfo,
+        events_per_line_override: Option<u16>,
+        wheel_lines_override: Option<u16>,
+        invert_direction: bool,
+    ) -> Self {
+        let mut events_per_line = match terminal.name {
+            TerminalName::AppleTerminal => 3,
+            TerminalName::WarpTerminal => 9,
+            TerminalName::WezTerm => 1,
+            TerminalName::Alacritty => 3,
+            TerminalName::Ghostty => 9,
+            TerminalName::Iterm2 => 1,
+            TerminalName::VsCode => 1,
+            TerminalName::Kitty => 3,
+            _ => DEFAULT_EVENTS_PER_LINE,
+        };
+
+        if let Some(override_value) = events_per_line_override {
+            events_per_line = override_value.max(1);
+        }
+
+        let mut wheel_lines_per_tick = DEFAULT_WHEEL_LINES_PER_TICK;
+        if let Some(override_value) = wheel_lines_override {
+            wheel_lines_per_tick = override_value.max(1);
+        }
+
+        Self {
+            events_per_line,
+            wheel_lines_per_tick,
+            invert_direction,
+        }
+    }
+
+    fn events_per_line_f32(self) -> f32 {
+        self.events_per_line.max(1) as f32
+    }
+
+    fn wheel_lines_per_tick_i32(self) -> i32 {
+        self.wheel_lines_per_tick.max(1) as i32
+    }
+
+    fn apply_direction(self, direction: ScrollDirection) -> ScrollDirection {
+        if self.invert_direction {
+            direction.inverted()
+        } else {
+            direction
         }
     }
 }
 
-/// Baseline tuning for terminals without specific overrides.
-impl Default for ScrollTuning {
+impl Default for ScrollConfig {
     fn default() -> Self {
         Self {
-            fast_threshold: Duration::from_millis(5),
-            frame_threshold: Duration::from_millis(20),
-            fast_lines: 1,
-            fast_divisor: 1,
-            frame_lines: 1,
-            slow_lines: 1,
+            events_per_line: DEFAULT_EVENTS_PER_LINE,
+            wheel_lines_per_tick: DEFAULT_WHEEL_LINES_PER_TICK,
+            invert_direction: false,
         }
     }
 }
 
-/// Tracks recent mouse scroll events so we can interpret bursts consistently.
+/// Output from scroll handling: lines to apply plus when to check for stream end.
 ///
-/// The state stores the last event timestamp and direction so elapsed time is computed only for
-/// successive events in the same direction. A remainder is stored for burst division so multiple
-/// fast events can accumulate into a single scroll line over time.
-#[derive(Clone, Copy, Debug, Default)]
+/// The caller should apply `lines` immediately. If `next_tick_in` is `Some`, schedule a follow-up
+/// tick (typically by requesting a frame) so [`MouseScrollState::on_tick`] can close the stream
+/// after a period of silence.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ScrollUpdate {
+    pub(crate) lines: i32,
+    pub(crate) next_tick_in: Option<Duration>,
+}
+
+/// Tracks active scroll input streams and coalesces redraws to a fixed cadence.
+///
+/// Typical usage:
+/// - Call [`MouseScrollState::on_scroll_event`] for each vertical scroll event.
+/// - Apply the returned [`ScrollUpdate::lines`] to the transcript scroll state.
+/// - If [`ScrollUpdate::next_tick_in`] is present, schedule a delayed tick and call
+///   [`MouseScrollState::on_tick`] to close the stream after it goes idle.
+#[derive(Clone, Debug)]
 pub(crate) struct MouseScrollState {
-    /// Timestamp of the last scroll event.
-    last_event_at: Option<Instant>,
-
-    /// Direction of the last scroll event.
-    last_direction: Option<ScrollDirection>,
-
-    /// Remainder lines accumulated while dividing burst events.
-    fast_remainder: i32,
-
-    /// Recently observed inter-event intervals used for burst detection.
-    intervals: [Duration; INTERVAL_WINDOW],
-
-    /// Number of valid intervals stored in the rolling buffer.
-    interval_count: usize,
-
-    /// Next insertion index for the rolling interval buffer.
-    interval_index: usize,
-
-    /// Number of consecutive intervals within the sequence window.
-    sequence_count: usize,
+    stream: Option<ScrollStream>,
+    last_redraw_at: Instant,
 }
 
 impl MouseScrollState {
-    /// Computes a signed line delta using the current time.
-    ///
-    /// This is the entry point for production code; it timestamps the event,
-    /// evaluates burst cadence, and returns a signed line count to apply.
-    pub(crate) fn delta_lines(&mut self, direction: ScrollDirection, tuning: ScrollTuning) -> i32 {
-        self.delta_lines_at(Instant::now(), direction, tuning)
+    fn new_at(now: Instant) -> Self {
+        Self {
+            stream: None,
+            last_redraw_at: now,
+        }
     }
 
-    /// Computes a signed line delta using an injected timestamp.
-    ///
-    /// Callers supply the timestamp to simulate event cadence in tests. The method
-    /// updates internal state, applies burst division when events are tightly
-    /// clustered, and falls back to frame/slow thresholds for single events.
-    pub(crate) fn delta_lines_at(
+    /// Handle a scroll event using the current time.
+    pub(crate) fn on_scroll_event(
+        &mut self,
+        direction: ScrollDirection,
+        config: ScrollConfig,
+    ) -> ScrollUpdate {
+        self.on_scroll_event_at(Instant::now(), direction, config)
+    }
+
+    /// Handle a scroll event at a specific time (for tests).
+    pub(crate) fn on_scroll_event_at(
         &mut self,
         now: Instant,
         direction: ScrollDirection,
-        tuning: ScrollTuning,
+        config: ScrollConfig,
+    ) -> ScrollUpdate {
+        let direction = config.apply_direction(direction);
+        let mut lines = 0;
+
+        if let Some(mut stream) = self.stream.take() {
+            let gap = now.duration_since(stream.last);
+            if gap > STREAM_GAP || stream.direction != direction {
+                lines += self.finalize_stream_at(now, &mut stream);
+            } else {
+                self.stream = Some(stream);
+            }
+        }
+
+        let stream = self.stream.get_or_insert_with(|| {
+            ScrollStream::new(now, direction, config.wheel_lines_per_tick_i32())
+        });
+        stream.push_event(now, direction, config.events_per_line_f32());
+
+        if now.duration_since(self.last_redraw_at) >= REDRAW_CADENCE {
+            lines += Self::flush_lines_at(&mut self.last_redraw_at, now, stream);
+        }
+
+        ScrollUpdate {
+            lines,
+            next_tick_in: self.next_tick_in(now),
+        }
+    }
+
+    /// Check whether an active stream has ended based on the current time.
+    pub(crate) fn on_tick(&mut self) -> ScrollUpdate {
+        self.on_tick_at(Instant::now())
+    }
+
+    /// Check whether an active stream has ended at a specific time (for tests).
+    pub(crate) fn on_tick_at(&mut self, now: Instant) -> ScrollUpdate {
+        let mut lines = 0;
+        if let Some(mut stream) = self.stream.take() {
+            let gap = now.duration_since(stream.last);
+            if gap > STREAM_GAP {
+                lines = self.finalize_stream_at(now, &mut stream);
+            } else {
+                // No new events, but we may still have accumulated enough fractional scroll to
+                // apply additional whole lines. Flushing on a fixed cadence prevents a "late jump"
+                // when the stream finally closes (which users perceive as overshoot).
+                if now.duration_since(self.last_redraw_at) >= REDRAW_CADENCE {
+                    lines = Self::flush_lines_at(&mut self.last_redraw_at, now, &mut stream);
+                }
+                self.stream = Some(stream);
+            }
+        }
+
+        ScrollUpdate {
+            lines,
+            next_tick_in: self.next_tick_in(now),
+        }
+    }
+
+    fn finalize_stream_at(&mut self, now: Instant, stream: &mut ScrollStream) -> i32 {
+        let duration_ms = stream.last.duration_since(stream.start).as_millis() as u64;
+        let discrete =
+            stream.event_count <= DISCRETE_MAX_EVENTS && duration_ms <= DISCRETE_MAX_DURATION_MS;
+        if discrete {
+            Self::flush_discrete_at(&mut self.last_redraw_at, now, stream)
+        } else {
+            Self::flush_lines_at(&mut self.last_redraw_at, now, stream)
+        }
+    }
+
+    fn flush_lines_at(
+        last_redraw_at: &mut Instant,
+        now: Instant,
+        stream: &mut ScrollStream,
     ) -> i32 {
-        let cadence = self.cadence(now, direction, tuning);
-
-        if cadence.is_burst && tuning.fast_divisor > 1 {
-            let total = self.fast_remainder + tuning.fast_lines;
-            let lines = total / tuning.fast_divisor;
-            self.fast_remainder = total % tuning.fast_divisor;
-            let signed_lines = if lines == 0 {
-                0
-            } else {
-                direction.signed_lines(lines)
-            };
-            self.trace_scroll(
-                direction,
-                tuning,
-                cadence,
-                total,
-                lines,
-                signed_lines,
-                "burst",
-            );
-            return signed_lines;
+        let mut lines = stream.accumulated_lines.trunc() as i32;
+        if lines == 0 {
+            return 0;
         }
 
-        self.fast_remainder = 0;
-
-        let elapsed = cadence.elapsed.unwrap_or(Duration::MAX);
-        let lines = if elapsed <= tuning.frame_threshold {
-            tuning.frame_lines
-        } else if cadence.has_sequence {
-            tuning.slow_lines
-        } else {
-            1
-        };
-
-        let signed_lines = direction.signed_lines(lines);
-        let reason = if elapsed <= tuning.frame_threshold {
-            "frame"
-        } else if cadence.has_sequence {
-            "sequence"
-        } else {
-            "single"
-        };
-        self.trace_scroll(direction, tuning, cadence, 0, lines, signed_lines, reason);
-        signed_lines
+        let clamped = lines.clamp(-MAX_ACCUMULATED_LINES, MAX_ACCUMULATED_LINES);
+        stream.applied_lines = stream.applied_lines.saturating_add(clamped);
+        stream.accumulated_lines -= clamped as f32;
+        *last_redraw_at = now;
+        clamped
     }
 
-    /// Updates the cadence buffer and returns elapsed/burst classification for the new event.
-    fn cadence(
-        &mut self,
+    fn flush_discrete_at(
+        last_redraw_at: &mut Instant,
         now: Instant,
-        direction: ScrollDirection,
-        tuning: ScrollTuning,
-    ) -> Cadence {
-        let elapsed = match (self.last_event_at, self.last_direction) {
-            (Some(last_event_at), Some(last_direction)) if last_direction == direction => {
-                Some(now.duration_since(last_event_at))
-            }
-            _ => {
-                self.reset_intervals();
-                None
-            }
-        };
-
-        if let Some(elapsed) = elapsed {
-            let sequence_window = tuning.frame_threshold.saturating_mul(4);
-            if elapsed <= sequence_window {
-                self.sequence_count = self.sequence_count.saturating_add(1);
-            } else {
-                self.sequence_count = 0;
-            }
-
-            if elapsed <= tuning.frame_threshold {
-                self.push_interval(elapsed);
-            } else {
-                self.reset_intervals();
-            }
-        } else {
-            self.sequence_count = 0;
+        stream: &mut ScrollStream,
+    ) -> i32 {
+        let mut total_lines = stream.applied_lines + stream.accumulated_lines.trunc() as i32;
+        if total_lines == 0 && stream.accumulated_events != 0 {
+            total_lines = stream.accumulated_events.signum() * MIN_LINES_PER_DISCRETE_STREAM;
         }
 
-        self.last_event_at = Some(now);
-        self.last_direction = Some(direction);
-
-        let is_burst = self.interval_count >= 2
-            && self
-                .median_interval()
-                .is_some_and(|median| median <= tuning.fast_threshold);
-        let has_sequence = self.sequence_count >= 2;
-
-        Cadence {
-            elapsed,
-            is_burst,
-            has_sequence,
+        let scaled_total = total_lines.saturating_mul(stream.wheel_lines_per_tick);
+        let mut delta = scaled_total - stream.applied_lines;
+        if delta == 0 {
+            return 0;
         }
+
+        delta = delta.clamp(-MAX_ACCUMULATED_LINES, MAX_ACCUMULATED_LINES);
+        stream.applied_lines = stream.applied_lines.saturating_add(delta);
+        stream.accumulated_lines = 0.0;
+        *last_redraw_at = now;
+        delta
     }
 
-    fn reset_intervals(&mut self) {
-        self.interval_count = 0;
-        self.interval_index = 0;
-        self.fast_remainder = 0;
-    }
-
-    fn push_interval(&mut self, elapsed: Duration) {
-        self.intervals[self.interval_index] = elapsed;
-        self.interval_index = (self.interval_index + 1) % INTERVAL_WINDOW;
-        self.interval_count = self.interval_count.saturating_add(1).min(INTERVAL_WINDOW);
-    }
-
-    fn median_interval(&self) -> Option<Duration> {
-        let count = self.interval_count;
-        if count == 0 {
+    fn next_tick_in(&self, now: Instant) -> Option<Duration> {
+        let stream = self.stream.as_ref()?;
+        let gap = now.duration_since(stream.last);
+        if gap > STREAM_GAP {
             return None;
         }
 
-        let mut intervals = self.intervals;
-        intervals[..count].sort_unstable();
-        Some(intervals[count / 2])
-    }
+        let mut next = STREAM_GAP.saturating_sub(gap);
 
-    fn trace_scroll(
-        &self,
-        direction: ScrollDirection,
-        tuning: ScrollTuning,
-        cadence: Cadence,
-        burst_total: i32,
-        lines: i32,
-        signed_lines: i32,
-        reason: &'static str,
-    ) {
-        trace!(
-            target: "tui2::scrolling",
-            direction = ?direction,
-            reason,
-            elapsed_ms = cadence.elapsed.map(|elapsed| elapsed.as_millis()),
-            fast_threshold_ms = tuning.fast_threshold.as_millis(),
-            frame_threshold_ms = tuning.frame_threshold.as_millis(),
-            interval_count = self.interval_count,
-            sequence_count = self.sequence_count,
-            is_burst = cadence.is_burst,
-            has_sequence = cadence.has_sequence,
-            burst_total,
-            lines,
-            signed_lines,
-            "scroll cadence",
-        );
+        // If we've accumulated at least one whole line but haven't flushed yet (because the last
+        // event arrived before the redraw cadence elapsed), schedule an earlier tick so we can
+        // flush promptly.
+        if stream.accumulated_lines.trunc() as i32 != 0 {
+            let since_redraw = now.duration_since(self.last_redraw_at);
+            let until_redraw = if since_redraw >= REDRAW_CADENCE {
+                Duration::from_millis(0)
+            } else {
+                REDRAW_CADENCE.saturating_sub(since_redraw)
+            };
+            next = next.min(until_redraw);
+        }
+
+        Some(next)
     }
 }
 
-/// Cadence details for the most recent event.
-#[derive(Clone, Copy, Debug)]
-struct Cadence {
-    /// Duration between the new event and the previous one when the direction matches.
-    elapsed: Option<Duration>,
-    /// Whether the rolling window indicates a sustained burst.
-    is_burst: bool,
-    /// Whether recent events form a short sequence that supports wheel inference.
-    has_sequence: bool,
+impl Default for MouseScrollState {
+    fn default() -> Self {
+        Self::new_at(Instant::now())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ScrollStream {
+    start: Instant,
+    last: Instant,
+    direction: ScrollDirection,
+    event_count: usize,
+    accumulated_events: i32,
+    accumulated_lines: f32,
+    applied_lines: i32,
+    wheel_lines_per_tick: i32,
+}
+
+impl ScrollStream {
+    fn new(now: Instant, direction: ScrollDirection, wheel_lines_per_tick: i32) -> Self {
+        Self {
+            start: now,
+            last: now,
+            direction,
+            event_count: 0,
+            accumulated_events: 0,
+            accumulated_lines: 0.0,
+            applied_lines: 0,
+            wheel_lines_per_tick: wheel_lines_per_tick.max(1),
+        }
+    }
+
+    fn push_event(&mut self, now: Instant, direction: ScrollDirection, events_per_line: f32) {
+        self.last = now;
+        self.direction = direction;
+        self.event_count = self
+            .event_count
+            .saturating_add(1)
+            .min(MAX_EVENTS_PER_STREAM);
+        self.accumulated_events = (self.accumulated_events + direction.sign()).clamp(
+            -(MAX_EVENTS_PER_STREAM as i32),
+            MAX_EVENTS_PER_STREAM as i32,
+        );
+        self.accumulated_lines =
+            (self.accumulated_lines + (direction.sign() as f32 / events_per_line)).clamp(
+                -(MAX_ACCUMULATED_LINES as f32),
+                MAX_ACCUMULATED_LINES as f32,
+            );
+    }
 }
 
 #[cfg(test)]
@@ -370,96 +404,201 @@ mod tests {
     }
 
     #[test]
-    fn ghostty_fast_scroll_divides_bursts() {
-        let tuning = ScrollTuning::for_terminal(&terminal_info_named(TerminalName::Ghostty));
-        let base = Instant::now();
-        let mut state = MouseScrollState {
-            last_event_at: Some(base),
-            last_direction: Some(ScrollDirection::Up),
-            ..MouseScrollState::default()
-        };
+    fn terminal_overrides_match_probe_defaults() {
+        let wezterm = ScrollConfig::from_terminal(
+            &terminal_info_named(TerminalName::WezTerm),
+            None,
+            None,
+            false,
+        );
+        let warp = ScrollConfig::from_terminal(
+            &terminal_info_named(TerminalName::WarpTerminal),
+            None,
+            None,
+            false,
+        );
+        let unknown = ScrollConfig::from_terminal(
+            &terminal_info_named(TerminalName::Unknown),
+            None,
+            None,
+            false,
+        );
 
-        let delta_one =
-            state.delta_lines_at(base + Duration::from_millis(1), ScrollDirection::Up, tuning);
-        let delta_two =
-            state.delta_lines_at(base + Duration::from_millis(2), ScrollDirection::Up, tuning);
-        let delta_three =
-            state.delta_lines_at(base + Duration::from_millis(3), ScrollDirection::Up, tuning);
-        let delta_four =
-            state.delta_lines_at(base + Duration::from_millis(4), ScrollDirection::Up, tuning);
-
-        assert_eq!(delta_one, -1);
-        assert_eq!(delta_two, 0);
-        assert_eq!(delta_three, 0);
-        assert_eq!(delta_four, -1);
+        assert_eq!(wezterm.events_per_line, 1);
+        assert_eq!(wezterm.wheel_lines_per_tick, DEFAULT_WHEEL_LINES_PER_TICK);
+        assert_eq!(warp.events_per_line, 9);
+        assert_eq!(unknown.events_per_line, DEFAULT_EVENTS_PER_LINE);
     }
 
     #[test]
-    fn iterm_scroll_uses_frame_and_slow_thresholds() {
-        let tuning = ScrollTuning::for_terminal(&terminal_info_named(TerminalName::Iterm2));
+    fn discrete_stream_applies_min_line_after_gap() {
+        let config = ScrollConfig::from_terminal(
+            &terminal_info_named(TerminalName::AppleTerminal),
+            Some(3),
+            None,
+            false,
+        );
         let base = Instant::now();
-        let mut state = MouseScrollState {
-            last_event_at: Some(base),
-            last_direction: Some(ScrollDirection::Down),
-            ..MouseScrollState::default()
-        };
+        let mut state = MouseScrollState::new_at(base);
 
-        let frame_delta = state.delta_lines_at(
-            base + Duration::from_millis(16),
+        let update = state.on_scroll_event_at(
+            base + Duration::from_millis(1),
             ScrollDirection::Down,
-            tuning,
+            config,
         );
-        let slow_delta = state.delta_lines_at(
-            base + Duration::from_millis(40),
-            ScrollDirection::Down,
-            tuning,
+        assert_eq!(
+            update,
+            ScrollUpdate {
+                lines: 0,
+                next_tick_in: Some(Duration::from_millis(STREAM_GAP_MS)),
+            }
         );
 
-        assert_eq!(frame_delta, 1);
-        assert_eq!(slow_delta, 3);
+        let update = state.on_tick_at(base + Duration::from_millis(STREAM_GAP_MS + 2));
+        assert_eq!(
+            update,
+            ScrollUpdate {
+                lines: 3,
+                next_tick_in: None,
+            }
+        );
     }
 
     #[test]
-    fn iterm_single_slow_event_stays_one_line() {
-        let tuning = ScrollTuning::for_terminal(&terminal_info_named(TerminalName::Iterm2));
+    fn wheel_lines_override_scales_discrete_stream() {
+        let config = ScrollConfig::from_terminal(
+            &terminal_info_named(TerminalName::AppleTerminal),
+            Some(3),
+            Some(2),
+            false,
+        );
         let base = Instant::now();
-        let mut state = MouseScrollState {
-            last_event_at: Some(base),
-            last_direction: Some(ScrollDirection::Down),
-            ..MouseScrollState::default()
-        };
+        let mut state = MouseScrollState::new_at(base);
 
-        let slow_delta = state.delta_lines_at(
-            base + Duration::from_millis(40),
+        let update = state.on_scroll_event_at(
+            base + Duration::from_millis(1),
             ScrollDirection::Down,
-            tuning,
+            config,
+        );
+        assert_eq!(
+            update,
+            ScrollUpdate {
+                lines: 0,
+                next_tick_in: Some(Duration::from_millis(STREAM_GAP_MS)),
+            }
         );
 
-        assert_eq!(slow_delta, 1);
+        let update = state.on_tick_at(base + Duration::from_millis(STREAM_GAP_MS + 2));
+        assert_eq!(
+            update,
+            ScrollUpdate {
+                lines: 2,
+                next_tick_in: None,
+            }
+        );
     }
 
     #[test]
-    fn vscode_scroll_uses_frame_and_slow_thresholds() {
-        let tuning = ScrollTuning::for_terminal(&terminal_info_named(TerminalName::VsCode));
+    fn direction_flip_closes_previous_stream() {
+        let config = ScrollConfig::from_terminal(
+            &terminal_info_named(TerminalName::AppleTerminal),
+            Some(3),
+            None,
+            false,
+        );
         let base = Instant::now();
-        let mut state = MouseScrollState {
-            last_event_at: Some(base),
-            last_direction: Some(ScrollDirection::Down),
-            ..MouseScrollState::default()
-        };
+        let mut state = MouseScrollState::new_at(base);
 
-        let frame_delta = state.delta_lines_at(
-            base + Duration::from_millis(16),
+        let _ =
+            state.on_scroll_event_at(base + Duration::from_millis(1), ScrollDirection::Up, config);
+        let update = state.on_scroll_event_at(
+            base + Duration::from_millis(2),
             ScrollDirection::Down,
-            tuning,
-        );
-        let slow_delta = state.delta_lines_at(
-            base + Duration::from_millis(40),
-            ScrollDirection::Down,
-            tuning,
+            config,
         );
 
-        assert_eq!(frame_delta, 3);
-        assert_eq!(slow_delta, 1);
+        assert_eq!(
+            update,
+            ScrollUpdate {
+                lines: -3,
+                next_tick_in: Some(Duration::from_millis(STREAM_GAP_MS)),
+            }
+        );
+    }
+
+    #[test]
+    fn continuous_stream_coalesces_redraws() {
+        let config = ScrollConfig::from_terminal(
+            &terminal_info_named(TerminalName::AppleTerminal),
+            Some(1),
+            None,
+            false,
+        );
+        let base = Instant::now();
+        let mut state = MouseScrollState::new_at(base);
+
+        let first = state.on_scroll_event_at(
+            base + Duration::from_millis(1),
+            ScrollDirection::Down,
+            config,
+        );
+        let second = state.on_scroll_event_at(
+            base + Duration::from_millis(10),
+            ScrollDirection::Down,
+            config,
+        );
+        let third = state.on_scroll_event_at(
+            base + Duration::from_millis(20),
+            ScrollDirection::Down,
+            config,
+        );
+
+        assert_eq!(
+            first,
+            ScrollUpdate {
+                lines: 0,
+                next_tick_in: Some(Duration::from_millis(REDRAW_CADENCE_MS - 1)),
+            }
+        );
+        assert_eq!(
+            second,
+            ScrollUpdate {
+                lines: 0,
+                next_tick_in: Some(Duration::from_millis(REDRAW_CADENCE_MS - 10)),
+            }
+        );
+        assert_eq!(
+            third,
+            ScrollUpdate {
+                lines: 3,
+                next_tick_in: Some(Duration::from_millis(STREAM_GAP_MS)),
+            }
+        );
+    }
+
+    #[test]
+    fn invert_direction_flips_sign() {
+        let config = ScrollConfig::from_terminal(
+            &terminal_info_named(TerminalName::AppleTerminal),
+            Some(1),
+            None,
+            true,
+        );
+        let base = Instant::now();
+        let mut state = MouseScrollState::new_at(base);
+
+        let update = state.on_scroll_event_at(
+            base + Duration::from_millis(REDRAW_CADENCE_MS + 1),
+            ScrollDirection::Up,
+            config,
+        );
+
+        assert_eq!(
+            update,
+            ScrollUpdate {
+                lines: 1,
+                next_tick_in: Some(Duration::from_millis(STREAM_GAP_MS)),
+            }
+        );
     }
 }

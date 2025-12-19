@@ -885,12 +885,23 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 # Disable terminal animations (welcome screen, status shimmer, spinner).
 # Defaults to true.
 animations = false
+
+# Override scroll normalization (events per line). TUI2 only.
+scroll_events_per_line = 3
+
+# Override wheel scroll lines per tick (classic feel). TUI2 only.
+scroll_wheel_lines = 3
+
+# Invert scroll direction for mouse wheel/trackpad. TUI2 only.
+scroll_invert = false
 ```
 
 > [!NOTE]
 > Codex emits desktop notifications using terminal escape codes. Not all terminals support these (notably, macOS Terminal.app and VS Code's terminal do not support custom notifications. iTerm2, Ghostty and WezTerm do support these notifications).
 
 > [!NOTE] > `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
+
+Scroll settings (`tui.scroll_events_per_line`, `tui.scroll_wheel_lines`, `tui.scroll_invert`) currently apply to the TUI2 viewport scroll implementation.
 
 ## Authentication and authorization
 
@@ -975,6 +986,9 @@ Valid values:
 | `file_opener`                                    | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`).                                                                         |
 | `tui`                                            | table                                                             | TUI‑specific options.                                                                                                           |
 | `tui.notifications`                              | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: true).                                                                        |
+| `tui.scroll_events_per_line`                     | number                                                            | Override events-per-line normalization for TUI2 scrolling (default: terminal-specific; fallback: 3).                            |
+| `tui.scroll_wheel_lines`                         | number                                                            | Lines to apply per wheel tick for TUI2 scrolling (default: 3).                                                                  |
+| `tui.scroll_invert`                              | boolean                                                           | Invert mouse scroll direction in TUI2 (default: false).                                                                         |
 | `hide_agent_reasoning`                           | boolean                                                           | Hide model reasoning events.                                                                                                    |
 | `check_for_update_on_startup`                    | boolean                                                           | Check for Codex updates on startup (default: true). Set to `false` only if updates are centrally managed.                       |
 | `show_raw_agent_reasoning`                       | boolean                                                           | Show raw reasoning (when available).                                                                                            |
