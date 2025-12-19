@@ -35,6 +35,8 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginChatGptCompleteNotification;
 use codex_app_server_protocol::LoginChatGptResponse;
+use codex_app_server_protocol::ModelListParams;
+use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
@@ -113,6 +115,9 @@ enum CliCommand {
     TestLogin,
     /// Fetch the current account rate limits from the Codex app-server.
     GetAccountRateLimits,
+    /// List the available models from the Codex app-server.
+    #[command(name = "model-list")]
+    ModelList,
 }
 
 fn main() -> Result<()> {
@@ -134,6 +139,7 @@ fn main() -> Result<()> {
         } => send_follow_up_v2(codex_bin, first_message, follow_up_message),
         CliCommand::TestLogin => test_login(codex_bin),
         CliCommand::GetAccountRateLimits => get_account_rate_limits(codex_bin),
+        CliCommand::ModelList => model_list(codex_bin),
     }
 }
 
@@ -301,6 +307,18 @@ fn get_account_rate_limits(codex_bin: String) -> Result<()> {
     Ok(())
 }
 
+fn model_list(codex_bin: String) -> Result<()> {
+    let mut client = CodexClient::spawn(codex_bin)?;
+
+    let initialize = client.initialize()?;
+    println!("< initialize response: {initialize:?}");
+
+    let response = client.model_list(ModelListParams::default())?;
+    println!("< model/list response: {response:?}");
+
+    Ok(())
+}
+
 struct CodexClient {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -450,6 +468,16 @@ impl CodexClient {
         };
 
         self.send_request(request, request_id, "account/rateLimits/read")
+    }
+
+    fn model_list(&mut self, params: ModelListParams) -> Result<ModelListResponse> {
+        let request_id = self.request_id();
+        let request = ClientRequest::ModelList {
+            request_id: request_id.clone(),
+            params,
+        };
+
+        self.send_request(request, request_id, "model/list")
     }
 
     fn stream_conversation(&mut self, conversation_id: &ConversationId) -> Result<()> {
