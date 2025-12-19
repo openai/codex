@@ -14,6 +14,7 @@ use crate::config::CONFIG_TOML_FILE;
 use crate::config_loader::config_requirements::ConfigRequirementsToml;
 use crate::config_loader::layer_io::LoadedConfigLayers;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_protocol::config_types::SandboxMode;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
@@ -238,17 +239,23 @@ async fn load_requirements_from_legacy_scheme(
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 struct LegacyManagedConfigToml {
     approval_policy: Option<AskForApproval>,
+    sandbox_mode: Option<SandboxMode>,
 }
 
 impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
     fn from(legacy: LegacyManagedConfigToml) -> Self {
         let mut config_requirements_toml = ConfigRequirementsToml::default();
 
-        let LegacyManagedConfigToml { approval_policy } = legacy;
+        let LegacyManagedConfigToml {
+            approval_policy,
+            sandbox_mode,
+        } = legacy;
         if let Some(approval_policy) = approval_policy {
             config_requirements_toml.allowed_approval_policies = Some(vec![approval_policy]);
         }
-
+        if let Some(sandbox_mode) = sandbox_mode {
+            config_requirements_toml.allowed_sandbox_modes = Some(vec![sandbox_mode.into()]);
+        }
         config_requirements_toml
     }
 }
