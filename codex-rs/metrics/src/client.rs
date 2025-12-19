@@ -15,13 +15,12 @@ use sentry::types::Dsn;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::mpsc;
-use std::sync::mpsc::Receiver;
-use std::sync::mpsc::SyncSender;
-use std::sync::mpsc::TrySendError;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::runtime::Builder;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 
 enum WorkerMessage {
     Batch(MetricsBatch),
@@ -29,7 +28,7 @@ enum WorkerMessage {
 }
 
 struct WorkerState {
-    sender: Mutex<Option<SyncSender<WorkerMessage>>>,
+    sender: Mutex<Option<mpsc::Sender<WorkerMessage>>>,
     handle: Mutex<Option<thread::JoinHandle<()>>>,
     capacity: usize,
 }
@@ -111,15 +110,15 @@ impl MetricsClient {
 
         let auth_header = dsn.to_auth(Some(&config.user_agent)).to_string();
 
-        let core = ClientCore {
+        let core = Arc::new(ClientCore {
             dsn,
             http,
             auth_header,
             default_tags: config.default_tags,
-        };
+        });
 
-        let (sender, receiver) = mpsc::sync_channel(capacity);
-        let handle = thread::spawn(move || run_worker(core, receiver));
+        let (sender, receiver) = mpsc::channel(capacity);
+        let handle = thread::spawn(move || run_worker_thread(core, receiver));
 
         Ok(Self {
             state: Arc::new(WorkerState {
@@ -223,7 +222,7 @@ impl MetricsClient {
             Err(TrySendError::Full(_)) => Err(MetricsError::QueueFull {
                 capacity: self.state.capacity,
             }),
-            Err(TrySendError::Disconnected(_)) => Err(MetricsError::WorkerUnavailable),
+            Err(TrySendError::Closed(_)) => Err(MetricsError::WorkerUnavailable),
         }
     }
 
@@ -280,12 +279,29 @@ impl Drop for MetricsClient {
     }
 }
 
-fn run_worker(client: ClientCore, receiver: Receiver<WorkerMessage>) {
-    while let Ok(message) = receiver.recv() {
+fn run_worker_thread(client: Arc<ClientCore>, receiver: mpsc::Receiver<WorkerMessage>) {
+    let runtime = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("metrics runtime");
+    let handle = runtime.spawn(run_worker(client, receiver));
+    runtime.block_on(async {
+        if let Err(err) = handle.await {
+            panic!("metrics worker panicked: {err}");
+        }
+    });
+}
+
+async fn run_worker(client: Arc<ClientCore>, mut receiver: mpsc::Receiver<WorkerMessage>) {
+    while let Some(message) = receiver.recv().await {
         match message {
             WorkerMessage::Batch(batch) => {
-                if let Err(err) = client.send(batch) {
-                    error_or_panic(format!("metrics send failed: {err}"));
+                let client = Arc::clone(&client);
+                let send_result = tokio::task::spawn_blocking(move || client.send(batch)).await;
+                match send_result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => error_or_panic(format!("metrics send failed: {err}")),
+                    Err(err) => error_or_panic(format!("metrics send task panicked: {err}")),
                 }
             }
             WorkerMessage::Shutdown => break,

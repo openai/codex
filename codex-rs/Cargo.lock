@@ -1271,6 +1271,7 @@ dependencies = [
  "codex-file-search",
  "codex-git",
  "codex-keyring-store",
+ "codex-metrics",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
@@ -1570,6 +1571,7 @@ dependencies = [
  "sentry",
  "serde_json",
  "thiserror 2.0.17",
+ "tokio",
  "tracing",
 ]
 
