@@ -1801,29 +1801,29 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
 
     let sse1 = sse(vec![
         ev_assistant_message("m1", FIRST_REPLY),
-        ev_completed_with_tokens("r1", 500),
+        ev_completed_with_tokens("r1", 5000),
     ]);
     let first_summary_payload = auto_summary(FIRST_AUTO_SUMMARY);
     let sse2 = sse(vec![
         ev_assistant_message("m2", &first_summary_payload),
-        ev_completed_with_tokens("r2", 50),
+        ev_completed_with_tokens("r2", 500),
     ]);
     let sse3 = sse(vec![
         ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
-        ev_completed_with_tokens("r3", 150),
+        ev_completed_with_tokens("r3", 1500),
     ]);
     let sse4 = sse(vec![
         ev_assistant_message("m4", SECOND_LARGE_REPLY),
-        ev_completed_with_tokens("r4", 450),
+        ev_completed_with_tokens("r4", 4500),
     ]);
     let second_summary_payload = auto_summary(SECOND_AUTO_SUMMARY);
     let sse5 = sse(vec![
         ev_assistant_message("m5", &second_summary_payload),
-        ev_completed_with_tokens("r5", 60),
+        ev_completed_with_tokens("r5", 600),
     ]);
     let sse6 = sse(vec![
         ev_assistant_message("m6", FINAL_REPLY),
-        ev_completed_with_tokens("r6", 120),
+        ev_completed_with_tokens("r6", 1200),
     ]);
     let follow_up_user = "FOLLOW_UP_AUTO_COMPACT";
     let final_user = "FINAL_AUTO_COMPACT";
@@ -1838,7 +1838,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     set_test_compact_prompt(&mut config);
     // Keep base instructions empty so token estimates align with mocked usage.
     config.base_instructions = Some(String::new());
-    config.model_auto_compact_token_limit = Some(200);
+    config.model_auto_compact_token_limit = Some(2000);
     let conversation_manager = ConversationManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
@@ -1916,14 +1916,14 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 
     let server = start_mock_server().await;
 
-    let context_window = 100;
+    let context_window = 1000;
     let limit = context_window * 90 / 100;
     let over_limit_tokens = context_window * 95 / 100 + 1;
     let follow_up_user = "FOLLOW_UP_AFTER_LIMIT";
 
     let first_turn = sse(vec![
         ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
-        ev_completed_with_tokens("r1", 50),
+        ev_completed_with_tokens("r1", 500),
     ]);
     let function_call_follow_up = sse(vec![
         ev_assistant_message("m2", FINAL_REPLY),
@@ -1932,9 +1932,9 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     let auto_summary_payload = auto_summary(AUTO_SUMMARY_TEXT);
     let auto_compact_turn = sse(vec![
         ev_assistant_message("m3", &auto_summary_payload),
-        ev_completed_with_tokens("r3", 10),
+        ev_completed_with_tokens("r3", 100),
     ]);
-    let post_auto_compact_turn = sse(vec![ev_completed_with_tokens("r4", 10)]);
+    let post_auto_compact_turn = sse(vec![ev_completed_with_tokens("r4", 100)]);
 
     // Mount responses in order and keep mocks only for the ones we assert on.
     let first_turn_mock = mount_sse_once(&server, first_turn).await;
@@ -2030,16 +2030,16 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     let second_user = "TRIGGER_COMPACT_AT_LIMIT";
     let third_user = "AFTER_REMOTE_COMPACT";
 
-    let pre_last_reasoning_content = "a".repeat(2_400);
-    let post_last_reasoning_content = "b".repeat(4_000);
+    let pre_last_reasoning_content = "a".repeat(2_4000);
+    let post_last_reasoning_content = "b".repeat(4_0000);
 
     let first_turn = sse(vec![
         ev_reasoning_item("pre-reasoning", &["pre"], &[&pre_last_reasoning_content]),
-        ev_completed_with_tokens("r1", 10),
+        ev_completed_with_tokens("r1", 100),
     ]);
     let second_turn = sse(vec![
         ev_reasoning_item("post-reasoning", &["post"], &[&post_last_reasoning_content]),
-        ev_completed_with_tokens("r2", 80),
+        ev_completed_with_tokens("r2", 800),
     ]);
     let third_turn = sse(vec![
         ev_assistant_message("m4", FINAL_REPLY),
