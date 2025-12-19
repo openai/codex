@@ -1,0 +1,204 @@
+import * as vscode from "vscode";
+
+import type { Session } from "../sessions";
+
+type ChatLine =
+  | { kind: "user"; text: string }
+  | { kind: "assistant"; text: string }
+  | { kind: "system"; text: string };
+
+export class SessionPanel implements vscode.Disposable {
+  private readonly panel: vscode.WebviewPanel;
+  private readonly transcript: ChatLine[] = [];
+  private latestDiff: string | null = null;
+
+  public constructor(
+    private readonly context: vscode.ExtensionContext,
+    public readonly session: Session,
+    private readonly onDispose: (sessionId: string) => void,
+  ) {
+    this.panel = vscode.window.createWebviewPanel(
+      "codexMine.session",
+      session.title,
+      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+      },
+    );
+
+    this.panel.onDidDispose(
+      () => {
+        this.onDispose(this.session.id);
+        this.dispose();
+      },
+      null,
+      this.context.subscriptions,
+    );
+    this.panel.webview.onDidReceiveMessage(
+      (msg: unknown) => this.onMessage(msg),
+      null,
+      this.context.subscriptions,
+    );
+
+    this.render();
+  }
+
+  public show(preserveFocus = true): void {
+    this.panel.reveal(undefined, preserveFocus);
+  }
+
+  public dispose(): void {
+    // no-op; panel disposal is handled by VS Code
+  }
+
+  public setLatestDiff(diff: string): void {
+    this.latestDiff = diff;
+    this.postState();
+  }
+
+  public addUserMessage(text: string): void {
+    this.transcript.push({ kind: "user", text });
+    this.transcript.push({ kind: "assistant", text: "" });
+    this.postState();
+  }
+
+  public appendAssistantDelta(delta: string): void {
+    const last = this.transcript.at(-1);
+    if (!last || last.kind !== "assistant") {
+      this.transcript.push({ kind: "assistant", text: delta });
+    } else {
+      last.text += delta;
+    }
+    this.postState();
+  }
+
+  public addSystemMessage(text: string): void {
+    this.transcript.push({ kind: "system", text });
+    this.postState();
+  }
+
+  private render(): void {
+    const nonce = String(Date.now());
+    this.panel.webview.html = `<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${escapeHtml(this.session.title)}</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 0; }
+      .topbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid rgba(127,127,127,0.3); }
+      .title { font-weight: 600; }
+      .actions { display: flex; gap: 8px; }
+      button { padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(127,127,127,0.35); background: transparent; color: inherit; cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .log { padding: 12px; }
+      .msg { margin: 10px 0; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(127,127,127,0.25); }
+      .user { background: rgba(0, 120, 212, 0.08); }
+      .assistant { background: rgba(0,0,0,0.06); }
+      .system { background: rgba(255, 185, 0, 0.12); }
+      pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+    </style>
+  </head>
+  <body>
+    <div class="topbar">
+      <div class="title">${escapeHtml(this.session.title)}</div>
+      <div class="actions">
+        <button id="send">Send Message</button>
+        <button id="diff" disabled>Open Latest Diff</button>
+      </div>
+    </div>
+    <div id="log" class="log"></div>
+
+    <script nonce="${nonce}">
+      const vscode = acquireVsCodeApi();
+      const sendBtn = document.getElementById("send");
+      const diffBtn = document.getElementById("diff");
+      const logEl = document.getElementById("log");
+
+      function render(state) {
+        diffBtn.disabled = !state.latestDiff;
+        logEl.innerHTML = "";
+        for (const line of state.transcript) {
+          const div = document.createElement("div");
+          div.className = "msg " + line.kind;
+          const pre = document.createElement("pre");
+          pre.textContent = line.text;
+          div.appendChild(pre);
+          logEl.appendChild(div);
+        }
+        window.scrollTo(0, document.body.scrollHeight);
+      }
+
+      window.addEventListener("message", (event) => {
+        const msg = event.data;
+        if (!msg || msg.type !== "state") return;
+        render(msg.state);
+      });
+
+      sendBtn.addEventListener("click", () => {
+        vscode.postMessage({ type: "sendMessage" });
+      });
+      diffBtn.addEventListener("click", () => {
+        vscode.postMessage({ type: "openDiff" });
+      });
+
+      vscode.postMessage({ type: "ready" });
+    </script>
+  </body>
+</html>`;
+  }
+
+  private postState(): void {
+    this.panel.webview.postMessage({
+      type: "state",
+      state: {
+        transcript: this.transcript,
+        latestDiff: this.latestDiff,
+      },
+    });
+  }
+
+  private onMessage(msg: unknown): void {
+    if (typeof msg !== "object" || msg === null) return;
+    const anyMsg = msg as Record<string, unknown>;
+    const type = anyMsg["type"];
+    if (type === "ready") {
+      this.postState();
+      return;
+    }
+    if (type === "sendMessage") {
+      void vscode.commands.executeCommand("codexMine.sendMessage", {
+        sessionId: this.session.id,
+      });
+      return;
+    }
+    if (type === "openDiff") {
+      void vscode.commands.executeCommand("codexMine.openLatestDiff", {
+        sessionId: this.session.id,
+      });
+      return;
+    }
+  }
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => {
+    switch (c) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case '"':
+        return "&quot;";
+      case "'":
+        return "&#39;";
+      default:
+        return c;
+    }
+  });
+}
