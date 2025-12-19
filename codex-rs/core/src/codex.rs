@@ -151,6 +151,7 @@ use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
 use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::otel_manager::OtelManager;
+use codex_protocol::config_types::NetworkAccess;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -265,6 +266,7 @@ impl Codex {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
+            network_access: config.network_access,
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             exec_policy,
@@ -366,6 +368,7 @@ pub(crate) struct TurnContext {
     pub(crate) user_instructions: Option<String>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: SandboxPolicy,
+    pub(crate) network_access: Option<NetworkAccess>,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
@@ -417,6 +420,8 @@ pub(crate) struct SessionConfiguration {
     approval_policy: Constrained<AskForApproval>,
     /// How to sandbox commands executed in the system
     sandbox_policy: SandboxPolicy,
+    /// Optional override describing network access to include in environment context.
+    network_access: Option<NetworkAccess>,
 
     /// Working directory that should be treated as the *root* of the
     /// session. All relative paths supplied by the model as well as the
@@ -528,6 +533,7 @@ impl Session {
             user_instructions: session_configuration.user_instructions.clone(),
             approval_policy: session_configuration.approval_policy.value(),
             sandbox_policy: session_configuration.sandbox_policy.clone(),
+            network_access: session_configuration.network_access,
             shell_environment_policy: per_turn_config.shell_environment_policy.clone(),
             tools_config,
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
@@ -1302,6 +1308,7 @@ impl Session {
             Some(turn_context.cwd.clone()),
             Some(turn_context.approval_policy),
             Some(turn_context.sandbox_policy.clone()),
+            turn_context.network_access,
             shell.as_ref().clone(),
         )));
         items
@@ -2156,6 +2163,7 @@ async fn spawn_review_thread(
         compact_prompt: parent_turn_context.compact_prompt.clone(),
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
+        network_access: parent_turn_context.network_access,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
@@ -2847,6 +2855,7 @@ mod tests {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
+            network_access: config.network_access,
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
@@ -2914,6 +2923,7 @@ mod tests {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
+            network_access: config.network_access,
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
@@ -3121,6 +3131,7 @@ mod tests {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
+            network_access: config.network_access,
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
@@ -3207,6 +3218,7 @@ mod tests {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
+            network_access: config.network_access,
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),

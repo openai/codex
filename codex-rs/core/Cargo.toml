@@ -61,7 +61,6 @@ sha1 = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
-strum_macros = { workspace = true }
 tempfile = { workspace = true }
 test-case = "3.3.1"
 test-log = { workspace = true }
