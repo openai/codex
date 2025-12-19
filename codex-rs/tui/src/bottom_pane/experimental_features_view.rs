@@ -91,7 +91,6 @@ impl ExperimentalFeaturesView {
             rows.push(GenericDisplayRow {
                 name,
                 description: Some(item.description.clone()),
-                max_row_lines: None,
                 ..Default::default()
             });
         }

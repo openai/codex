@@ -15,6 +15,7 @@ const SYSTEM_SKILLS_DIR: Dir =
 const SYSTEM_SKILLS_DIR_NAME: &str = ".system";
 const SKILLS_DIR_NAME: &str = "skills";
 const SYSTEM_SKILLS_MARKER_FILENAME: &str = ".codex-system-skills.marker";
+const SYSTEM_SKILLS_MARKER_SALT: &str = "v1";
 
 /// Returns the on-disk cache location for embedded system skills.
 ///
@@ -103,6 +104,7 @@ fn embedded_system_skills_fingerprint() -> String {
     items.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
     let mut hasher = DefaultHasher::new();
+    SYSTEM_SKILLS_MARKER_SALT.hash(&mut hasher);
     for (path, contents_hash) in items {
         path.hash(&mut hasher);
         contents_hash.hash(&mut hasher);

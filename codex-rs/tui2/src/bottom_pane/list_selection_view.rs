@@ -216,7 +216,6 @@ impl ListSelectionView {
                         display_shortcut: item.display_shortcut,
                         match_indices: None,
                         description,
-                        max_row_lines: None,
                         wrap_indent,
                     }
                 })

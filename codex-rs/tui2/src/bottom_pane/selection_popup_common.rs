@@ -22,7 +22,6 @@ pub(crate) struct GenericDisplayRow {
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
     pub wrap_indent: Option<usize>,        // optional indent for wrapped lines
-    pub max_row_lines: Option<usize>,      // optional max row lines before truncating
 }
 
 fn line_width(line: &Line<'_>) -> usize {
@@ -79,21 +78,20 @@ fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static
     Line::from(spans_out)
 }
 
-fn append_ellipsis(line: Line<'static>, max_width: usize) -> Line<'static> {
+fn truncate_line_with_ellipsis_if_overflow(line: Line<'static>, max_width: usize) -> Line<'static> {
     if max_width == 0 {
         return Line::from(Vec::<Span<'static>>::new());
     }
 
     let width = line_width(&line);
-    if width < max_width {
-        let mut spans = line.spans;
-        spans.push("…".into());
-        return Line::from(spans);
+    if width <= max_width {
+        return line;
     }
 
     let truncated = truncate_line_to_width(line, max_width.saturating_sub(1));
     let mut spans = truncated.spans;
-    spans.push("…".into());
+    let ellipsis_style = spans.last().map(|span| span.style).unwrap_or_default();
+    spans.push(Span::styled("…", ellipsis_style));
     Line::from(spans)
 }
 
@@ -265,22 +263,12 @@ pub(crate) fn render_rows(
 
         // Wrap with subsequent indent aligned to the description column.
         use crate::wrapping::RtOptions;
-        use crate::wrapping::word_wrap_lines;
+        use crate::wrapping::word_wrap_line;
         let continuation_indent = wrap_indent(row, desc_col, area.width);
         let options = RtOptions::new(area.width as usize)
             .initial_indent(Line::from(""))
             .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
-        let wrapped = word_wrap_lines([full_line.clone()], options);
-        let max_row_lines = row.max_row_lines.unwrap_or(usize::MAX);
-        let wrapped = if wrapped.len() > max_row_lines {
-            let mut limited: Vec<Line<'static>> = wrapped.into_iter().take(max_row_lines).collect();
-            if let Some(last) = limited.pop() {
-                limited.push(append_ellipsis(last, area.width as usize));
-            }
-            limited
-        } else {
-            wrapped
-        };
+        let wrapped = word_wrap_line(&full_line, options);
 
         // Render the wrapped lines.
         for line in wrapped {
@@ -298,6 +286,72 @@ pub(crate) fn render_rows(
             );
             cur_y = cur_y.saturating_add(1);
         }
+    }
+}
+
+/// Render rows as a single line each (no wrapping), truncating overflow with an ellipsis.
+pub(crate) fn render_rows_single_line(
+    area: Rect,
+    buf: &mut Buffer,
+    rows_all: &[GenericDisplayRow],
+    state: &ScrollState,
+    max_results: usize,
+    empty_message: &str,
+) {
+    if rows_all.is_empty() {
+        if area.height > 0 {
+            Line::from(empty_message.dim().italic()).render(area, buf);
+        }
+        return;
+    }
+
+    let visible_items = max_results
+        .min(rows_all.len())
+        .min(area.height.max(1) as usize);
+
+    let mut start_idx = state.scroll_top.min(rows_all.len().saturating_sub(1));
+    if let Some(sel) = state.selected_idx {
+        if sel < start_idx {
+            start_idx = sel;
+        } else if visible_items > 0 {
+            let bottom = start_idx + visible_items - 1;
+            if sel > bottom {
+                start_idx = sel + 1 - visible_items;
+            }
+        }
+    }
+
+    let desc_col = compute_desc_col(rows_all, start_idx, visible_items, area.width);
+
+    let mut cur_y = area.y;
+    for (i, row) in rows_all
+        .iter()
+        .enumerate()
+        .skip(start_idx)
+        .take(visible_items)
+    {
+        if cur_y >= area.y + area.height {
+            break;
+        }
+
+        let mut full_line = build_full_line(row, desc_col);
+        if Some(i) == state.selected_idx {
+            full_line.spans.iter_mut().for_each(|span| {
+                span.style = Style::default().fg(Color::Cyan).bold();
+            });
+        }
+
+        let full_line = truncate_line_with_ellipsis_if_overflow(full_line, area.width as usize);
+        full_line.render(
+            Rect {
+                x: area.x,
+                y: cur_y,
+                width: area.width,
+                height: 1,
+            },
+            buf,
+        );
+        cur_y = cur_y.saturating_add(1);
     }
 }
 
@@ -348,9 +402,7 @@ pub(crate) fn measure_rows_height(
             .initial_indent(Line::from(""))
             .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
         let wrapped_lines = word_wrap_line(&full_line, opts).len();
-        let max_row_lines = row.max_row_lines.unwrap_or(usize::MAX);
-        let capped_lines = wrapped_lines.min(max_row_lines).max(1);
-        total = total.saturating_add(capped_lines as u16);
+        total = total.saturating_add(wrapped_lines as u16);
     }
     total.max(1)
 }

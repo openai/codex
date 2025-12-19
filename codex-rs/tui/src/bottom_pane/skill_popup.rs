@@ -5,8 +5,7 @@ use ratatui::widgets::WidgetRef;
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
-use super::selection_popup_common::measure_rows_height;
-use super::selection_popup_common::render_rows;
+use super::selection_popup_common::render_rows_single_line;
 use crate::render::Insets;
 use crate::render::RectExt;
 use codex_common::fuzzy_match::fuzzy_match;
@@ -39,9 +38,10 @@ impl SkillPopup {
         self.clamp_selection();
     }
 
-    pub(crate) fn calculate_required_height(&self, width: u16) -> u16 {
+    pub(crate) fn calculate_required_height(&self, _width: u16) -> u16 {
         let rows = self.rows_from_matches(self.filtered());
-        measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width)
+        let visible = rows.len().clamp(1, MAX_POPUP_ROWS);
+        visible as u16
     }
 
     pub(crate) fn move_up(&mut self) {
@@ -81,7 +81,7 @@ impl SkillPopup {
             .into_iter()
             .map(|(idx, indices, _score)| {
                 let skill = &self.skills[idx];
-                let name = truncate_text(&skill.name, 24);
+                let name = truncate_text(&skill.name, 21);
                 let description = skill
                     .short_description
                     .as_ref()
@@ -93,7 +93,6 @@ impl SkillPopup {
                     display_shortcut: None,
                     description: Some(description),
                     disabled_reason: None,
-                    max_row_lines: Some(2),
                     wrap_indent: None,
                 }
             })
@@ -132,7 +131,7 @@ impl SkillPopup {
 impl WidgetRef for SkillPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let rows = self.rows_from_matches(self.filtered());
-        render_rows(
+        render_rows_single_line(
             area.inset(Insets::tlbr(0, 2, 0, 0)),
             buf,
             &rows,
