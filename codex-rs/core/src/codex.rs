@@ -2409,21 +2409,22 @@ async fn run_turn(
         ),
     ));
 
-    let model_supports_parallel = turn_context
-        .client
-        .get_model_family()
-        .supports_parallel_tool_calls;
-
-    let prompt = Prompt {
-        input,
-        tools: router.specs(),
-        parallel_tool_calls: model_supports_parallel && sess.enabled(Feature::ParallelToolCalls),
-        base_instructions_override: turn_context.base_instructions.clone(),
-        output_schema: turn_context.final_output_json_schema.clone(),
-    };
-
     let mut retries = 0;
     loop {
+        let model_supports_parallel = turn_context
+            .client
+            .get_model_family()
+            .supports_parallel_tool_calls;
+
+        let prompt = Prompt {
+            input: input.clone(),
+            tools: router.specs(),
+            parallel_tool_calls: model_supports_parallel
+                && sess.enabled(Feature::ParallelToolCalls),
+            base_instructions_override: turn_context.base_instructions.clone(),
+            output_schema: turn_context.final_output_json_schema.clone(),
+        };
+
         match try_run_turn(
             Arc::clone(&router),
             Arc::clone(&sess),
