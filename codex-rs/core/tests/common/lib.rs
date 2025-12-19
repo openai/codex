@@ -182,7 +182,7 @@ where
     F: FnMut(&codex_core::protocol::EventMsg) -> bool,
 {
     use tokio::time::Duration;
-    wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
+    wait_for_event_with_timeout(codex, predicate, Duration::from_secs(10)).await
 }
 
 pub async fn wait_for_event_match<T, F>(codex: &CodexConversation, matcher: F) -> T
