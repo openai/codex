@@ -395,7 +395,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Skills,
         key: "skills",
         stage: Stage::Experimental,
-        default_enabled: true,
+        default_enabled: !cfg!(windows),
     },
     FeatureSpec {
         id: Feature::Tui2,
