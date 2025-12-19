@@ -8,6 +8,7 @@ use std::time::Duration;
 use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
+use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
@@ -2658,7 +2659,7 @@ impl ChatWidget {
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
         let current_approval = self.config.approval_policy.value();
-        let current_sandbox = self.config.sandbox_policy.clone();
+        let current_sandbox = self.config.sandbox_policy.clone_value();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
         for preset in presets.into_iter() {
@@ -2812,7 +2813,7 @@ impl ChatWidget {
             self.config.codex_home.as_path(),
             cwd.as_path(),
             &env_map,
-            &self.config.sandbox_policy,
+            self.config.sandbox_policy.get(),
             Some(self.config.codex_home.as_path()),
         ) {
             Ok(_) => None,
@@ -2911,7 +2912,7 @@ impl ChatWidget {
         let mode_label = preset
             .as_ref()
             .map(|p| describe_policy(&p.sandbox))
-            .unwrap_or_else(|| describe_policy(&self.config.sandbox_policy));
+            .unwrap_or_else(|| describe_policy(self.config.sandbox_policy.get()));
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -3084,17 +3085,19 @@ impl ChatWidget {
     }
 
     /// Set the sandbox policy in the widget's config copy.
-    pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) {
+    pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
         #[cfg(target_os = "windows")]
-        let should_clear_downgrade = !matches!(policy, SandboxPolicy::ReadOnly)
+        let should_clear_downgrade = !matches!(&policy, SandboxPolicy::ReadOnly)
             || codex_core::get_platform_sandbox().is_some();
 
-        self.config.sandbox_policy = policy;
+        self.config.sandbox_policy.set(policy)?;
 
         #[cfg(target_os = "windows")]
         if should_clear_downgrade {
             self.config.forced_auto_mode_downgraded_on_windows = false;
         }
+
+        Ok(())
     }
 
     pub(crate) fn set_feature_enabled(&mut self, feature: Feature, enabled: bool) {
