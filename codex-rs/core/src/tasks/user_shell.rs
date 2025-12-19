@@ -16,6 +16,7 @@ use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
 use crate::exec::execute_exec_env;
 use crate::exec_env::create_env;
+use crate::features::Feature;
 use crate::parse_command::parse_command;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
@@ -68,9 +69,12 @@ impl SessionTask for UserShellCommandTask {
         // allows commands that use shell features (pipes, &&, redirects, etc.).
         // We do not source rc files or otherwise reformat the script.
         let use_login_shell = true;
-        let command = session
-            .user_shell()
-            .derive_exec_args(&self.command, use_login_shell);
+        let powershell_utf8_enabled = session.features().enabled(Feature::PowershellUtf8);
+        let command = session.user_shell().derive_exec_args(
+            &self.command,
+            use_login_shell,
+            powershell_utf8_enabled,
+        );
 
         let call_id = Uuid::new_v4().to_string();
         let raw_command = self.command.clone();

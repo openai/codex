@@ -1,13 +1,11 @@
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
-use crate::powershell::prefix_utf8_output;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandSource;
 use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
-use crate::shell::ShellType;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -275,14 +273,7 @@ fn get_command(
     });
     let shell = model_shell.as_ref().unwrap_or(session_shell);
 
-    let command_str =
-        if matches!(shell.shell_type, ShellType::PowerShell) && powershell_utf8_enabled {
-            prefix_utf8_output(&args.cmd)
-        } else {
-            args.cmd.to_string()
-        };
-
-    shell.derive_exec_args(&command_str, args.login)
+    shell.derive_exec_args(&args.cmd, args.login, powershell_utf8_enabled)
 }
 
 fn format_response(response: &UnifiedExecResponse) -> String {

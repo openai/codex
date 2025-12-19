@@ -112,7 +112,7 @@ async fn run_shell_script_with_timeout(
     script: &str,
     snapshot_timeout: Duration,
 ) -> Result<String> {
-    let args = shell.derive_exec_args(script, true);
+    let args = shell.derive_exec_args(script, true, false);
     let shell_name = shell.name();
 
     // Handler is kept as guard to control the drop. The `mut` pattern is required because .args()

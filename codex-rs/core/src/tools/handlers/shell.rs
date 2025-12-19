@@ -10,10 +10,8 @@ use crate::exec_policy::create_exec_approval_requirement_for_command;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
-use crate::powershell::prefix_utf8_output;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
-use crate::shell::ShellType;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -46,9 +44,14 @@ impl ShellHandler {
 }
 
 impl ShellCommandHandler {
-    fn base_command(shell: &Shell, command: &str, login: Option<bool>) -> Vec<String> {
+    fn base_command(
+        shell: &Shell,
+        command: &str,
+        login: Option<bool>,
+        powershell_utf8_enabled: bool,
+    ) -> Vec<String> {
         let use_login_shell = login.unwrap_or(true);
-        shell.derive_exec_args(command, use_login_shell)
+        shell.derive_exec_args(command, use_login_shell, powershell_utf8_enabled)
     }
 
     fn to_exec_params(
@@ -57,14 +60,12 @@ impl ShellCommandHandler {
         turn_context: &TurnContext,
     ) -> ExecParams {
         let shell = session.user_shell();
-        let command_str = if matches!(shell.shell_type, ShellType::PowerShell)
-            && session.features().enabled(Feature::PowershellUtf8)
-        {
-            prefix_utf8_output(&params.command)
-        } else {
-            params.command.to_string()
-        };
-        let command = Self::base_command(shell.as_ref(), &command_str, params.login);
+        let command = Self::base_command(
+            shell.as_ref(),
+            &params.command,
+            params.login,
+            session.features().enabled(Feature::PowershellUtf8),
+        );
 
         ExecParams {
             command,
@@ -171,7 +172,8 @@ impl ToolHandler for ShellCommandHandler {
         serde_json::from_str::<ShellCommandToolCallParams>(arguments)
             .map(|params| {
                 let shell = invocation.session.user_shell();
-                let command = Self::base_command(shell.as_ref(), &params.command, params.login);
+                let command =
+                    Self::base_command(shell.as_ref(), &params.command, params.login, false);
                 !is_known_safe_command(&command)
             })
             .unwrap_or(true)
@@ -360,12 +362,18 @@ mod tests {
     }
 
     fn assert_safe(shell: &Shell, command: &str) {
-        assert!(is_known_safe_command(
-            &shell.derive_exec_args(command, /* use_login_shell */ true)
-        ));
-        assert!(is_known_safe_command(
-            &shell.derive_exec_args(command, /* use_login_shell */ false)
-        ));
+        assert!(is_known_safe_command(&shell.derive_exec_args(
+            command, /* use_login_shell */ true, false
+        )));
+        assert!(is_known_safe_command(&shell.derive_exec_args(
+            command, /* use_login_shell */ false, false
+        )));
+        assert!(is_known_safe_command(&shell.derive_exec_args(
+            command, /* use_login_shell */ true, true
+        )));
+        assert!(is_known_safe_command(&shell.derive_exec_args(
+            command, /* use_login_shell */ false, true
+        )));
     }
 
     #[tokio::test]
@@ -379,7 +387,7 @@ mod tests {
         let sandbox_permissions = SandboxPermissions::RequireEscalated;
         let justification = Some("because tests".to_string());
 
-        let expected_command = session.user_shell().derive_exec_args(&command, true);
+        let expected_command = session.user_shell().derive_exec_args(&command, true, false);
         let expected_cwd = turn_context.resolve_path(workdir.clone());
         let expected_env = create_env(&turn_context.shell_environment_policy);
 
@@ -415,17 +423,17 @@ mod tests {
         };
 
         let login_command =
-            ShellCommandHandler::base_command(&shell, "echo login shell", Some(true));
+            ShellCommandHandler::base_command(&shell, "echo login shell", Some(true), false);
         assert_eq!(
             login_command,
-            shell.derive_exec_args("echo login shell", true)
+            shell.derive_exec_args("echo login shell", true, false)
         );
 
         let non_login_command =
-            ShellCommandHandler::base_command(&shell, "echo non login shell", Some(false));
+            ShellCommandHandler::base_command(&shell, "echo non login shell", Some(false), false);
         assert_eq!(
             non_login_command,
-            shell.derive_exec_args("echo non login shell", false)
+            shell.derive_exec_args("echo non login shell", false, false)
         );
     }
 }

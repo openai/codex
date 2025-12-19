@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::powershell::prefix_utf8_output;
 use crate::shell_snapshot::ShellSnapshot;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -35,7 +36,12 @@ impl Shell {
 
     /// Takes a string of shell and returns the full list of command args to
     /// use with `exec()` to run the shell command.
-    pub fn derive_exec_args(&self, command: &str, use_login_shell: bool) -> Vec<String> {
+    pub fn derive_exec_args(
+        &self,
+        command: &str,
+        use_login_shell: bool,
+        powershell_utf8_enabled: bool,
+    ) -> Vec<String> {
         match self.shell_type {
             ShellType::Zsh | ShellType::Bash | ShellType::Sh => {
                 let arg = if use_login_shell { "-lc" } else { "-c" };
@@ -52,7 +58,11 @@ impl Shell {
                 }
 
                 args.push("-Command".to_string());
-                args.push(command.to_string());
+                if powershell_utf8_enabled {
+                    args.push(prefix_utf8_output(command));
+                } else {
+                    args.push(command.to_string());
+                }
                 args
             }
             ShellType::Cmd => {
@@ -408,7 +418,7 @@ mod tests {
 
     fn shell_works(shell: Option<Shell>, command: &str, required: bool) -> bool {
         if let Some(shell) = shell {
-            let args = shell.derive_exec_args(command, false);
+            let args = shell.derive_exec_args(command, false, false);
             let output = Command::new(args[0].clone())
                 .args(&args[1..])
                 .output()
@@ -429,11 +439,11 @@ mod tests {
             shell_snapshot: None,
         };
         assert_eq!(
-            test_bash_shell.derive_exec_args("echo hello", false),
+            test_bash_shell.derive_exec_args("echo hello", false, false),
             vec!["/bin/bash", "-c", "echo hello"]
         );
         assert_eq!(
-            test_bash_shell.derive_exec_args("echo hello", true),
+            test_bash_shell.derive_exec_args("echo hello", true, false),
             vec!["/bin/bash", "-lc", "echo hello"]
         );
 
@@ -443,11 +453,11 @@ mod tests {
             shell_snapshot: None,
         };
         assert_eq!(
-            test_zsh_shell.derive_exec_args("echo hello", false),
+            test_zsh_shell.derive_exec_args("echo hello", false, false),
             vec!["/bin/zsh", "-c", "echo hello"]
         );
         assert_eq!(
-            test_zsh_shell.derive_exec_args("echo hello", true),
+            test_zsh_shell.derive_exec_args("echo hello", true, false),
             vec!["/bin/zsh", "-lc", "echo hello"]
         );
 
@@ -457,20 +467,37 @@ mod tests {
             shell_snapshot: None,
         };
         assert_eq!(
-            test_powershell_shell.derive_exec_args("echo hello", false),
+            test_powershell_shell.derive_exec_args("echo hello", false, false),
             vec![
                 "pwsh.exe".to_string(),
                 "-NoProfile".to_string(),
                 "-Command".to_string(),
-                format!("echo hello"),
+                "echo hello".to_string(),
             ]
         );
         assert_eq!(
-            test_powershell_shell.derive_exec_args("echo hello", true),
+            test_powershell_shell.derive_exec_args("echo hello", true, false),
             vec![
                 "pwsh.exe".to_string(),
                 "-Command".to_string(),
-                format!("echo hello"),
+                "echo hello".to_string(),
+            ]
+        );
+        assert_eq!(
+            test_powershell_shell.derive_exec_args("echo hello", false, true),
+            vec![
+                "pwsh.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\necho hello".to_string(),
+            ]
+        );
+        assert_eq!(
+            test_powershell_shell.derive_exec_args("echo hello", true, true),
+            vec![
+                "pwsh.exe".to_string(),
+                "-Command".to_string(),
+                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\necho hello".to_string(),
             ]
         );
     }
