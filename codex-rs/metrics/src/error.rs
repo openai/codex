@@ -60,4 +60,14 @@ pub enum MetricsError {
         status: reqwest::StatusCode,
         body: String,
     },
+
+    // Worker.
+    #[error("metrics queue capacity must be positive")]
+    QueueCapacityZero,
+    #[error("metrics queue is full (capacity {capacity})")]
+    QueueFull { capacity: usize },
+    #[error("metrics worker is unavailable")]
+    WorkerUnavailable,
+    #[error("metrics worker thread panicked")]
+    WorkerPanicked,
 }

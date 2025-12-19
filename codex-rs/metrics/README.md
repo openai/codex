@@ -4,7 +4,7 @@ Send lightweight counters and histogram buckets to Sentry via the statsd envelop
 
 ## Overview
 
-- Blocking, minimal client designed for CLI and service use.
+- Non-blocking client that enqueues metrics to a background worker.
 - Counters and histograms only (histograms are encoded as bucketed counters).
 - Tag validation and metric name validation are enforced before send.
 
@@ -48,6 +48,8 @@ let metrics = MetricsClient::new(MetricsConfig::default())?;
 - `with_tag(key, value)` to add default tags.
 - `with_timeout(duration)` to override the HTTP timeout (default 10s).
 - `with_user_agent(agent)` to override the user agent.
+Use `MetricsClient::with_capacity(config, capacity)` to override the default
+queue capacity.
 
 ## Buckets
 
@@ -80,6 +82,39 @@ bound that is greater than or equal to the value (or `inf` if none match):
 metrics.histogram("codex.request_latency", 83, &buckets, &[("route", "chat")])?;
 ```
 
+`counter`, `histogram`, and `send` enqueue metrics for the background worker.
+Call `shutdown` to flush queued metrics on exit.
+
+## Timing
+
+Measure a closure and emit a histogram sample for the elapsed time in milliseconds:
+
+```rust
+let result = metrics.time("codex.request_latency", &buckets, &[("route", "chat")], || {
+    "ok"
+})?;
+```
+
+If the closure already returns `codex_metrics::Result<T>`, use `time_result` to
+avoid nested results:
+
+```rust
+let result = metrics.time_result("codex.request_latency", &buckets, &[("route", "chat")], || {
+    Ok("ok")
+})?;
+```
+
+If you already have a duration, record it directly:
+
+```rust
+metrics.record_duration(
+    "codex.request_latency",
+    std::time::Duration::from_millis(83),
+    &buckets,
+    &[("route", "chat")],
+)?;
+```
+
 ## Batching
 
 Batching reduces network requests. Build a batch and send it once:
@@ -90,6 +125,21 @@ batch.counter("codex.turns", 1, &[("model", "gpt-5.1")])?;
 batch.histogram("codex.tool_latency", 140, &buckets, &[("tool", "shell")])?;
 metrics.send(batch)?;
 ```
+
+## Shutdown and queue capacity
+
+The client uses a bounded queue (default capacity 1024). Enqueueing returns a
+`MetricsError::QueueFull` error if the queue is full or `MetricsError::WorkerUnavailable`
+if the worker is no longer running.
+
+`shutdown` waits up to 500ms for the worker to stop. Use `shutdown_with_timeout`
+to override the timeout.
+
+Uploads are best-effort; if the worker encounters a send error, the metric is
+dropped.
+
+`MetricsClient` also attempts a best-effort shutdown on drop using the default
+timeout, so explicit calls to `shutdown` are optional.
 
 ## Validation rules
 

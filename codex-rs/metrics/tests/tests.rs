@@ -167,6 +167,7 @@ fn parse_statsd_line(line: &str) -> ParsedStatsdLine {
     }
 }
 
+// Ensures counters/histograms render with default + per-call tags.
 #[test]
 fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
     let (dsn, handle) = spawn_server(200);
@@ -181,6 +182,7 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
     batch.counter("codex.turns", 1, &[("model", "gpt-5.1"), ("env", "dev")])?;
     batch.histogram("codex.tool_latency", 25, &buckets, &[("tool", "shell")])?;
     metrics.send(batch)?;
+    metrics.shutdown()?;
 
     let captured = handle.join().expect("server thread");
     assert_eq!(captured.method, "POST");
@@ -230,6 +232,7 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
     Ok(())
 }
 
+// Verifies values above the max bucket use the inf tag.
 #[test]
 fn send_uses_inf_bucket_for_values_over_max() -> Result<()> {
     let (dsn, handle) = spawn_server(200);
@@ -239,6 +242,7 @@ fn send_uses_inf_bucket_for_values_over_max() -> Result<()> {
     let mut batch = metrics.batch();
     batch.histogram("codex.tool_latency", 99, &buckets, &[("tool", "shell")])?;
     metrics.send(batch)?;
+    metrics.shutdown()?;
 
     let captured = handle.join().expect("server thread");
     let envelope = parse_envelope(&captured.body);
@@ -250,30 +254,149 @@ fn send_uses_inf_bucket_for_values_over_max() -> Result<()> {
     Ok(())
 }
 
+// Ensures duration recording maps to the expected bucket tag.
 #[test]
-fn send_reports_non_success_status() -> Result<()> {
+fn record_duration_uses_matching_bucket() -> Result<()> {
+    let (dsn, handle) = spawn_server(200);
+    let metrics = MetricsClient::new(MetricsConfig::new(dsn))?;
+    let buckets = HistogramBuckets::from_values(&[10, 20])?;
+
+    metrics.record_duration(
+        "codex.request_latency",
+        Duration::from_millis(15),
+        &buckets,
+        &[("route", "chat")],
+    )?;
+    metrics.shutdown()?;
+
+    let captured = handle.join().expect("server thread");
+    let envelope = parse_envelope(&captured.body);
+    let lines: Vec<&str> = envelope.payload.split('\n').collect();
+    assert_eq!(lines.len(), 1);
+
+    let line = parse_statsd_line(lines[0]);
+    assert_eq!(line.name, "codex.request_latency");
+    assert_eq!(line.tags.get("route").map(String::as_str), Some("chat"));
+    assert_eq!(line.tags.get("le").map(String::as_str), Some("20"));
+
+    Ok(())
+}
+
+// Ensures time_result returns the closure output and records timing.
+#[test]
+fn time_result_records_success() -> Result<()> {
+    let (dsn, handle) = spawn_server(200);
+    let metrics = MetricsClient::new(MetricsConfig::new(dsn))?;
+    let buckets = HistogramBuckets::from_values(&[10, 20])?;
+
+    let value = metrics.time_result(
+        "codex.request_latency",
+        &buckets,
+        &[("route", "chat")],
+        || Ok("ok"),
+    )?;
+    assert_eq!(value, "ok");
+    metrics.shutdown()?;
+
+    let captured = handle.join().expect("server thread");
+    let envelope = parse_envelope(&captured.body);
+    let lines: Vec<&str> = envelope.payload.split('\n').collect();
+    assert!(!lines.is_empty());
+    for line in lines {
+        let line = parse_statsd_line(line);
+        assert_eq!(line.name, "codex.request_latency");
+        assert_eq!(line.tags.get("route").map(String::as_str), Some("chat"));
+        assert!(line.tags.contains_key("le"));
+    }
+
+    Ok(())
+}
+
+// Ensures time_result propagates errors but still records timing.
+#[test]
+fn time_result_records_on_error() -> Result<()> {
+    let (dsn, handle) = spawn_server(200);
+    let metrics = MetricsClient::new(MetricsConfig::new(dsn))?;
+    let buckets = HistogramBuckets::from_values(&[10, 20])?;
+
+    let err = metrics
+        .time_result(
+            "codex.request_latency",
+            &buckets,
+            &[("route", "chat")],
+            || -> Result<&'static str> { Err(MetricsError::EmptyMetricName) },
+        )
+        .unwrap_err();
+    assert!(matches!(err, MetricsError::EmptyMetricName));
+    metrics.shutdown()?;
+
+    let captured = handle.join().expect("server thread");
+    let envelope = parse_envelope(&captured.body);
+    let lines: Vec<&str> = envelope.payload.split('\n').collect();
+    assert!(!lines.is_empty());
+    for line in lines {
+        let line = parse_statsd_line(line);
+        assert_eq!(line.name, "codex.request_latency");
+        assert_eq!(line.tags.get("route").map(String::as_str), Some("chat"));
+        assert!(line.tags.contains_key("le"));
+    }
+
+    Ok(())
+}
+
+// Verifies enqueued batches are delivered by the background worker.
+#[test]
+fn client_sends_enqueued_batch() -> Result<()> {
+    let (dsn, handle) = spawn_server(200);
+    let metrics = MetricsClient::with_capacity(MetricsConfig::new(dsn), 8)?;
+
+    let mut batch = metrics.batch();
+    batch.counter("codex.turns", 1, &[("model", "gpt-5.1")])?;
+    metrics.send(batch)?;
+    metrics.shutdown()?;
+
+    let captured = handle.join().expect("server thread");
+    let envelope = parse_envelope(&captured.body);
+    let lines: Vec<&str> = envelope.payload.split('\n').collect();
+    assert_eq!(lines.len(), 1);
+
+    let line = parse_statsd_line(lines[0]);
+    assert_eq!(line.name, "codex.turns");
+    assert_eq!(line.value, 1);
+    assert_eq!(line.kind, "c");
+    assert_eq!(line.tags.get("model").map(String::as_str), Some("gpt-5.1"));
+
+    Ok(())
+}
+
+// Ensures a non-success response panics in debug builds via error_or_panic.
+#[test]
+fn send_panics_on_non_success_status_in_debug() -> Result<()> {
     let (dsn, handle) = spawn_server(500);
     let metrics = MetricsClient::new(MetricsConfig::new(dsn))?;
 
     let mut batch = metrics.batch();
     batch.counter("codex.turns", 1, &[])?;
-    let err = metrics.send(batch).unwrap_err();
-    assert!(matches!(
-        err,
-        MetricsError::SentryUploadFailed { status, .. } if status.as_u16() == 500
-    ));
+    metrics.send(batch)?;
+    let err = metrics.shutdown().unwrap_err();
+    assert!(matches!(err, MetricsError::WorkerPanicked));
 
-    let _ = handle.join().expect("server thread");
+    let captured = handle.join().expect("server thread");
+    assert_eq!(captured.method, "POST");
     Ok(())
 }
 
+// Validates invalid DSNs are rejected early.
 #[test]
 fn invalid_dsn_reports_error() -> Result<()> {
-    let err = MetricsClient::new(MetricsConfig::new("not a dsn")).unwrap_err();
-    assert!(matches!(err, MetricsError::InvalidDsn { .. }));
+    assert!(matches!(
+        MetricsClient::new(MetricsConfig::new("not a dsn")),
+        Err(MetricsError::InvalidDsn { .. })
+    ));
     Ok(())
 }
 
+// Ensures empty batches do not trigger any HTTP request.
 #[test]
 fn send_is_noop_when_batch_empty() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
@@ -283,6 +406,7 @@ fn send_is_noop_when_batch_empty() -> Result<()> {
     let metrics = MetricsClient::new(MetricsConfig::new(dsn))?;
 
     metrics.send(metrics.batch())?;
+    metrics.shutdown()?;
 
     let mut saw_connection = false;
     for _ in 0..10 {
@@ -301,6 +425,7 @@ fn send_is_noop_when_batch_empty() -> Result<()> {
     Ok(())
 }
 
+// Ensures invalid tag components are rejected during config build.
 #[test]
 fn invalid_tag_component_is_rejected() -> Result<()> {
     let err = MetricsConfig::default()
@@ -314,6 +439,7 @@ fn invalid_tag_component_is_rejected() -> Result<()> {
     Ok(())
 }
 
+// Ensures invalid metric names are rejected when building a batch.
 #[test]
 fn counter_rejects_invalid_metric_name() -> Result<()> {
     let mut batch = MetricsBatch::new();
@@ -325,12 +451,14 @@ fn counter_rejects_invalid_metric_name() -> Result<()> {
     Ok(())
 }
 
+// Ensures empty histogram bucket lists are rejected.
 #[test]
 fn empty_buckets_are_rejected() {
     let err = HistogramBuckets::from_values(&[]).unwrap_err();
     assert!(matches!(err, MetricsError::EmptyBuckets));
 }
 
+// Ensures range overflow is detected when building buckets.
 #[test]
 fn range_overflow_is_reported() {
     let err = HistogramBuckets::from_range(i64::MAX - 1, i64::MAX, 2).unwrap_err();

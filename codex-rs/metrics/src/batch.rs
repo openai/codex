@@ -167,6 +167,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
+    // Verifies linear bucket construction over a clean step range.
     fn from_range_builds_linear_buckets() -> Result<()> {
         let buckets = HistogramBuckets::from_range(25, 100, 25)?;
         let expected = HistogramBuckets::from_values(&[25, 50, 75, 100])?;
@@ -175,6 +176,7 @@ mod tests {
     }
 
     #[test]
+    // Ensures uneven steps still include the final upper bound.
     fn from_range_includes_upper_bound_when_step_is_uneven() -> Result<()> {
         let buckets = HistogramBuckets::from_range(10, 95, 30)?;
         let expected = HistogramBuckets::from_values(&[10, 40, 70, 95])?;
@@ -183,6 +185,7 @@ mod tests {
     }
 
     #[test]
+    // Confirms a single-value range produces one bucket.
     fn from_range_accepts_single_value_range() -> Result<()> {
         let buckets = HistogramBuckets::from_range(42, 42, 5)?;
         let expected = HistogramBuckets::from_values(&[42])?;
@@ -191,12 +194,14 @@ mod tests {
     }
 
     #[test]
+    // Rejects a non-positive step to avoid invalid ranges.
     fn from_range_rejects_non_positive_step() {
         let err = HistogramBuckets::from_range(0, 10, 0).unwrap_err();
         assert_eq!(err.to_string(), "histogram bucket step must be positive: 0");
     }
 
     #[test]
+    // Rejects descending ranges to prevent inverted buckets.
     fn from_range_rejects_descending_range() {
         let err = HistogramBuckets::from_range(10, 0, 1).unwrap_err();
         assert_eq!(
@@ -206,6 +211,7 @@ mod tests {
     }
 
     #[test]
+    // Verifies exponential buckets grow and include the upper bound.
     fn from_exponential_builds_buckets() -> Result<()> {
         let buckets = HistogramBuckets::from_exponential(10, 100, 2.0)?;
         let expected = HistogramBuckets::from_values(&[10, 20, 40, 80, 100])?;
@@ -214,6 +220,7 @@ mod tests {
     }
 
     #[test]
+    // Ensures exponential buckets always include the final bound.
     fn from_exponential_includes_upper_bound() -> Result<()> {
         let buckets = HistogramBuckets::from_exponential(30, 100, 3.0)?;
         let expected = HistogramBuckets::from_values(&[30, 90, 100])?;
@@ -222,6 +229,7 @@ mod tests {
     }
 
     #[test]
+    // Rejects non-positive starts because exponential growth requires > 0.
     fn from_exponential_rejects_non_positive_start() {
         let err = HistogramBuckets::from_exponential(0, 10, 2.0).unwrap_err();
         assert!(matches!(
@@ -231,6 +239,7 @@ mod tests {
     }
 
     #[test]
+    // Rejects invalid exponential factors (non-finite or <= 1).
     fn from_exponential_rejects_invalid_factor() {
         let err = HistogramBuckets::from_exponential(1, 10, 1.0).unwrap_err();
         assert!(matches!(
