@@ -32,12 +32,7 @@ jobs:
             || { echo "Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
           tag_version="${GITHUB_REF_NAME#codexel-v}"
-          package_version=$(python - <<'PY'
-import json
-with open("codex-cli/package.json", "r", encoding="utf-8") as f:
-    print(json.load(f)["version"])
-PY
-          )
+          package_version=$(python -c 'import json; print(json.load(open("codex-cli/package.json", "r", encoding="utf-8"))["version"])')
 
           if [[ "${package_version}" == *-dev ]]; then
             echo "codex-cli/package.json version is ${package_version}; release tags require a non-dev version."
