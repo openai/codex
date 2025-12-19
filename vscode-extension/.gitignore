@@ -1,0 +1,5 @@
+dist
+node_modules
+src/generated
+# VS Code extension packages
+*.vsix

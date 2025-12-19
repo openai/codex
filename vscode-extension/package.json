@@ -1,0 +1,166 @@
+{
+  "name": "codex-ui-vscode-extension",
+  "version": "0.0.3",
+  "displayName": "Codex UI",
+  "publisher": "harukary7518",
+  "description": "Use Codex CLI (app-server) inside VS Code: sessions, chat, tools, diffs.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/harukary/codex-ui-vscode-extension.git"
+  },
+  "main": "./dist/extension.js",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:codexMine.startBackend",
+    "onCommand:codexMine.newSession",
+    "onCommand:codexMine.sendMessage",
+    "onCommand:codexMine.openSession",
+    "onCommand:codexMine.openLatestDiff",
+    "onCommand:codexMine.selectSession",
+    "onCommand:codexMine.renameSession",
+    "onCommand:codexMine.sessionMenu",
+    "onCommand:codexMine.hideSessionTab",
+    "onCommand:codexMine.closeSession",
+    "onCommand:codexMine.respondApproval",
+    "onView:codexMine.chatView"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "codexMine.startBackend",
+        "title": "Codex UI: Start Backend (app-server)"
+      },
+      {
+        "command": "codexMine.newSession",
+        "title": "Codex UI: New Session"
+      },
+      {
+        "command": "codexMine.sendMessage",
+        "title": "Codex UI: Send Message"
+      },
+      {
+        "command": "codexMine.openSession",
+        "title": "Codex UI: Open Session"
+      },
+      {
+        "command": "codexMine.openLatestDiff",
+        "title": "Codex UI: Open Latest Diff"
+      },
+      {
+        "command": "codexMine.selectSession",
+        "title": "Codex UI: Select Session"
+      },
+      {
+        "command": "codexMine.renameSession",
+        "title": "Codex UI: Rename Session"
+      },
+      {
+        "command": "codexMine.sessionMenu",
+        "title": "Codex UI: Session Menu"
+      },
+      {
+        "command": "codexMine.hideSessionTab",
+        "title": "Codex UI: Hide Session Tab"
+      },
+      {
+        "command": "codexMine.closeSession",
+        "title": "Codex UI: Close Session (Hide from Sessions)"
+      },
+      {
+        "command": "codexMine.respondApproval",
+        "title": "Codex UI: Respond Approval"
+      }
+    ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "codexMine.closeSession",
+          "when": "view == codexMine.sessionsView && viewItem == codexMine.session",
+          "group": "navigation"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codexMine",
+          "title": "Codex UI",
+          "icon": "resources/codex-mine.svg"
+        }
+      ]
+    },
+    "views": {
+      "codexMine": [
+        {
+          "id": "codexMine.sessionsView",
+          "name": "Sessions"
+        },
+        {
+          "id": "codexMine.chatView",
+          "name": "Chat",
+          "type": "webview"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Codex UI",
+      "properties": {
+        "codexMine.backend.command": {
+          "type": "string",
+          "default": "codex",
+          "description": "Backend CLI command to spawn (e.g. codex)."
+        },
+        "codexMine.backend.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "app-server"
+          ],
+          "description": "Arguments passed to the backend command."
+        },
+        "codexMine.debug.logRpcPayloads": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log full JSON-RPC payloads to the output channel (may include sensitive data)."
+        },
+        "codexMine.approvals.defaultDecision": {
+          "type": "string",
+          "enum": [
+            "prompt",
+            "decline",
+            "cancel"
+          ],
+          "default": "prompt",
+          "description": "Default decision for server-initiated approval requests."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node ./scripts/check-generated.js && node ./scripts/prepare-webview-vendors.js && tsc -p .",
+    "watch": "tsc -p . -w",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write .",
+    "vsix:package": "pnpm run compile && npx --yes @vscode/vsce package",
+    "regen:protocol": "node ./scripts/regen-protocol.js"
+  },
+  "dependencies": {
+    "shell-quote": "^1.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.18",
+    "@types/shell-quote": "^1.7.5",
+    "@types/vscode": "^1.90.0",
+    "markdown-it": "^14.1.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2"
+  }
+}
