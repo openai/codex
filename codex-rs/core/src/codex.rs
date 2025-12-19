@@ -764,6 +764,16 @@ impl Session {
         state.get_total_token_usage()
     }
 
+    async fn get_total_token_usage_with_estimate(&self, turn_context: &TurnContext) -> i64 {
+        let reported = self.get_total_token_usage().await;
+        let estimated = self
+            .clone_history()
+            .await
+            .estimate_token_count(turn_context)
+            .unwrap_or(0);
+        reported.max(estimated)
+    }
+
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
         let turn_context = self.new_default_turn().await;
         match conversation_history {
@@ -2233,7 +2243,9 @@ pub(crate) async fn run_task(
         .get_model_family()
         .auto_compact_token_limit()
         .unwrap_or(i64::MAX);
-    let total_usage_tokens = sess.get_total_token_usage().await;
+    let total_usage_tokens = sess
+        .get_total_token_usage_with_estimate(&turn_context)
+        .await;
     if total_usage_tokens >= auto_compact_limit {
         run_auto_compact(&sess, &turn_context).await;
     }
@@ -2315,7 +2327,9 @@ pub(crate) async fn run_task(
                     needs_follow_up,
                     last_agent_message: turn_last_agent_message,
                 } = turn_output;
-                let total_usage_tokens = sess.get_total_token_usage().await;
+                let total_usage_tokens = sess
+                    .get_total_token_usage_with_estimate(&turn_context)
+                    .await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
