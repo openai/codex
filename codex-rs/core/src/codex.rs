@@ -2368,6 +2368,30 @@ pub(crate) async fn run_task(
     last_agent_message
 }
 
+async fn refresh_models_and_reset_turn_context(
+    sess: &Arc<Session>,
+    turn_context: &mut Arc<TurnContext>,
+) {
+    let config = {
+        let state = sess.state.lock().await;
+        state
+            .session_configuration
+            .original_config_do_not_use
+            .clone()
+    };
+    if let Err(err) = sess
+        .services
+        .models_manager
+        .refresh_available_models(&config)
+        .await
+    {
+        error!("failed to refresh models after outdated models error: {err}");
+    }
+    *turn_context = sess
+        .new_default_turn_with_sub_id(turn_context.sub_id.clone())
+        .await;
+}
+
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
     if should_use_remote_compact_task(sess.as_ref(), &turn_context.client.get_provider()) {
         run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
@@ -2460,24 +2484,8 @@ async fn run_turn(
                     retries += 1;
                     // Refresh models if we got an outdated models error
                     if matches!(e, CodexErr::OutdatedModels) {
-                        let config = {
-                            let state = sess.state.lock().await;
-                            state
-                                .session_configuration
-                                .original_config_do_not_use
-                                .clone()
-                        };
-                        if let Err(err) = sess
-                            .services
-                            .models_manager
-                            .refresh_available_models(&config)
-                            .await
-                        {
-                            error!("failed to refresh models after outdated models error: {err}");
-                        }
-                        *turn_context = sess
-                            .new_default_turn_with_sub_id(turn_context.sub_id.clone())
-                            .await;
+                        refresh_models_and_reset_turn_context(&sess, turn_context).await;
+                        continue;
                     }
                     let delay = match e {
                         CodexErr::Stream(_, Some(delay)) => delay,

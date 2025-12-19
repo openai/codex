@@ -530,17 +530,6 @@ async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
         })
         .await?;
 
-    let stream_error =
-        wait_for_event(&codex, |event| matches!(event, EventMsg::StreamError(_))).await;
-    let EventMsg::StreamError(stream_error) = stream_error else {
-        unreachable!();
-    };
-    assert!(
-        stream_error.message.starts_with("Reconnecting..."),
-        "unexpected stream error message: {}",
-        stream_error.message
-    );
-
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
     // Phase 3c: assert the refresh happened and the ETag was updated.
