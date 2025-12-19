@@ -1697,7 +1697,7 @@ impl ChatWidget {
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
-        let mut widget = Self {
+        Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -1737,7 +1737,7 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            current_status_header: String::from("Working"),
+            current_status_header: String::from("Ready"),
             retry_status_header: None,
             plan_variants_progress: None,
             conversation_id: None,
@@ -1751,11 +1751,7 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
-        };
-
-        widget.prefetch_rate_limits();
-
-        widget
+        }
     }
 
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
@@ -1784,7 +1780,7 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
-        let mut widget = Self {
+        Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -1824,7 +1820,7 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            current_status_header: String::from("Working"),
+            current_status_header: String::from("Ready"),
             retry_status_header: None,
             plan_variants_progress: None,
             conversation_id: None,
@@ -1838,11 +1834,7 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
-        };
-
-        widget.prefetch_rate_limits();
-
-        widget
+        }
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -2186,6 +2178,7 @@ impl ChatWidget {
             }
         }
 
+        self.prefetch_rate_limits();
         self.codex_op_tx
             .send(Op::UserInput { items })
             .unwrap_or_else(|e| {
@@ -2532,7 +2525,12 @@ impl ChatWidget {
     }
 
     fn prefetch_rate_limits(&mut self) {
-        self.stop_rate_limit_poller();
+        if self.rate_limit_poller.is_some() {
+            return;
+        }
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
 
         let Some(auth) = self.auth_manager.auth() else {
             return;
