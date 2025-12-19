@@ -5,8 +5,11 @@ use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::read_openai_api_key_from_env;
+use codex_login::DeviceCode;
 use codex_login::ServerOptions;
 use codex_login::ShutdownHandle;
+use codex_login::complete_device_code_login;
+use codex_login::request_device_code;
 use codex_login::run_login_server;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -40,6 +43,7 @@ use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::Notify;
 
 use super::onboarding_screen::StepState;
 
@@ -47,6 +51,7 @@ use super::onboarding_screen::StepState;
 pub(crate) enum SignInState {
     PickMode,
     ChatGptContinueInBrowser(ContinueInBrowserState),
+    ChatGptDeviceCode(ContinueWithDeviceCodeState),
     ChatGptSuccessMessage,
     ChatGptSuccess,
     ApiKeyEntry(ApiKeyInputState),
@@ -66,6 +71,12 @@ pub(crate) struct ApiKeyInputState {
 pub(crate) struct ContinueInBrowserState {
     auth_url: String,
     shutdown_flag: Option<ShutdownHandle>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ContinueWithDeviceCodeState {
+    device_code: Option<DeviceCode>,
+    cancel: Option<Arc<Notify>>,
 }
 
 impl Drop for ContinueInBrowserState {
@@ -128,10 +139,22 @@ impl KeyboardHandler for AuthModeWidget {
             }
             KeyCode::Esc => {
                 tracing::info!("Esc pressed");
-                let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
-                if matches!(sign_in_state, SignInState::ChatGptContinueInBrowser(_)) {
-                    *self.sign_in_state.write().unwrap() = SignInState::PickMode;
-                    self.request_frame.schedule_frame();
+                let mut sign_in_state = self.sign_in_state.write().unwrap();
+                match &*sign_in_state {
+                    SignInState::ChatGptContinueInBrowser(_) => {
+                        *sign_in_state = SignInState::PickMode;
+                        drop(sign_in_state);
+                        self.request_frame.schedule_frame();
+                    }
+                    SignInState::ChatGptDeviceCode(state) => {
+                        if let Some(cancel) = &state.cancel {
+                            cancel.notify_one();
+                        }
+                        *sign_in_state = SignInState::PickMode;
+                        drop(sign_in_state);
+                        self.request_frame.schedule_frame();
+                    }
+                    _ => {}
                 }
             }
             _ => {}
@@ -216,10 +239,12 @@ impl AuthModeWidget {
             vec![line1, line2]
         };
 
-        let chatgpt_description = if self.is_chatgpt_login_allowed() {
-            "Usage included with Plus, Pro, Business, Education, and Enterprise plans"
-        } else {
+        let chatgpt_description = if !self.is_chatgpt_login_allowed() {
             "ChatGPT login is disabled"
+        } else if is_headless_environment() {
+            "Uses device code login (headless environment detected)"
+        } else {
+            "Usage included with Plus, Pro, Team, and Enterprise plans"
         };
         lines.extend(create_mode_item(
             0,
@@ -278,6 +303,58 @@ impl AuthModeWidget {
             lines.push("  If the link doesn't open automatically, open the following link to authenticate:".into());
             lines.push("".into());
             lines.push(Line::from(state.auth_url.as_str().cyan().underlined()));
+            lines.push("".into());
+        }
+
+        lines.push("  Press Esc to cancel".dim().into());
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
+    fn render_device_code_login(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        state: &ContinueWithDeviceCodeState,
+    ) {
+        let banner = if state.device_code.is_some() {
+            "Finish signing in via your browser"
+        } else {
+            "Preparing device code login"
+        };
+
+        let mut spans = vec!["  ".into()];
+        if self.animations_enabled {
+            // Schedule a follow-up frame to keep the shimmer animation going.
+            self.request_frame
+                .schedule_frame_in(std::time::Duration::from_millis(100));
+            spans.extend(shimmer_spans(banner));
+        } else {
+            spans.push(banner.into());
+        }
+
+        let mut lines = vec![spans.into(), "".into()];
+
+        if let Some(device_code) = &state.device_code {
+            lines.push("  1. Open this link in your browser and sign in".into());
+            lines.push("".into());
+            lines.push(Line::from(
+                device_code.verification_url.as_str().cyan().underlined(),
+            ));
+            lines.push("".into());
+            lines.push("  2. Enter this one-time code (expires in 15 minutes)".into());
+            lines.push("".into());
+            lines.push(Line::from(device_code.user_code.as_str().cyan().bold()));
+            lines.push("".into());
+            lines.push(
+                "  Device codes are a common phishing target. Never share this code."
+                    .dim()
+                    .into(),
+            );
+            lines.push("".into());
+        } else {
+            lines.push("  Requesting a one-time code...".dim().into());
             lines.push("".into());
         }
 
@@ -563,12 +640,167 @@ impl AuthModeWidget {
         }
 
         self.error = None;
-        let opts = ServerOptions::new(
+        let mut opts = ServerOptions::new(
             self.codex_home.clone(),
             CLIENT_ID.to_string(),
             self.forced_chatgpt_workspace_id.clone(),
             self.cli_auth_credentials_store_mode,
         );
+
+        if is_headless_environment() {
+            opts.open_browser = false;
+            let sign_in_state = self.sign_in_state.clone();
+            let request_frame = self.request_frame.clone();
+            let auth_manager = self.auth_manager.clone();
+            let cancel = Arc::new(Notify::new());
+
+            *self.sign_in_state.write().unwrap() =
+                SignInState::ChatGptDeviceCode(ContinueWithDeviceCodeState {
+                    device_code: None,
+                    cancel: Some(cancel.clone()),
+                });
+            self.request_frame.schedule_frame();
+
+            tokio::spawn(async move {
+                let device_code = match request_device_code(&opts).await {
+                    Ok(device_code) => device_code,
+                    Err(err) => {
+                        if err.to_string().contains("device code login is not enabled") {
+                            let should_fallback = {
+                                let guard = sign_in_state.read().unwrap();
+                                matches!(
+                                    &*guard,
+                                    SignInState::ChatGptDeviceCode(state)
+                                        if state
+                                            .cancel
+                                            .as_ref()
+                                            .is_some_and(|c| Arc::ptr_eq(c, &cancel))
+                                )
+                            };
+
+                            if !should_fallback {
+                                return;
+                            }
+
+                            match run_login_server(opts) {
+                                Ok(child) => {
+                                    let auth_url = child.auth_url.clone();
+                                    {
+                                        *sign_in_state.write().unwrap() =
+                                            SignInState::ChatGptContinueInBrowser(
+                                                ContinueInBrowserState {
+                                                    auth_url,
+                                                    shutdown_flag: Some(child.cancel_handle()),
+                                                },
+                                            );
+                                    }
+                                    request_frame.schedule_frame();
+                                    let r = child.block_until_done().await;
+                                    match r {
+                                        Ok(()) => {
+                                            auth_manager.reload();
+                                            *sign_in_state.write().unwrap() =
+                                                SignInState::ChatGptSuccessMessage;
+                                            request_frame.schedule_frame();
+                                        }
+                                        _ => {
+                                            *sign_in_state.write().unwrap() = SignInState::PickMode;
+                                            request_frame.schedule_frame();
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    *sign_in_state.write().unwrap() = SignInState::PickMode;
+                                    request_frame.schedule_frame();
+                                }
+                            }
+                        } else {
+                            let mut guard = sign_in_state.write().unwrap();
+                            let should_reset = matches!(
+                                &*guard,
+                                SignInState::ChatGptDeviceCode(state)
+                                    if state
+                                        .cancel
+                                        .as_ref()
+                                        .is_some_and(|c| Arc::ptr_eq(c, &cancel))
+                            );
+                            if should_reset {
+                                *guard = SignInState::PickMode;
+                                drop(guard);
+                                request_frame.schedule_frame();
+                            }
+                        }
+
+                        return;
+                    }
+                };
+
+                {
+                    let mut guard = sign_in_state.write().unwrap();
+                    let should_update = matches!(
+                        &*guard,
+                        SignInState::ChatGptDeviceCode(state)
+                            if state
+                                .cancel
+                                .as_ref()
+                                .is_some_and(|c| Arc::ptr_eq(c, &cancel))
+                    );
+                    if !should_update {
+                        return;
+                    }
+
+                    *guard = SignInState::ChatGptDeviceCode(ContinueWithDeviceCodeState {
+                        device_code: Some(device_code.clone()),
+                        cancel: Some(cancel.clone()),
+                    });
+                }
+                request_frame.schedule_frame();
+
+                tokio::select! {
+                    _ = cancel.notified() => {}
+                    r = complete_device_code_login(opts, device_code) => {
+                        match r {
+                            Ok(()) => {
+                                let mut guard = sign_in_state.write().unwrap();
+                                let should_update = matches!(
+                                    &*guard,
+                                    SignInState::ChatGptDeviceCode(state)
+                                        if state
+                                            .cancel
+                                            .as_ref()
+                                            .is_some_and(|c| Arc::ptr_eq(c, &cancel))
+                                );
+                                if should_update {
+                                    auth_manager.reload();
+                                    *guard = SignInState::ChatGptSuccessMessage;
+                                    drop(guard);
+                                    request_frame.schedule_frame();
+                                }
+                            }
+                            Err(_) => {
+                                let mut guard = sign_in_state.write().unwrap();
+                                let should_update = matches!(
+                                    &*guard,
+                                    SignInState::ChatGptDeviceCode(state)
+                                        if state
+                                            .cancel
+                                            .as_ref()
+                                            .is_some_and(|c| Arc::ptr_eq(c, &cancel))
+                                );
+                                if should_update {
+                                    *guard = SignInState::PickMode;
+                                    drop(guard);
+                                    request_frame.schedule_frame();
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            return;
+        }
+
         match run_login_server(opts) {
             Ok(child) => {
                 let sign_in_state = self.sign_in_state.clone();
@@ -617,6 +849,7 @@ impl StepStateProvider for AuthModeWidget {
             SignInState::PickMode
             | SignInState::ApiKeyEntry(_)
             | SignInState::ChatGptContinueInBrowser(_)
+            | SignInState::ChatGptDeviceCode(_)
             | SignInState::ChatGptSuccessMessage => StepState::InProgress,
             SignInState::ChatGptSuccess | SignInState::ApiKeyConfigured => StepState::Complete,
         }
@@ -633,6 +866,9 @@ impl WidgetRef for AuthModeWidget {
             SignInState::ChatGptContinueInBrowser(_) => {
                 self.render_continue_in_browser(area, buf);
             }
+            SignInState::ChatGptDeviceCode(state) => {
+                self.render_device_code_login(area, buf, state);
+            }
             SignInState::ChatGptSuccessMessage => {
                 self.render_chatgpt_success_message(area, buf);
             }
@@ -647,6 +883,29 @@ impl WidgetRef for AuthModeWidget {
             }
         }
     }
+}
+
+fn env_var_set(key: &str) -> bool {
+    std::env::var(key).is_ok_and(|v| !v.trim().is_empty())
+}
+
+fn is_headless_environment() -> bool {
+    if env_var_set("CI")
+        || env_var_set("SSH_CONNECTION")
+        || env_var_set("SSH_CLIENT")
+        || env_var_set("SSH_TTY")
+    {
+        return true;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if !env_var_set("DISPLAY") && !env_var_set("WAYLAND_DISPLAY") {
+            return true;
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]

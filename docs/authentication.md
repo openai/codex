@@ -28,7 +28,18 @@ If you've used the Codex CLI before with usage-based billing via an API key and 
 
 ## Connecting on a "Headless" Machine
 
-Today, the login process entails running a server on `localhost:1455`. If you are on a "headless" server, such as a Docker container or are `ssh`'d into a remote machine, loading `localhost:1455` in the browser on your local machine will not automatically connect to the webserver running on the _headless_ machine, so you must use one of the following workarounds:
+Codex supports two ChatGPT login flows:
+
+- **Device code login** (recommended for headless): shows a one-time code in your terminal. Open the verification URL in any browser and enter the code.
+- **Browser login**: starts a local server on `localhost:1455` and completes login via a browser redirect.
+
+On headless machines (SSH, Docker, CI), Codex will automatically prefer device code login when you sign in with ChatGPT. You can also start it explicitly with:
+
+```shell
+codex login --device-auth
+```
+
+If device code login isn’t available for your environment/server, use one of the following workarounds for the browser login flow:
 
 ### Authenticate locally and copy your credentials to the "headless" machine
 
@@ -65,4 +76,6 @@ If you run Codex on a remote machine (VPS/server) without a local browser, the l
 ssh -L 1455:localhost:1455 <user>@<remote-host>
 ```
 
-Then, in that SSH session, run `codex` and select "Sign in with ChatGPT". When prompted, open the printed URL (it will be `http://localhost:1455/...`) in your local browser. The traffic will be tunneled to the remote server.
+Then, in that SSH session, run `codex` and select "Sign in with ChatGPT". When prompted, open the printed URL in your local browser. The traffic will be tunneled to the remote server.
+
+If you see a device code prompt instead, your environment was detected as headless and device code login was selected automatically.
