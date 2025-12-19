@@ -68,10 +68,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-          - runner: macos-15-xlarge
-            target: x86_64-apple-darwin
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             install_musl: true
@@ -160,6 +156,8 @@ jobs:
           mkdir -p "$staging" "$staging/vendor"
           cp codex-cli/package.json "$staging/"
           cp -R codex-cli/bin "$staging/"
+          mkdir -p "$staging/scripts"
+          cp codex-cli/scripts/verify-vendor.mjs "$staging/scripts/"
           cp README.md "$staging/"
           cp LICENSE "$staging/"
 
@@ -203,8 +201,6 @@ jobs:
           set -euo pipefail
           staging="${{ steps.staging.outputs.dir }}"
           targets=(
-            "aarch64-apple-darwin"
-            "x86_64-apple-darwin"
             "aarch64-unknown-linux-musl"
             "x86_64-unknown-linux-musl"
             "aarch64-pc-windows-msvc"
