@@ -67,6 +67,11 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                         status,
                         request_id: extract_request_id(headers.as_ref()),
                     })
+                } else if status == http::StatusCode::PRECONDITION_FAILED
+                    && body_text
+                        .contains("Models catalog has changed. Please refresh your models list.")
+                {
+                    CodexErr::OutdatedModels
                 } else {
                     CodexErr::UnexpectedStatus(UnexpectedResponseError {
                         status,
