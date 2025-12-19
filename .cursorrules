@@ -1,0 +1,63 @@
+# Cursor Rules for Codex Repository
+
+## Git Configuration
+
+### Always Use Origin Branch
+- **ALWAYS** use `origin` remote for all git operations (fetch, push, pull, etc.)
+- `origin` points to: `https://github.com/openai/codex.git` (upstream repository)
+- When creating branches, pushing, or pulling, use `origin` as the remote
+- Example commands:
+  - `git push origin <branch-name>` (not `git push fork <branch-name>`)
+  - `git pull origin main` (not `git pull fork main`)
+  - `git fetch origin` (not `git fetch fork`)
+
+### Branch Management
+- When creating PRs, push to `origin` and create PRs from your fork if needed
+- Default branch is `main` on origin
+- Always sync with `origin/main` before creating new branches
+
+### Remote Configuration
+- `origin` = upstream repository (openai/codex)
+- `fork` = personal fork (parmartejass/codex) - use only when explicitly needed
+- Prefer working with `origin` for all operations
+
+## Codex-Specific Rules
+
+### Rust Code Conventions
+- Crate names are prefixed with `codex-` (e.g., `codex-core`, `codex-tui`)
+- Always run `just fmt` after making Rust code changes
+- Run `just fix -p <project>` before finalizing changes
+- Use format! with inline variables when possible
+- Collapse if statements per Clippy recommendations
+- Use method references over closures when possible
+
+### Testing
+- Run project-specific tests: `cargo test -p codex-<project>`
+- Run complete test suite: `cargo test --all-features` (only when needed)
+- Update snapshots with `cargo insta accept -p codex-tui` when UI changes are intentional
+- Use `pretty_assertions::assert_eq` for clearer test diffs
+
+### Error Handling
+- Never silently ignore errors with `let _ =`
+- Always propagate errors properly or log them
+- Use proper error types and avoid unwrap() in production code
+- Add monitoring and logging for critical error paths
+
+### Security & Reliability
+- Review for silent errors and resource leakages
+- Add proper error handling and monitoring
+- Ensure all failure points have visibility
+- Add user feedback for critical failures
+
+## File Organization
+- Keep source code under `codex-rs/`
+- Keep tests in `tests/` folders
+- Keep documentation in `docs/`
+- Maintain modular design under `src/` structure
+
+## Commit Messages
+- Use conventional commit format: `type: description`
+- Types: feat, fix, refactor, docs, test, etc.
+- Provide detailed descriptions for complex changes
+- Reference issues/PRs when applicable
+
