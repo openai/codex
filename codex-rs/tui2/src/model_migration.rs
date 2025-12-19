@@ -114,6 +114,7 @@ pub(crate) async fn run_model_migration_prompt(
         if let Some(event) = events.next().await {
             match event {
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
+                TuiEvent::Mouse(_) => {}
                 TuiEvent::Paste(_) => {}
                 TuiEvent::Draw => {
                     let _ = alt.tui.draw(u16::MAX, |frame| {
@@ -354,7 +355,7 @@ mod tests {
                 "gpt-5.1-codex-mini",
                 "gpt-5.1-codex-max",
                 "gpt-5.1-codex-max".to_string(),
-                Some("Latest Codex-optimized flagship for deep and fast reasoning.".to_string()),
+                Some("Codex-optimized flagship for deep and fast reasoning.".to_string()),
                 true,
             ),
         );
@@ -404,7 +405,7 @@ mod tests {
                 "gpt-5-codex",
                 "gpt-5.1-codex-max",
                 "gpt-5.1-codex-max".to_string(),
-                Some("Latest Codex-optimized flagship for deep and fast reasoning.".to_string()),
+                Some("Codex-optimized flagship for deep and fast reasoning.".to_string()),
                 false,
             ),
         );

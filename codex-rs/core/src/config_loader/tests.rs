@@ -1,6 +1,11 @@
 use super::LoaderOverrides;
 use super::load_config_layers_state;
 use crate::config::CONFIG_TOML_FILE;
+use crate::config_loader::ConfigRequirements;
+use crate::config_loader::config_requirements::ConfigRequirementsToml;
+use crate::config_loader::load_requirements_toml;
+use codex_protocol::protocol::AskForApproval;
+use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 use toml::Value as TomlValue;
 
@@ -66,13 +71,24 @@ async fn returns_empty_when_all_layers_missing() {
     let layers = load_config_layers_state(tmp.path(), &[] as &[(String, TomlValue)], overrides)
         .await
         .expect("load layers");
-    let base_table = layers.user.config.as_table().expect("base table expected");
+    assert!(
+        layers.get_user_layer().is_none(),
+        "no user layer when CODEX_HOME/config.toml does not exist"
+    );
+
+    let binding = layers.effective_config();
+    let base_table = binding.as_table().expect("base table expected");
     assert!(
         base_table.is_empty(),
         "expected empty base layer when configs missing"
     );
-    assert!(
-        layers.system.is_none(),
+    let num_system_layers = layers
+        .layers_high_to_low()
+        .iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::System { .. }))
+        .count();
+    assert_eq!(
+        num_system_layers, 0,
         "managed config layer should be absent when file missing"
     );
 
@@ -135,4 +151,41 @@ flag = true
         Some(&TomlValue::String("managed".to_string()))
     );
     assert_eq!(nested.get("flag"), Some(&TomlValue::Boolean(false)));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn load_requirements_toml_produces_expected_constraints() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_file = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+allowed_approval_policies = ["never", "on-request"]
+"#,
+    )
+    .await?;
+
+    let mut config_requirements_toml = ConfigRequirementsToml::default();
+    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+
+    assert_eq!(
+        config_requirements_toml.allowed_approval_policies,
+        Some(vec![AskForApproval::Never, AskForApproval::OnRequest])
+    );
+
+    let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
+    assert_eq!(
+        config_requirements.approval_policy.value(),
+        AskForApproval::Never
+    );
+    config_requirements
+        .approval_policy
+        .can_set(&AskForApproval::Never)?;
+    assert!(
+        config_requirements
+            .approval_policy
+            .can_set(&AskForApproval::OnFailure)
+            .is_err()
+    );
+    Ok(())
 }

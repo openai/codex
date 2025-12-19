@@ -7,14 +7,13 @@ pub fn render_skills_section(skills: &[SkillMetadata]) -> Option<String> {
 
     let mut lines: Vec<String> = Vec::new();
     lines.push("## Skills".to_string());
-    lines.push("These skills are discovered at startup from ~/.codex/skills; each entry shows name, description, and file path so you can open the source for full instructions. Content is not inlined to keep context lean.".to_string());
+    lines.push("These skills are discovered at startup from multiple local sources. Each entry includes a name, description, and file path so you can open the source for full instructions.".to_string());
 
     for skill in skills {
         let path_str = skill.path.to_string_lossy().replace('\\', "/");
-        lines.push(format!(
-            "- {}: {} (file: {})",
-            skill.name, skill.description, path_str
-        ));
+        let name = skill.name.as_str();
+        let description = skill.description.as_str();
+        lines.push(format!("- {name}: {description} (file: {path_str})"));
     }
 
     lines.push(

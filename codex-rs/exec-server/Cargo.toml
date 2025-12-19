@@ -61,4 +61,3 @@ exec_server_test_support = { workspace = true }
 maplit = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
-which = { workspace = true }

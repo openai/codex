@@ -3,7 +3,6 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -19,11 +18,14 @@ use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParam;
 use rmcp::model::CallToolResult;
 use rmcp::model::CreateElicitationRequestParam;
+use rmcp::model::EmptyResult;
+use rmcp::model::ServerResult;
 use rmcp::model::object;
 use serde_json::json;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::fs::symlink;
 use tempfile::TempDir;
+use tokio::process::Command;
 
 /// Verify that when using a read-only sandbox and an execpolicy that prompts,
 /// the proper elicitation is sent. Upon auto-approving the elicitation, the
@@ -53,11 +55,11 @@ prefix_rule(
 
     // Create an MCP client that approves expected elicitation messages.
     let project_root = TempDir::new()?;
-    let git = which::which("git")?;
     let project_root_path = project_root.path().canonicalize().unwrap();
+    let git_path = resolve_git_path().await?;
     let expected_elicitation_message = format!(
         "Allow agent to run `{} init .` in `{}`?",
-        git.display(),
+        git_path,
         project_root_path.display()
     );
     let elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParam>>> = Default::default();
@@ -81,19 +83,11 @@ prefix_rule(
     } else {
         None
     };
-    notify_readable_sandbox(&project_root_path, codex_linux_sandbox_exe, &service).await?;
-
-    // TODO(mbolin): Remove this hack to remove flakiness when possible.
-    // As noted in the commentary on https://github.com/openai/codex/pull/7832,
-    // an rmcp server does not process messages serially: it takes messages off
-    // the queue and immediately dispatches them to handlers, which may complete
-    // out of order. The proper fix is to replace our custom notification with a
-    // custom request where we wait for the response before proceeding. However,
-    // rmcp does not currently support custom requests, so as a temporary
-    // workaround we just wait a bit to increase the probability the server has
-    // processed the notification. Assuming we can upstream rmcp support for
-    // custom requests, we will remove this once the functionality is available.
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    let response =
+        notify_readable_sandbox(&project_root_path, codex_linux_sandbox_exe, &service).await?;
+    let ServerResult::EmptyResult(EmptyResult {}) = response else {
+        panic!("expected EmptyResult from sandbox state notification but found: {response:?}");
+    };
 
     // Call the shell tool and verify that an elicitation was created and
     // auto-approved.
@@ -174,4 +168,24 @@ fn ensure_codex_cli() -> Result<PathBuf> {
     );
 
     Ok(codex_cli)
+}
+
+async fn resolve_git_path() -> Result<String> {
+    let git = Command::new("bash")
+        .arg("-lc")
+        .arg("command -v git")
+        .output()
+        .await
+        .context("failed to resolve git via login shell")?;
+    ensure!(
+        git.status.success(),
+        "failed to resolve git via login shell: {}",
+        String::from_utf8_lossy(&git.stderr)
+    );
+    let git_path = String::from_utf8(git.stdout)
+        .context("git path was not valid utf8")?
+        .trim()
+        .to_string();
+    ensure!(!git_path.is_empty(), "git path should not be empty");
+    Ok(git_path)
 }

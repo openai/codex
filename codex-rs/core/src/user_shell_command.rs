@@ -80,8 +80,8 @@ mod tests {
         assert!(!is_user_shell_command_text("echo hi"));
     }
 
-    #[test]
-    fn formats_basic_record() {
+    #[tokio::test]
+    async fn formats_basic_record() {
         let exec_output = ExecToolCallOutput {
             exit_code: 0,
             stdout: StreamOutput::new("hi".to_string()),
@@ -90,7 +90,7 @@ mod tests {
             duration: Duration::from_secs(1),
             timed_out: false,
         };
-        let (_, turn_context) = make_session_and_context();
+        let (_, turn_context) = make_session_and_context().await;
         let item = user_shell_command_record_item("echo hi", &exec_output, &turn_context);
         let ResponseItem::Message { content, .. } = item else {
             panic!("expected message");
@@ -104,8 +104,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn uses_aggregated_output_over_streams() {
+    #[tokio::test]
+    async fn uses_aggregated_output_over_streams() {
         let exec_output = ExecToolCallOutput {
             exit_code: 42,
             stdout: StreamOutput::new("stdout-only".to_string()),
@@ -114,7 +114,7 @@ mod tests {
             duration: Duration::from_millis(120),
             timed_out: false,
         };
-        let (_, turn_context) = make_session_and_context();
+        let (_, turn_context) = make_session_and_context().await;
         let record = format_user_shell_command_record("false", &exec_output, &turn_context);
         assert_eq!(
             record,

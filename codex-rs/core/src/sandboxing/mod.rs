@@ -85,7 +85,9 @@ impl SandboxManager {
                 crate::safety::get_platform_sandbox().unwrap_or(SandboxType::None)
             }
             SandboxablePreference::Auto => match policy {
-                SandboxPolicy::DangerFullAccess => SandboxType::None,
+                SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                    SandboxType::None
+                }
                 _ => crate::safety::get_platform_sandbox().unwrap_or(SandboxType::None),
             },
         }

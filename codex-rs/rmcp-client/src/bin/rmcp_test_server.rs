@@ -81,6 +81,7 @@ impl ServerHandler for TestToolServer {
             Ok(ListToolsResult {
                 tools: (*tools).clone(),
                 next_cursor: None,
+                meta: None,
             })
         }
     }

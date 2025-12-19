@@ -193,6 +193,10 @@ pub enum Op {
         /// When empty, the session default working directory is used.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         cwds: Vec<PathBuf>,
+
+        /// When true, recompute skills even if a cached result exists.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        force_reload: bool,
     },
 
     /// Request the agent to summarize the current conversation context.
@@ -264,6 +268,24 @@ pub enum AskForApproval {
     Never,
 }
 
+/// Represents whether outbound network access is available to the agent.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, Default, JsonSchema, TS,
+)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum NetworkAccess {
+    #[default]
+    Restricted,
+    Enabled,
+}
+
+impl NetworkAccess {
+    pub fn is_enabled(self) -> bool {
+        matches!(self, NetworkAccess::Enabled)
+    }
+}
+
 /// Determines execution restrictions for model shell commands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display, JsonSchema, TS)]
 #[strum(serialize_all = "kebab-case")]
@@ -276,6 +298,15 @@ pub enum SandboxPolicy {
     /// Read-only access to the entire file-system.
     #[serde(rename = "read-only")]
     ReadOnly,
+
+    /// Indicates the process is already in an external sandbox. Allows full
+    /// disk access while honoring the provided network setting.
+    #[serde(rename = "external-sandbox")]
+    ExternalSandbox {
+        /// Whether the external sandbox permits outbound network traffic.
+        #[serde(default)]
+        network_access: NetworkAccess,
+    },
 
     /// Same as `ReadOnly` but additionally grants write access to the current
     /// working directory ("workspace").
@@ -306,12 +337,14 @@ pub enum SandboxPolicy {
 
 /// A writable root path accompanied by a list of subpaths that should remain
 /// read‑only even when the root is writable. This is primarily used to ensure
-/// top‑level VCS metadata directories (e.g. `.git`) under a writable root are
-/// not modified by the agent.
+/// that folders containing files that could be modified to escalate the
+/// privileges of the agent (e.g. `.codex`, `.git`, notably `.git/hooks`) under
+/// a writable root are not modified by the agent.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
 pub struct WritableRoot {
     pub root: AbsolutePathBuf,
 
+    /// By construction, these subpaths are all under `root`.
     pub read_only_subpaths: Vec<AbsolutePathBuf>,
 }
 
@@ -367,6 +400,7 @@ impl SandboxPolicy {
     pub fn has_full_disk_write_access(&self) -> bool {
         match self {
             SandboxPolicy::DangerFullAccess => true,
+            SandboxPolicy::ExternalSandbox { .. } => true,
             SandboxPolicy::ReadOnly => false,
             SandboxPolicy::WorkspaceWrite { .. } => false,
         }
@@ -375,6 +409,7 @@ impl SandboxPolicy {
     pub fn has_full_network_access(&self) -> bool {
         match self {
             SandboxPolicy::DangerFullAccess => true,
+            SandboxPolicy::ExternalSandbox { network_access } => network_access.is_enabled(),
             SandboxPolicy::ReadOnly => false,
             SandboxPolicy::WorkspaceWrite { network_access, .. } => *network_access,
         }
@@ -386,6 +421,7 @@ impl SandboxPolicy {
     pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<WritableRoot> {
         match self {
             SandboxPolicy::DangerFullAccess => Vec::new(),
+            SandboxPolicy::ExternalSandbox { .. } => Vec::new(),
             SandboxPolicy::ReadOnly => Vec::new(),
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
@@ -457,6 +493,13 @@ impl SandboxPolicy {
                             .expect(".git is a valid relative path");
                         if top_level_git.as_path().is_dir() {
                             subpaths.push(top_level_git);
+                        }
+                        #[allow(clippy::expect_used)]
+                        let top_level_codex = writable_root
+                            .join(".codex")
+                            .expect(".codex is a valid relative path");
+                        if top_level_codex.as_path().is_dir() {
+                            subpaths.push(top_level_codex);
                         }
                         WritableRoot {
                             root: writable_root,
@@ -599,6 +642,9 @@ pub enum EventMsg {
 
     /// List of skills available to the agent.
     ListSkillsResponse(ListSkillsResponseEvent),
+
+    /// Notification that skill data may have been updated and clients may want to reload.
+    SkillsUpdateAvailable,
 
     PlanUpdate(UpdatePlanArgs),
 
@@ -1674,12 +1720,17 @@ pub struct ListSkillsResponseEvent {
 pub enum SkillScope {
     User,
     Repo,
+    System,
+    Admin,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SkillMetadata {
     pub name: String,
     pub description: String,
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_description: Option<String>,
     pub path: PathBuf,
     pub scope: SkillScope,
 }
@@ -1809,6 +1860,21 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn external_sandbox_reports_full_access_flags() {
+        let restricted = SandboxPolicy::ExternalSandbox {
+            network_access: NetworkAccess::Restricted,
+        };
+        assert!(restricted.has_full_disk_write_access());
+        assert!(!restricted.has_full_network_access());
+
+        let enabled = SandboxPolicy::ExternalSandbox {
+            network_access: NetworkAccess::Enabled,
+        };
+        assert!(enabled.has_full_disk_write_access());
+        assert!(enabled.has_full_network_access());
+    }
 
     #[test]
     fn item_started_event_from_web_search_emits_begin_event() {

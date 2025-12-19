@@ -15,6 +15,7 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ContextCompactedNotification;
+use codex_app_server_protocol::DeprecationNoticeNotification;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
@@ -31,6 +32,7 @@ use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
+use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
@@ -282,6 +284,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::ContextCompacted(notification))
                 .await;
         }
+        EventMsg::DeprecationNotice(event) => {
+            let notification = DeprecationNoticeNotification {
+                summary: event.summary,
+                details: event.details,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::DeprecationNotice(notification))
+                .await;
+        }
         EventMsg::ReasoningContentDelta(event) => {
             let notification = ReasoningSummaryTextDeltaNotification {
                 thread_id: conversation_id.to_string(),
@@ -450,6 +461,16 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(completed))
                 .await;
+        }
+        EventMsg::RawResponseItem(raw_response_item_event) => {
+            maybe_emit_raw_response_item_completed(
+                api_version,
+                conversation_id,
+                &event_turn_id,
+                raw_response_item_event.item,
+                outgoing.as_ref(),
+            )
+            .await;
         }
         EventMsg::PatchApplyBegin(patch_begin_event) => {
             // Until we migrate the core to be aware of a first class FileChangeItem
@@ -817,6 +838,27 @@ async fn complete_command_execution_item(
     };
     outgoing
         .send_server_notification(ServerNotification::ItemCompleted(notification))
+        .await;
+}
+
+async fn maybe_emit_raw_response_item_completed(
+    api_version: ApiVersion,
+    conversation_id: ConversationId,
+    turn_id: &str,
+    item: codex_protocol::models::ResponseItem,
+    outgoing: &OutgoingMessageSender,
+) {
+    let ApiVersion::V2 = api_version else {
+        return;
+    };
+
+    let notification = RawResponseItemCompletedNotification {
+        thread_id: conversation_id.to_string(),
+        turn_id: turn_id.to_string(),
+        item,
+    };
+    outgoing
+        .send_server_notification(ServerNotification::RawResponseItemCompleted(notification))
         .await;
 }
 

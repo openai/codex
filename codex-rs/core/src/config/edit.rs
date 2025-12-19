@@ -90,7 +90,7 @@ mod document_helpers {
         }
     }
 
-    pub(super) fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
+    fn serialize_mcp_server_table(config: &McpServerConfig) -> TomlTable {
         let mut entry = TomlTable::new();
         entry.set_implicit(false);
 
@@ -161,7 +161,29 @@ mod document_helpers {
             entry["disabled_tools"] = array_from_iter(disabled_tools.iter().cloned());
         }
 
-        TomlItem::Table(entry)
+        entry
+    }
+
+    pub(super) fn serialize_mcp_server(config: &McpServerConfig) -> TomlItem {
+        TomlItem::Table(serialize_mcp_server_table(config))
+    }
+
+    pub(super) fn serialize_mcp_server_inline(config: &McpServerConfig) -> InlineTable {
+        serialize_mcp_server_table(config).into_inline_table()
+    }
+
+    pub(super) fn merge_inline_table(existing: &mut InlineTable, replacement: InlineTable) {
+        existing.retain(|key, _| replacement.get(key).is_some());
+
+        for (key, value) in replacement.iter() {
+            if let Some(existing_value) = existing.get_mut(key) {
+                let mut updated_value = value.clone();
+                *updated_value.decor_mut() = existing_value.decor().clone();
+                *existing_value = updated_value;
+            } else {
+                existing.insert(key.to_string(), value.clone());
+            }
+        }
     }
 
     fn table_from_inline(inline: &InlineTable) -> TomlTable {
@@ -317,15 +339,52 @@ impl ConfigDocument {
             return self.clear(Scope::Global, &["mcp_servers"]);
         }
 
-        let mut table = TomlTable::new();
-        table.set_implicit(true);
-
-        for (name, config) in servers {
-            table.insert(name, document_helpers::serialize_mcp_server(config));
+        let root = self.doc.as_table_mut();
+        if !root.contains_key("mcp_servers") {
+            root.insert(
+                "mcp_servers",
+                TomlItem::Table(document_helpers::new_implicit_table()),
+            );
         }
 
-        let item = TomlItem::Table(table);
-        self.write_value(Scope::Global, &["mcp_servers"], item)
+        let Some(item) = root.get_mut("mcp_servers") else {
+            return false;
+        };
+
+        if document_helpers::ensure_table_for_write(item).is_none() {
+            *item = TomlItem::Table(document_helpers::new_implicit_table());
+        }
+
+        let Some(table) = item.as_table_mut() else {
+            return false;
+        };
+
+        let keys_to_remove: Vec<String> = table
+            .iter()
+            .map(|(key, _)| key.to_string())
+            .filter(|key| !servers.contains_key(key.as_str()))
+            .collect();
+
+        for key in keys_to_remove {
+            table.remove(&key);
+        }
+
+        for (name, config) in servers {
+            if let Some(existing) = table.get_mut(name.as_str()) {
+                if let TomlItem::Value(value) = existing
+                    && let Some(inline) = value.as_inline_table_mut()
+                {
+                    let replacement = document_helpers::serialize_mcp_server_inline(config);
+                    document_helpers::merge_inline_table(inline, replacement);
+                } else {
+                    *existing = document_helpers::serialize_mcp_server(config);
+                }
+            } else {
+                table.insert(name, document_helpers::serialize_mcp_server(config));
+            }
+        }
+
+        true
     }
 
     fn scoped_segments(&self, scope: Scope, segments: &[&str]) -> Vec<String> {
@@ -357,6 +416,10 @@ impl ConfigDocument {
             return false;
         };
 
+        let mut value = value;
+        if let Some(existing) = parent.get(last) {
+            Self::preserve_decor(existing, &mut value);
+        }
         parent[last] = value;
         true
     }
@@ -397,6 +460,37 @@ impl ConfigDocument {
         }
 
         Some(current)
+    }
+
+    fn preserve_decor(existing: &TomlItem, replacement: &mut TomlItem) {
+        match (existing, replacement) {
+            (TomlItem::Table(existing_table), TomlItem::Table(replacement_table)) => {
+                replacement_table
+                    .decor_mut()
+                    .clone_from(existing_table.decor());
+                for (key, existing_item) in existing_table.iter() {
+                    if let (Some(existing_key), Some(mut replacement_key)) =
+                        (existing_table.key(key), replacement_table.key_mut(key))
+                    {
+                        replacement_key
+                            .leaf_decor_mut()
+                            .clone_from(existing_key.leaf_decor());
+                        replacement_key
+                            .dotted_decor_mut()
+                            .clone_from(existing_key.dotted_decor());
+                    }
+                    if let Some(replacement_item) = replacement_table.get_mut(key) {
+                        Self::preserve_decor(existing_item, replacement_item);
+                    }
+                }
+            }
+            (TomlItem::Value(existing_value), TomlItem::Value(replacement_value)) => {
+                replacement_value
+                    .decor_mut()
+                    .clone_from(existing_value.decor());
+            }
+            _ => {}
+        }
     }
 }
 
@@ -600,7 +694,6 @@ mod tests {
     use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
-    use tokio::runtime::Builder;
     use toml::Value as TomlValue;
 
     #[test]
@@ -689,6 +782,68 @@ profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
             fast_tbl.get("model").and_then(|v| v.as_str()),
             Some("o4-mini")
         );
+    }
+
+    #[test]
+    fn batch_write_table_upsert_preserves_inline_comments() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        let original = r#"approval_policy = "never"
+
+[mcp_servers.linear]
+name = "linear"
+# ok
+url = "https://linear.example"
+
+[mcp_servers.linear.http_headers]
+foo = "bar"
+
+[sandbox_workspace_write]
+# ok 3
+network_access = false
+"#;
+        std::fs::write(codex_home.join(CONFIG_TOML_FILE), original).expect("seed config");
+
+        apply_blocking(
+            codex_home,
+            None,
+            &[
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "mcp_servers".to_string(),
+                        "linear".to_string(),
+                        "url".to_string(),
+                    ],
+                    value: value("https://linear.example/v2"),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "sandbox_workspace_write".to_string(),
+                        "network_access".to_string(),
+                    ],
+                    value: value(true),
+                },
+            ],
+        )
+        .expect("apply");
+
+        let updated =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"approval_policy = "never"
+
+[mcp_servers.linear]
+name = "linear"
+# ok
+url = "https://linear.example/v2"
+
+[mcp_servers.linear.http_headers]
+foo = "bar"
+
+[sandbox_workspace_write]
+# ok 3
+network_access = true
+"#;
+        assert_eq!(updated, expected);
     }
 
     #[test]
@@ -1029,6 +1184,178 @@ B = \"2\"
     }
 
     #[test]
+    fn blocking_replace_mcp_servers_preserves_inline_comments() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        std::fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            r#"[mcp_servers]
+# keep me
+foo = { command = "cmd" }
+"#,
+        )
+        .expect("seed");
+
+        let mut servers = BTreeMap::new();
+        servers.insert(
+            "foo".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "cmd".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+        );
+
+        apply_blocking(codex_home, None, &[ConfigEdit::ReplaceMcpServers(servers)])
+            .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[mcp_servers]
+# keep me
+foo = { command = "cmd" }
+"#;
+        assert_eq!(contents, expected);
+    }
+
+    #[test]
+    fn blocking_replace_mcp_servers_preserves_inline_comment_suffix() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        std::fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            r#"[mcp_servers]
+foo = { command = "cmd" } # keep me
+"#,
+        )
+        .expect("seed");
+
+        let mut servers = BTreeMap::new();
+        servers.insert(
+            "foo".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "cmd".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: false,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+        );
+
+        apply_blocking(codex_home, None, &[ConfigEdit::ReplaceMcpServers(servers)])
+            .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[mcp_servers]
+foo = { command = "cmd" , enabled = false } # keep me
+"#;
+        assert_eq!(contents, expected);
+    }
+
+    #[test]
+    fn blocking_replace_mcp_servers_preserves_inline_comment_after_removing_keys() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        std::fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            r#"[mcp_servers]
+foo = { command = "cmd", args = ["--flag"] } # keep me
+"#,
+        )
+        .expect("seed");
+
+        let mut servers = BTreeMap::new();
+        servers.insert(
+            "foo".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "cmd".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+        );
+
+        apply_blocking(codex_home, None, &[ConfigEdit::ReplaceMcpServers(servers)])
+            .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[mcp_servers]
+foo = { command = "cmd"} # keep me
+"#;
+        assert_eq!(contents, expected);
+    }
+
+    #[test]
+    fn blocking_replace_mcp_servers_preserves_inline_comment_prefix_on_update() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        std::fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            r#"[mcp_servers]
+# keep me
+foo = { command = "cmd" }
+"#,
+        )
+        .expect("seed");
+
+        let mut servers = BTreeMap::new();
+        servers.insert(
+            "foo".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "cmd".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: false,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+            },
+        );
+
+        apply_blocking(codex_home, None, &[ConfigEdit::ReplaceMcpServers(servers)])
+            .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[mcp_servers]
+# keep me
+foo = { command = "cmd" , enabled = false }
+"#;
+        assert_eq!(contents, expected);
+    }
+
+    #[test]
     fn blocking_clear_path_noop_when_missing() {
         let tmp = tempdir().expect("tmpdir");
         let codex_home = tmp.path();
@@ -1127,22 +1454,16 @@ model_reasoning_effort = "high"
         assert_eq!(contents, initial_expected);
     }
 
-    #[test]
-    fn blocking_set_asynchronous_helpers_available() {
-        let rt = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+    #[tokio::test]
+    async fn blocking_set_asynchronous_helpers_available() {
         let tmp = tempdir().expect("tmpdir");
         let codex_home = tmp.path().to_path_buf();
 
-        rt.block_on(async {
-            ConfigEditsBuilder::new(&codex_home)
-                .set_hide_full_access_warning(true)
-                .apply()
-                .await
-                .expect("persist");
-        });
+        ConfigEditsBuilder::new(&codex_home)
+            .set_hide_full_access_warning(true)
+            .apply()
+            .await
+            .expect("persist");
 
         let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         let notice = toml::from_str::<TomlValue>(&raw)
