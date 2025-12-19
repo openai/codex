@@ -33,8 +33,12 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::ev_shell_command_call;
 use core_test_support::responses::mount_models_once;
+use core_test_support::responses::mount_models_once_with_etag;
+use core_test_support::responses::mount_response_once_match;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
@@ -42,6 +46,7 @@ use core_test_support::skip_if_sandbox;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::Duration;
@@ -49,8 +54,91 @@ use tokio::time::Instant;
 use tokio::time::sleep;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
 
 const REMOTE_MODEL_SLUG: &str = "codex-test";
+
+#[derive(Clone, Default)]
+struct ResponsesMatch {
+    etag: Option<String>,
+    user_text: Option<String>,
+    call_id: Option<String>,
+}
+
+impl ResponsesMatch {
+    fn with_etag(mut self, etag: &str) -> Self {
+        self.etag = Some(etag.to_string());
+        self
+    }
+
+    fn with_user_text(mut self, text: &str) -> Self {
+        self.user_text = Some(text.to_string());
+        self
+    }
+
+    fn with_function_call_output(mut self, call_id: &str) -> Self {
+        self.call_id = Some(call_id.to_string());
+        self
+    }
+}
+
+impl wiremock::Match for ResponsesMatch {
+    fn matches(&self, request: &wiremock::Request) -> bool {
+        if let Some(expected_etag) = &self.etag {
+            let header = request
+                .headers
+                .get("X-If-Models-Match")
+                .and_then(|value| value.to_str().ok());
+            if header != Some(expected_etag.as_str()) {
+                return false;
+            }
+        }
+
+        let Ok(body): Result<Value, _> = request.body_json() else {
+            return false;
+        };
+        let Some(items) = body.get("input").and_then(Value::as_array) else {
+            return false;
+        };
+
+        if let Some(expected_text) = &self.user_text
+            && !input_has_user_text(items, expected_text)
+        {
+            return false;
+        }
+
+        if let Some(expected_call_id) = &self.call_id
+            && !input_has_function_call_output(items, expected_call_id)
+        {
+            return false;
+        }
+
+        true
+    }
+}
+
+fn input_has_user_text(items: &[Value], expected: &str) -> bool {
+    items.iter().any(|item| {
+        item.get("type").and_then(Value::as_str) == Some("message")
+            && item.get("role").and_then(Value::as_str) == Some("user")
+            && item
+                .get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|content| {
+                    content.iter().any(|span| {
+                        span.get("type").and_then(Value::as_str) == Some("input_text")
+                            && span.get("text").and_then(Value::as_str) == Some(expected)
+                    })
+                })
+    })
+}
+
+fn input_has_function_call_output(items: &[Value], call_id: &str) -> bool {
+    items.iter().any(|item| {
+        item.get("type").and_then(Value::as_str) == Some("function_call_output")
+            && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+    })
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
@@ -298,6 +386,192 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
+        .start()
+        .await;
+
+    let remote_model = test_remote_model("remote-etag", ModelVisibility::List, 1);
+    let initial_etag = "models-etag-initial";
+    let refreshed_etag = "models-etag-refreshed";
+
+    // Phase 1: start Codex with remote models and capture the initial ETag.
+    let models_mock = mount_models_once_with_etag(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model.clone()],
+        },
+        initial_etag,
+    )
+    .await;
+
+    let harness = build_remote_models_harness(&server, |config| {
+        config.features.enable(Feature::RemoteModels);
+        config.model = Some("gpt-5.1".to_string());
+    })
+    .await?;
+
+    let RemoteModelsHarness {
+        codex,
+        cwd,
+        config,
+        conversation_manager,
+        ..
+    } = harness;
+
+    let models_manager = conversation_manager.get_models_manager();
+    wait_for_model_available(&models_manager, "remote-etag", &config).await;
+
+    assert_eq!(
+        models_manager.get_models_etag().await.as_deref(),
+        Some(initial_etag),
+    );
+    assert_eq!(
+        models_mock.requests().len(),
+        1,
+        "expected an initial /models request",
+    );
+    assert_eq!(models_mock.requests()[0].url.path(), "/v1/models");
+
+    // Phase 2: the tool output turn hits a 412 and triggers a models refresh.
+    server.reset().await;
+    let refreshed_models_mock = mount_models_once_with_etag(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+        refreshed_etag,
+    )
+    .await;
+
+    let call_id = "shell-command-call";
+    let first_prompt = "run a shell command";
+    let followup_prompt = "send another message";
+
+    let first_response = mount_sse_once_match(
+        &server,
+        ResponsesMatch::default()
+            .with_etag(initial_etag)
+            .with_user_text(first_prompt),
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_shell_command_call(call_id, "echo refreshed"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let stale_response = mount_response_once_match(
+        &server,
+        ResponsesMatch::default()
+            .with_etag(initial_etag)
+            .with_function_call_output(call_id),
+        ResponseTemplate::new(412)
+            .set_body_string("Models catalog has changed. Please refresh your models list."),
+    )
+    .await;
+
+    let refreshed_response = mount_sse_once_match(
+        &server,
+        ResponsesMatch::default()
+            .with_etag(refreshed_etag)
+            .with_function_call_output(call_id),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    // Phase 3: the next user turn should send the refreshed ETag.
+    let next_turn_response = mount_sse_once_match(
+        &server,
+        ResponsesMatch::default()
+            .with_etag(refreshed_etag)
+            .with_user_text(followup_prompt),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("msg-2", "ok"),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: first_prompt.into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: "gpt-5.1".to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    assert_eq!(
+        refreshed_models_mock.requests().len(),
+        1,
+        "expected a refreshed /models request",
+    );
+    assert_eq!(
+        models_manager.get_models_etag().await.as_deref(),
+        Some(refreshed_etag),
+    );
+
+    assert_eq!(
+        first_response.single_request().header("X-If-Models-Match"),
+        Some(initial_etag.to_string()),
+    );
+    assert_eq!(
+        stale_response.single_request().header("X-If-Models-Match"),
+        Some(initial_etag.to_string()),
+    );
+    assert_eq!(
+        refreshed_response
+            .single_request()
+            .header("X-If-Models-Match"),
+        Some(refreshed_etag.to_string()),
+    );
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: followup_prompt.into(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: "gpt-5.1".to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+
+    assert_eq!(
+        next_turn_response
+            .single_request()
+            .header("X-If-Models-Match"),
+        Some(refreshed_etag.to_string()),
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_preserve_builtin_presets() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -327,7 +601,7 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
     );
 
     manager
-        .refresh_available_models(&config)
+        .try_refresh_available_models(&config)
         .await
         .expect("refresh succeeds");
 
