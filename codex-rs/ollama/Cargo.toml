@@ -17,6 +17,7 @@ bytes = { workspace = true }
 codex-core = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
+semver = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
@@ -27,7 +28,6 @@ tokio = { workspace = true, features = [
 ] }
 tracing = { workspace = true, features = ["log"] }
 wiremock = { workspace = true }
-semver = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
