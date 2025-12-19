@@ -7,8 +7,6 @@ use std::sync::LazyLock;
 
 const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
 
-use crate::powershell::strip_utf8_output_prefix;
-
 /// On Windows, we conservatively allow only clearly read-only PowerShell invocations
 /// that match a small safelist. Anything else (including direct CMD commands) is unsafe.
 pub fn is_safe_command_windows(command: &[String]) -> bool {
@@ -100,7 +98,6 @@ fn parse_powershell_invocation(executable: &str, args: &[String]) -> Option<Vec<
 /// Tokenizes an inline PowerShell script and delegates to the command splitter.
 /// Examples of when this is called: pwsh.exe -Command '<script>' or pwsh.exe -Command:<script>
 fn parse_powershell_script(executable: &str, script: &str) -> Option<Vec<Vec<String>>> {
-    let script = strip_utf8_output_prefix(script);
     if let PowershellParseOutcome::Commands(commands) =
         parse_with_powershell_ast(executable, script)
     {

@@ -3,14 +3,13 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::powershell::prefix_utf8_output;
 use crate::shell_snapshot::ShellSnapshot;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum ShellType {
     Zsh,
     Bash,
-    PowerShell { utf8_enabled: bool },
+    PowerShell,
     Sh,
     Cmd,
 }
@@ -46,18 +45,14 @@ impl Shell {
                     command.to_string(),
                 ]
             }
-            ShellType::PowerShell { utf8_enabled } => {
+            ShellType::PowerShell => {
                 let mut args = vec![self.shell_path.to_string_lossy().to_string()];
                 if !use_login_shell {
                     args.push("-NoProfile".to_string());
                 }
 
                 args.push("-Command".to_string());
-                if utf8_enabled {
-                    args.push(prefix_utf8_output(command));
-                } else {
-                    args.push(command.to_string());
-                }
+                args.push(command.to_string());
                 args
             }
             ShellType::Cmd => {
@@ -168,24 +163,17 @@ fn get_sh_shell(path: Option<&PathBuf>) -> Option<Shell> {
     })
 }
 
-fn get_powershell_shell(path: Option<&PathBuf>, utf8_enabled: bool) -> Option<Shell> {
+fn get_powershell_shell(path: Option<&PathBuf>) -> Option<Shell> {
     let shell_path = get_shell_path(
-        ShellType::PowerShell { utf8_enabled },
+        ShellType::PowerShell,
         path,
         "pwsh",
         vec!["/usr/local/bin/pwsh"],
     )
-    .or_else(|| {
-        get_shell_path(
-            ShellType::PowerShell { utf8_enabled },
-            path,
-            "powershell",
-            vec![],
-        )
-    });
+    .or_else(|| get_shell_path(ShellType::PowerShell, path, "powershell", vec![]));
 
     shell_path.map(|shell_path| Shell {
-        shell_type: ShellType::PowerShell { utf8_enabled },
+        shell_type: ShellType::PowerShell,
         shell_path,
         shell_snapshot: None,
     })
@@ -227,30 +215,26 @@ pub fn get_shell(shell_type: ShellType, path: Option<&PathBuf>) -> Option<Shell>
     match shell_type {
         ShellType::Zsh => get_zsh_shell(path),
         ShellType::Bash => get_bash_shell(path),
-        ShellType::PowerShell { utf8_enabled } => get_powershell_shell(path, utf8_enabled),
+        ShellType::PowerShell => get_powershell_shell(path),
         ShellType::Sh => get_sh_shell(path),
         ShellType::Cmd => get_cmd_shell(path),
     }
 }
 
-pub fn detect_shell_type(command: &[String]) -> Option<ShellType> {
+pub fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
     match shell_path.as_os_str().to_str() {
         Some("zsh") => Some(ShellType::Zsh),
         Some("sh") => Some(ShellType::Sh),
         Some("cmd") => Some(ShellType::Cmd),
         Some("bash") => Some(ShellType::Bash),
-        Some("pwsh") => Some(ShellType::PowerShell {
-            utf8_enabled: powershell_utf8_enabled,
-        }),
-        Some("powershell") => Some(ShellType::PowerShell {
-            utf8_enabled: powershell_utf8_enabled,
-        }),
+        Some("pwsh") => Some(ShellType::PowerShell),
+        Some("powershell") => Some(ShellType::PowerShell),
         _ => {
             let shell_name = shell_path.file_stem();
             if let Some(shell_name) = shell_name
                 && shell_name != shell_path
             {
-                detect_shell_type(&PathBuf::from(shell_name), powershell_utf8_enabled)
+                detect_shell_type(&PathBuf::from(shell_name))
             } else {
                 None
             }
@@ -258,25 +242,16 @@ pub fn detect_shell_type(command: &[String]) -> Option<ShellType> {
     }
 }
 
-pub fn default_user_shell(powershell_utf8_enabled: bool) -> Shell {
-    default_user_shell_from_path(get_user_shell_path(), powershell_utf8_enabled)
+pub fn default_user_shell() -> Shell {
+    default_user_shell_from_path(get_user_shell_path())
 }
 
-fn default_user_shell_from_path(
-    user_shell_path: Option<PathBuf>,
-    powershell_utf8_enabled: bool,
-) -> Shell {
+fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> Shell {
     if cfg!(windows) {
-        get_shell(
-            ShellType::PowerShell {
-                utf8_enabled: powershell_utf8_enabled,
-            },
-            None,
-        )
-        .unwrap_or(ultimate_fallback_shell())
+        get_shell(ShellType::PowerShell, None).unwrap_or(ultimate_fallback_shell())
     } else {
         let user_default_shell = user_shell_path
-            .and_then(|shell| detect_shell_type(&shell, powershell_utf8_enabled))
+            .and_then(|shell| detect_shell_type(&shell))
             .and_then(|shell_type| get_shell(shell_type, None));
 
         let shell_with_fallback = if cfg!(target_os = "macos") {
@@ -496,23 +471,6 @@ mod tests {
                 "pwsh.exe".to_string(),
                 "-Command".to_string(),
                 "echo hello".to_string(),
-            ]
-        );
-        assert_eq!(
-            test_powershell_shell.derive_exec_args("echo hello", false),
-            vec![
-                "pwsh.exe".to_string(),
-                "-NoProfile".to_string(),
-                "-Command".to_string(),
-                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\necho hello".to_string(),
-            ]
-        );
-        assert_eq!(
-            test_powershell_shell.derive_exec_args("echo hello", true),
-            vec![
-                "pwsh.exe".to_string(),
-                "-Command".to_string(),
-                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\necho hello".to_string(),
             ]
         );
     }

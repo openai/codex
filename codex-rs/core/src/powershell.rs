@@ -12,22 +12,24 @@ const POWERSHELL_FLAGS: &[&str] = &["-nologo", "-noprofile", "-command", "-c"];
 pub(crate) const UTF8_OUTPUT_PREFIX: &str =
     "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\n";
 
-pub(crate) fn prefix_utf8_output(script: &str) -> String {
+pub(crate) fn prefix_powershell_script_with_utf8(command: &[String]) -> Vec<String> {
+    let Some((_, script)) = extract_powershell_command(command) else {
+        return command.to_vec();
+    };
+
     let trimmed = script.trim_start();
-    if trimmed.starts_with(UTF8_OUTPUT_PREFIX) {
+    let script = if trimmed.starts_with(UTF8_OUTPUT_PREFIX) {
         script.to_string()
     } else {
         format!("{UTF8_OUTPUT_PREFIX}{script}")
-    }
-}
+    };
 
-pub(crate) fn strip_utf8_output_prefix(script: &str) -> &str {
-    let trimmed = script.trim_start();
-    if let Some(rest) = trimmed.strip_prefix(UTF8_OUTPUT_PREFIX) {
-        rest.trim_start_matches(|c: char| c.is_whitespace() || c == ';')
-    } else {
-        script
-    }
+    let mut command: Vec<String> = command[..command.len()]
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
+    command.push(script);
+    command
 }
 
 /// Extract the PowerShell script body from an invocation such as:
@@ -61,8 +63,7 @@ pub fn extract_powershell_command(command: &[String]) -> Option<(&str, &str)> {
         }
         if flag.eq_ignore_ascii_case("-Command") || flag.eq_ignore_ascii_case("-c") {
             let script = &command[i + 1];
-            let stripped = strip_utf8_output_prefix(script);
-            return Some((shell, stripped));
+            return Some((shell, script));
         }
         i += 1;
     }
@@ -206,16 +207,5 @@ mod tests {
         ];
         let (_shell, script) = extract_powershell_command(&cmd).expect("extract");
         assert_eq!(script, "Get-ChildItem | Select-String foo");
-    }
-
-    #[test]
-    fn strips_utf8_prefix_when_present() {
-        let cmd = vec![
-            "powershell".to_string(),
-            "-Command".to_string(),
-            format!("{UTF8_OUTPUT_PREFIX}Write-Host hi"),
-        ];
-        let (_shell, script) = extract_powershell_command(&cmd).expect("extract");
-        assert_eq!(script, "Write-Host hi");
     }
 }
