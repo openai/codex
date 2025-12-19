@@ -45,6 +45,8 @@ pub(crate) fn start_streaming_output(
         use tokio::sync::broadcast::error::RecvError;
 
         let mut pending = Vec::<u8>::new();
+        let mut lagged_count = 0u64;
+        let mut last_log_time = Instant::now();
 
         let mut grace_sleep: Option<Pin<Box<Sleep>>> = None;
 
@@ -67,7 +69,20 @@ pub(crate) fn start_streaming_output(
                 received = receiver.recv() => {
                     let chunk = match received {
                         Ok(chunk) => chunk,
-                        Err(RecvError::Lagged(_)) => {
+                        Err(RecvError::Lagged(lag_count)) => {
+                            lagged_count += lag_count as u64;
+
+                            // Log every 10 seconds if we're losing messages
+                            if last_log_time.elapsed() > std::time::Duration::from_secs(10) {
+                                if lagged_count > 0 {
+                                    tracing::warn!(
+                                        "Unified exec output channel lagging, dropped {} messages for call_id {}",
+                                        lagged_count, call_id
+                                    );
+                                    lagged_count = 0;
+                                    last_log_time = Instant::now();
+                                }
+                            }
                             continue;
                         },
                         Err(RecvError::Closed) => {

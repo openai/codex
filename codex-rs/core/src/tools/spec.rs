@@ -1106,6 +1106,8 @@ pub(crate) fn build_specs(
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
+        let mut failed_tools = Vec::new();
+
         for (name, tool) in entries.into_iter() {
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
                 Ok(converted_tool) => {
@@ -1113,8 +1115,27 @@ pub(crate) fn build_specs(
                     builder.register_handler(name, mcp_handler.clone());
                 }
                 Err(e) => {
-                    tracing::error!("Failed to convert {name:?} MCP tool to OpenAI tool: {e:?}");
+                    tracing::error!("Failed to convert MCP tool '{name}' to OpenAI tool: {e:?}");
+                    failed_tools.push((name, e.to_string()));
                 }
+            }
+        }
+
+        if !failed_tools.is_empty() {
+            tracing::warn!(
+                "Failed to load {} out of {} MCP tools. These tools will not be available. \
+                 Check MCP server configuration and tool schemas.",
+                failed_tools.len(),
+                failed_tools.len() + builder.specs().len().saturating_sub(failed_tools.len())
+            );
+
+            // Log first few failed tools with more detail
+            for (name, error) in failed_tools.iter().take(3) {
+                tracing::debug!("MCP tool '{name}' failed conversion: {error}");
+            }
+
+            if failed_tools.len() > 3 {
+                tracing::debug!("... and {} more MCP tools failed to convert", failed_tools.len() - 3);
             }
         }
     }

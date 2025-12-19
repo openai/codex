@@ -511,7 +511,7 @@ impl App {
         event: TuiEvent,
     ) -> Result<bool> {
         if self.overlay.is_some() {
-            let _ = self.handle_backtrack_overlay_event(tui, event).await?;
+            return self.handle_backtrack_overlay_event(tui, event).await;
         } else {
             match event {
                 TuiEvent::Key(key_event) => {

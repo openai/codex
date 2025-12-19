@@ -79,7 +79,9 @@ struct PreparedSessionHandles {
 
 impl UnifiedExecSessionManager {
     pub(crate) async fn allocate_process_id(&self) -> String {
-        loop {
+        const MAX_ALLOCATION_ATTEMPTS: usize = 1000;
+
+        for attempt in 0..MAX_ALLOCATION_ATTEMPTS {
             let mut store = self.session_store.lock().await;
 
             let process_id = if !cfg!(test) && !cfg!(feature = "deterministic_process_ids") {
@@ -105,11 +107,47 @@ impl UnifiedExecSessionManager {
             store.reserved_sessions_id.insert(process_id.clone());
             return process_id;
         }
+
+        // Fallback: if we can't find a free ID after many attempts,
+        // generate a timestamp-based ID that's unlikely to collide
+        let timestamp_id = format!("ts_{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis());
+
+        let mut store = self.session_store.lock().await;
+        store.reserved_sessions_id.insert(timestamp_id.clone());
+        timestamp_id
     }
 
     pub(crate) async fn release_process_id(&self, process_id: &str) {
         let mut store = self.session_store.lock().await;
         store.remove(process_id);
+    }
+
+    /// Log current session manager statistics for monitoring and debugging
+    pub(crate) async fn log_stats(&self) {
+        let store = self.session_store.lock().await;
+        let session_count = store.sessions.len();
+        let reserved_ids_count = store.reserved_sessions_id.len();
+
+        if session_count > 0 || reserved_ids_count > 0 {
+            tracing::info!(
+                "UnifiedExec session stats: {} active sessions, {} reserved process IDs",
+                session_count,
+                reserved_ids_count
+            );
+        }
+
+        // Warn if we're approaching capacity limits
+        if session_count >= WARNING_UNIFIED_EXEC_SESSIONS {
+            tracing::warn!(
+                "UnifiedExec sessions at {} (warning threshold: {}, max: {})",
+                session_count,
+                WARNING_UNIFIED_EXEC_SESSIONS,
+                MAX_UNIFIED_EXEC_SESSIONS
+            );
+        }
     }
 
     pub(crate) async fn exec_command(

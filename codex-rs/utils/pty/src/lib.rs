@@ -217,8 +217,14 @@ pub async fn spawn_pty_process(
             while let Some(bytes) = writer_rx.recv().await {
                 let mut guard = writer.lock().await;
                 use std::io::Write;
-                let _ = guard.write_all(&bytes);
-                let _ = guard.flush();
+                if let Err(e) = guard.write_all(&bytes) {
+                    tracing::warn!("Failed to write to PTY: {}", e);
+                    break;
+                }
+                if let Err(e) = guard.flush() {
+                    tracing::warn!("Failed to flush PTY: {}", e);
+                    break;
+                }
             }
         }
     });
