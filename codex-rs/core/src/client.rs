@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::RwLock;
 
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
@@ -58,8 +57,8 @@ use crate::tools::spec::create_tools_json_for_responses_api;
 pub struct ModelClient {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
-    model_family: RwLock<ModelFamily>,
-    models_etag: RwLock<Option<String>>,
+    model_family: ModelFamily,
+    models_etag: Option<String>,
     otel_manager: OtelManager,
     provider: ModelProviderInfo,
     conversation_id: ConversationId,
@@ -85,8 +84,8 @@ impl ModelClient {
         Self {
             config,
             auth_manager,
-            model_family: RwLock::new(model_family),
-            models_etag: RwLock::new(models_etag),
+            model_family,
+            models_etag,
             otel_manager,
             provider,
             conversation_id,
@@ -110,22 +109,6 @@ impl ModelClient {
 
     pub fn provider(&self) -> &ModelProviderInfo {
         &self.provider
-    }
-
-    pub fn update_models_etag(&self, models_etag: Option<String>) {
-        let mut guard = self
-            .models_etag
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = models_etag;
-    }
-
-    pub fn update_model_family(&self, model_family: ModelFamily) {
-        let mut guard = self
-            .model_family
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = model_family;
     }
 
     /// Streams a single model turn using either the Responses or Chat
@@ -167,7 +150,7 @@ impl ModelClient {
 
         let auth_manager = self.auth_manager.clone();
         let model_family = self.get_model_family();
-        let instructions = prompt.get_full_instructions(&model_family).into_owned();
+        let instructions = prompt.get_full_instructions(model_family).into_owned();
         let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
         let api_prompt = build_api_prompt(prompt, instructions, tools_json);
         let conversation_id = self.conversation_id.to_string();
@@ -221,7 +204,7 @@ impl ModelClient {
 
         let auth_manager = self.auth_manager.clone();
         let model_family = self.get_model_family();
-        let instructions = prompt.get_full_instructions(&model_family).into_owned();
+        let instructions = prompt.get_full_instructions(model_family).into_owned();
         let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
 
         let reasoning = if model_family.supports_reasoning_summaries {
@@ -282,7 +265,7 @@ impl ModelClient {
                 store_override: None,
                 conversation_id: Some(conversation_id.clone()),
                 session_source: Some(session_source.clone()),
-                extra_headers: beta_feature_headers(&self.config, self.get_models_etag()),
+                extra_headers: beta_feature_headers(&self.config, self.get_models_etag().clone()),
             };
 
             let stream_result = client
@@ -322,18 +305,12 @@ impl ModelClient {
     }
 
     /// Returns the currently configured model family.
-    pub fn get_model_family(&self) -> ModelFamily {
-        self.model_family
-            .read()
-            .map(|model_family| model_family.clone())
-            .unwrap_or_else(|err| err.into_inner().clone())
+    pub fn get_model_family(&self) -> &ModelFamily {
+        &self.model_family
     }
 
-    fn get_models_etag(&self) -> Option<String> {
-        self.models_etag
-            .read()
-            .map(|models_etag| models_etag.clone())
-            .unwrap_or_else(|err| err.into_inner().clone())
+    fn get_models_etag(&self) -> &Option<String> {
+        &self.models_etag
     }
 
     /// Returns the current reasoning effort setting.
@@ -370,7 +347,7 @@ impl ModelClient {
             .with_telemetry(Some(request_telemetry));
 
         let instructions = prompt
-            .get_full_instructions(&self.get_model_family())
+            .get_full_instructions(self.get_model_family())
             .into_owned();
         let payload = ApiCompactionInput {
             model: &self.get_model(),

@@ -1,6 +1,10 @@
 use crate::client_common::tools::ToolSpec;
+use crate::codex::Session;
+use crate::codex::TurnContext;
 use crate::error::Result;
+use crate::features::Feature;
 use crate::openai_models::model_family::ModelFamily;
+use crate::tools::ToolRouter;
 pub use codex_api::common::ResponseEvent;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::models::ResponseItem;
@@ -44,6 +48,27 @@ pub struct Prompt {
 }
 
 impl Prompt {
+    pub(crate) fn new(
+        sess: &Session,
+        turn_context: &TurnContext,
+        router: &ToolRouter,
+        input: &[ResponseItem],
+    ) -> Prompt {
+        let model_supports_parallel = turn_context
+            .client
+            .get_model_family()
+            .supports_parallel_tool_calls;
+
+        Prompt {
+            input: input.to_vec(),
+            tools: router.specs(),
+            parallel_tool_calls: model_supports_parallel
+                && sess.enabled(Feature::ParallelToolCalls),
+            base_instructions_override: turn_context.base_instructions.clone(),
+            output_schema: turn_context.final_output_json_schema.clone(),
+        }
+    }
+
     pub(crate) fn get_full_instructions<'a>(&'a self, model: &'a ModelFamily) -> Cow<'a, str> {
         let base = self
             .base_instructions_override

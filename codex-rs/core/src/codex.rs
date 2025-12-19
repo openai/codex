@@ -2226,7 +2226,7 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
 ///
 pub(crate) async fn run_task(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    mut turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
@@ -2309,7 +2309,7 @@ pub(crate) async fn run_task(
             .collect::<Vec<String>>();
         match run_turn(
             Arc::clone(&sess),
-            Arc::clone(&turn_context),
+            &mut turn_context,
             Arc::clone(&turn_diff_tracker),
             turn_input,
             cancellation_token.child_token(),
@@ -2386,7 +2386,7 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
 )]
 async fn run_turn(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    turn_context: &mut Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
@@ -2399,19 +2399,20 @@ async fn run_turn(
         .list_all_tools()
         .or_cancel(&cancellation_token)
         .await?;
-    let router = Arc::new(ToolRouter::from_config(
-        &turn_context.tools_config,
-        Some(
-            mcp_tools
-                .into_iter()
-                .map(|(name, tool)| (name, tool.tool))
-                .collect(),
-        ),
-    ));
 
     let mut retries = 0;
     loop {
-        let prompt = build_prompt(
+        let router = Arc::new(ToolRouter::from_config(
+            &turn_context.tools_config,
+            Some(
+                mcp_tools
+                    .clone()
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect(),
+            ),
+        ));
+        let prompt = Prompt::new(
             sess.as_ref(),
             turn_context.as_ref(),
             router.as_ref(),
@@ -2421,7 +2422,7 @@ async fn run_turn(
         match try_run_turn(
             Arc::clone(&router),
             Arc::clone(&sess),
-            Arc::clone(&turn_context),
+            Arc::clone(turn_context),
             Arc::clone(&turn_diff_tracker),
             &prompt,
             cancellation_token.child_token(),
@@ -2437,13 +2438,13 @@ async fn run_turn(
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e @ CodexErr::Fatal(_)) => return Err(e),
             Err(e @ CodexErr::ContextWindowExceeded) => {
-                sess.set_total_tokens_full(&turn_context).await;
+                sess.set_total_tokens_full(turn_context).await;
                 return Err(e);
             }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
                 if let Some(rate_limits) = rate_limits {
-                    sess.update_rate_limits(&turn_context, rate_limits).await;
+                    sess.update_rate_limits(turn_context, rate_limits).await;
                 }
                 return Err(CodexErr::UsageLimitReached(e));
             }
@@ -2459,7 +2460,23 @@ async fn run_turn(
                     retries += 1;
                     // Refresh models if we got an outdated models error
                     if matches!(e, CodexErr::OutdatedModels) {
-                        refresh_models_after_outdated_error(sess.as_ref(), turn_context.as_ref())
+                        let config = {
+                            let state = sess.state.lock().await;
+                            state
+                                .session_configuration
+                                .original_config_do_not_use
+                                .clone()
+                        };
+                        if let Err(err) = sess
+                            .services
+                            .models_manager
+                            .refresh_available_models(&config)
+                            .await
+                        {
+                            error!("failed to refresh models after outdated models error: {err}");
+                        }
+                        *turn_context = sess
+                            .new_default_turn_with_sub_id(turn_context.sub_id.clone())
                             .await;
                     }
                     let delay = match e {
@@ -2474,7 +2491,7 @@ async fn run_turn(
                     // user understands what is happening instead of staring
                     // at a seemingly frozen screen.
                     sess.notify_stream_error(
-                        &turn_context,
+                        turn_context,
                         format!("Reconnecting... {retries}/{max_retries}"),
                         e,
                     )
@@ -2487,53 +2504,6 @@ async fn run_turn(
             }
         }
     }
-}
-
-fn build_prompt(
-    sess: &Session,
-    turn_context: &TurnContext,
-    router: &ToolRouter,
-    input: &[ResponseItem],
-) -> Prompt {
-    let model_supports_parallel = turn_context
-        .client
-        .get_model_family()
-        .supports_parallel_tool_calls;
-
-    Prompt {
-        input: input.to_vec(),
-        tools: router.specs(),
-        parallel_tool_calls: model_supports_parallel && sess.enabled(Feature::ParallelToolCalls),
-        base_instructions_override: turn_context.base_instructions.clone(),
-        output_schema: turn_context.final_output_json_schema.clone(),
-    }
-}
-
-async fn refresh_models_after_outdated_error(sess: &Session, turn_context: &TurnContext) {
-    let config = {
-        let state = sess.state.lock().await;
-        state
-            .session_configuration
-            .original_config_do_not_use
-            .clone()
-    };
-    if let Err(err) = sess
-        .services
-        .models_manager
-        .refresh_available_models(&config)
-        .await
-    {
-        error!("failed to refresh models after outdated models error: {err}");
-    }
-    let models_etag = sess.services.models_manager.get_models_etag().await;
-    let model = turn_context.client.get_model();
-    let model_family = sess
-        .services
-        .models_manager
-        .construct_model_family(&model, &config)
-        .await;
-    turn_context.client.update_model_family(model_family);
-    turn_context.client.update_models_etag(models_etag);
 }
 
 #[derive(Debug)]
