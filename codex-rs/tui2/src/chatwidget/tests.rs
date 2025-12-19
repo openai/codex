@@ -412,6 +412,7 @@ fn make_chatwidget_manual(
         token_info: None,
         rate_limit_snapshot: None,
         plan_type: None,
+        last_plan_update_key: None,
         rate_limit_warnings: RateLimitWarningState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
         rate_limit_poller: None,
@@ -2915,6 +2916,36 @@ fn plan_update_renders_history_cell() {
     assert!(blob.contains("Explore codebase"));
     assert!(blob.contains("Implement feature"));
     assert!(blob.contains("Write tests"));
+}
+
+#[test]
+fn plan_update_dedupes_identical_updates() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
+    let update = UpdatePlanArgs {
+        explanation: Some("Updating plan".to_string()),
+        plan: vec![
+            PlanItemArg {
+                step: "Explore codebase".into(),
+                status: StepStatus::Completed,
+            },
+            PlanItemArg {
+                step: "Implement feature".into(),
+                status: StepStatus::InProgress,
+            },
+        ],
+    };
+
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::PlanUpdate(update.clone()),
+    });
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::PlanUpdate(update),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected a single plan update cell");
 }
 
 #[test]

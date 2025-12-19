@@ -299,6 +299,7 @@ pub(crate) struct ChatWidget {
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
     plan_type: Option<PlanType>,
+    last_plan_update_key: Option<String>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     rate_limit_poller: Option<JoinHandle<()>>,
@@ -962,6 +963,13 @@ impl ChatWidget {
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
+        let update_key = serde_json::to_string(&update).ok();
+        if let Some(key) = update_key.as_deref()
+            && self.last_plan_update_key.as_deref() == Some(key)
+        {
+            return;
+        }
+        self.last_plan_update_key = update_key;
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
@@ -1638,6 +1646,7 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshot: None,
             plan_type: None,
+            last_plan_update_key: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
@@ -1720,6 +1729,7 @@ impl ChatWidget {
             token_info: None,
             rate_limit_snapshot: None,
             plan_type: None,
+            last_plan_update_key: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             rate_limit_poller: None,
