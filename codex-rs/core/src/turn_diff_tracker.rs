@@ -8,6 +8,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use sha1::digest::Output;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::protocol::FileChange;
@@ -65,7 +66,10 @@ impl TurnDiffTracker {
                 let baseline_file_info = if path.exists() {
                     let mode = file_mode_for_path(path);
                     let mode_val = mode.unwrap_or(FileMode::Regular);
-                    let content = blob_bytes(path, mode_val).unwrap_or_default();
+                    let content = blob_bytes(path, mode_val).unwrap_or_else(|| {
+                        warn!("failed to read baseline bytes for diff: {}", path.display());
+                        Vec::new()
+                    });
                     let oid = if mode == Some(FileMode::Symlink) {
                         format!("{:x}", git_blob_sha1_hex_bytes(&content))
                     } else {

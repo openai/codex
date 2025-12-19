@@ -60,6 +60,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::debug;
@@ -348,6 +349,55 @@ pub(crate) struct Session {
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
+    /// Manages background tasks to prevent resource leaks.
+    task_manager: TaskManager,
+}
+
+/// Manages background tasks to prevent resource leaks.
+/// Tracks JoinHandles and provides cleanup on drop.
+#[derive(Debug)]
+pub(crate) struct TaskManager {
+    tasks: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl TaskManager {
+    pub(crate) fn new() -> Self {
+        Self {
+            tasks: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Spawn a task and track its JoinHandle for cleanup.
+    pub(crate) async fn spawn<F>(&self, future: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let handle = tokio::spawn(future);
+        self.tasks.lock().await.push(handle);
+    }
+
+    /// Wait for all tracked tasks to complete.
+    /// This should be called during shutdown to ensure proper cleanup.
+    pub(crate) async fn wait_for_all(&self) {
+        // Collect handles first to minimize lock time
+        let handles: Vec<_> = {
+            let mut tasks = self.tasks.lock().await;
+            tasks.drain(..).collect()
+        };
+
+        // Await completion outside the lock
+        for handle in handles {
+            if let Err(err) = handle.await {
+                warn!("background task failed: {err}");
+            }
+        }
+    }
+}
+
+impl Default for TaskManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// The context needed for a single turn of the conversation.
@@ -681,6 +731,7 @@ impl Session {
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
+            task_manager: TaskManager::new(),
         });
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
@@ -859,10 +910,7 @@ impl Session {
                     drop(state);
                     self.send_event_raw(Event {
                         id: sub_id.clone(),
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: err.to_string(),
-                            codex_error_info: Some(CodexErrorInfo::BadRequest),
-                        }),
+                        msg: create_error_event(err.to_string(), CodexErrorInfo::BadRequest),
                     })
                     .await;
                     return Err(err);
@@ -1096,7 +1144,13 @@ impl Session {
             parsed_cmd,
         });
         self.send_event(turn_context, event).await;
-        rx_approve.await.unwrap_or_default()
+        match rx_approve.await {
+            Ok(decision) => decision,
+            Err(_) => {
+                warn!("pending approval sender dropped for sub_id: {sub_id}");
+                ReviewDecision::default()
+            }
+        }
     }
 
     pub async fn request_patch_approval(
@@ -1149,7 +1203,9 @@ impl Session {
         };
         match entry {
             Some(tx_approve) => {
-                tx_approve.send(decision).ok();
+                if tx_approve.send(decision).is_err() {
+                    warn!("pending approval receiver dropped for sub_id: {sub_id}");
+                }
             }
             None => {
                 warn!("No pending approval found for sub_id: {sub_id}");
@@ -1592,7 +1648,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
         debug!(?sub, "Submission");
         match sub.op.clone() {
             Op::Interrupt => {
-                handlers::interrupt(&sess).await;
+                if let Err(e) = handlers::interrupt(&sess).await {
+                    error!("Handler error in interrupt: {}", e);
+                    // Interrupt is internal, don't notify user
+                }
             }
             Op::OverrideTurnContext {
                 cwd,
@@ -1602,7 +1661,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 effort,
                 summary,
             } => {
-                handlers::override_turn_context(
+                if let Err(e) = handlers::override_turn_context(
                     &sess,
                     sub.id.clone(),
                     SessionSettingsUpdate {
@@ -1615,55 +1674,82 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         ..Default::default()
                     },
                 )
-                .await;
+                .await
+                {
+                    error!("Handler error in override_turn_context: {}", e);
+                }
             }
             Op::UserInput { .. } | Op::UserTurn { .. } => {
-                handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
-                    .await;
+                if let Err(e) = handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
+                    .await {
+                    error!("Handler error in user_input_or_turn: {}", e);
+                }
             }
             Op::ExecApproval { id, decision } => {
-                handlers::exec_approval(&sess, id, decision).await;
+                if let Err(e) = handlers::exec_approval(&sess, id, decision).await {
+                    error!("Handler error in exec_approval: {}", e);
+                }
             }
             Op::PatchApproval { id, decision } => {
-                handlers::patch_approval(&sess, id, decision).await;
+                if let Err(e) = handlers::patch_approval(&sess, id, decision).await {
+                    error!("Handler error in patch_approval: {}", e);
+                }
             }
             Op::AddToHistory { text } => {
-                handlers::add_to_history(&sess, &config, text).await;
+                if let Err(e) = handlers::add_to_history(&sess, &config, text).await {
+                    error!("Handler error in add_to_history: {}", e);
+                }
             }
             Op::GetHistoryEntryRequest { offset, log_id } => {
-                handlers::get_history_entry_request(&sess, &config, sub.id.clone(), offset, log_id)
-                    .await;
+                if let Err(e) = handlers::get_history_entry_request(&sess, &config, sub.id.clone(), offset, log_id)
+                    .await {
+                    error!("Handler error in get_history_entry_request: {}", e);
+                }
             }
             Op::ListMcpTools => {
-                handlers::list_mcp_tools(&sess, &config, sub.id.clone()).await;
+                if let Err(e) = handlers::list_mcp_tools(&sess, &config, sub.id.clone()).await {
+                    error!("Handler error in list_mcp_tools: {}", e);
+                }
             }
             Op::ListCustomPrompts => {
-                handlers::list_custom_prompts(&sess, sub.id.clone()).await;
+                if let Err(e) = handlers::list_custom_prompts(&sess, sub.id.clone()).await {
+                    error!("Handler error in list_custom_prompts: {}", e);
+                }
             }
             Op::ListSkills { cwds, force_reload } => {
-                handlers::list_skills(&sess, sub.id.clone(), cwds, force_reload).await;
+                if let Err(e) = handlers::list_skills(&sess, sub.id.clone(), cwds, force_reload).await {
+                    error!("Handler error in list_skills: {}", e);
+                }
             }
             Op::Undo => {
-                handlers::undo(&sess, sub.id.clone()).await;
+                if let Err(e) = handlers::undo(&sess, sub.id.clone()).await {
+                    error!("Handler error in undo: {}", e);
+                }
             }
             Op::Compact => {
-                handlers::compact(&sess, sub.id.clone()).await;
+                if let Err(e) = handlers::compact(&sess, sub.id.clone()).await {
+                    error!("Handler error in compact: {}", e);
+                }
             }
             Op::RunUserShellCommand { command } => {
-                handlers::run_user_shell_command(
+                if let Err(e) = handlers::run_user_shell_command(
                     &sess,
                     sub.id.clone(),
                     command,
                     &mut previous_context,
                 )
-                .await;
+                .await {
+                    error!("Handler error in run_user_shell_command: {}", e);
+                }
             }
             Op::ResolveElicitation {
                 server_name,
                 request_id,
                 decision,
             } => {
-                handlers::resolve_elicitation(&sess, server_name, request_id, decision).await;
+                if let Err(e) = handlers::resolve_elicitation(&sess, server_name, request_id, decision).await {
+                    error!("Handler error in resolve_elicitation: {}", e);
+                }
             }
             Op::Shutdown => {
                 if handlers::shutdown(&sess, sub.id.clone()).await {
@@ -1671,12 +1757,28 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 }
             }
             Op::Review { review_request } => {
-                handlers::review(&sess, &config, sub.id.clone(), review_request).await;
+                if let Err(e) = handlers::review(&sess, &config, sub.id.clone(), review_request).await {
+                    error!("Handler error in review: {}", e);
+                }
             }
             _ => {} // Ignore unknown ops; enum is non_exhaustive to allow extensions.
         }
     }
+
+    /// Cleanup background tasks. Should be called during shutdown.
+    pub async fn cleanup_background_tasks(&self) {
+        self.task_manager.wait_for_all().await;
+    }
+
     debug!("Agent loop exited");
+}
+
+/// Create a standardized error event
+fn create_error_event(message: String, error_info: CodexErrorInfo) -> EventMsg {
+    EventMsg::Error(ErrorEvent {
+        message,
+        codex_error_info: Some(error_info),
+    })
 }
 
 /// Operation handlers
@@ -1684,6 +1786,7 @@ mod handlers {
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::TurnContext;
+    use super::create_error_event;
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
@@ -1718,25 +1821,24 @@ mod handlers {
     use tracing::info;
     use tracing::warn;
 
-    pub async fn interrupt(sess: &Arc<Session>) {
+    pub async fn interrupt(sess: &Arc<Session>) -> CodexResult<()> {
         sess.interrupt_task().await;
+        Ok(())
     }
 
     pub async fn override_turn_context(
         sess: &Session,
         sub_id: String,
         updates: SessionSettingsUpdate,
-    ) {
+    ) -> CodexResult<()> {
         if let Err(err) = sess.update_settings(updates).await {
             sess.send_event_raw(Event {
                 id: sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: err.to_string(),
-                    codex_error_info: Some(CodexErrorInfo::BadRequest),
-                }),
+                msg: create_error_event(err.to_string(), CodexErrorInfo::BadRequest),
             })
             .await;
         }
+        Ok(())
     }
 
     pub async fn user_input_or_turn(
@@ -1744,7 +1846,7 @@ mod handlers {
         sub_id: String,
         op: Op,
         previous_context: &mut Option<Arc<TurnContext>>,
-    ) {
+    ) -> CodexResult<()> {
         let (items, updates) = match op {
             Op::UserTurn {
                 cwd,
@@ -1771,9 +1873,12 @@ mod handlers {
             _ => unreachable!(),
         };
 
-        let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
-            // new_turn_with_sub_id already emits the error event.
-            return;
+        let current_context = match sess.new_turn_with_sub_id(sub_id, updates).await {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                // new_turn_with_sub_id should have already emitted the error event
+                return Err(e);
+            }
         };
         current_context
             .client
@@ -1793,6 +1898,7 @@ mod handlers {
                 .await;
             *previous_context = Some(current_context);
         }
+        Ok(())
     }
 
     pub async fn run_user_shell_command(
@@ -1800,7 +1906,7 @@ mod handlers {
         sub_id: String,
         command: String,
         previous_context: &mut Option<Arc<TurnContext>>,
-    ) {
+    ) -> CodexResult<()> {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
         sess.spawn_task(
             Arc::clone(&turn_context),
@@ -1809,6 +1915,7 @@ mod handlers {
         )
         .await;
         *previous_context = Some(turn_context);
+        Ok(())
     }
 
     pub async fn resolve_elicitation(
@@ -1839,7 +1946,7 @@ mod handlers {
 
     /// Propagate a user's exec approval decision to the session.
     /// Also optionally applies an execpolicy amendment.
-    pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
+    pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) -> CodexResult<()> {
         if let ReviewDecision::ApprovedExecpolicyAmendment {
             proposed_execpolicy_amendment,
         } = &decision
@@ -1862,25 +1969,28 @@ mod handlers {
             }
             other => sess.notify_approval(&id, other).await,
         }
+        Ok(())
     }
 
-    pub async fn patch_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
+    pub async fn patch_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) -> CodexResult<()> {
         match decision {
             ReviewDecision::Abort => {
                 sess.interrupt_task().await;
             }
             other => sess.notify_approval(&id, other).await,
         }
+        Ok(())
     }
 
-    pub async fn add_to_history(sess: &Arc<Session>, config: &Arc<Config>, text: String) {
+    pub async fn add_to_history(sess: &Arc<Session>, config: &Arc<Config>, text: String) -> CodexResult<()> {
         let id = sess.conversation_id;
         let config = Arc::clone(config);
-        tokio::spawn(async move {
+        sess.task_manager.spawn(async move {
             if let Err(e) = crate::message_history::append_entry(&text, &id, &config).await {
                 warn!("failed to append to message history: {e}");
             }
-        });
+        }).await;
+        Ok(())
     }
 
     pub async fn get_history_entry_request(
@@ -1889,17 +1999,23 @@ mod handlers {
         sub_id: String,
         offset: usize,
         log_id: u64,
-    ) {
+    ) -> CodexResult<()> {
         let config = Arc::clone(config);
         let sess_clone = Arc::clone(sess);
 
-        tokio::spawn(async move {
+        sess.task_manager.spawn(async move {
             // Run lookup in blocking thread because it does file IO + locking.
-            let entry_opt = tokio::task::spawn_blocking(move || {
+            let entry_opt = match tokio::task::spawn_blocking(move || {
                 crate::message_history::lookup(log_id, offset, &config)
             })
             .await
-            .unwrap_or(None);
+            {
+                Ok(entry_opt) => entry_opt,
+                Err(err) => {
+                    tracing::warn!("history lookup task failed: {err}");
+                    None
+                }
+            };
 
             let event = Event {
                 id: sub_id,
@@ -1917,10 +2033,11 @@ mod handlers {
             };
 
             sess_clone.send_event_raw(event).await;
-        });
+        }).await;
+        Ok(())
     }
 
-    pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
+    pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) -> CodexResult<()> {
         let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
         let snapshot = collect_mcp_snapshot_from_manager(
             &mcp_connection_manager,
@@ -1936,9 +2053,10 @@ mod handlers {
             msg: EventMsg::McpListToolsResponse(snapshot),
         };
         sess.send_event_raw(event).await;
+        Ok(())
     }
 
-    pub async fn list_custom_prompts(sess: &Session, sub_id: String) {
+    pub async fn list_custom_prompts(sess: &Session, sub_id: String) -> CodexResult<()> {
         let custom_prompts: Vec<CustomPrompt> =
             if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
                 crate::custom_prompts::discover_prompts_in(&dir).await
@@ -1953,6 +2071,7 @@ mod handlers {
             }),
         };
         sess.send_event_raw(event).await;
+        Ok(())
     }
 
     pub async fn list_skills(
@@ -1960,7 +2079,7 @@ mod handlers {
         sub_id: String,
         cwds: Vec<PathBuf>,
         force_reload: bool,
-    ) {
+    ) -> CodexResult<()> {
         let cwds = if cwds.is_empty() {
             let state = sess.state.lock().await;
             vec![state.session_configuration.cwd.clone()]
@@ -1995,15 +2114,17 @@ mod handlers {
             msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
         };
         sess.send_event_raw(event).await;
+        Ok(())
     }
 
-    pub async fn undo(sess: &Arc<Session>, sub_id: String) {
-        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+    pub async fn undo(sess: &Arc<Session>, sub_id: String) -> CodexResult<()> {
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
         sess.spawn_task(turn_context, Vec::new(), UndoTask::new())
             .await;
+        Ok(())
     }
 
-    pub async fn compact(sess: &Arc<Session>, sub_id: String) {
+    pub async fn compact(sess: &Arc<Session>, sub_id: String) -> CodexResult<()> {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
         sess.spawn_task(
@@ -2014,6 +2135,7 @@ mod handlers {
             CompactTask,
         )
         .await;
+        Ok(())
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -2022,6 +2144,10 @@ mod handlers {
             .unified_exec_manager
             .terminate_all_sessions()
             .await;
+
+        // Clean up background tasks before shutdown
+        sess.cleanup_background_tasks().await;
+
         info!("Shutting down Codex instance");
 
         // Gracefully flush and shutdown rollout recorder on session end so tests
@@ -2057,7 +2183,7 @@ mod handlers {
         config: &Arc<Config>,
         sub_id: String,
         review_request: ReviewRequest,
-    ) {
+    ) -> CodexResult<()> {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
         match resolve_review_request(review_request, config.cwd.as_path()) {
             Ok(resolved) => {
@@ -2081,6 +2207,7 @@ mod handlers {
                 sess.send_event(&turn_context, event.msg).await;
             }
         }
+        Ok(())
     }
 }
 
@@ -3168,6 +3295,7 @@ mod tests {
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
+            task_manager: TaskManager::new(),
         };
 
         (session, turn_context)

@@ -182,8 +182,12 @@ impl CodexAuth {
                             "Token data is not available after refresh.",
                         ))?;
 
-                    #[expect(clippy::unwrap_used)]
-                    let mut auth_lock = self.auth_dot_json.lock().unwrap();
+                    let mut auth_lock = self.auth_dot_json.lock().map_err(|_| {
+                        std::io::Error::new(
+                            ErrorKind::Other,
+                            "Auth state mutex is poisoned - another thread panicked while holding the lock"
+                        )
+                    })?;
                     *auth_lock = Some(updated_auth_dot_json);
                 }
 
@@ -235,8 +239,7 @@ impl CodexAuth {
     }
 
     fn get_current_auth_json(&self) -> Option<AuthDotJson> {
-        #[expect(clippy::unwrap_used)]
-        self.auth_dot_json.lock().unwrap().clone()
+        self.auth_dot_json.lock().ok()?.clone()
     }
 
     fn get_current_token_data(&self) -> Option<TokenData> {
@@ -531,7 +534,13 @@ async fn try_refresh_token(
             .map_err(|err| RefreshTokenError::Transient(std::io::Error::other(err)))?;
         Ok(refresh_response)
     } else {
-        let body = response.text().await.unwrap_or_default();
+        let body = match response.text().await {
+            Ok(body) => body,
+            Err(err) => {
+                tracing::warn!("failed to read refresh token error body: {err}");
+                String::new()
+            }
+        };
         if status == StatusCode::UNAUTHORIZED {
             let failed = classify_refresh_token_failure(&body);
             Err(RefreshTokenError::Permanent(failed))

@@ -376,7 +376,13 @@ fn tmux_version_from_env(env: &dyn Environment) -> Option<String> {
 
 fn split_term_program_and_version(value: &str) -> (String, Option<String>) {
     let mut parts = value.split_whitespace();
-    let program = parts.next().unwrap_or_default().to_string();
+    let program = match parts.next() {
+        Some(program) => program.to_string(),
+        None => {
+            tracing::debug!("TERM_PROGRAM was empty");
+            String::new()
+        }
+    };
     let version = parts.next().map(ToString::to_string);
     (program, version)
 }

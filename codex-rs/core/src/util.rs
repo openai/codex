@@ -26,7 +26,13 @@ pub(crate) fn error_or_panic(message: impl std::string::ToString) {
 
 pub(crate) fn try_parse_error_message(text: &str) -> String {
     debug!("Parsing server error response: {}", text);
-    let json = serde_json::from_str::<serde_json::Value>(text).unwrap_or_default();
+    let json = match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(json) => json,
+        Err(err) => {
+            debug!("Failed to parse error response as JSON: {err}");
+            serde_json::Value::Null
+        }
+    };
     if let Some(error) = json.get("error")
         && let Some(message) = error.get("message")
         && let Some(message_str) = message.as_str()

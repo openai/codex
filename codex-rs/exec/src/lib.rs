@@ -225,11 +225,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let _ = tracing_subscriber::registry()
+    if let Err(e) = tracing_subscriber::registry()
         .with(fmt_layer)
         .with(otel_tracing_layer)
         .with(otel_logger_layer)
-        .try_init();
+        .try_init()
+    {
+        eprintln!("Failed to initialize tracing subscriber: {}", e);
+        // Continue execution but log the error
+    }
 
     let mut event_processor: Box<dyn EventProcessor> = match json_mode {
         true => Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone())),

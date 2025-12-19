@@ -13,19 +13,34 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use std::ops::Deref;
 
+/// Default maximum number of messages to keep in conversation history
+const DEFAULT_MAX_MESSAGES: usize = 1000;
+
+/// Minimum number of messages to prevent unusable conversations
+const MIN_MAX_MESSAGES: usize = 10;
+
 /// Transcript of conversation history
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
+    /// Maximum number of messages to keep in history
+    max_messages: usize,
 }
 
 impl ContextManager {
     pub(crate) fn new() -> Self {
+        Self::with_max_messages(DEFAULT_MAX_MESSAGES)
+    }
+
+    pub(crate) fn with_max_messages(max_messages: usize) -> Self {
+        // Enforce minimum bound to prevent unusable conversations
+        let max_messages = max_messages.max(MIN_MAX_MESSAGES);
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            max_messages,
         }
     }
 
@@ -61,6 +76,12 @@ impl ContextManager {
 
             let processed = self.process_item(item_ref, policy);
             self.items.push(processed);
+
+            // Enforce message count limit by removing oldest items
+            if self.items.len() > self.max_messages {
+                let excess = self.items.len() - self.max_messages;
+                self.items.drain(..excess);
+            }
         }
     }
 
@@ -95,10 +116,15 @@ impl ContextManager {
                 | ResponseItem::Compaction {
                     encrypted_content: content,
                 } => estimate_reasoning_length(content.len()) as i64,
-                item => {
-                    let serialized = serde_json::to_string(item).unwrap_or_default();
-                    i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX)
-                }
+                item => match serde_json::to_string(item) {
+                    Ok(serialized) => i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX),
+                    Err(err) => {
+                        tracing::warn!(
+                            "failed to serialize history item for token estimation: {err}"
+                        );
+                        i64::MAX
+                    }
+                },
             }
         });
 
@@ -119,6 +145,11 @@ impl ContextManager {
 
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
+        // Enforce message count limit even when replacing the entire history.
+        if self.items.len() > self.max_messages {
+            let excess = self.items.len() - self.max_messages;
+            self.items.drain(..excess);
+        }
     }
 
     pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) {
@@ -262,6 +293,12 @@ impl ContextManager {
             | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Other => item.clone(),
         }
+    }
+}
+
+impl Default for ContextManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
