@@ -416,7 +416,7 @@ pub(crate) struct SessionConfiguration {
     /// When to escalate for approval for execution
     approval_policy: Constrained<AskForApproval>,
     /// How to sandbox commands executed in the system
-    sandbox_policy: SandboxPolicy,
+    sandbox_policy: Constrained<SandboxPolicy>,
 
     /// Working directory that should be treated as the *root* of the
     /// session. All relative paths supplied by the model as well as the
@@ -452,7 +452,7 @@ impl SessionConfiguration {
             next_configuration.approval_policy.set(approval_policy)?;
         }
         if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
-            next_configuration.sandbox_policy = sandbox_policy;
+            next_configuration.sandbox_policy.set(sandbox_policy)?;
         }
         if let Some(cwd) = updates.cwd.clone() {
             next_configuration.cwd = cwd;
@@ -527,7 +527,7 @@ impl Session {
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             approval_policy: session_configuration.approval_policy.value(),
-            sandbox_policy: session_configuration.sandbox_policy.clone(),
+            sandbox_policy: session_configuration.sandbox_policy.get().clone(),
             shell_environment_policy: per_turn_config.shell_environment_policy.clone(),
             tools_config,
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
@@ -644,7 +644,7 @@ impl Session {
             config.model_context_window,
             config.model_auto_compact_token_limit,
             config.approval_policy.value(),
-            config.sandbox_policy.clone(),
+            config.sandbox_policy.get().clone(),
             config.mcp_servers.keys().map(String::as_str).collect(),
             config.active_profile.clone(),
         );
@@ -694,7 +694,7 @@ impl Session {
                 model: session_configuration.model.clone(),
                 model_provider_id: config.model_provider_id.clone(),
                 approval_policy: session_configuration.approval_policy.value(),
-                sandbox_policy: session_configuration.sandbox_policy.clone(),
+                sandbox_policy: session_configuration.sandbox_policy.get().clone(),
                 cwd: session_configuration.cwd.clone(),
                 reasoning_effort: session_configuration.model_reasoning_effort,
                 history_log_id,
@@ -711,7 +711,7 @@ impl Session {
         // Construct sandbox_state before initialize() so it can be sent to each
         // MCP server immediately after it becomes ready (avoiding blocking).
         let sandbox_state = SandboxState {
-            sandbox_policy: session_configuration.sandbox_policy.clone(),
+            sandbox_policy: session_configuration.sandbox_policy.get().clone(),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             sandbox_cwd: session_configuration.cwd.clone(),
         };
@@ -898,7 +898,7 @@ impl Session {
 
         if sandbox_policy_changed {
             let sandbox_state = SandboxState {
-                sandbox_policy: per_turn_config.sandbox_policy.clone(),
+                sandbox_policy: per_turn_config.sandbox_policy.get().clone(),
                 codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
                 sandbox_cwd: per_turn_config.cwd.clone(),
             };
