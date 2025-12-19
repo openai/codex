@@ -1081,6 +1081,7 @@ pub enum SkillScope {
     User,
     Repo,
     System,
+    Admin,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1131,6 +1132,7 @@ impl From<CoreSkillScope> for SkillScope {
             CoreSkillScope::User => Self::User,
             CoreSkillScope::Repo => Self::Repo,
             CoreSkillScope::System => Self::System,
+            CoreSkillScope::Admin => Self::Admin,
         }
     }
 }

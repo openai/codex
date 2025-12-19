@@ -1721,6 +1721,7 @@ pub enum SkillScope {
     User,
     Repo,
     System,
+    Admin,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
