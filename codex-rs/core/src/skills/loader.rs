@@ -148,22 +148,26 @@ pub(crate) fn repo_skills_root(cwd: &Path) -> Option<SkillRoot> {
     })
 }
 
-fn skill_roots(config: &Config) -> Vec<SkillRoot> {
+pub(crate) fn skill_roots_for_cwd(codex_home: &Path, cwd: &Path) -> Vec<SkillRoot> {
     let mut roots = Vec::new();
 
-    if let Some(repo_root) = repo_skills_root(&config.cwd) {
+    if let Some(repo_root) = repo_skills_root(cwd) {
         roots.push(repo_root);
     }
 
     // Load order matters: we dedupe by name, keeping the first occurrence.
     // Priority order: repo, user, system, then admin.
-    roots.push(user_skills_root(&config.codex_home));
-    roots.push(system_skills_root(&config.codex_home));
+    roots.push(user_skills_root(codex_home));
+    roots.push(system_skills_root(codex_home));
     if cfg!(unix) {
         roots.push(admin_skills_root());
     }
 
     roots
+}
+
+fn skill_roots(config: &Config) -> Vec<SkillRoot> {
+    skill_roots_for_cwd(&config.codex_home, &config.cwd)
 }
 
 fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut SkillLoadOutcome) {
