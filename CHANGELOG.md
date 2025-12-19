@@ -11,19 +11,18 @@ edited between the markers.
 
 ### Highlights
 
-- Create GitHub Releases for codexel tags with bundled binaries and npm tarball.
+- _No fork-only changes yet._
 
 ### Details
 
-<!-- BEGIN GENERATED DETAILS: range=624036dc6e93a8160dbf5a326dc952d22c77e2bf..HEAD -->
-#### Branding & Packaging
-- Add GitHub Release publishing for Codexel
+<!-- BEGIN GENERATED DETAILS: range=a0947895c7a906deccbbe7a57e6e0b1c4ea66fcb..HEAD -->
+_No fork-only changes yet._
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.2] - 2025-12-19
 
 Upstream baseline: openai/codex@be274cbe6273cb17d756a6cda729d537f15ae49a
-Release commit: 624036dc6e93a8160dbf5a326dc952d22c77e2bf
+Release commit: a0947895c7a906deccbbe7a57e6e0b1c4ea66fcb
 
 ### Highlights
 
@@ -32,13 +31,14 @@ Release commit: 624036dc6e93a8160dbf5a326dc952d22c77e2bf
 
 ### Details
 
-<!-- BEGIN GENERATED DETAILS: range=d02343f99e3260308b2355f26e382ae04b14d7e7..624036dc6e93a8160dbf5a326dc952d22c77e2bf -->
+<!-- BEGIN GENERATED DETAILS: range=d02343f99e3260308b2355f26e382ae04b14d7e7..a0947895c7a906deccbbe7a57e6e0b1c4ea66fcb -->
 #### Plan Mode
 - Deduplicate plan updates in history
 
 
 #### Branding & Packaging
 - Fix Codexel update actions
+- Add GitHub Release publishing for Codexel
 
 
 #### Other
@@ -48,6 +48,7 @@ Release commit: 624036dc6e93a8160dbf5a326dc952d22c77e2bf
 - Avoid working status on resume replay
 - Prevent resume from auto-executing plans
 - Release 0.1.2
+- Update changelog for 0.1.2 release
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.1] - 2025-12-19
