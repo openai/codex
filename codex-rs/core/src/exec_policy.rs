@@ -1,7 +1,6 @@
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use crate::command_safety::is_dangerous_command::requires_initial_appoval;
 use codex_execpolicy::AmendError;
@@ -17,7 +16,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
 use tokio::fs;
-use tokio::sync::RwLock;
 use tokio::task::spawn_blocking;
 
 use crate::bash::parse_shell_lc_plain_commands;
@@ -129,9 +127,9 @@ pub(crate) fn default_policy_path(codex_home: &Path) -> PathBuf {
 
 pub(crate) async fn append_execpolicy_amendment_and_update(
     codex_home: &Path,
-    current_policy: &Arc<RwLock<Policy>>,
+    current_policy: &Policy,
     prefix: &[String],
-) -> Result<(), ExecPolicyUpdateError> {
+) -> Result<Policy, ExecPolicyUpdateError> {
     let policy_path = default_policy_path(codex_home);
     let prefix = prefix.to_vec();
     spawn_blocking({
@@ -146,12 +144,10 @@ pub(crate) async fn append_execpolicy_amendment_and_update(
         source,
     })?;
 
-    current_policy
-        .write()
-        .await
-        .add_prefix_rule(&prefix, Decision::Allow)?;
+    let mut next_policy = current_policy.clone();
+    next_policy.add_prefix_rule(&prefix, Decision::Allow)?;
 
-    Ok(())
+    Ok(next_policy)
 }
 
 /// Derive a proposed execpolicy amendment when a command requires user approval
@@ -218,7 +214,7 @@ fn derive_prompt_reason(evaluation: &Evaluation) -> Option<String> {
 }
 
 pub(crate) async fn create_exec_approval_requirement_for_command(
-    exec_policy: &Arc<RwLock<Policy>>,
+    exec_policy: &Policy,
     features: &Features,
     command: &[String],
     approval_policy: AskForApproval,
@@ -233,8 +229,7 @@ pub(crate) async fn create_exec_approval_requirement_for_command(
             Decision::Allow
         }
     };
-    let policy = exec_policy.read().await;
-    let evaluation = policy.check_multiple(commands.iter(), &heuristics_fallback);
+    let evaluation = exec_policy.check_multiple(commands.iter(), &heuristics_fallback);
 
     match evaluation.decision {
         Decision::Forbidden => ExecApprovalRequirement::Forbidden {
@@ -325,7 +320,6 @@ mod tests {
     use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::fs;
-    use std::sync::Arc;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -425,7 +419,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         parser
             .parse("test.rules", policy_src)
             .expect("parse policy");
-        let policy = Arc::new(RwLock::new(parser.build()));
+        let policy = parser.build();
 
         let forbidden_script = vec![
             "bash".to_string(),
@@ -458,7 +452,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         parser
             .parse("test.rules", policy_src)
             .expect("parse policy");
-        let policy = Arc::new(RwLock::new(parser.build()));
+        let policy = parser.build();
         let command = vec!["rm".to_string()];
 
         let requirement = create_exec_approval_requirement_for_command(
@@ -487,7 +481,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         parser
             .parse("test.rules", policy_src)
             .expect("parse policy");
-        let policy = Arc::new(RwLock::new(parser.build()));
+        let policy = parser.build();
         let command = vec!["rm".to_string()];
 
         let requirement = create_exec_approval_requirement_for_command(
@@ -512,7 +506,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     async fn exec_approval_requirement_falls_back_to_heuristics() {
         let command = vec!["cargo".to_string(), "build".to_string()];
 
-        let empty_policy = Arc::new(RwLock::new(Policy::empty()));
+        let empty_policy = Policy::empty();
         let requirement = create_exec_approval_requirement_for_command(
             &empty_policy,
             &Features::with_defaults(),
@@ -539,7 +533,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         parser
             .parse("test.rules", policy_src)
             .expect("parse policy");
-        let policy = Arc::new(RwLock::new(parser.build()));
+        let policy = parser.build();
         let command = vec![
             "bash".to_string(),
             "-lc".to_string(),
@@ -568,14 +562,15 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     #[tokio::test]
     async fn append_execpolicy_amendment_updates_policy_and_file() {
         let codex_home = tempdir().expect("create temp dir");
-        let current_policy = Arc::new(RwLock::new(Policy::empty()));
+        let current_policy = Policy::empty();
         let prefix = vec!["echo".to_string(), "hello".to_string()];
 
-        append_execpolicy_amendment_and_update(codex_home.path(), &current_policy, &prefix)
-            .await
-            .expect("update policy");
+        let updated_policy =
+            append_execpolicy_amendment_and_update(codex_home.path(), &current_policy, &prefix)
+                .await
+                .expect("update policy");
 
-        let evaluation = current_policy.read().await.check(
+        let evaluation = updated_policy.check(
             &["echo".to_string(), "hello".to_string(), "world".to_string()],
             &|_| Decision::Allow,
         );
@@ -599,7 +594,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     #[tokio::test]
     async fn append_execpolicy_amendment_rejects_empty_prefix() {
         let codex_home = tempdir().expect("create temp dir");
-        let current_policy = Arc::new(RwLock::new(Policy::empty()));
+        let current_policy = Policy::empty();
 
         let result =
             append_execpolicy_amendment_and_update(codex_home.path(), &current_policy, &[]).await;
@@ -617,7 +612,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     async fn proposed_execpolicy_amendment_is_present_for_single_command_without_policy_match() {
         let command = vec!["cargo".to_string(), "build".to_string()];
 
-        let empty_policy = Arc::new(RwLock::new(Policy::empty()));
+        let empty_policy = Policy::empty();
         let requirement = create_exec_approval_requirement_for_command(
             &empty_policy,
             &Features::with_defaults(),
@@ -643,9 +638,10 @@ prefix_rule(pattern=["rm"], decision="forbidden")
 
         let mut features = Features::with_defaults();
         features.disable(Feature::ExecPolicy);
+        let empty_policy = Policy::empty();
 
         let requirement = create_exec_approval_requirement_for_command(
-            &Arc::new(RwLock::new(Policy::empty())),
+            &empty_policy,
             &features,
             &command,
             AskForApproval::UnlessTrusted,
@@ -670,7 +666,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         parser
             .parse("test.rules", policy_src)
             .expect("parse policy");
-        let policy = Arc::new(RwLock::new(parser.build()));
+        let policy = parser.build();
         let command = vec!["rm".to_string()];
 
         let requirement = create_exec_approval_requirement_for_command(
@@ -699,8 +695,9 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             "-lc".to_string(),
             "cargo build && echo ok".to_string(),
         ];
+        let empty_policy = Policy::empty();
         let requirement = create_exec_approval_requirement_for_command(
-            &Arc::new(RwLock::new(Policy::empty())),
+            &empty_policy,
             &Features::with_defaults(),
             &command,
             AskForApproval::UnlessTrusted,
@@ -728,7 +725,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         parser
             .parse("test.rules", policy_src)
             .expect("parse policy");
-        let policy = Arc::new(RwLock::new(parser.build()));
+        let policy = parser.build();
 
         let command = vec![
             "bash".to_string(),
@@ -758,9 +755,10 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     #[tokio::test]
     async fn proposed_execpolicy_amendment_is_present_when_heuristics_allow() {
         let command = vec!["echo".to_string(), "safe".to_string()];
+        let empty_policy = Policy::empty();
 
         let requirement = create_exec_approval_requirement_for_command(
-            &Arc::new(RwLock::new(Policy::empty())),
+            &empty_policy,
             &Features::with_defaults(),
             &command,
             AskForApproval::OnRequest,
@@ -785,7 +783,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         parser
             .parse("test.rules", policy_src)
             .expect("parse policy");
-        let policy = Arc::new(RwLock::new(parser.build()));
+        let policy = parser.build();
         let command = vec!["echo".to_string(), "safe".to_string()];
 
         let requirement = create_exec_approval_requirement_for_command(

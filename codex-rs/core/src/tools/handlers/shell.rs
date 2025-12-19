@@ -253,7 +253,7 @@ impl ShellHandler {
 
         let features = session.features();
         let exec_approval_requirement = create_exec_approval_requirement_for_command(
-            &turn.exec_policy,
+            turn.exec_policy.as_ref(),
             &features,
             &exec_params.command,
             turn.approval_policy,

@@ -245,7 +245,7 @@ impl Codex {
         let exec_policy = load_exec_policy_for_features(&config.features, &config.codex_home)
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
-        let exec_policy = Arc::new(RwLock::new(exec_policy));
+        let exec_policy = Arc::new(exec_policy);
 
         let config = Arc::new(config);
         if config.features.enabled(Feature::RemoteModels)
@@ -372,7 +372,7 @@ pub(crate) struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
-    pub(crate) exec_policy: Arc<RwLock<ExecPolicy>>,
+    pub(crate) exec_policy: Arc<ExecPolicy>,
     pub(crate) truncation_policy: TruncationPolicy,
 }
 
@@ -428,7 +428,7 @@ pub(crate) struct SessionConfiguration {
     cwd: PathBuf,
 
     /// Execpolicy policy, applied only when enabled by feature flag.
-    exec_policy: Arc<RwLock<ExecPolicy>>,
+    exec_policy: Arc<ExecPolicy>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -1049,12 +1049,14 @@ impl Session {
             return Err(ExecPolicyUpdateError::FeatureDisabled);
         }
 
-        crate::exec_policy::append_execpolicy_amendment_and_update(
+        let updated_policy = crate::exec_policy::append_execpolicy_amendment_and_update(
             &codex_home,
-            &current_policy,
+            current_policy.as_ref(),
             &amendment.command,
         )
         .await?;
+        let mut state = self.state.lock().await;
+        state.session_configuration.exec_policy = Arc::new(updated_policy);
 
         Ok(())
     }
@@ -2849,7 +2851,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
+            exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
 
@@ -2916,7 +2918,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
+            exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
 
@@ -3123,7 +3125,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
+            exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
@@ -3209,7 +3211,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
+            exec_policy: Arc::new(ExecPolicy::empty()),
             session_source: SessionSource::Exec,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);

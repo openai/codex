@@ -485,7 +485,7 @@ impl UnifiedExecSessionManager {
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
         let exec_approval_requirement = create_exec_approval_requirement_for_command(
-            &context.turn.exec_policy,
+            context.turn.exec_policy.as_ref(),
             &features,
             command,
             context.turn.approval_policy,
