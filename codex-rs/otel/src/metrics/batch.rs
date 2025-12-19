@@ -1,8 +1,7 @@
-use crate::error::MetricsError;
-use crate::error::Result;
-use crate::statsd::StatsdLine;
-use crate::statsd::collect_tags;
-use std::collections::BTreeMap;
+use crate::metrics::error::MetricsError;
+use crate::metrics::error::Result;
+use crate::metrics::tags::collect_tags;
+use crate::metrics::validation::validate_metric_name;
 
 #[cfg_attr(test, derive(PartialEq, Eq))]
 #[derive(Clone, Debug)]
@@ -97,10 +96,28 @@ impl HistogramBuckets {
 
         Self::new(bounds)
     }
+
+    pub(crate) fn bounds(&self) -> &[i64] {
+        &self.bounds
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum MetricEvent {
+    Counter {
+        name: String,
+        value: i64,
+        tags: Vec<(String, String)>,
+    },
+    Histogram {
+        name: String,
+        value: i64,
+        tags: Vec<(String, String)>,
+    },
 }
 
 pub struct MetricsBatch {
-    lines: Vec<StatsdLine>,
+    events: Vec<MetricEvent>,
 }
 
 impl Default for MetricsBatch {
@@ -112,17 +129,22 @@ impl Default for MetricsBatch {
 impl MetricsBatch {
     /// Create an empty metrics batch.
     pub fn new() -> Self {
-        Self { lines: Vec::new() }
+        Self { events: Vec::new() }
     }
 
     /// Append a counter increment to the batch.
     pub fn counter(&mut self, name: &str, inc: i64, tags: &[(&str, &str)]) -> Result<()> {
+        validate_metric_name(name)?;
         let tags = collect_tags(tags)?;
-        self.lines.push(StatsdLine::counter(name, inc, tags)?);
+        self.events.push(MetricEvent::Counter {
+            name: name.to_string(),
+            value: inc,
+            tags,
+        });
         Ok(())
     }
 
-    /// Append a histogram sample, encoded as a bucketed counter, to the batch.
+    /// Append a histogram sample to the batch.
     pub fn histogram(
         &mut self,
         name: &str,
@@ -130,36 +152,32 @@ impl MetricsBatch {
         buckets: &HistogramBuckets,
         tags: &[(&str, &str)],
     ) -> Result<()> {
-        let base_tags = collect_tags(tags)?;
-        for bound in buckets.bounds.iter().filter(|bound| value <= **bound) {
-            let mut tags = base_tags.clone();
-            tags.push(("le".to_string(), bound.to_string()));
-            self.lines.push(StatsdLine::counter(name, 1, tags)?);
-        }
-        let mut tags = base_tags;
-        tags.push(("le".to_string(), "inf".to_string()));
-        self.lines.push(StatsdLine::counter(name, 1, tags)?);
+        // Buckets remain part of the API, but OTEL histogram aggregation owns bucket selection.
+        let _ = buckets.bounds();
+        validate_metric_name(name)?;
+        let tags = collect_tags(tags)?;
+        self.events.push(MetricEvent::Histogram {
+            name: name.to_string(),
+            value,
+            tags,
+        });
         Ok(())
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.lines.is_empty()
+        self.events.is_empty()
     }
 
-    pub(crate) fn render(&self, default_tags: &BTreeMap<String, String>) -> Result<String> {
-        let mut rendered = Vec::with_capacity(self.lines.len());
-        for line in &self.lines {
-            rendered.push(line.render(default_tags)?);
-        }
-        Ok(rendered.join("\n"))
+    pub(crate) fn into_events(self) -> Vec<MetricEvent> {
+        self.events
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::HistogramBuckets;
-    use crate::error::MetricsError;
-    use crate::error::Result;
+    use crate::metrics::error::MetricsError;
+    use crate::metrics::error::Result;
     use pretty_assertions::assert_eq;
 
     #[test]

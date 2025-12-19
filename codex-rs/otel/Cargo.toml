@@ -19,13 +19,14 @@ codex-utils-absolute-path = { workspace = true }
 codex-api = { workspace = true }
 codex-protocol = { workspace = true }
 eventsource-stream = { workspace = true }
-opentelemetry = { workspace = true, features = ["logs", "trace"] }
+opentelemetry = { workspace = true, features = ["logs", "metrics", "trace"] }
 opentelemetry-appender-tracing = { workspace = true }
 opentelemetry-otlp = { workspace = true, features = [
     "grpc-tonic",
     "http-proto",
     "http-json",
     "logs",
+    "metrics",
     "trace",
     "reqwest-blocking-client",
     "reqwest-rustls",
@@ -33,16 +34,13 @@ opentelemetry-otlp = { workspace = true, features = [
     "tls-roots",
 ]}
 opentelemetry-semantic-conventions = { workspace = true }
-opentelemetry_sdk = { workspace = true, features = [
-    "logs",
-    "rt-tokio",
-    "trace",
-]}
+opentelemetry_sdk = { workspace = true, features = ["logs", "metrics", "rt-tokio", "trace"] }
 http = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 strum_macros = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true, features = [
     "transport",
@@ -55,3 +53,4 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
+pretty_assertions = { workspace = true }

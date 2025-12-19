@@ -30,37 +30,25 @@ pub enum MetricsError {
     #[error("tag key is reserved: {key}")]
     ReservedTagKey { key: String },
 
-    // Client.
-    #[error("invalid sentry dsn: {dsn}")]
-    InvalidDsn {
-        dsn: String,
+    // Config.
+    #[error("metrics endpoint cannot be empty")]
+    EmptyEndpoint,
+    #[error("metrics api key cannot be empty")]
+    EmptyApiKey,
+    #[error("failed to build metrics exporter")]
+    ExporterBuild {
         #[source]
-        source: sentry::types::ParseDsnError,
+        source: opentelemetry_otlp::ExporterBuildError,
     },
-    #[error("failed to build metrics http client")]
-    HttpClientBuild {
+    #[error("failed to flush metrics")]
+    FlushFailed {
         #[source]
-        source: reqwest::Error,
+        source: opentelemetry_sdk::error::OTelSdkError,
     },
-    #[error("failed to serialize envelope header")]
-    SerializeEnvelopeHeader {
+    #[error("failed to shutdown metrics provider")]
+    ShutdownFailed {
         #[source]
-        source: serde_json::Error,
-    },
-    #[error("failed to serialize item header")]
-    SerializeEnvelopeItemHeader {
-        #[source]
-        source: serde_json::Error,
-    },
-    #[error("failed to send metrics envelope")]
-    SendEnvelope {
-        #[source]
-        source: reqwest::Error,
-    },
-    #[error("sentry metrics upload failed: {status}{body}")]
-    SentryUploadFailed {
-        status: reqwest::StatusCode,
-        body: String,
+        source: opentelemetry_sdk::error::OTelSdkError,
     },
 
     // Worker.

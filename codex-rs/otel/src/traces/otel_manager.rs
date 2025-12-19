@@ -1,4 +1,11 @@
-use crate::otel_provider::traceparent_context_from_env;
+use crate::metrics::HistogramBuckets;
+use crate::metrics::MetricsBatch;
+use crate::metrics::MetricsClient;
+use crate::metrics::MetricsConfig;
+use crate::metrics::Result as MetricsResult;
+use crate::metrics::validation::validate_tag_key;
+use crate::metrics::validation::validate_tag_value;
+use crate::traces::otel_provider::traceparent_context_from_env;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_api::ResponseEvent;
@@ -52,6 +59,8 @@ pub struct OtelEventMetadata {
 pub struct OtelManager {
     metadata: OtelEventMetadata,
     session_span: Span,
+    metrics: Option<MetricsClient>,
+    metrics_use_metadata_tags: bool,
 }
 
 impl OtelManager {
@@ -86,6 +95,8 @@ impl OtelManager {
                 terminal_type,
             },
             session_span,
+            metrics: None,
+            metrics_use_metadata_tags: true,
         }
     }
 
@@ -96,8 +107,107 @@ impl OtelManager {
         manager
     }
 
+    pub fn with_metrics(mut self, metrics: MetricsClient) -> Self {
+        self.metrics = Some(metrics);
+        self.metrics_use_metadata_tags = true;
+        self
+    }
+
+    pub fn with_metrics_without_metadata_tags(mut self, metrics: MetricsClient) -> Self {
+        self.metrics = Some(metrics);
+        self.metrics_use_metadata_tags = false;
+        self
+    }
+
+    pub fn with_metrics_config(self, config: MetricsConfig) -> MetricsResult<Self> {
+        let metrics = MetricsClient::new(config)?;
+        Ok(self.with_metrics(metrics))
+    }
+
     pub fn current_span(&self) -> &Span {
         &self.session_span
+    }
+
+    pub fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) -> MetricsResult<()> {
+        let Some(metrics) = &self.metrics else {
+            return Ok(());
+        };
+        let tags = self.tags_with_metadata(tags)?;
+        metrics.counter(name, inc, &tags)
+    }
+
+    pub fn histogram(
+        &self,
+        name: &str,
+        value: i64,
+        buckets: &HistogramBuckets,
+        tags: &[(&str, &str)],
+    ) -> MetricsResult<()> {
+        let Some(metrics) = &self.metrics else {
+            return Ok(());
+        };
+        let tags = self.tags_with_metadata(tags)?;
+        metrics.histogram(name, value, buckets, &tags)
+    }
+
+    pub fn record_duration(
+        &self,
+        name: &str,
+        duration: Duration,
+        buckets: &HistogramBuckets,
+        tags: &[(&str, &str)],
+    ) -> MetricsResult<()> {
+        let Some(metrics) = &self.metrics else {
+            return Ok(());
+        };
+        let tags = self.tags_with_metadata(tags)?;
+        metrics.record_duration(name, duration, buckets, &tags)
+    }
+
+    pub fn time<T>(
+        &self,
+        name: &str,
+        buckets: &HistogramBuckets,
+        tags: &[(&str, &str)],
+        f: impl FnOnce() -> T,
+    ) -> MetricsResult<T> {
+        let Some(metrics) = &self.metrics else {
+            return Ok(f());
+        };
+        let tags = self.tags_with_metadata(tags)?;
+        metrics.time(name, buckets, &tags, f)
+    }
+
+    pub fn time_result<T>(
+        &self,
+        name: &str,
+        buckets: &HistogramBuckets,
+        tags: &[(&str, &str)],
+        f: impl FnOnce() -> MetricsResult<T>,
+    ) -> MetricsResult<T> {
+        let Some(metrics) = &self.metrics else {
+            return f();
+        };
+        let tags = self.tags_with_metadata(tags)?;
+        metrics.time_result(name, buckets, &tags, f)
+    }
+
+    pub fn batch(&self) -> MetricsResult<OtelMetricsBatch> {
+        Ok(OtelMetricsBatch::new(self.metadata_tags_owned()?))
+    }
+
+    pub fn send(&self, batch: OtelMetricsBatch) -> MetricsResult<()> {
+        let Some(metrics) = &self.metrics else {
+            return Ok(());
+        };
+        metrics.send(batch.into_inner())
+    }
+
+    pub fn shutdown_metrics(&self) -> MetricsResult<()> {
+        let Some(metrics) = &self.metrics else {
+            return Ok(());
+        };
+        metrics.shutdown()
     }
 
     pub fn record_responses(&self, handle_responses_span: &Span, event: &ResponseEvent) {
@@ -528,6 +638,108 @@ impl OtelManager {
             ResponseItem::Compaction { .. } => "compaction".into(),
             ResponseItem::Other => "other".into(),
         }
+    }
+
+    fn tags_with_metadata<'a>(
+        &'a self,
+        tags: &'a [(&'a str, &'a str)],
+    ) -> MetricsResult<Vec<(&'a str, &'a str)>> {
+        let mut merged = self.metadata_tag_refs()?;
+        merged.extend(tags.iter().copied());
+        Ok(merged)
+    }
+
+    fn metadata_tag_refs(&self) -> MetricsResult<Vec<(&str, &str)>> {
+        if !self.metrics_use_metadata_tags {
+            return Ok(Vec::new());
+        }
+        let mut tags = Vec::with_capacity(5);
+        Self::push_metadata_tag(&mut tags, "auth_mode", self.metadata.auth_mode.as_deref())?;
+        Self::push_metadata_tag(&mut tags, "model", Some(self.metadata.model.as_str()))?;
+        Self::push_metadata_tag(&mut tags, "slug", Some(self.metadata.slug.as_str()))?;
+        Self::push_metadata_tag(
+            &mut tags,
+            "terminal.type",
+            Some(self.metadata.terminal_type.as_str()),
+        )?;
+        Self::push_metadata_tag(&mut tags, "app.version", Some(self.metadata.app_version))?;
+        Ok(tags)
+    }
+
+    fn metadata_tags_owned(&self) -> MetricsResult<Vec<(String, String)>> {
+        let tags = self.metadata_tag_refs()?;
+        Ok(tags
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect())
+    }
+
+    fn push_metadata_tag<'a>(
+        tags: &mut Vec<(&'a str, &'a str)>,
+        key: &'static str,
+        value: Option<&'a str>,
+    ) -> MetricsResult<()> {
+        let Some(value) = value else {
+            return Ok(());
+        };
+        validate_tag_key(key)?;
+        validate_tag_value(value)?;
+        tags.push((key, value));
+        Ok(())
+    }
+}
+
+pub struct OtelMetricsBatch {
+    batch: MetricsBatch,
+    metadata_tags: Vec<(String, String)>,
+}
+
+impl OtelMetricsBatch {
+    fn new(metadata_tags: Vec<(String, String)>) -> Self {
+        Self {
+            batch: MetricsBatch::new(),
+            metadata_tags,
+        }
+    }
+
+    pub fn counter(&mut self, name: &str, inc: i64, tags: &[(&str, &str)]) -> MetricsResult<()> {
+        let metadata_tags = std::mem::take(&mut self.metadata_tags);
+        let merged = Self::merge_tags(&metadata_tags, tags);
+        let result = self.batch.counter(name, inc, &merged);
+        self.metadata_tags = metadata_tags;
+        result
+    }
+
+    pub fn histogram(
+        &mut self,
+        name: &str,
+        value: i64,
+        buckets: &HistogramBuckets,
+        tags: &[(&str, &str)],
+    ) -> MetricsResult<()> {
+        let metadata_tags = std::mem::take(&mut self.metadata_tags);
+        let merged = Self::merge_tags(&metadata_tags, tags);
+        let result = self.batch.histogram(name, value, buckets, &merged);
+        self.metadata_tags = metadata_tags;
+        result
+    }
+
+    fn merge_tags<'a>(
+        metadata_tags: &'a [(String, String)],
+        tags: &'a [(&'a str, &'a str)],
+    ) -> Vec<(&'a str, &'a str)> {
+        let mut merged = Vec::with_capacity(metadata_tags.len() + tags.len());
+        merged.extend(
+            metadata_tags
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        );
+        merged.extend(tags.iter().copied());
+        merged
+    }
+
+    fn into_inner(self) -> MetricsBatch {
+        self.batch
     }
 }
 

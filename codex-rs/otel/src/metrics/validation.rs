@@ -1,5 +1,5 @@
-use crate::error::MetricsError;
-use crate::error::Result;
+use crate::metrics::error::MetricsError;
+use crate::metrics::error::Result;
 use std::collections::BTreeMap;
 
 pub(crate) fn validate_tags(tags: &BTreeMap<String, String>) -> Result<()> {

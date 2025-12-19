@@ -1271,7 +1271,6 @@ dependencies = [
  "codex-file-search",
  "codex-git",
  "codex-keyring-store",
- "codex-metrics",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
@@ -1563,19 +1562,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-metrics"
-version = "0.0.0"
-dependencies = [
- "pretty_assertions",
- "reqwest",
- "sentry",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "codex-ollama"
 version = "0.0.0"
 dependencies = [
@@ -1607,10 +1593,12 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
+ "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",
  "strum_macros 0.27.2",
+ "thiserror 2.0.17",
  "tokio",
  "tonic",
  "tracing",
