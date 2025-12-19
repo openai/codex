@@ -385,6 +385,12 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     Ok(())
 }
 
+/// Exercises the remote-models retry flow:
+/// 1) initial `/models` fetch stores an ETag,
+/// 2) `/responses` uses that ETag for a tool call,
+/// 3) the tool-output turn receives a 412 (stale models),
+/// 4) Codex refreshes `/models` to get a new ETag and retries,
+/// 5) subsequent user turns keep sending the refreshed ETag.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -399,7 +405,7 @@ async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
     let initial_etag = "models-etag-initial";
     let refreshed_etag = "models-etag-refreshed";
 
-    // Phase 1: start Codex with remote models and capture the initial ETag.
+    // Phase 1a: seed the initial `/models` response with an ETag.
     let models_mock = mount_models_once_with_etag(
         &server,
         ModelsResponse {
@@ -409,6 +415,7 @@ async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
     )
     .await;
 
+    // Phase 1b: boot a Codex session configured for remote models.
     let harness = build_remote_models_harness(&server, |config| {
         config.features.enable(Feature::RemoteModels);
         config.model = Some("gpt-5.1".to_string());
@@ -426,6 +433,7 @@ async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
     let models_manager = conversation_manager.get_models_manager();
     wait_for_model_available(&models_manager, "remote-etag", &config).await;
 
+    // Phase 1c: confirm the ETag is stored and `/models` was called.
     assert_eq!(
         models_manager.get_models_etag().await.as_deref(),
         Some(initial_etag),
@@ -437,8 +445,9 @@ async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
     );
     assert_eq!(models_mock.requests()[0].url.path(), "/v1/models");
 
-    // Phase 2: the tool output turn hits a 412 and triggers a models refresh.
+    // Phase 2a: reset mocks so the next `/models` call must be explicit.
     server.reset().await;
+    // Phase 2b: mount a refreshed `/models` response with a new ETag.
     let refreshed_models_mock = mount_models_once_with_etag(
         &server,
         ModelsResponse {
@@ -452,6 +461,7 @@ async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
     let first_prompt = "run a shell command";
     let followup_prompt = "send another message";
 
+    // Phase 2c: first `/responses` turn uses the initial ETag and emits a tool call.
     let first_response = mount_sse_once_match(
         &server,
         ResponsesMatch::default()
@@ -465,6 +475,7 @@ async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
     )
     .await;
 
+    // Phase 2d: the tool-output follow-up returns 412 (stale models).
     let stale_response = mount_response_once_match(
         &server,
         ResponsesMatch::default()
@@ -475,6 +486,7 @@ async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
     )
     .await;
 
+    // Phase 2e: retry tool-output follow-up should use the refreshed ETag.
     let refreshed_response = mount_sse_once_match(
         &server,
         ResponsesMatch::default()
@@ -488,7 +500,7 @@ async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
     )
     .await;
 
-    // Phase 3: the next user turn should send the refreshed ETag.
+    // Phase 3a: next user turn should also use the refreshed ETag.
     let next_turn_response = mount_sse_once_match(
         &server,
         ResponsesMatch::default()
@@ -502,6 +514,7 @@ async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
     )
     .await;
 
+    // Phase 3b: run the first user turn and let retries complete.
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
@@ -519,6 +532,7 @@ async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
+    // Phase 3c: assert the refresh happened and the ETag was updated.
     assert_eq!(
         refreshed_models_mock.requests().len(),
         1,
@@ -529,6 +543,7 @@ async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
         Some(refreshed_etag),
     );
 
+    // Phase 3d: assert the ETag header progression across the retry sequence.
     assert_eq!(
         first_response.single_request().header("X-If-Models-Match"),
         Some(initial_etag.to_string()),
@@ -544,6 +559,7 @@ async fn remote_models_refresh_etag_after_outdated_models() -> Result<()> {
         Some(refreshed_etag.to_string()),
     );
 
+    // Phase 3e: execute a new user turn and ensure the refreshed ETag persists.
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
