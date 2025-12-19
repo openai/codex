@@ -38,15 +38,16 @@ pub(crate) async fn run_editor(seed: &str, editor_cmd: &[String]) -> Result<Stri
         return Err(Report::msg("editor command is empty"));
     }
 
-    let tempfile = Builder::new().suffix(".md").tempfile()?;
-    fs::write(tempfile.path(), seed)?;
+    // Convert to TempPath immediately so no file handle stays open on Windows.
+    let temp_path = Builder::new().suffix(".md").tempfile()?.into_temp_path();
+    fs::write(&temp_path, seed)?;
 
     let mut cmd = Command::new(&editor_cmd[0]);
     if editor_cmd.len() > 1 {
         cmd.args(&editor_cmd[1..]);
     }
     let status = cmd
-        .arg(tempfile.path())
+        .arg(&temp_path)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -57,7 +58,7 @@ pub(crate) async fn run_editor(seed: &str, editor_cmd: &[String]) -> Result<Stri
         return Err(Report::msg(format!("editor exited with status {status}")));
     }
 
-    let contents = fs::read_to_string(tempfile.path())?;
+    let contents = fs::read_to_string(&temp_path)?;
     Ok(contents)
 }
 
