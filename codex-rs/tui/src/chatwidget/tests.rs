@@ -39,6 +39,7 @@ use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
+use codex_core::protocol::TerminalInteractionEvent;
 use codex_core::protocol::TokenCountEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
@@ -866,6 +867,42 @@ fn begin_exec_with_source(
     event
 }
 
+fn begin_unified_exec_startup(
+    chat: &mut ChatWidget,
+    call_id: &str,
+    process_id: &str,
+    raw_cmd: &str,
+) -> ExecCommandBeginEvent {
+    let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let event = ExecCommandBeginEvent {
+        call_id: call_id.to_string(),
+        process_id: Some(process_id.to_string()),
+        turn_id: "turn-1".to_string(),
+        command,
+        cwd,
+        parsed_cmd: Vec::new(),
+        source: ExecCommandSource::UnifiedExecStartup,
+        interaction_input: None,
+    };
+    chat.handle_codex_event(Event {
+        id: call_id.to_string(),
+        msg: EventMsg::ExecCommandBegin(event.clone()),
+    });
+    event
+}
+
+fn terminal_interaction(chat: &mut ChatWidget, call_id: &str, process_id: &str, stdin: &str) {
+    chat.handle_codex_event(Event {
+        id: call_id.to_string(),
+        msg: EventMsg::TerminalInteraction(TerminalInteractionEvent {
+            call_id: call_id.to_string(),
+            process_id: process_id.to_string(),
+            stdin: stdin.to_string(),
+        }),
+    });
+}
+
 fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) -> ExecCommandBeginEvent {
     begin_exec_with_source(chat, call_id, raw_cmd, ExecCommandSource::Agent)
 }
@@ -1245,6 +1282,90 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
         cells.is_empty(),
         "expected unified exec end after task complete to be suppressed"
     );
+}
+
+#[tokio::test]
+async fn unified_exec_waiting_multiple_empty_snapshots() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    begin_unified_exec_startup(&mut chat, "call-wait-1", "proc-1", "just fix");
+
+    terminal_interaction(&mut chat, "call-wait-1a", "proc-1", "");
+    terminal_interaction(&mut chat, "call-wait-1b", "proc-1", "");
+    assert_snapshot!(
+        "unified_exec_waiting_multiple_empty_active",
+        active_blob(&chat)
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-wait-1".into(),
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_snapshot!("unified_exec_waiting_multiple_empty_after", combined);
+}
+
+#[tokio::test]
+async fn unified_exec_empty_then_non_empty_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    begin_unified_exec_startup(&mut chat, "call-wait-2", "proc-2", "just fix");
+
+    terminal_interaction(&mut chat, "call-wait-2a", "proc-2", "");
+    terminal_interaction(&mut chat, "call-wait-2b", "proc-2", "ls\n");
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_snapshot!("unified_exec_empty_then_non_empty_after", combined);
+}
+
+#[tokio::test]
+async fn unified_exec_non_empty_then_empty_snapshots() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    begin_unified_exec_startup(&mut chat, "call-wait-3", "proc-3", "just fix");
+
+    terminal_interaction(&mut chat, "call-wait-3a", "proc-3", "pwd\n");
+    terminal_interaction(&mut chat, "call-wait-3b", "proc-3", "");
+    let pre_cells = drain_insert_history(&mut rx);
+    let mut active_combined = pre_cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    if !active_combined.is_empty() {
+        active_combined.push('\n');
+    }
+    active_combined.push_str(&active_blob(&chat));
+    assert_snapshot!("unified_exec_non_empty_then_empty_active", active_combined);
+
+    chat.handle_codex_event(Event {
+        id: "turn-wait-3".into(),
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    let post_cells = drain_insert_history(&mut rx);
+    let mut combined = pre_cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    let post = post_cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    if !combined.is_empty() && !post.is_empty() {
+        combined.push('\n');
+    }
+    combined.push_str(&post);
+    assert_snapshot!("unified_exec_non_empty_then_empty_after", combined);
 }
 
 /// Selecting the custom prompt option from the review popup sends

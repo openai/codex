@@ -8,6 +8,7 @@ use chrono::Local;
 use codex_common::create_config_summary_entries;
 use codex_core::config::Config;
 use codex_core::openai_models::model_family::ModelFamily;
+use codex_core::protocol::NetworkAccess;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
 use codex_protocol::ConversationId;
@@ -122,6 +123,13 @@ impl StatusHistoryCell {
             SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
             SandboxPolicy::ReadOnly => "read-only".to_string(),
             SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
+            SandboxPolicy::ExternalSandbox { network_access } => {
+                if matches!(network_access, NetworkAccess::Enabled) {
+                    "external-sandbox (network access enabled)".to_string()
+                } else {
+                    "external-sandbox".to_string()
+                }
+            }
         };
         let agents_summary = compose_agents_summary(config);
         let account = compose_account_display(auth_manager, plan_type);
