@@ -48,7 +48,7 @@ pub struct Prompt {
 }
 
 impl Prompt {
-    pub(crate) fn new(
+    pub(crate) async fn new(
         sess: &Session,
         turn_context: &TurnContext,
         router: &ToolRouter,
@@ -57,6 +57,7 @@ impl Prompt {
         let model_supports_parallel = turn_context
             .client
             .get_model_family()
+            .await
             .supports_parallel_tool_calls;
 
         Prompt {

@@ -55,7 +55,7 @@ pub(crate) async fn run_compact_task(
     input: Vec<UserInput>,
 ) {
     let start_event = EventMsg::TaskStarted(TaskStartedEvent {
-        model_context_window: turn_context.client.get_model_context_window(),
+        model_context_window: turn_context.client.get_model_context_window().await,
     });
     sess.send_event(&turn_context, start_event).await;
     run_compact_task_inner(sess.clone(), turn_context, input).await;
@@ -83,7 +83,7 @@ async fn run_compact_task_inner(
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
-        model: turn_context.client.get_model(),
+        model: turn_context.client.get_model().await,
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
     });
