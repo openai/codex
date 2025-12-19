@@ -78,7 +78,6 @@ use crate::client_common::ResponseEvent;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
-use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
 use crate::config::types::ShellEnvironmentPolicy;
@@ -836,11 +835,8 @@ impl Session {
                 Ok(())
             }
             Err(err) => {
-                let wrapped = ConstraintError {
-                    message: format!("Could not update config: {err}"),
-                };
-                warn!(%wrapped, "rejected session settings update");
-                Err(wrapped)
+                warn!("rejected session settings update: {err}");
+                Err(err)
             }
         }
     }
@@ -861,18 +857,15 @@ impl Session {
                 }
                 Err(err) => {
                     drop(state);
-                    let wrapped = ConstraintError {
-                        message: format!("Could not update config: {err}"),
-                    };
                     self.send_event_raw(Event {
                         id: sub_id.clone(),
                         msg: EventMsg::Error(ErrorEvent {
-                            message: wrapped.to_string(),
+                            message: err.to_string(),
                             codex_error_info: Some(CodexErrorInfo::BadRequest),
                         }),
                     })
                     .await;
-                    return Err(wrapped);
+                    return Err(err);
                 }
             }
         };
