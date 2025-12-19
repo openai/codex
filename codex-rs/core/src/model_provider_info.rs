@@ -2,7 +2,7 @@
 //!
 //! Providers can be defined in two places:
 //!   1. Built-in defaults compiled into the binary so Codex works out-of-the-box.
-//!   2. User-defined entries inside `~/.codex/config.toml` under the `model_providers`
+//!   2. User-defined entries inside `~/.codexel/config.toml` under the `model_providers`
 //!      key. These override or extend the defaults at runtime.
 
 use codex_api::Provider as ApiProvider;

@@ -1,6 +1,6 @@
-#![cfg(not(debug_assertions))]
+#![cfg(any(not(debug_assertions), test))]
+#![cfg_attr(test, allow(dead_code))]
 
-use crate::update_action;
 use crate::update_action::UpdateAction;
 use chrono::DateTime;
 use chrono::Duration;
@@ -20,7 +20,10 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
     }
 
     let version_file = version_filepath(config);
-    let info = read_version_info(&version_file).ok();
+    let update_target = current_update_target();
+    let info = read_version_info_for_source(&version_file, update_target.source_key)
+        .ok()
+        .flatten();
 
     if match &info {
         None => true,
@@ -52,17 +55,41 @@ struct VersionInfo {
     last_checked_at: DateTime<Utc>,
     #[serde(default)]
     dismissed_version: Option<String>,
+    #[serde(default)]
+    source_key: Option<String>,
 }
 
 const VERSION_FILENAME: &str = "version.json";
+const NPM_LATEST_URL: &str = "https://registry.npmjs.org/@ixe1%2Fcodexel/latest";
+const NPM_SOURCE_KEY: &str = "npm:@ixe1/codexel";
 // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
 const HOMEBREW_CASK_URL: &str =
     "https://raw.githubusercontent.com/Homebrew/homebrew-cask/HEAD/Casks/c/codexel.rb";
+const HOMEBREW_SOURCE_KEY: &str = "brew:codexel";
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/Ixe1/codexel/releases/latest";
+const GITHUB_SOURCE_KEY: &str = "github:Ixe1/codexel";
 
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {
     tag_name: String,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+struct NpmLatestInfo {
+    version: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdateSource {
+    Npm,
+    Homebrew,
+    Github,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UpdateTarget {
+    source: UpdateSource,
+    source_key: &'static str,
 }
 
 fn version_filepath(config: &Config) -> PathBuf {
@@ -74,9 +101,53 @@ fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
     Ok(serde_json::from_str(&contents)?)
 }
 
+fn read_version_info_for_source(
+    version_file: &Path,
+    source_key: &str,
+) -> anyhow::Result<Option<VersionInfo>> {
+    let info = read_version_info(version_file)?;
+    Ok(filter_version_info_by_source(info, source_key))
+}
+
+fn filter_version_info_by_source(info: VersionInfo, source_key: &str) -> Option<VersionInfo> {
+    if info.source_key.as_deref() == Some(source_key) {
+        Some(info)
+    } else {
+        None
+    }
+}
+
+fn resolve_update_target(action: Option<UpdateAction>) -> UpdateTarget {
+    match action {
+        Some(UpdateAction::BrewUpgrade) => UpdateTarget {
+            source: UpdateSource::Homebrew,
+            source_key: HOMEBREW_SOURCE_KEY,
+        },
+        Some(UpdateAction::NpmUpgrade | UpdateAction::BunUpgrade) => UpdateTarget {
+            source: UpdateSource::Npm,
+            source_key: NPM_SOURCE_KEY,
+        },
+        None => UpdateTarget {
+            source: UpdateSource::Github,
+            source_key: GITHUB_SOURCE_KEY,
+        },
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn current_update_target() -> UpdateTarget {
+    resolve_update_target(crate::update_action::get_update_action())
+}
+
+#[cfg(test)]
+fn current_update_target() -> UpdateTarget {
+    resolve_update_target(None)
+}
+
 async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
-    let latest_version = match update_action::get_update_action() {
-        Some(UpdateAction::BrewUpgrade) => {
+    let update_target = current_update_target();
+    let latest_version = match update_target.source {
+        UpdateSource::Homebrew => {
             let cask_contents = create_client()
                 .get(HOMEBREW_CASK_URL)
                 .send()
@@ -86,7 +157,17 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
                 .await?;
             extract_version_from_cask(&cask_contents)?
         }
-        _ => {
+        UpdateSource::Npm => {
+            let NpmLatestInfo { version } = create_client()
+                .get(NPM_LATEST_URL)
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<NpmLatestInfo>()
+                .await?;
+            version
+        }
+        UpdateSource::Github => {
             let ReleaseInfo {
                 tag_name: latest_tag_name,
             } = create_client()
@@ -101,11 +182,14 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
     };
 
     // Preserve any previously dismissed version if present.
-    let prev_info = read_version_info(version_file).ok();
+    let prev_info = read_version_info_for_source(version_file, update_target.source_key)
+        .ok()
+        .flatten();
     let info = VersionInfo {
         latest_version,
         last_checked_at: Utc::now(),
         dismissed_version: prev_info.and_then(|p| p.dismissed_version),
+        source_key: Some(update_target.source_key.to_string()),
     };
 
     let json_line = format!("{}\n", serde_json::to_string(&info)?);
@@ -152,7 +236,8 @@ pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
     let version_file = version_filepath(config);
     let latest = get_upgrade_version(config)?;
     // If the user dismissed this exact version previously, do not show the popup.
-    if let Ok(info) = read_version_info(&version_file)
+    let source_key = current_update_target().source_key;
+    if let Ok(Some(info)) = read_version_info_for_source(&version_file, source_key)
         && info.dismissed_version.as_deref() == Some(latest.as_str())
     {
         return None;
@@ -164,11 +249,15 @@ pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
 /// the update popup again for this version.
 pub async fn dismiss_version(config: &Config, version: &str) -> anyhow::Result<()> {
     let version_file = version_filepath(config);
-    let mut info = match read_version_info(&version_file) {
-        Ok(info) => info,
-        Err(_) => return Ok(()),
+    let source_key = current_update_target().source_key;
+    let Some(mut info) = read_version_info_for_source(&version_file, source_key)
+        .ok()
+        .flatten()
+    else {
+        return Ok(());
     };
     info.dismissed_version = Some(version.to_string());
+    info.source_key = Some(source_key.to_string());
     let json_line = format!("{}\n", serde_json::to_string(&info)?);
     if let Some(parent) = version_file.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -188,6 +277,7 @@ fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn parses_version_from_cask_contents() {
@@ -233,5 +323,29 @@ mod tests {
     fn whitespace_is_ignored() {
         assert_eq!(parse_version(" 1.2.3 \n"), Some((1, 2, 3)));
         assert_eq!(is_newer(" 1.2.3 ", "1.2.2"), Some(true));
+    }
+
+    #[test]
+    fn parses_npm_latest_version() {
+        let payload = r#"{ "name": "@ixe1/codexel", "version": "0.42.1" }"#;
+        let parsed = serde_json::from_str::<NpmLatestInfo>(payload)
+            .expect("failed to parse npm latest payload");
+        assert_eq!(
+            parsed,
+            NpmLatestInfo {
+                version: "0.42.1".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn cache_mismatch_is_ignored() {
+        let info = VersionInfo {
+            latest_version: "9.9.9".to_string(),
+            last_checked_at: Utc::now(),
+            dismissed_version: None,
+            source_key: Some(GITHUB_SOURCE_KEY.to_string()),
+        };
+        assert!(filter_version_info_by_source(info, NPM_SOURCE_KEY).is_none());
     }
 }

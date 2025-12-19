@@ -9,8 +9,7 @@ use std::path::PathBuf;
 ///
 /// The directory can be specified by the `CODEXEL_HOME` environment variable.
 /// For compatibility with existing installs, `CODEX_HOME` is also honored. When
-/// neither is set, defaults to `~/.codexel`, falling back to `~/.codex` if that
-/// directory exists and `~/.codexel` does not.
+/// neither is set, defaults to `~/.codexel`.
 ///
 /// - If `CODEXEL_HOME` (or `CODEX_HOME`) is set, the value will be canonicalized and this
 ///   function will Err if the path does not exist.
@@ -39,14 +38,5 @@ pub(crate) fn find_codex_home() -> std::io::Result<PathBuf> {
     })?;
 
     let codexel_home = home.join(".codexel");
-    if codexel_home.exists() {
-        return Ok(codexel_home);
-    }
-
-    let codex_home = home.join(".codex");
-    if codex_home.exists() {
-        return Ok(codex_home);
-    }
-
     Ok(codexel_home)
 }

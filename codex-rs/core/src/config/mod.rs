@@ -158,7 +158,7 @@ pub struct Config {
     /// appends one extra argument containing a JSON payload describing the
     /// event.
     ///
-    /// Example `~/.codex/config.toml` snippet:
+    /// Example `~/.codexel/config.toml` snippet:
     ///
     /// ```toml
     /// notify = ["notify-send", "Codex"]
@@ -219,11 +219,12 @@ pub struct Config {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
-    /// Directory containing all Codex state (defaults to `~/.codex` but can be
-    /// overridden by the `CODEX_HOME` environment variable).
+    /// Directory containing all Codex state (defaults to `~/.codexel` but can be
+    /// overridden by the `CODEXEL_HOME` environment variable, or the legacy
+    /// `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
 
-    /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
+    /// Settings that govern if and what will be written to `~/.codexel/history.jsonl`.
     pub history: History,
 
     /// Optional URI-based file opener. If set, citations to files in the model
@@ -609,7 +610,7 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
     Ok(())
 }
 
-/// Base config deserialized from ~/.codex/config.toml.
+/// Base config deserialized from ~/.codexel/config.toml.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigToml {
     /// Optional override of model selection.
@@ -701,7 +702,7 @@ pub struct ConfigToml {
     #[serde(default)]
     pub profiles: HashMap<String, ConfigProfile>,
 
-    /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
+    /// Settings that govern if and what will be written to `~/.codexel/history.jsonl`.
     #[serde(default)]
     pub history: Option<History>,
 
@@ -1428,8 +1429,7 @@ fn default_review_model() -> String {
 ///
 /// The directory can be specified by the `CODEXEL_HOME` environment variable.
 /// For compatibility with existing installs, `CODEX_HOME` is also honored. When
-/// neither is set, defaults to `~/.codexel`, falling back to `~/.codex` if that
-/// directory exists and `~/.codexel` does not.
+/// neither is set, defaults to `~/.codexel`.
 ///
 /// - If `CODEXEL_HOME` (or `CODEX_HOME`) is set, the value will be canonicalized and this
 ///   function will Err if the path does not exist.
@@ -1458,15 +1458,6 @@ pub fn find_codex_home() -> std::io::Result<PathBuf> {
     })?;
 
     let codexel_home = home.join(".codexel");
-    if codexel_home.exists() {
-        return Ok(codexel_home);
-    }
-
-    let codex_home = home.join(".codex");
-    if codex_home.exists() {
-        return Ok(codex_home);
-    }
-
     Ok(codexel_home)
 }
 

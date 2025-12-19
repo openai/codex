@@ -4,7 +4,7 @@ Custom prompts turn your repeatable instructions into reusable slash commands, s
 
 ### Where prompts live
 
-- Location: store prompts in `$CODEXEL_HOME/prompts/` (defaults to `~/.codexel/prompts/`). Set `CODEXEL_HOME` if you want to use a different folder (legacy `CODEX_HOME` is also supported).
+- Location: store prompts in `$CODEXEL_HOME/prompts/` (defaults to `~/.codexel/prompts/`). Set `CODEXEL_HOME` if you want to use a different folder (or set `CODEX_HOME` to use the legacy location).
 - File type: Codex only loads `.md` files. Non-Markdown files are ignored. Both regular files and symlinks to Markdown files are supported.
 - Naming: The filename (without `.md`) becomes the prompt name. A file called `review.md` registers the prompt `review`.
 - Refresh: Prompts are loaded when a session starts. Restart Codexel (or start a new session) after adding or editing files.

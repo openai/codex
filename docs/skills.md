@@ -8,7 +8,7 @@ Codexel can automatically discover reusable "skills" you keep on disk. A skill i
 
 Skills are behind the experimental `skills` feature flag and are disabled by default.
 
-- Enable in config (preferred): add the following to `$CODEXEL_HOME/config.toml` (usually `~/.codexel/config.toml`, or legacy `~/.codex/config.toml`) and restart Codexel:
+- Enable in config (preferred): add the following to `$CODEXEL_HOME/config.toml` (usually `~/.codexel/config.toml`, or `~/.codex/config.toml` when `CODEX_HOME=~/.codex` is set) and restart Codexel:
 
   ```toml
   [features]

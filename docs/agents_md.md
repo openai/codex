@@ -4,7 +4,7 @@ Codexel uses [`AGENTS.md`](https://agents.md/) files to gather helpful guidance 
 
 ## Global Instructions (`~/.codexel`)
 
-- Codexel looks for global guidance in your Codexel home directory (usually `~/.codexel`; set `CODEXEL_HOME` to change it, or legacy `CODEX_HOME`). For a quick overview, see the [Memory with AGENTS.md section](../docs/getting-started.md#memory-with-agentsmd) in the getting started guide.
+- Codexel looks for global guidance in your Codexel home directory (usually `~/.codexel`; set `CODEXEL_HOME` to change it, or set `CODEX_HOME` to use the legacy location). For a quick overview, see the [Memory with AGENTS.md section](../docs/getting-started.md#memory-with-agentsmd) in the getting started guide.
 - If an `AGENTS.override.md` file exists there, it takes priority. If not, Codexel falls back to `AGENTS.md`.
 - Only the first non-empty file is used. Other filenames, such as `instructions.md`, have no effect unless Codexel is specifically instructed to use them.
 - Whatever Codexel finds here stays active for the whole session, and Codexel combines it with any project-specific instructions it discovers.

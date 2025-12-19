@@ -14,13 +14,16 @@ edited between the markers.
 - Skip macOS rust-ci jobs on pull requests to avoid flaky PR runs.
 - Skip upstream npm package staging in CI for forks.
 - Fix sdk workflow to build the codexel binary.
+- Fix Codexel update checks for npm/bun installs and keep the default state directory isolated to `~/.codexel`.
 
 ### Details
 
 <!-- BEGIN GENERATED DETAILS: range=79d019672838ccc532247588d31d2eda81fb42d8..HEAD -->
+#### Branding & Packaging
+- Fix sdk workflow codexel build
+
 
 #### Other
-
 - Update changelog for 0.1.2 release
 - Adjust changelog release metadata
 - Skip macOS rust-ci jobs on PRs
@@ -41,18 +44,16 @@ Release commit: 79d019672838ccc532247588d31d2eda81fb42d8
 ### Details
 
 <!-- BEGIN GENERATED DETAILS: range=d02343f99e3260308b2355f26e382ae04b14d7e7..79d019672838ccc532247588d31d2eda81fb42d8 -->
-
 #### Plan Mode
-
 - Deduplicate plan updates in history
 
-#### Branding & Packaging
 
+#### Branding & Packaging
 - Fix Codexel update actions
 - Add GitHub Release publishing for Codexel
 
-#### Other
 
+#### Other
 - Update changelog for 0.1.1 (mac build)
 - Update status snapshots
 - Delay rate limit polling until user input
@@ -74,19 +75,17 @@ Release commit: d02343f99e3260308b2355f26e382ae04b14d7e7
 ### Details
 
 <!-- BEGIN GENERATED DETAILS: range=3e57f558eff5b400292a6ad3c9df2721648aed6f..d02343f99e3260308b2355f26e382ae04b14d7e7 -->
-
 #### Documentation
-
 - Document changelog workflow in AGENTS
 - Remove interactive questions from AGENTS
 
-#### Branding & Packaging
 
+#### Branding & Packaging
 - Add Codexel changelog and generator
 - Prepare Codexel npm 0.1.1 release
 
-#### Other
 
+#### Other
 - Update changelog for 0.1.1
 - Fix npm publish workflow yaml
 - Skip macOS in npm publish workflow
@@ -107,23 +106,21 @@ Release commit: 3e57f558eff5b400292a6ad3c9df2721648aed6f
 ### Details
 
 <!-- BEGIN GENERATED DETAILS: range=be274cbe6273cb17d756a6cda729d537f15ae49a..3e57f558eff5b400292a6ad3c9df2721648aed6f -->
-
 #### Features
-
 - Add /plan mode with plan approval
 
-#### Fixes
 
+#### Fixes
 - Drop disabled_reason from ask_user_question rows
 
-#### Documentation
 
+#### Documentation
 - Document AskUserQuestion
 - Add Windows notes for just
 - Fix plan mode note apostrophe
 
-#### TUI
 
+#### TUI
 - Show plan-variant progress
 - Show plan subagent checklist
 - Auto-execute approved plans
@@ -133,15 +130,15 @@ Release commit: 3e57f558eff5b400292a6ad3c9df2721648aed6f
 - Taller plan approval overlay and wrapped summary
 - Make Plan Mode placeholder generic
 
-#### Core
 
+#### Core
 - Keep plan subagents aligned with session model
 - Make Plan Mode outputs junior-executable
 - Pin approved plan into developer instructions
 - Emit immediate plan progress on approval
 
-#### Plan Mode
 
+#### Plan Mode
 - Run variants in parallel with status
 - Show subagent thinking/writing status
 - Show per-variant token usage
@@ -154,18 +151,18 @@ Release commit: 3e57f558eff5b400292a6ad3c9df2721648aed6f
 - Add configurable plan model setting
 - Humanize exec activity + multiline goal
 
-#### Branding & Packaging
 
+#### Branding & Packaging
 - Rebrand Codex CLI as Codexel
 - Use @ixe1/codexel npm scope
 - Rebrand headers to Codexel
 
-#### Chores
 
+#### Chores
 - Fix build after rebasing onto upstream/main
 - Sync built-in prompts with upstream
 
-#### Other
 
+#### Other
 - Add ask_user_question tool
 <!-- END GENERATED DETAILS -->
