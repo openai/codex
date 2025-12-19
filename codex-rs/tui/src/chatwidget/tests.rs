@@ -2275,12 +2275,12 @@ async fn approvals_popup_shows_disabled_presets() {
     chat.config.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
             AskForApproval::OnRequest => Ok(()),
-            _ => Err(ConstraintError {
-                message: "this message should be printed in the description".to_string(),
-            }),
+            _ => Err(ConstraintError::invalid_value(
+                candidate.to_string(),
+                "this message should be printed in the description",
+            )),
         })
         .expect("construct constrained approval policy");
-
     chat.open_approvals_popup();
 
     let width = 80;
@@ -2311,12 +2311,12 @@ async fn approvals_popup_navigation_skips_disabled() {
     chat.config.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
             AskForApproval::OnRequest => Ok(()),
-            _ => Err(ConstraintError {
-                message: "disabled preset".to_string(),
-            }),
+            _ => Err(ConstraintError::invalid_value(
+                candidate.to_string(),
+                "[on-request]",
+            )),
         })
         .expect("construct constrained approval policy");
-
     chat.open_approvals_popup();
 
     // The approvals popup is the active bottom-pane view; drive navigation via chat handle_key_event.
