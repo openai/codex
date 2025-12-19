@@ -258,6 +258,67 @@ jobs:
           npm install -g "$tarball"
           codexel --help >/dev/null
 
+  release:
+    name: Create GitHub release
+    needs:
+      - tag-check
+      - build
+      - package
+      - smoke-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Assemble release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          shopt -s nullglob
+
+          for tarball in artifacts/codexel-npm/*.tgz; do
+            cp "$tarball" dist/
+          done
+
+          for codex_dir in artifacts/codexel-*/vendor/*/codex; do
+            target="$(basename "$(dirname "$codex_dir")")"
+            if [[ -f "$codex_dir/codexel.exe" ]]; then
+              cp "$codex_dir/codexel.exe" "dist/codexel-${target}.exe"
+            elif [[ -f "$codex_dir/codexel" ]]; then
+              cp "$codex_dir/codexel" "dist/codexel-${target}"
+            else
+              echo "No codexel binary found in $codex_dir" >&2
+              exit 1
+            fi
+          done
+
+      - name: Define release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#codexel-v}"
+          prerelease="false"
+          if [[ "${version}" == *-* ]]; then
+            prerelease="true"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.release_meta.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          files: dist/**
+          prerelease: ${{ steps.release_meta.outputs.prerelease }}
+          generate_release_notes: true
+
   publish:
     name: Publish npm package
     needs:

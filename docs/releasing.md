@@ -18,6 +18,7 @@ The `npm-publish-codexel` workflow:
 - Builds the `codexel` binary for all supported targets.
 - Assembles `codex-cli/vendor/<target>/codex/codexel(.exe)`.
 - Packs an npm tarball and runs a smoke test (`codexel --help`).
+- Creates a GitHub Release containing the per-target binaries and npm tarball.
 - Publishes `@ixe1/codexel` using npm Trusted Publishing (OIDC).
 
 ### One-time setup

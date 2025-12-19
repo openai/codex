@@ -11,19 +11,19 @@ edited between the markers.
 
 ### Highlights
 
-- _No fork-only changes yet._
+- Create GitHub Releases for codexel tags with bundled binaries and npm tarball.
 
 ### Details
 
-<!-- BEGIN GENERATED DETAILS: range=8b35db50ec4c5291b3b6ddc91d56346a7fbcb5b7..HEAD -->
-#### Other
-- Release 0.1.2
+<!-- BEGIN GENERATED DETAILS: range=624036dc6e93a8160dbf5a326dc952d22c77e2bf..HEAD -->
+#### Branding & Packaging
+- Add GitHub Release publishing for Codexel
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.2] - 2025-12-19
 
 Upstream baseline: openai/codex@be274cbe6273cb17d756a6cda729d537f15ae49a
-Release commit: 8b35db50ec4c5291b3b6ddc91d56346a7fbcb5b7
+Release commit: 624036dc6e93a8160dbf5a326dc952d22c77e2bf
 
 ### Highlights
 
@@ -32,7 +32,7 @@ Release commit: 8b35db50ec4c5291b3b6ddc91d56346a7fbcb5b7
 
 ### Details
 
-<!-- BEGIN GENERATED DETAILS: range=d02343f99e3260308b2355f26e382ae04b14d7e7..8b35db50ec4c5291b3b6ddc91d56346a7fbcb5b7 -->
+<!-- BEGIN GENERATED DETAILS: range=d02343f99e3260308b2355f26e382ae04b14d7e7..624036dc6e93a8160dbf5a326dc952d22c77e2bf -->
 #### Plan Mode
 - Deduplicate plan updates in history
 
@@ -47,6 +47,7 @@ Release commit: 8b35db50ec4c5291b3b6ddc91d56346a7fbcb5b7
 - Delay rate limit polling until user input
 - Avoid working status on resume replay
 - Prevent resume from auto-executing plans
+- Release 0.1.2
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.1] - 2025-12-19
