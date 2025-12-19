@@ -92,6 +92,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         Arc::clone(&config),
         None,
         model_family,
+        None,
         otel_manager,
         provider,
         effort,

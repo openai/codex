@@ -492,6 +492,7 @@ impl Session {
         session_configuration: &SessionConfiguration,
         per_turn_config: Config,
         model_family: ModelFamily,
+        models_etag: Option<String>,
         conversation_id: ConversationId,
         sub_id: String,
     ) -> TurnContext {
@@ -505,6 +506,7 @@ impl Session {
             per_turn_config.clone(),
             auth_manager,
             model_family.clone(),
+            models_etag,
             otel_manager,
             provider,
             session_configuration.model_reasoning_effort,
@@ -919,6 +921,7 @@ impl Session {
             .models_manager
             .construct_model_family(session_configuration.model.as_str(), &per_turn_config)
             .await;
+        let models_etag = self.services.models_manager.get_models_etag().await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.otel_manager,
@@ -926,6 +929,7 @@ impl Session {
             &session_configuration,
             per_turn_config,
             model_family,
+            models_etag,
             self.conversation_id,
             sub_id,
         );
@@ -2105,6 +2109,7 @@ async fn spawn_review_thread(
         .models_manager
         .construct_model_family(&model, &config)
         .await;
+    let models_etag = sess.services.models_manager.get_models_etag().await;
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
     review_features
@@ -2137,6 +2142,7 @@ async fn spawn_review_thread(
         per_turn_config.clone(),
         auth_manager,
         model_family.clone(),
+        models_etag,
         otel_manager,
         provider,
         per_turn_config.model_reasoning_effort,
@@ -3163,6 +3169,7 @@ mod tests {
             &session_configuration,
             per_turn_config,
             model_family,
+            None,
             conversation_id,
             "turn_id".to_string(),
         );
@@ -3249,6 +3256,7 @@ mod tests {
             &session_configuration,
             per_turn_config,
             model_family,
+            None,
             conversation_id,
             "turn_id".to_string(),
         ));

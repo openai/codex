@@ -58,6 +58,7 @@ pub struct ModelClient {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
     model_family: ModelFamily,
+    models_etag: Option<String>,
     otel_manager: OtelManager,
     provider: ModelProviderInfo,
     conversation_id: ConversationId,
@@ -72,6 +73,7 @@ impl ModelClient {
         config: Arc<Config>,
         auth_manager: Option<Arc<AuthManager>>,
         model_family: ModelFamily,
+        models_etag: Option<String>,
         otel_manager: OtelManager,
         provider: ModelProviderInfo,
         effort: Option<ReasoningEffortConfig>,
@@ -83,6 +85,7 @@ impl ModelClient {
             config,
             auth_manager,
             model_family,
+            models_etag,
             otel_manager,
             provider,
             conversation_id,
@@ -262,7 +265,7 @@ impl ModelClient {
                 store_override: None,
                 conversation_id: Some(conversation_id.clone()),
                 session_source: Some(session_source.clone()),
-                extra_headers: beta_feature_headers(&self.config),
+                extra_headers: beta_feature_headers(&self.config, self.models_etag.clone()),
             };
 
             let stream_result = client
@@ -398,7 +401,7 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
     }
 }
 
-fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
+fn beta_feature_headers(config: &Config, models_etag: Option<String>) -> ApiHeaderMap {
     let enabled = FEATURES
         .iter()
         .filter_map(|spec| {
@@ -415,6 +418,11 @@ fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
         && let Ok(header_value) = HeaderValue::from_str(value.as_str())
     {
         headers.insert("x-codex-beta-features", header_value);
+    }
+    if let Some(etag) = models_etag
+        && let Ok(header_value) = HeaderValue::from_str(&etag)
+    {
+        headers.insert("X-If-Models-Match", header_value);
     }
     headers
 }

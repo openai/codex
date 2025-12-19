@@ -93,6 +93,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         Arc::clone(&config),
         None,
         model_family,
+        None,
         otel_manager,
         provider,
         effort,

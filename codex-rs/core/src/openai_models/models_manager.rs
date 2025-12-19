@@ -131,6 +131,10 @@ impl ModelsManager {
             .with_config_overrides(config)
     }
 
+    pub async fn get_models_etag(&self) -> Option<String> {
+        self.etag.read().await.clone()
+    }
+
     pub async fn get_model(&self, model: &Option<String>, config: &Config) -> String {
         if let Some(model) = model.as_ref() {
             return model.to_string();
