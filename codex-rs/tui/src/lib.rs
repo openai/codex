@@ -7,9 +7,9 @@ use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
 use codex_app_server_protocol::AuthMode;
-use codex_common::oss::detect_ollama_wire_api_if_needed;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
+use codex_common::oss::update_ollama_wire_api_if_needed;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
@@ -549,7 +549,7 @@ async fn load_config_or_exit(
     #[allow(clippy::print_stderr)]
     match Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await {
         Ok(mut config) => {
-            detect_ollama_wire_api_if_needed(&mut config).await;
+            update_ollama_wire_api_if_needed(&mut config).await;
             config
         }
         Err(err) => {
