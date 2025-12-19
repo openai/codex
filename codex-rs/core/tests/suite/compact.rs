@@ -1836,6 +1836,8 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
+    // Keep base instructions empty so token estimates align with mocked usage.
+    config.base_instructions = Some(String::new());
     config.model_auto_compact_token_limit = Some(200);
     let conversation_manager = ConversationManager::with_models_provider(
         CodexAuth::from_api_key("dummy"),
@@ -1947,6 +1949,8 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
+    // Keep base instructions empty so token estimates align with mocked usage.
+    config.base_instructions = Some(String::new());
     config.model_context_window = Some(context_window);
     config.model_auto_compact_token_limit = Some(limit);
 
@@ -2074,6 +2078,8 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             set_test_compact_prompt(config);
+            // Keep base instructions empty so token estimates align with mocked usage.
+            config.base_instructions = Some(String::new());
             config.model_auto_compact_token_limit = Some(300);
             config.features.enable(Feature::RemoteCompaction);
         })
