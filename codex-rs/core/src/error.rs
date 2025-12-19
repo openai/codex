@@ -90,6 +90,10 @@ pub enum CodexErr {
     #[error("spawn failed: child stdout/stderr not captured")]
     Spawn,
 
+    /// Returned when the models list is outdated and needs to be refreshed.
+    #[error("remote models list is outdated")]
+    OutdatedModels,
+
     /// Returned by run_command_stream when the user pressed Ctrl‑C (SIGINT). Session uses this to
     /// surface a polite FunctionCallOutput back to the model instead of crashing the CLI.
     #[error("interrupted (Ctrl-C). Something went wrong? Hit `/feedback` to report the issue.")]

@@ -6,6 +6,7 @@ use crate::client_common::ResponseEvent;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::get_last_assistant_message_from_turn;
+use crate::codex::refresh_models_and_reset_turn_context;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
@@ -55,7 +56,7 @@ pub(crate) async fn run_compact_task(
     input: Vec<UserInput>,
 ) {
     let start_event = EventMsg::TaskStarted(TaskStartedEvent {
-        model_context_window: turn_context.client.get_model_context_window(),
+        model_context_window: turn_context.client.get_model_context_window().await,
     });
     sess.send_event(&turn_context, start_event).await;
     run_compact_task_inner(sess.clone(), turn_context, input).await;
@@ -83,7 +84,7 @@ async fn run_compact_task_inner(
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
-        model: turn_context.client.get_model(),
+        model: turn_context.client.get_model().await,
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
     });
@@ -132,6 +133,10 @@ async fn run_compact_task_inner(
             Err(e) => {
                 if retries < max_retries {
                     retries += 1;
+                    if matches!(e, CodexErr::OutdatedModels) {
+                        refresh_models_and_reset_turn_context(&sess, &turn_context).await;
+                        continue;
+                    }
                     let delay = backoff(retries);
                     sess.notify_stream_error(
                         turn_context.as_ref(),
@@ -290,7 +295,7 @@ async fn drain_to_completed(
     turn_context: &TurnContext,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut stream = turn_context.client.clone().stream(prompt).await?;
+    let mut stream = turn_context.client.stream(prompt).await?;
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {

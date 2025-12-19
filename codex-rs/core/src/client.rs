@@ -33,6 +33,7 @@ use http::StatusCode as HttpStatusCode;
 use reqwest::StatusCode;
 use serde_json::Value;
 use std::time::Duration;
+use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -53,11 +54,12 @@ use crate::openai_models::model_family::ModelFamily;
 use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ModelClient {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
-    model_family: ModelFamily,
+    model_family: RwLock<ModelFamily>,
+    models_etag: RwLock<Option<String>>,
     otel_manager: OtelManager,
     provider: ModelProviderInfo,
     conversation_id: ConversationId,
@@ -72,6 +74,7 @@ impl ModelClient {
         config: Arc<Config>,
         auth_manager: Option<Arc<AuthManager>>,
         model_family: ModelFamily,
+        models_etag: Option<String>,
         otel_manager: OtelManager,
         provider: ModelProviderInfo,
         effort: Option<ReasoningEffortConfig>,
@@ -82,7 +85,8 @@ impl ModelClient {
         Self {
             config,
             auth_manager,
-            model_family,
+            model_family: RwLock::new(model_family),
+            models_etag: RwLock::new(models_etag),
             otel_manager,
             provider,
             conversation_id,
@@ -92,8 +96,8 @@ impl ModelClient {
         }
     }
 
-    pub fn get_model_context_window(&self) -> Option<i64> {
-        let model_family = self.get_model_family();
+    pub async fn get_model_context_window(&self) -> Option<i64> {
+        let model_family = self.get_model_family().await;
         let effective_context_window_percent = model_family.effective_context_window_percent;
         model_family
             .context_window
@@ -146,7 +150,7 @@ impl ModelClient {
         }
 
         let auth_manager = self.auth_manager.clone();
-        let model_family = self.get_model_family();
+        let model_family = self.get_model_family().await;
         let instructions = prompt.get_full_instructions(&model_family).into_owned();
         let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
         let api_prompt = build_api_prompt(prompt, instructions, tools_json);
@@ -167,7 +171,7 @@ impl ModelClient {
 
             let stream_result = client
                 .stream_prompt(
-                    &self.get_model(),
+                    &self.get_model().await,
                     &api_prompt,
                     Some(conversation_id.clone()),
                     Some(session_source.clone()),
@@ -200,7 +204,7 @@ impl ModelClient {
         }
 
         let auth_manager = self.auth_manager.clone();
-        let model_family = self.get_model_family();
+        let model_family = self.get_model_family().await;
         let instructions = prompt.get_full_instructions(&model_family).into_owned();
         let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
 
@@ -262,11 +266,14 @@ impl ModelClient {
                 store_override: None,
                 conversation_id: Some(conversation_id.clone()),
                 session_source: Some(session_source.clone()),
-                extra_headers: beta_feature_headers(&self.config),
+                extra_headers: beta_feature_headers(
+                    &self.config,
+                    self.get_models_etag().await.clone(),
+                ),
             };
 
             let stream_result = client
-                .stream_prompt(&self.get_model(), &api_prompt, options)
+                .stream_prompt(&self.get_model().await, &api_prompt, options)
                 .await;
 
             match stream_result {
@@ -297,13 +304,25 @@ impl ModelClient {
     }
 
     /// Returns the currently configured model slug.
-    pub fn get_model(&self) -> String {
-        self.get_model_family().get_model_slug().to_string()
+    pub async fn get_model(&self) -> String {
+        self.get_model_family().await.get_model_slug().to_string()
     }
 
     /// Returns the currently configured model family.
-    pub fn get_model_family(&self) -> ModelFamily {
-        self.model_family.clone()
+    pub async fn get_model_family(&self) -> ModelFamily {
+        self.model_family.read().await.clone()
+    }
+
+    pub async fn get_models_etag(&self) -> Option<String> {
+        self.models_etag.read().await.clone()
+    }
+
+    pub async fn update_models_etag(&self, etag: Option<String>) {
+        *self.models_etag.write().await = etag;
+    }
+
+    pub async fn update_model_family(&self, model_family: ModelFamily) {
+        *self.model_family.write().await = model_family;
     }
 
     /// Returns the current reasoning effort setting.
@@ -340,10 +359,10 @@ impl ModelClient {
             .with_telemetry(Some(request_telemetry));
 
         let instructions = prompt
-            .get_full_instructions(&self.get_model_family())
+            .get_full_instructions(&self.get_model_family().await)
             .into_owned();
         let payload = ApiCompactionInput {
-            model: &self.get_model(),
+            model: &self.get_model().await,
             input: &prompt.input,
             instructions: &instructions,
         };
@@ -398,7 +417,7 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
     }
 }
 
-fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
+fn beta_feature_headers(config: &Config, models_etag: Option<String>) -> ApiHeaderMap {
     let enabled = FEATURES
         .iter()
         .filter_map(|spec| {
@@ -415,6 +434,11 @@ fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
         && let Ok(header_value) = HeaderValue::from_str(value.as_str())
     {
         headers.insert("x-codex-beta-features", header_value);
+    }
+    if let Some(etag) = models_etag
+        && let Ok(header_value) = HeaderValue::from_str(&etag)
+    {
+        headers.insert("X-If-Models-Match", header_value);
     }
     headers
 }

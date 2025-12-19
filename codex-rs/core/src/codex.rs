@@ -248,7 +248,7 @@ impl Codex {
 
         let config = Arc::new(config);
         if config.features.enabled(Feature::RemoteModels)
-            && let Err(err) = models_manager.refresh_available_models(&config).await
+            && let Err(err) = models_manager.try_refresh_available_models(&config).await
         {
             error!("failed to refresh available models: {err:?}");
         }
@@ -491,6 +491,7 @@ impl Session {
         session_configuration: &SessionConfiguration,
         per_turn_config: Config,
         model_family: ModelFamily,
+        models_etag: Option<String>,
         conversation_id: ConversationId,
         sub_id: String,
     ) -> TurnContext {
@@ -504,6 +505,7 @@ impl Session {
             per_turn_config.clone(),
             auth_manager,
             model_family.clone(),
+            models_etag,
             otel_manager,
             provider,
             session_configuration.model_reasoning_effort,
@@ -787,7 +789,7 @@ impl Session {
                         }
                     })
                 {
-                    let curr = turn_context.client.get_model();
+                    let curr = turn_context.client.get_model().await;
                     if prev != curr {
                         warn!(
                             "resuming session with different model: previous={prev}, current={curr}"
@@ -912,6 +914,7 @@ impl Session {
             .models_manager
             .construct_model_family(session_configuration.model.as_str(), &per_turn_config)
             .await;
+        let models_etag = self.services.models_manager.get_models_etag().await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.otel_manager,
@@ -919,6 +922,7 @@ impl Session {
             &session_configuration,
             per_turn_config,
             model_family,
+            models_etag,
             self.conversation_id,
             sub_id,
         );
@@ -1327,7 +1331,7 @@ impl Session {
             if let Some(token_usage) = token_usage {
                 state.update_token_info_from_usage(
                     token_usage,
-                    turn_context.client.get_model_context_window(),
+                    turn_context.client.get_model_context_window().await,
                 );
             }
         }
@@ -1339,6 +1343,7 @@ impl Session {
             .clone_history()
             .await
             .estimate_token_count(turn_context)
+            .await
         else {
             return;
         };
@@ -1359,7 +1364,7 @@ impl Session {
             };
 
             if info.model_context_window.is_none() {
-                info.model_context_window = turn_context.client.get_model_context_window();
+                info.model_context_window = turn_context.client.get_model_context_window().await;
             }
 
             state.set_token_info(Some(info));
@@ -1389,7 +1394,7 @@ impl Session {
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
-        let context_window = turn_context.client.get_model_context_window();
+        let context_window = turn_context.client.get_model_context_window().await;
         if let Some(context_window) = context_window {
             {
                 let mut state = self.state.lock().await;
@@ -2098,6 +2103,7 @@ async fn spawn_review_thread(
         .models_manager
         .construct_model_family(&model, &config)
         .await;
+    let models_etag = sess.services.models_manager.get_models_etag().await;
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
     review_features
@@ -2130,6 +2136,7 @@ async fn spawn_review_thread(
         per_turn_config.clone(),
         auth_manager,
         model_family.clone(),
+        models_etag,
         otel_manager,
         provider,
         per_turn_config.model_reasoning_effort,
@@ -2224,6 +2231,7 @@ pub(crate) async fn run_task(
     let auto_compact_limit = turn_context
         .client
         .get_model_family()
+        .await
         .auto_compact_token_limit()
         .unwrap_or(i64::MAX);
     let total_usage_tokens = sess.get_total_token_usage().await;
@@ -2231,7 +2239,7 @@ pub(crate) async fn run_task(
         run_auto_compact(&sess, &turn_context).await;
     }
     let event = EventMsg::TaskStarted(TaskStartedEvent {
-        model_context_window: turn_context.client.get_model_context_window(),
+        model_context_window: turn_context.client.get_model_context_window().await,
     });
     sess.send_event(&turn_context, event).await;
 
@@ -2296,7 +2304,7 @@ pub(crate) async fn run_task(
             .collect::<Vec<String>>();
         match run_turn(
             Arc::clone(&sess),
-            Arc::clone(&turn_context),
+            &turn_context,
             Arc::clone(&turn_diff_tracker),
             turn_input,
             cancellation_token.child_token(),
@@ -2355,6 +2363,36 @@ pub(crate) async fn run_task(
     last_agent_message
 }
 
+pub(crate) async fn refresh_models_and_reset_turn_context(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) {
+    let config = {
+        let state = sess.state.lock().await;
+        state
+            .session_configuration
+            .original_config_do_not_use
+            .clone()
+    };
+    if let Err(err) = sess
+        .services
+        .models_manager
+        .refresh_available_models(&config)
+        .await
+    {
+        error!("failed to refresh models after outdated models error: {err}");
+    }
+    let model = turn_context.client.get_model().await;
+    let model_family = sess
+        .services
+        .models_manager
+        .construct_model_family(&model, &config)
+        .await;
+    let models_etag = sess.services.models_manager.get_models_etag().await;
+    turn_context.client.update_model_family(model_family).await;
+    turn_context.client.update_models_etag(models_etag).await;
+}
+
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
     if should_use_remote_compact_task(sess.as_ref(), &turn_context.client.get_provider()) {
         run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
@@ -2367,17 +2405,19 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
     skip_all,
     fields(
         turn_id = %turn_context.sub_id,
-        model = %turn_context.client.get_model(),
+        model = tracing::field::Empty,
         cwd = %turn_context.cwd.display()
     )
 )]
 async fn run_turn(
     sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
+    turn_context: &Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
+    let model = turn_context.client.get_model().await;
+    tracing::Span::current().record("model", field::display(&model));
     let mcp_tools = sess
         .services
         .mcp_connection_manager
@@ -2386,37 +2426,32 @@ async fn run_turn(
         .list_all_tools()
         .or_cancel(&cancellation_token)
         .await?;
-    let router = Arc::new(ToolRouter::from_config(
-        &turn_context.tools_config,
-        Some(
-            mcp_tools
-                .into_iter()
-                .map(|(name, tool)| (name, tool.tool))
-                .collect(),
-        ),
-    ));
-
-    let model_supports_parallel = turn_context
-        .client
-        .get_model_family()
-        .supports_parallel_tool_calls;
-
-    let prompt = Prompt {
-        input,
-        tools: router.specs(),
-        parallel_tool_calls: model_supports_parallel && sess.enabled(Feature::ParallelToolCalls),
-        base_instructions_override: turn_context.base_instructions.clone(),
-        output_schema: turn_context.final_output_json_schema.clone(),
-    };
 
     let mut retries = 0;
     loop {
+        let router = Arc::new(ToolRouter::from_config(
+            &turn_context.tools_config,
+            Some(
+                mcp_tools
+                    .clone()
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect(),
+            ),
+        ));
+        let prompt = Prompt::new(
+            sess.as_ref(),
+            turn_context.as_ref(),
+            router.as_ref(),
+            &input,
+        );
+
         match try_run_turn(
             Arc::clone(&router),
             Arc::clone(&sess),
-            Arc::clone(&turn_context),
+            Arc::clone(turn_context),
             Arc::clone(&turn_diff_tracker),
-            &prompt,
+            &prompt.await,
             cancellation_token.child_token(),
         )
         .await
@@ -2430,13 +2465,13 @@ async fn run_turn(
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e @ CodexErr::Fatal(_)) => return Err(e),
             Err(e @ CodexErr::ContextWindowExceeded) => {
-                sess.set_total_tokens_full(&turn_context).await;
+                sess.set_total_tokens_full(turn_context).await;
                 return Err(e);
             }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
                 if let Some(rate_limits) = rate_limits {
-                    sess.update_rate_limits(&turn_context, rate_limits).await;
+                    sess.update_rate_limits(turn_context, rate_limits).await;
                 }
                 return Err(CodexErr::UsageLimitReached(e));
             }
@@ -2450,6 +2485,11 @@ async fn run_turn(
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
                 if retries < max_retries {
                     retries += 1;
+                    // Refresh models if we got an outdated models error
+                    if matches!(e, CodexErr::OutdatedModels) {
+                        refresh_models_and_reset_turn_context(&sess, turn_context).await;
+                        continue;
+                    }
                     let delay = match e {
                         CodexErr::Stream(_, Some(delay)) => delay,
                         _ => backoff(retries),
@@ -2462,7 +2502,7 @@ async fn run_turn(
                     // user understands what is happening instead of staring
                     // at a seemingly frozen screen.
                     sess.notify_stream_error(
-                        &turn_context,
+                        turn_context,
                         format!("Reconnecting... {retries}/{max_retries}"),
                         e,
                     )
@@ -2507,7 +2547,7 @@ async fn drain_in_flight(
     skip_all,
     fields(
         turn_id = %turn_context.sub_id,
-        model = %turn_context.client.get_model()
+        model = tracing::field::Empty,
     )
 )]
 async fn try_run_turn(
@@ -2518,11 +2558,13 @@ async fn try_run_turn(
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
+    let model = turn_context.client.get_model().await;
+    tracing::Span::current().record("model", field::display(&model));
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
-        model: turn_context.client.get_model(),
+        model,
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
     });
@@ -2530,7 +2572,6 @@ async fn try_run_turn(
     sess.persist_rollout_items(&[rollout_item]).await;
     let mut stream = turn_context
         .client
-        .clone()
         .stream(prompt)
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
@@ -3156,6 +3197,7 @@ mod tests {
             &session_configuration,
             per_turn_config,
             model_family,
+            None,
             conversation_id,
             "turn_id".to_string(),
         );
@@ -3242,6 +3284,7 @@ mod tests {
             &session_configuration,
             per_turn_config,
             model_family,
+            None,
             conversation_id,
             "turn_id".to_string(),
         ));
