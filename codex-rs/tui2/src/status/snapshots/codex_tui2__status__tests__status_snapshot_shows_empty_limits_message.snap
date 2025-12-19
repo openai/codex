@@ -5,7 +5,7 @@ expression: sanitized
 /status
 
 ╭───────────────────────────────────────────────────────────────────────╮
-│  >_ Codexel (v0.0.0)                                                  │
+│  >_ Codexel (v0.1.1)                                                  │
 │                                                                       │
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date         │
 │ information on rate limits and credits                                │
@@ -20,4 +20,3 @@ expression: sanitized
 │  Context window:   100% left (750 used / 272K)                        │
 │  Limits:           data not available yet                             │
 ╰───────────────────────────────────────────────────────────────────────╯
-
