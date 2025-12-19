@@ -11,13 +11,15 @@ edited between the markers.
 
 ### Highlights
 
-- Update release metadata in the changelog.
+- Skip macOS rust-ci jobs on pull requests to avoid flaky PR runs.
 
 ### Details
 
 <!-- BEGIN GENERATED DETAILS: range=79d019672838ccc532247588d31d2eda81fb42d8..HEAD -->
 #### Other
 - Update changelog for 0.1.2 release
+- Adjust changelog release metadata
+- Skip macOS rust-ci jobs on PRs
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.2] - 2025-12-19
