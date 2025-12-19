@@ -143,6 +143,41 @@ pub fn restore_keep_raw() -> Result<()> {
     restore_common(should_disable_raw_mode)
 }
 
+#[cfg(unix)]
+pub(crate) fn flush_terminal_input_buffer() {
+    // Safety: flushing the stdin queue is safe and does not move ownership.
+    let result = unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) };
+    if result != 0 {
+        let err = std::io::Error::last_os_error();
+        tracing::warn!("failed to tcflush stdin: {err}");
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn flush_terminal_input_buffer() {
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::FlushConsoleInputBuffer;
+    use windows_sys::Win32::System::Console::GetStdHandle;
+    use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
+
+    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    if handle == INVALID_HANDLE_VALUE || handle == 0 {
+        let err = unsafe { GetLastError() };
+        tracing::warn!("failed to get stdin handle for flush: error {err}");
+        return;
+    }
+
+    let result = unsafe { FlushConsoleInputBuffer(handle) };
+    if result == 0 {
+        let err = unsafe { GetLastError() };
+        tracing::warn!("failed to flush stdin buffer: error {err}");
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn flush_terminal_input_buffer() {}
+
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
 pub fn init() -> Result<Terminal> {
     if !stdin().is_terminal() {

@@ -5,9 +5,8 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::diff_render::DiffSummary;
-use crate::editor;
-use crate::editor::EditorError;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
@@ -62,7 +61,6 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
-use tokio::time;
 
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
@@ -813,12 +811,6 @@ impl App {
             AppEvent::OpenFeedbackConsent { category } => {
                 self.chat_widget.open_feedback_consent(category);
             }
-            AppEvent::ExternalEditorRequestTimeout => {
-                // Reset the external editor state if it was requested and no draw occurred in time.
-                if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
-                    self.reset_external_editor_state(tui);
-                }
-            }
             AppEvent::LaunchExternalEditorAfterDraw => {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
                     self.launch_external_editor(tui).await;
@@ -1167,9 +1159,9 @@ impl App {
     }
 
     async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
-        let editor_cmd = match editor::resolve_editor_command() {
+        let editor_cmd = match external_editor::resolve_editor_command() {
             Ok(cmd) => cmd,
-            Err(EditorError::MissingEditor) => {
+            Err(external_editor::EditorError::MissingEditor) => {
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(
                         "Cannot open external editor: set $VISUAL or $EDITOR".to_string(),
@@ -1203,13 +1195,13 @@ impl App {
         }
 
         let seed = self.chat_widget.composer_text_with_pending();
-        let editor_result = editor::run_editor(&seed, &editor_cmd).await;
+        let editor_result = external_editor::run_editor(&seed, &editor_cmd).await;
 
         if let Err(err) = tui::set_modes() {
             tracing::warn!("failed to re-enable terminal modes after editor: {err}");
         }
         // After the editor exits, reset terminal state and flush any buffered keypresses.
-        Self::flush_terminal_input_buffer();
+        tui::flush_terminal_input_buffer();
         self.reset_external_editor_state(tui);
 
         if was_alt_screen {
@@ -1232,41 +1224,6 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
-    #[cfg(unix)]
-    fn flush_terminal_input_buffer() {
-        // Safety: flushing the stdin queue is safe and does not move ownership.
-        let result = unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) };
-        if result != 0 {
-            let err = std::io::Error::last_os_error();
-            tracing::warn!("failed to tcflush stdin: {err}");
-        }
-    }
-
-    #[cfg(windows)]
-    fn flush_terminal_input_buffer() {
-        use windows_sys::Win32::Foundation::GetLastError;
-        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-        use windows_sys::Win32::System::Console::FlushConsoleInputBuffer;
-        use windows_sys::Win32::System::Console::GetStdHandle;
-        use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
-
-        let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-        if handle == INVALID_HANDLE_VALUE || handle == 0 {
-            let err = unsafe { GetLastError() };
-            tracing::warn!("failed to get stdin handle for flush: error {err}");
-            return;
-        }
-
-        let result = unsafe { FlushConsoleInputBuffer(handle) };
-        if result == 0 {
-            let err = unsafe { GetLastError() };
-            tracing::warn!("failed to flush stdin buffer: error {err}");
-        }
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    fn flush_terminal_input_buffer() {}
-
     fn request_external_editor_launch(&mut self, tui: &mut tui::Tui) {
         self.chat_widget
             .set_external_editor_state(ExternalEditorState::Requested);
@@ -1275,13 +1232,6 @@ impl App {
             String::new(),
         )]));
         tui.frame_requester().schedule_frame();
-
-        // Right now this sends the timeout event regardless of whether the frame was drawn.
-        let tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            time::sleep(Duration::from_millis(500)).await;
-            tx.send(AppEvent::ExternalEditorRequestTimeout);
-        });
     }
 
     fn reset_external_editor_state(&mut self, tui: &mut tui::Tui) {
