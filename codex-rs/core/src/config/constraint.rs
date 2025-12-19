@@ -116,6 +116,13 @@ impl<T: Send + Sync> Constrained<T> {
         self.value
     }
 
+    pub fn clone_value(&self) -> T
+    where
+        T: Clone,
+    {
+        self.value.clone()
+    }
+
     pub fn can_set(&self, candidate: &T) -> ConstraintResult<()> {
         (self.validator)(candidate)
     }

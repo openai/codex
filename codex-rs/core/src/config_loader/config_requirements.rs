@@ -1,4 +1,6 @@
+use codex_protocol::config_types::SandboxMode;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use serde::Deserialize;
 
 use crate::config::Constrained;
@@ -9,12 +11,14 @@ use crate::config::ConstraintError;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigRequirements {
     pub approval_policy: Constrained<AskForApproval>,
+    pub sandbox_policy: Constrained<SandboxPolicy>,
 }
 
 impl Default for ConfigRequirements {
     fn default() -> Self {
         Self {
             approval_policy: Constrained::allow_any_from_default(),
+            sandbox_policy: Constrained::allow_any(SandboxPolicy::ReadOnly),
         }
     }
 }
@@ -23,6 +27,34 @@ impl Default for ConfigRequirements {
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
+    pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
+}
+
+/// Currently, `external-sandbox` is not supported in config.toml, but it is
+/// supported through programmatic use.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+pub enum SandboxModeRequirement {
+    #[serde(rename = "read-only")]
+    ReadOnly,
+
+    #[serde(rename = "workspace-write")]
+    WorkspaceWrite,
+
+    #[serde(rename = "danger-full-access")]
+    DangerFullAccess,
+
+    #[serde(rename = "external-sandbox")]
+    ExternalSandbox,
+}
+
+impl From<SandboxMode> for SandboxModeRequirement {
+    fn from(mode: SandboxMode) -> Self {
+        match mode {
+            SandboxMode::ReadOnly => SandboxModeRequirement::ReadOnly,
+            SandboxMode::WorkspaceWrite => SandboxModeRequirement::WorkspaceWrite,
+            SandboxMode::DangerFullAccess => SandboxModeRequirement::DangerFullAccess,
+        }
+    }
 }
 
 impl ConfigRequirementsToml {
@@ -41,7 +73,7 @@ impl ConfigRequirementsToml {
             };
         }
 
-        fill_missing_take!(self, other, { allowed_approval_policies });
+        fill_missing_take!(self, other, { allowed_approval_policies, allowed_sandbox_modes });
     }
 }
 
@@ -49,7 +81,11 @@ impl TryFrom<ConfigRequirementsToml> for ConfigRequirements {
     type Error = ConstraintError;
 
     fn try_from(toml: ConfigRequirementsToml) -> Result<Self, Self::Error> {
-        let approval_policy: Constrained<AskForApproval> = match toml.allowed_approval_policies {
+        let ConfigRequirementsToml {
+            allowed_approval_policies,
+            allowed_sandbox_modes,
+        } = toml;
+        let approval_policy: Constrained<AskForApproval> = match allowed_approval_policies {
             Some(policies) => {
                 let default_value = AskForApproval::default();
                 if policies.contains(&default_value) {
@@ -62,7 +98,43 @@ impl TryFrom<ConfigRequirementsToml> for ConfigRequirements {
             }
             None => Constrained::allow_any_from_default(),
         };
-        Ok(ConfigRequirements { approval_policy })
+        let sandbox_policy: Constrained<SandboxPolicy> = match allowed_sandbox_modes {
+            Some(modes) => {
+                // TODO(gt): `ConfigRequirementsToml` should let the author
+                // specify the default `SandboxPolicy`?
+                if !modes.contains(&SandboxModeRequirement::ReadOnly) {
+                    return Err(ConstraintError::invalid_value(
+                        "allowed_sandbox_modes",
+                        "must include 'read-only' to allow any SandboxPolicy",
+                    ));
+                };
+                Constrained::new(SandboxPolicy::ReadOnly, move |candidate| {
+                    let mode = match candidate {
+                        SandboxPolicy::ReadOnly => SandboxModeRequirement::ReadOnly,
+                        SandboxPolicy::WorkspaceWrite { .. } => {
+                            SandboxModeRequirement::WorkspaceWrite
+                        }
+                        SandboxPolicy::DangerFullAccess => SandboxModeRequirement::DangerFullAccess,
+                        SandboxPolicy::ExternalSandbox { .. } => {
+                            SandboxModeRequirement::ExternalSandbox
+                        }
+                    };
+                    if modes.contains(&mode) {
+                        Ok(())
+                    } else {
+                        Err(ConstraintError::invalid_value(
+                            format!("{candidate:?}"),
+                            format!("{modes:?}"),
+                        ))
+                    }
+                })?
+            }
+            None => Constrained::allow_any(SandboxPolicy::ReadOnly),
+        };
+        Ok(ConfigRequirements {
+            approval_policy,
+            sandbox_policy,
+        })
     }
 }
 
