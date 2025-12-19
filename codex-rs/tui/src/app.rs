@@ -1179,34 +1179,13 @@ impl App {
             }
         };
 
-        // Pause crossterm events to avoid stdin conflicts with editor.
-        tui.pause_events();
-
-        // Leave alt screen if active to avoid conflicts with editor.
-        // This is defensive as we gate the external editor launch on there being no overlay.
-        let was_alt_screen = tui.is_alt_screen_active();
-        if was_alt_screen {
-            let _ = tui.leave_alt_screen();
-        }
-
-        let restore_modes = tui::restore_keep_raw();
-        if let Err(err) = restore_modes {
-            tracing::warn!("failed to restore terminal modes before editor: {err}");
-        }
-
         let seed = self.chat_widget.composer_text_with_pending();
-        let editor_result = external_editor::run_editor(&seed, &editor_cmd).await;
-
-        if let Err(err) = tui::set_modes() {
-            tracing::warn!("failed to re-enable terminal modes after editor: {err}");
-        }
-        // After the editor exits, reset terminal state and flush any buffered keypresses.
-        tui::flush_terminal_input_buffer();
+        let editor_result = tui
+            .with_restored(tui::RestoreMode::KeepRaw, || async {
+                external_editor::run_editor(&seed, &editor_cmd).await
+            })
+            .await;
         self.reset_external_editor_state(tui);
-
-        if was_alt_screen {
-            let _ = tui.enter_alt_screen();
-        }
 
         match editor_result {
             Ok(new_text) => {
@@ -1238,7 +1217,6 @@ impl App {
         self.chat_widget
             .set_external_editor_state(ExternalEditorState::Closed);
         self.chat_widget.set_footer_hint_override(None);
-        tui.resume_events();
         tui.frame_requester().schedule_frame();
     }
 

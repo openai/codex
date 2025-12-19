@@ -1,4 +1,5 @@
 use std::fmt;
+use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
@@ -143,6 +144,22 @@ pub fn restore_keep_raw() -> Result<()> {
     restore_common(should_disable_raw_mode)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestoreMode {
+    #[allow(dead_code)]
+    Full, // Fully restore the terminal (disables raw mode).
+    KeepRaw, // Restore the terminal but keep raw mode enabled.
+}
+
+impl RestoreMode {
+    fn restore(self) -> Result<()> {
+        match self {
+            RestoreMode::Full => restore(),
+            RestoreMode::KeepRaw => restore_keep_raw(),
+        }
+    }
+}
+
 #[cfg(unix)]
 pub(crate) fn flush_terminal_input_buffer() {
     // Safety: flushing the stdin queue is safe and does not move ownership.
@@ -276,6 +293,45 @@ impl Tui {
     // Inverse of `pause_events`.
     pub fn resume_events(&mut self) {
         self.event_broker.resume_events();
+    }
+
+    /// Temporarily restore terminal state to run an external interactive program `f`.
+    ///
+    /// This pauses crossterm's stdin polling by dropping the underlying event stream, restores
+    /// terminal modes (optionally keeping raw mode enabled), then re-applies Codex TUI modes and
+    /// flushes pending stdin input before resuming events.
+    pub async fn with_restored<R, F, Fut>(&mut self, mode: RestoreMode, f: F) -> R
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = R>,
+    {
+        // Pause crossterm events to avoid stdin conflicts with external program `f`.
+        self.pause_events();
+
+        // Leave alt screen if active to avoid conflicts with external program `f`.
+        let was_alt_screen = self.is_alt_screen_active();
+        if was_alt_screen {
+            let _ = self.leave_alt_screen();
+        }
+
+        if let Err(err) = mode.restore() {
+            tracing::warn!("failed to restore terminal modes before external program: {err}");
+        }
+
+        let output = f().await;
+
+        if let Err(err) = set_modes() {
+            tracing::warn!("failed to re-enable terminal modes after external program: {err}");
+        }
+        // After the external program `f` finishes, reset terminal state and flush any buffered keypresses.
+        flush_terminal_input_buffer();
+
+        if was_alt_screen {
+            let _ = self.enter_alt_screen();
+        }
+
+        self.resume_events();
+        output
     }
 
     /// Emit a desktop notification now if the terminal is unfocused.
