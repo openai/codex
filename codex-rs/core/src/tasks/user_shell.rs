@@ -15,7 +15,7 @@ use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
 use crate::exec::execute_exec_env;
-use crate::exec_env::create_env_with_network_proxy;
+use crate::exec_env::create_env;
 use crate::parse_command::parse_command;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
@@ -97,7 +97,7 @@ impl SessionTask for UserShellCommandTask {
         let exec_env = ExecEnv {
             command: command.clone(),
             cwd: cwd.clone(),
-            env: create_env_with_network_proxy(
+            env: create_env(
                 &turn_context.shell_environment_policy,
                 &sandbox_policy,
                 &turn_context.network_proxy,

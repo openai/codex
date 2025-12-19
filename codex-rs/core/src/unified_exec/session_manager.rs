@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::bash::extract_bash_command;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::exec_env::create_env_with_network_proxy;
+use crate::exec_env::create_env;
 use crate::exec_policy::create_exec_approval_requirement_for_command;
 use crate::network_proxy;
 use crate::protocol::BackgroundEventEvent;
@@ -481,7 +481,7 @@ impl UnifiedExecSessionManager {
         justification: Option<String>,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
-        let env = apply_unified_exec_env(create_env_with_network_proxy(
+        let env = apply_unified_exec_env(create_env(
             &context.turn.shell_environment_policy,
             &context.turn.sandbox_policy,
             &context.turn.network_proxy,

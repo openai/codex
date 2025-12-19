@@ -118,7 +118,7 @@ impl SandboxManager {
                 let mut seatbelt_env = HashMap::new();
                 seatbelt_env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
                 let mut args =
-                    create_seatbelt_command_args(command.clone(), policy, sandbox_policy_cwd);
+                    create_seatbelt_command_args(command.clone(), policy, sandbox_policy_cwd, &env);
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
                 full_command.append(&mut args);

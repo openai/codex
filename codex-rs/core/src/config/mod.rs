@@ -865,8 +865,18 @@ fn ensure_default_no_proxy_entries(entries: &mut Vec<String>) {
     }
 }
 
-fn default_no_proxy_entries() -> [&'static str; 3] {
-    ["localhost", "127.0.0.1", "::1"]
+fn default_no_proxy_entries() -> [&'static str; 9] {
+    [
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "*.local",
+        ".local",
+        "169.254.0.0/16",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+    ]
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]

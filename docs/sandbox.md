@@ -76,7 +76,9 @@ Network access is controlled through a proxy server running outside the sandbox:
 - **Custom proxy support:** Advanced users can implement custom rules on outgoing traffic.
 - **Comprehensive coverage:** Restrictions apply to all scripts, programs, and subprocesses spawned by Codex.
 
-`NO_PROXY` is supported via `[network_proxy].no_proxy` and is passed to subprocesses as `NO_PROXY/no_proxy`. Any domains or IPs in that list bypass the proxy and are not filtered by proxy policy.
+`NO_PROXY` is supported via `[network_proxy].no_proxy` and is passed to subprocesses as `NO_PROXY/no_proxy`. Defaults include localhost and private network ranges; any entries in that list bypass the proxy and are not filtered by proxy policy.
+
+On macOS, `[network_proxy.policy]` can also allow localhost binding or Unix socket paths when proxy-restricted network access is active. These settings influence the Seatbelt profile.
 
 When MITM is enabled in the proxy config, Codex injects common CA environment variables (for example `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `PIP_CERT`, and `NPM_CONFIG_CAFILE`) pointing at the proxy CA cert to reduce per‑tool configuration.
 

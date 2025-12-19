@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
-use crate::exec_env::create_env_with_network_proxy;
+use crate::exec_env::create_env;
 use crate::exec_policy::create_exec_approval_requirement_for_command;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
@@ -37,7 +37,7 @@ impl ShellHandler {
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
-            env: create_env_with_network_proxy(
+            env: create_env(
                 &turn_context.shell_environment_policy,
                 &turn_context.sandbox_policy,
                 &turn_context.network_proxy,
@@ -67,7 +67,7 @@ impl ShellCommandHandler {
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
-            env: create_env_with_network_proxy(
+            env: create_env(
                 &turn_context.shell_environment_policy,
                 &turn_context.sandbox_policy,
                 &turn_context.network_proxy,
@@ -407,7 +407,11 @@ mod tests {
 
         let expected_command = session.user_shell().derive_exec_args(&command, true);
         let expected_cwd = turn_context.resolve_path(workdir.clone());
-        let expected_env = create_env(&turn_context.shell_environment_policy);
+        let expected_env = create_env(
+            &turn_context.shell_environment_policy,
+            &turn_context.sandbox_policy,
+            &turn_context.network_proxy,
+        );
 
         let params = ShellCommandToolCallParams {
             command,

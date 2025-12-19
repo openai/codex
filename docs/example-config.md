@@ -106,18 +106,37 @@ exclude_slash_tmp = false
 [network_proxy]
 # Enable proxy env injection + approval prompts for blocked domains. Default: false
 enabled = false
-# HTTP/HTTPS/ALL proxy URL. Default: "http://127.0.0.1:3128"
+# HTTP/HTTPS proxy URL. Default: "http://127.0.0.1:3128"
 proxy_url = "http://127.0.0.1:3128"
 # Admin API for the proxy (for /blocked, /reload, /mode). Default: "http://127.0.0.1:8080"
 admin_url = "http://127.0.0.1:8080"
 # limited | full (default: full)
 mode = "full"
-# Hosts/IPs that bypass the proxy. Default includes localhost + loopback.
-no_proxy = ["localhost", "127.0.0.1", "::1"]
+# Hosts/IPs that bypass the proxy. Default includes localhost + private networks.
+no_proxy = [
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "*.local",
+  ".local",
+  "169.254.0.0/16",
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+]
 # Poll proxy /blocked and prompt the user. Default: true
 prompt_on_block = true
 # Poll interval in milliseconds. Default: 1000
 poll_interval_ms = 1000
+
+[network_proxy.policy]
+# Allow localhost binds inside the sandbox (macOS only). Default: false
+allowLocalBinding = false
+# Allow Unix socket paths inside the sandbox (macOS only). Default: []
+allowUnixSockets = []
+# Optional domain allow/deny lists (denylist wins)
+allowedDomains = []
+deniedDomains = []
 
 ################################################################################
 # Shell Environment Policy for spawned processes

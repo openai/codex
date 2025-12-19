@@ -114,14 +114,12 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                     session
                         .request_command_approval(
                             turn,
-                            crate::codex::CommandApprovalRequest {
-                                call_id,
-                                command: vec!["apply_patch".to_string()],
-                                cwd,
-                                reason: Some(reason),
-                                proposed_execpolicy_amendment: None,
-                                network_preflight_only: false,
-                            },
+                            call_id,
+                            vec!["apply_patch".to_string()],
+                            cwd,
+                            Some(reason),
+                            None,
+                            false,
                         )
                         .await
                 } else if user_explicitly_approved {

@@ -420,14 +420,18 @@ struct NetworkProxySection {
 }
 
 #[derive(Default, Deserialize)]
-struct NetworkPolicy {
+pub(crate) struct NetworkPolicy {
     #[serde(default, rename = "allowedDomains")]
     allowed_domains: Vec<String>,
     #[serde(default, rename = "deniedDomains")]
     denied_domains: Vec<String>,
+    #[serde(default, rename = "allowUnixSockets")]
+    pub(crate) allow_unix_sockets: Vec<String>,
+    #[serde(default, rename = "allowLocalBinding")]
+    pub(crate) allow_local_binding: bool,
 }
 
-fn load_network_policy(config_path: &Path) -> Result<NetworkPolicy> {
+pub(crate) fn load_network_policy(config_path: &Path) -> Result<NetworkPolicy> {
     if !config_path.exists() {
         return Ok(NetworkPolicy::default());
     }

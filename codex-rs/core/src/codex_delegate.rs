@@ -277,14 +277,12 @@ async fn handle_exec_approval(
     // Race approval with cancellation and timeout to avoid hangs.
     let approval_fut = parent_session.request_command_approval(
         parent_ctx,
-        crate::codex::CommandApprovalRequest {
-            call_id: parent_ctx.sub_id.clone(),
-            command: event.command,
-            cwd: event.cwd,
-            reason: event.reason,
-            network_preflight_only: event.network_preflight_only,
-            proposed_execpolicy_amendment: event.proposed_execpolicy_amendment,
-        },
+        parent_ctx.sub_id.clone(),
+        event.command,
+        event.cwd,
+        event.reason,
+        event.proposed_execpolicy_amendment,
+        event.network_preflight_only,
     );
     let decision = await_approval_with_cancel(
         approval_fut,

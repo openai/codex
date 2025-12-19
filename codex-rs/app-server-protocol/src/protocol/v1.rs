@@ -227,6 +227,8 @@ pub struct ExecCommandApprovalParams {
     pub cwd: PathBuf,
     pub reason: Option<String>,
     pub parsed_cmd: Vec<ParsedCommand>,
+    #[serde(default)]
+    pub network_preflight_only: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

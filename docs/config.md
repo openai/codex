@@ -359,7 +359,17 @@ enabled = true
 proxy_url = "http://127.0.0.1:3128"
 admin_url = "http://127.0.0.1:8080"
 mode = "limited" # limited | full (default)
-no_proxy = ["localhost", "127.0.0.1"]
+no_proxy = [
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "*.local",
+  ".local",
+  "169.254.0.0/16",
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+]
 prompt_on_block = true
 poll_interval_ms = 1000
 ```
@@ -367,8 +377,10 @@ poll_interval_ms = 1000
 Notes:
 
 - Proxy settings are injected only when sandbox network access is enabled (or full access mode). If the sandbox blocks network access, requests are blocked at the OS layer.
-- `proxy_url` is used for `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` env vars.
-- `no_proxy` entries bypass the proxy; use sparingly because bypassed traffic is not filtered by the proxy policy.
+- `proxy_url` is used for HTTP proxy envs (`HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy`, plus npm/yarn variants). Docker and Cloud SDK proxy envs are derived from the HTTP proxy when present.
+- When `proxy_url` points at localhost, Codex also assumes a SOCKS5 proxy on `localhost:8081` for `ALL_PROXY`, `GRPC_PROXY`, `FTP_PROXY`, `RSYNC_PROXY`, and (macOS only) `GIT_SSH_COMMAND`.
+- `no_proxy` entries bypass the proxy; defaults include localhost + private network ranges. Use sparingly because bypassed traffic is not filtered by the proxy policy.
+- `[network_proxy.policy]` can optionally allow localhost binding or Unix socket access (macOS only) when proxy-restricted network access is active.
 - When `prompt_on_block = true`, Codex polls the proxy admin API (`/blocked`) and surfaces a prompt to allow for the session, allow always (add to allowlist), or deny (add to denylist). Allow/deny decisions update `~/.codex/config.toml` under `[network_proxy.policy]`, then Codex calls `/reload`.
 
 ### tools.\*
@@ -963,14 +975,16 @@ Valid values:
 | `sandbox_workspace_write.exclude_tmpdir_env_var`   | boolean                                                           | Exclude `$TMPDIR` from writable roots (default: false).                                                                         |
 | `sandbox_workspace_write.exclude_slash_tmp`        | boolean                                                           | Exclude `/tmp` from writable roots (default: false).                                                                            |
 | `network_proxy.enabled`                            | boolean                                                           | Enable proxy environment injection + admin polling (default: false).                                                            |
-| `network_proxy.proxy_url`                          | string                                                            | Proxy URL used for `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` (default: `http://127.0.0.1:3128`).                                    |
+| `network_proxy.proxy_url`                          | string                                                            | Proxy URL used for HTTP proxy envs (`HTTP_PROXY`/`HTTPS_PROXY`); when it points at localhost, Codex also assumes SOCKS5 on `localhost:8081` for `ALL_PROXY` (default: `http://127.0.0.1:3128`). |
 | `network_proxy.admin_url`                          | string                                                            | Proxy admin API base URL (default: `http://127.0.0.1:8080`).                                                                    |
 | `network_proxy.mode`                               | `limited` \| `full`                                                | Default proxy mode for policy hints (default: `full`).                                                                          |
-| `network_proxy.no_proxy`                           | array<string>                                                     | Hosts/IPs that bypass the proxy (default includes `localhost`, `127.0.0.1`, `::1`).                                              |
+| `network_proxy.no_proxy`                           | array<string>                                                     | Hosts/IPs that bypass the proxy (default includes localhost + private network ranges).                                           |
 | `network_proxy.prompt_on_block`                    | boolean                                                           | Poll `/blocked` and prompt on denied requests (default: true).                                                                  |
 | `network_proxy.poll_interval_ms`                   | number                                                            | Admin poll interval in ms (default: 1000).                                                                                     |
 | `network_proxy.policy.allowedDomains`              | array<string>                                                     | Allowlist of domain patterns (denylist takes precedence).                                                                        |
 | `network_proxy.policy.deniedDomains`               | array<string>                                                     | Denylist of domain patterns (takes precedence over allowlist).                                                                   |
+| `network_proxy.policy.allowLocalBinding`           | boolean                                                           | Allow localhost binding when proxy-restricted (macOS only, default: false).                                                      |
+| `network_proxy.policy.allowUnixSockets`            | array<string>                                                     | Allow specific Unix socket paths when proxy-restricted (macOS only, default: []).                                                |
 | `network_proxy.mitm.enabled`                       | boolean                                                           | Enable HTTPS MITM for read-only enforcement in limited mode (default: false).                                                    |
 | `network_proxy.mitm.inspect`                       | boolean                                                           | Enable body inspection in MITM mode (default: false).                                                                            |
 | `network_proxy.mitm.max_body_bytes`                | number                                                            | Max body bytes to buffer when inspection is enabled (default: 4096).                                                             |

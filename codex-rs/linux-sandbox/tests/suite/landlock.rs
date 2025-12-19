@@ -1,4 +1,5 @@
 #![cfg(target_os = "linux")]
+use codex_core::config::types::NetworkProxyConfig;
 use codex_core::config::types::ShellEnvironmentPolicy;
 use codex_core::error::CodexErr;
 use codex_core::error::SandboxErr;
@@ -29,25 +30,16 @@ const NETWORK_TIMEOUT_MS: u64 = 2_000;
 #[cfg(target_arch = "aarch64")]
 const NETWORK_TIMEOUT_MS: u64 = 10_000;
 
-fn create_env_from_core_vars() -> HashMap<String, String> {
+fn create_env_from_core_vars(sandbox_policy: &SandboxPolicy) -> HashMap<String, String> {
     let policy = ShellEnvironmentPolicy::default();
-    create_env(&policy)
+    let network_proxy = NetworkProxyConfig::default();
+    create_env(&policy, sandbox_policy, &network_proxy)
 }
 
 #[expect(clippy::print_stdout, clippy::expect_used, clippy::unwrap_used)]
 async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
-    let params = ExecParams {
-        command: cmd.iter().copied().map(str::to_owned).collect(),
-        cwd,
-        expiration: timeout_ms.into(),
-        env: create_env_from_core_vars(),
-        sandbox_permissions: SandboxPermissions::UseDefault,
-        justification: None,
-        arg0: None,
-    };
-
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: writable_roots
             .iter()
@@ -59,6 +51,15 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
         // writing to in the sandbox.
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
+    };
+    let params = ExecParams {
+        command: cmd.iter().copied().map(str::to_owned).collect(),
+        cwd,
+        expiration: timeout_ms.into(),
+        env: create_env_from_core_vars(&sandbox_policy),
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        justification: None,
+        arg0: None,
     };
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));

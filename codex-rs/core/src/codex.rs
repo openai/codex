@@ -393,15 +393,6 @@ impl TurnContext {
     }
 }
 
-pub(crate) struct CommandApprovalRequest {
-    pub(crate) call_id: String,
-    pub(crate) command: Vec<String>,
-    pub(crate) cwd: PathBuf,
-    pub(crate) reason: Option<String>,
-    pub(crate) network_preflight_only: bool,
-    pub(crate) proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
-}
-
 #[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
@@ -1106,7 +1097,12 @@ impl Session {
     pub async fn request_command_approval(
         &self,
         turn_context: &TurnContext,
-        request: CommandApprovalRequest,
+        call_id: String,
+        command: Vec<String>,
+        cwd: PathBuf,
+        reason: Option<String>,
+        proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+        network_preflight_only: bool,
     ) -> ReviewDecision {
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
@@ -1126,16 +1122,16 @@ impl Session {
             warn!("Overwriting existing pending approval for sub_id: {event_id}");
         }
 
-        let parsed_cmd = parse_command(&request.command);
+        let parsed_cmd = parse_command(&command);
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-            call_id: request.call_id,
+            call_id,
             turn_id: turn_context.sub_id.clone(),
-            command: request.command,
-            cwd: request.cwd,
-            reason: request.reason,
-            proposed_execpolicy_amendment: request.proposed_execpolicy_amendment,
+            command,
+            cwd,
+            reason,
+            proposed_execpolicy_amendment,
             parsed_cmd,
-            network_preflight_only: request.network_preflight_only,
+            network_preflight_only,
         });
         self.send_event(turn_context, event).await;
         rx_approve.await.unwrap_or_default()
