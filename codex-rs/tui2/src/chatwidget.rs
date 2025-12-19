@@ -532,7 +532,6 @@ impl ChatWidget {
         self.bottom_pane.set_task_running(true);
         self.retry_status_header = None;
         self.bottom_pane.set_interrupt_hint_visible(true);
-        self.bottom_pane.update_status_details(None);
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
@@ -968,8 +967,6 @@ impl ChatWidget {
             self.retry_status_header = Some(self.current_status_header.clone());
         }
         self.set_status_header(message);
-        self.bottom_pane
-            .update_status_details(Some("test".to_string()));
     }
 
     /// Periodic tick to commit at most one queued line to history with a small delay,
