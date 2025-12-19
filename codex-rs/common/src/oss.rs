@@ -24,12 +24,11 @@ pub async fn detect_ollama_wire_api_if_needed(config: &mut Config) {
         return;
     }
 
-if let Ok(Some(detection)) =
-    codex_ollama::detect_wire_api(&config.model_provider).await
-    && detection.wire_api == WireApi::Chat
-{
-    config.model_provider.wire_api = WireApi::Chat;
-}
+    if let Ok(Some(detection)) = codex_ollama::detect_wire_api(&config.model_provider).await
+        && detection.wire_api == WireApi::Chat
+    {
+        config.model_provider.wire_api = WireApi::Chat;
+    }
 }
 
 /// Ensures the specified OSS provider is ready (models downloaded, service reachable).
