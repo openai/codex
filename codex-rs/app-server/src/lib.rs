@@ -2,7 +2,6 @@
 
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
@@ -81,12 +80,11 @@ pub async fn run_main(
             format!("error parsing -c overrides: {e}"),
         )
     })?;
-    let config =
-        Config::load_with_cli_overrides(cli_kv_overrides.clone(), ConfigOverrides::default())
-            .await
-            .map_err(|e| {
-                std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
-            })?;
+    let config = Config::load_with_cli_overrides(cli_kv_overrides.clone())
+        .await
+        .map_err(|e| {
+            std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
+        })?;
 
     let feedback = CodexFeedback::new();
 

@@ -2,7 +2,6 @@ mod windows_impl {
     use crate::acl::allow_null_device;
     use crate::allow::compute_allow_paths;
     use crate::allow::AllowDenyPaths;
-    use crate::cap::cap_sid_file;
     use crate::cap::load_or_create_cap_sids;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
@@ -53,13 +52,6 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::STARTUPINFOW;
 
     /// Ensures the parent directory of a path exists before writing to it.
-    fn ensure_dir(p: &Path) -> Result<()> {
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d)?;
-        }
-        Ok(())
-    }
-
     /// Walks upward from `start` to locate the git worktree root, following gitfile redirects.
     fn find_git_root(start: &Path) -> Option<PathBuf> {
         let mut cur = dunce::canonicalize(start).ok()?;
@@ -246,44 +238,31 @@ mod windows_impl {
         let sandbox_creds =
             require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, codex_home)?;
         log_note("cli creds ready", logs_base_dir);
-        let cap_sid_path = cap_sid_file(codex_home);
-
         // Build capability SID for ACL grants.
+        if matches!(
+            &policy,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        ) {
+            anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
+        }
+        let caps = load_or_create_cap_sids(codex_home)?;
         let (psid_to_use, cap_sid_str) = match &policy {
-            SandboxPolicy::ReadOnly => {
-                let caps = load_or_create_cap_sids(codex_home);
-                ensure_dir(&cap_sid_path)?;
-                fs::write(&cap_sid_path, serde_json::to_string(&caps)?)?;
-                (
-                    unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
-                    caps.readonly.clone(),
-                )
-            }
-            SandboxPolicy::WorkspaceWrite { .. } => {
-                let caps = load_or_create_cap_sids(codex_home);
-                ensure_dir(&cap_sid_path)?;
-                fs::write(&cap_sid_path, serde_json::to_string(&caps)?)?;
-                (
-                    unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() },
-                    caps.workspace.clone(),
-                )
-            }
-            SandboxPolicy::DangerFullAccess => {
-                anyhow::bail!("DangerFullAccess is not supported for sandboxing")
+            SandboxPolicy::ReadOnly => (
+                unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
+                caps.readonly.clone(),
+            ),
+            SandboxPolicy::WorkspaceWrite { .. } => (
+                unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() },
+                caps.workspace.clone(),
+            ),
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                unreachable!("DangerFullAccess handled above")
             }
         };
 
-        let AllowDenyPaths { allow, deny } =
+        let AllowDenyPaths { allow: _, deny: _ } =
             compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
         // Deny/allow ACEs are now applied during setup; avoid per-command churn.
-        log_note(
-            &format!(
-                "cli skipping per-command ACL grants (allow_count={} deny_count={})",
-                allow.len(),
-                deny.len()
-            ),
-            logs_base_dir,
-        );
         unsafe {
             allow_null_device(psid_to_use);
         }

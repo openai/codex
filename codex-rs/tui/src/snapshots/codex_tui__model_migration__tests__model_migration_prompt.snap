@@ -1,16 +1,12 @@
 ---
 source: tui/src/model_migration.rs
-assertion_line: 368
 expression: terminal.backend()
 ---
 
-> Try gpt-5.1-codex-max
+> Codex just got an upgrade. Introducing gpt-5.1-codex-max.
 
-  We recommend switching from gpt-5.1-codex-mini to
-  gpt-5.1-codex-max.
-
-  Latest Codex-optimized flagship for deep and fast
-  reasoning.
+  Upgrade to gpt-5.2-codex for the latest and greatest
+  agentic coding model.
 
   You can continue using gpt-5.1-codex-mini if you prefer.
 

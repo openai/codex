@@ -43,7 +43,12 @@ impl ToolsConfig {
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
         } else if features.enabled(Feature::UnifiedExec) {
-            ConfigShellToolType::UnifiedExec
+            // If ConPTY not supported (for old Windows versions), fallback on ShellCommand.
+            if codex_utils_pty::conpty_supported() {
+                ConfigShellToolType::UnifiedExec
+            } else {
+                ConfigShellToolType::ShellCommand
+            }
         } else {
             model_family.shell_type
         };
@@ -153,8 +158,7 @@ fn create_exec_command_tool() -> ToolSpec {
         "login".to_string(),
         JsonSchema::Boolean {
             description: Some(
-                "Whether to run the shell with -l/-i semantics. Defaults to false unless a shell snapshot is available."
-                    .to_string(),
+                "Whether to run the shell with -l/-i semantics. Defaults to true.".to_string(),
             ),
         },
     );
@@ -336,7 +340,7 @@ fn create_shell_command_tool() -> ToolSpec {
         "login".to_string(),
         JsonSchema::Boolean {
             description: Some(
-                "Whether to run the shell with login shell semantics. Defaults to false unless a shell snapshot is available."
+                "Whether to run the shell with login shell semantics. Defaults to true."
                     .to_string(),
             ),
         },

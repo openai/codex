@@ -1,0 +1,51 @@
+name: rust-release-prepare
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */4 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Update models.json
+        env:
+          OPENAI_API_KEY: ${{ secrets.CODEX_OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          client_version="99.99.99"
+          terminal_info="github-actions"
+          user_agent="codex_cli_rs/99.99.99 (Linux $(uname -r); $(uname -m)) ${terminal_info}"
+          base_url="${OPENAI_BASE_URL:-https://chatgpt.com/backend-api/codex}"
+
+          headers=(
+            -H "Authorization: Bearer ${OPENAI_API_KEY}"
+            -H "User-Agent: ${user_agent}"
+          )
+
+          url="${base_url%/}/models?client_version=${client_version}"
+          curl --http1.1 --fail --show-error --location "${headers[@]}" "${url}" | jq '.' > codex-rs/core/models.json
+
+      - name: Open pull request (if changed)
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "Update models.json"
+          title: "Update models.json"
+          body: "Automated update of models.json."
+          branch: "bot/update-models-json"
+          reviewers: "pakrym-oai,aibrahim-oai"
+          delete-branch: true

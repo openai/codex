@@ -251,7 +251,7 @@ pub fn apply_capability_denies_for_world_writable(
     }
     std::fs::create_dir_all(codex_home)?;
     let cap_path = cap_sid_file(codex_home);
-    let caps = load_or_create_cap_sids(codex_home);
+    let caps = load_or_create_cap_sids(codex_home)?;
     std::fs::write(&cap_path, serde_json::to_string(&caps)?)?;
     let (active_sid, workspace_roots): (*mut c_void, Vec<PathBuf>) = match sandbox_policy {
         SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
@@ -271,7 +271,7 @@ pub fn apply_capability_denies_for_world_writable(
             })?,
             Vec::new(),
         ),
-        SandboxPolicy::DangerFullAccess => {
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
             return Ok(());
         }
     };

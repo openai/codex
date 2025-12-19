@@ -296,7 +296,7 @@ impl ModifierDiff {
     }
 }
 
-fn write_spans<'a, I>(mut writer: &mut impl Write, content: I) -> io::Result<()>
+pub(crate) fn write_spans<'a, I>(mut writer: &mut impl Write, content: I) -> io::Result<()>
 where
     I: IntoIterator<Item = &'a Span<'a>>,
 {

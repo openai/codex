@@ -141,6 +141,7 @@ icu_locale_core = "2.1"
 icu_provider = { version = "2.1", features = ["sync"] }
 ignore = "0.4.23"
 image = { version = "^0.25.9", default-features = false }
+include_dir = "0.7.4"
 indexmap = "2.12.0"
 insta = "1.44.3"
 itertools = "0.14.0"
@@ -177,7 +178,7 @@ ratatui-macros = "0.6.0"
 regex = "1.12.2"
 regex-lite = "0.1.7"
 reqwest = "0.12"
-rmcp = { version = "0.10.0", default-features = false }
+rmcp = { version = "0.12.0", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 sentry = "0.46.0"

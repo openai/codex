@@ -381,6 +381,17 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_transcript_ui_state(
+        &mut self,
+        scrolled: bool,
+        selection_active: bool,
+        scroll_position: Option<(usize, usize)>,
+    ) {
+        self.composer
+            .set_transcript_ui_state(scrolled, selection_active, scroll_position);
+        self.request_redraw();
+    }
+
     /// Show a generic list selection view with the provided items.
     pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());

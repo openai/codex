@@ -184,17 +184,20 @@ struct ManagedClient {
 }
 
 impl ManagedClient {
+    /// Returns once the server has ack'd the sandbox state update.
     async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
         if !self.server_supports_sandbox_state_capability {
             return Ok(());
         }
 
-        self.client
-            .send_custom_notification(
-                MCP_SANDBOX_STATE_NOTIFICATION,
+        let _response = self
+            .client
+            .send_custom_request(
+                MCP_SANDBOX_STATE_METHOD,
                 Some(serde_json::to_value(sandbox_state)?),
             )
-            .await
+            .await?;
+        Ok(())
     }
 }
 
@@ -253,9 +256,9 @@ impl AsyncManagedClient {
 
 pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
 
-/// Custom MCP notification for sandbox state updates.
+/// Custom MCP request to push sandbox state updates.
 /// When used, the `params` field of the notification is [`SandboxState`].
-pub const MCP_SANDBOX_STATE_NOTIFICATION: &str = "codex/sandbox-state/update";
+pub const MCP_SANDBOX_STATE_METHOD: &str = "codex/sandbox-state/update";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -398,7 +401,7 @@ impl McpConnectionManager {
 
     /// Returns a single map that contains all tools. Each key is the
     /// fully-qualified name for the tool.
-    #[instrument(skip_all)]
+    #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
         let mut tools = HashMap::new();
         for managed_client in self.clients.values() {

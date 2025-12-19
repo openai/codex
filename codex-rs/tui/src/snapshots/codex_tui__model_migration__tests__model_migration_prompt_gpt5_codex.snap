@@ -1,15 +1,15 @@
 ---
 source: tui/src/model_migration.rs
-assertion_line: 416
 expression: terminal.backend()
 ---
 
-> Try gpt-5.1-codex-max
+> Codex just got an upgrade. Introducing gpt-5.1-codex-max.
 
   We recommend switching from gpt-5-codex to
   gpt-5.1-codex-max.
 
-  Latest Codex-optimized flagship for deep and fast
-  reasoning.
+  Codex-optimized flagship for deep and fast reasoning.
+  Learn more about gpt-5.1-codex-max at
+  https://www.codex.com/models/gpt-5.1-codex-max
 
   Press enter to continue

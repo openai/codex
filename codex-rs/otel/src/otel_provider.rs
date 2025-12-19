@@ -134,7 +134,7 @@ impl OtelProvider {
         self.tracer.as_ref().map(|tracer| {
             tracing_opentelemetry::layer()
                 .with_tracer(tracer.clone())
-                .with_filter(LevelFilter::INFO)
+                .with_filter(LevelFilter::TRACE)
         })
     }
 

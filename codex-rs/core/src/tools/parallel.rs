@@ -6,8 +6,8 @@ use tokio_util::either::Either;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
-use tracing::info_span;
 use tracing::instrument;
+use tracing::trace_span;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -45,9 +45,9 @@ impl ToolCallRuntime {
         }
     }
 
-    #[instrument(skip_all, fields(call = ?call))]
+    #[instrument(level = "trace", skip_all, fields(call = ?call))]
     pub(crate) fn handle_tool_call(
-        &self,
+        self,
         call: ToolCall,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
@@ -60,7 +60,7 @@ impl ToolCallRuntime {
         let lock = Arc::clone(&self.parallel_execution);
         let started = Instant::now();
 
-        let dispatch_span = info_span!(
+        let dispatch_span = trace_span!(
             "dispatch_tool_call",
             otel.name = call.tool_name.as_str(),
             tool_name = call.tool_name.as_str(),

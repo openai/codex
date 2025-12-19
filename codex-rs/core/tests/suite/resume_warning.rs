@@ -24,7 +24,7 @@ fn resume_history(
 ) -> InitialHistory {
     let turn_ctx = TurnContextItem {
         cwd: config.cwd.clone(),
-        approval_policy: config.approval_policy,
+        approval_policy: config.approval_policy.value(),
         sandbox_policy: config.sandbox_policy.clone(),
         model: previous_model.to_string(),
         effort: config.model_reasoning_effort,
@@ -42,7 +42,7 @@ fn resume_history(
 async fn emits_warning_when_resumed_model_differs() {
     // Arrange a config with a current model and a prior rollout recorded under a different model.
     let home = TempDir::new().expect("tempdir");
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model = Some("current-model".to_string());
     // Ensure cwd is absolute (the helper sets it to the temp dir already).
     assert!(config.cwd.is_absolute());

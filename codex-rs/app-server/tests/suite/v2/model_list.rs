@@ -48,75 +48,6 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
 
     let expected_models = vec![
         Model {
-            id: "gpt-5.1-codex-max".to_string(),
-            model: "gpt-5.1-codex-max".to_string(),
-            display_name: "gpt-5.1-codex-max".to_string(),
-            description: "Latest Codex-optimized flagship for deep and fast reasoning.".to_string(),
-            supported_reasoning_efforts: vec![
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Low,
-                    description: "Fast responses with lighter reasoning".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Medium,
-                    description: "Balances speed and reasoning depth for everyday tasks"
-                        .to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::High,
-                    description: "Greater reasoning depth for complex problems".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::XHigh,
-                    description: "Extra high reasoning depth for complex problems".to_string(),
-                },
-            ],
-            default_reasoning_effort: ReasoningEffort::Medium,
-            is_default: true,
-        },
-        Model {
-            id: "gpt-5.1-codex".to_string(),
-            model: "gpt-5.1-codex".to_string(),
-            display_name: "gpt-5.1-codex".to_string(),
-            description: "Optimized for codex.".to_string(),
-            supported_reasoning_efforts: vec![
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Low,
-                    description: "Fastest responses with limited reasoning".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Medium,
-                    description: "Dynamically adjusts reasoning based on the task".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::High,
-                    description: "Maximizes reasoning depth for complex or ambiguous problems"
-                        .to_string(),
-                },
-            ],
-            default_reasoning_effort: ReasoningEffort::Medium,
-            is_default: false,
-        },
-        Model {
-            id: "gpt-5.1-codex-mini".to_string(),
-            model: "gpt-5.1-codex-mini".to_string(),
-            display_name: "gpt-5.1-codex-mini".to_string(),
-            description: "Optimized for codex. Cheaper, faster, but less capable.".to_string(),
-            supported_reasoning_efforts: vec![
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Medium,
-                    description: "Dynamically adjusts reasoning based on the task".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::High,
-                    description: "Maximizes reasoning depth for complex or ambiguous problems"
-                        .to_string(),
-                },
-            ],
-            default_reasoning_effort: ReasoningEffort::Medium,
-            is_default: false,
-        },
-        Model {
             id: "gpt-5.2".to_string(),
             model: "gpt-5.2".to_string(),
             display_name: "gpt-5.2".to_string(),
@@ -138,7 +69,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                 },
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::High,
-                    description: "Greater reasoning depth for complex or ambiguous problems"
+                    description: "Maximizes reasoning depth for complex or ambiguous problems"
                         .to_string(),
                 },
                 ReasoningEffortOption {
@@ -147,30 +78,76 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                 },
             ],
             default_reasoning_effort: ReasoningEffort::Medium,
-            is_default: false,
+            is_default: true,
         },
         Model {
-            id: "gpt-5.1".to_string(),
-            model: "gpt-5.1".to_string(),
-            display_name: "gpt-5.1".to_string(),
-            description: "Broad world knowledge with strong general reasoning.".to_string(),
+            id: "gpt-5.1-codex-mini".to_string(),
+            model: "gpt-5.1-codex-mini".to_string(),
+            display_name: "gpt-5.1-codex-mini".to_string(),
+            description: "Optimized for codex. Cheaper, faster, but less capable.".to_string(),
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Low,
-                    description: "Balances speed with some reasoning; useful for straightforward \
-                                   queries and short explanations"
-                        .to_string(),
-                },
-                ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Medium,
-                    description: "Provides a solid balance of reasoning depth and latency for \
-                         general-purpose tasks"
-                        .to_string(),
+                    description: "Dynamically adjusts reasoning based on the task".to_string(),
                 },
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::High,
                     description: "Maximizes reasoning depth for complex or ambiguous problems"
                         .to_string(),
+                },
+            ],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            is_default: false,
+        },
+        Model {
+            id: "gpt-5.1-codex-max".to_string(),
+            model: "gpt-5.1-codex-max".to_string(),
+            display_name: "gpt-5.1-codex-max".to_string(),
+            description: "Codex-optimized flagship for deep and fast reasoning.".to_string(),
+            supported_reasoning_efforts: vec![
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Medium,
+                    description: "Balances speed and reasoning depth for everyday tasks"
+                        .to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Greater reasoning depth for complex problems".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::XHigh,
+                    description: "Extra high reasoning depth for complex problems".to_string(),
+                },
+            ],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            is_default: false,
+        },
+        Model {
+            id: "gpt-5.2-codex".to_string(),
+            model: "gpt-5.2-codex".to_string(),
+            display_name: "gpt-5.2-codex".to_string(),
+            description: "Latest frontier agentic coding model.".to_string(),
+            supported_reasoning_efforts: vec![
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Medium,
+                    description: "Balances speed and reasoning depth for everyday tasks"
+                        .to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Greater reasoning depth for complex problems".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::XHigh,
+                    description: "Extra high reasoning depth for complex problems".to_string(),
                 },
             ],
             default_reasoning_effort: ReasoningEffort::Medium,
@@ -210,7 +187,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(first_response)?;
 
     assert_eq!(first_items.len(), 1);
-    assert_eq!(first_items[0].id, "gpt-5.1-codex-max");
+    assert_eq!(first_items[0].id, "gpt-5.2");
     let next_cursor = first_cursor.ok_or_else(|| anyhow!("cursor for second page"))?;
 
     let second_request = mcp
@@ -232,7 +209,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(second_response)?;
 
     assert_eq!(second_items.len(), 1);
-    assert_eq!(second_items[0].id, "gpt-5.1-codex");
+    assert_eq!(second_items[0].id, "gpt-5.1-codex-mini");
     let third_cursor = second_cursor.ok_or_else(|| anyhow!("cursor for third page"))?;
 
     let third_request = mcp
@@ -254,7 +231,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(third_response)?;
 
     assert_eq!(third_items.len(), 1);
-    assert_eq!(third_items[0].id, "gpt-5.1-codex-mini");
+    assert_eq!(third_items[0].id, "gpt-5.1-codex-max");
     let fourth_cursor = third_cursor.ok_or_else(|| anyhow!("cursor for fourth page"))?;
 
     let fourth_request = mcp
@@ -276,30 +253,8 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(fourth_response)?;
 
     assert_eq!(fourth_items.len(), 1);
-    assert_eq!(fourth_items[0].id, "gpt-5.2");
-    let fifth_cursor = fourth_cursor.ok_or_else(|| anyhow!("cursor for fifth page"))?;
-
-    let fifth_request = mcp
-        .send_list_models_request(ModelListParams {
-            limit: Some(1),
-            cursor: Some(fifth_cursor.clone()),
-        })
-        .await?;
-
-    let fifth_response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(fifth_request)),
-    )
-    .await??;
-
-    let ModelListResponse {
-        data: fifth_items,
-        next_cursor: fifth_cursor,
-    } = to_response::<ModelListResponse>(fifth_response)?;
-
-    assert_eq!(fifth_items.len(), 1);
-    assert_eq!(fifth_items[0].id, "gpt-5.1");
-    assert!(fifth_cursor.is_none());
+    assert_eq!(fourth_items[0].id, "gpt-5.2-codex");
+    assert!(fourth_cursor.is_none());
     Ok(())
 }
 

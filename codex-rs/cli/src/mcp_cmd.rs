@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -9,14 +8,12 @@ use clap::ArgGroup;
 use codex_common::CliConfigOverrides;
 use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::features::Feature;
-use codex_core::git_info::resolve_root_git_project_for_trust;
 use codex_core::mcp::auth::compute_auth_statuses;
 use codex_core::protocol::McpAuthStatus;
 use codex_rmcp_client::delete_oauth_tokens;
@@ -35,11 +32,6 @@ use codex_rmcp_client::supports_oauth_login;
 pub struct McpCli {
     #[clap(flatten)]
     pub config_overrides: CliConfigOverrides,
-
-    /// Working directory used to resolve cwd-dependent configuration (e.g. trust/project scope).
-    /// Set by the top-level CLI `--cd/-C` flag.
-    #[clap(skip)]
-    pub cwd: Option<PathBuf>,
 
     #[command(subcommand)]
     pub subcommand: McpSubcommand,
@@ -90,10 +82,6 @@ pub struct GetArgs {
 pub struct AddArgs {
     /// Name for the MCP server configuration.
     pub name: String,
-
-    /// Write to `$CODEX_HOME/config.toml` even when inside a git repo.
-    #[arg(short = 'g', long = "global")]
-    pub global: bool,
 
     #[command(flatten)]
     pub transport_args: AddMcpTransportArgs,
@@ -156,10 +144,6 @@ pub struct AddMcpStreamableHttpArgs {
 pub struct RemoveArgs {
     /// Name of the MCP server configuration to remove.
     pub name: String,
-
-    /// Remove from `$CODEX_HOME/config.toml` even when inside a git repo.
-    #[arg(short = 'g', long = "global")]
-    pub global: bool,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -182,28 +166,27 @@ impl McpCli {
     pub async fn run(self) -> Result<()> {
         let McpCli {
             config_overrides,
-            cwd,
             subcommand,
         } = self;
 
         match subcommand {
             McpSubcommand::List(args) => {
-                run_list(&config_overrides, cwd.clone(), args).await?;
+                run_list(&config_overrides, args).await?;
             }
             McpSubcommand::Get(args) => {
-                run_get(&config_overrides, cwd.clone(), args).await?;
+                run_get(&config_overrides, args).await?;
             }
             McpSubcommand::Add(args) => {
-                run_add(&config_overrides, cwd.clone(), args).await?;
+                run_add(&config_overrides, args).await?;
             }
             McpSubcommand::Remove(args) => {
-                run_remove(&config_overrides, cwd.clone(), args).await?;
+                run_remove(&config_overrides, args).await?;
             }
             McpSubcommand::Login(args) => {
-                run_login(&config_overrides, cwd.clone(), args).await?;
+                run_login(&config_overrides, args).await?;
             }
             McpSubcommand::Logout(args) => {
-                run_logout(&config_overrides, cwd.clone(), args).await?;
+                run_logout(&config_overrides, args).await?;
             }
         }
 
@@ -211,65 +194,26 @@ impl McpCli {
     }
 }
 
-async fn load_config(
-    config_overrides: &CliConfigOverrides,
-    cwd: Option<PathBuf>,
-) -> Result<Config> {
+async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<()> {
     // Validate any provided overrides even though they are not currently applied.
     let overrides = config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(
-        overrides,
-        ConfigOverrides {
-            cwd,
-            ..ConfigOverrides::default()
-        },
-    )
-    .await
-    .context("failed to load configuration")?;
-    Ok(config)
-}
-
-async fn run_add(
-    config_overrides: &CliConfigOverrides,
-    cwd: Option<PathBuf>,
-    add_args: AddArgs,
-) -> Result<()> {
-    let config = load_config(config_overrides, cwd).await?;
+    let config = Config::load_with_cli_overrides(overrides)
+        .await
+        .context("failed to load configuration")?;
 
     let AddArgs {
         name,
-        global,
         transport_args,
     } = add_args;
 
     validate_server_name(&name)?;
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
-    let cwd = std::env::current_dir().context("failed to resolve current directory")?;
-    let target_config_dir = if global {
-        codex_home.clone()
-    } else {
-        resolve_root_git_project_for_trust(&cwd)
-            .map(|repo_root| repo_root.join(".codex"))
-            .unwrap_or_else(|| codex_home.clone())
-    };
-    std::fs::create_dir_all(&target_config_dir).with_context(|| {
-        format!(
-            "failed to create config directory at {}",
-            target_config_dir.display()
-        )
-    })?;
-
-    let mut servers = load_global_mcp_servers(&target_config_dir, None)
+    let mut servers = load_global_mcp_servers(&codex_home)
         .await
-        .with_context(|| {
-            format!(
-                "failed to load MCP servers from {}",
-                target_config_dir.display()
-            )
-        })?;
+        .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
     let transport = match transport_args {
         AddMcpTransportArgs {
@@ -321,21 +265,13 @@ async fn run_add(
 
     servers.insert(name.clone(), new_entry);
 
-    ConfigEditsBuilder::new(&target_config_dir)
+    ConfigEditsBuilder::new(&codex_home)
         .replace_mcp_servers(&servers)
         .apply()
         .await
-        .with_context(|| {
-            format!(
-                "failed to write MCP servers to {}",
-                target_config_dir.display()
-            )
-        })?;
+        .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
 
-    println!(
-        "Added MCP server '{name}' to {}.",
-        target_config_dir.join("config.toml").display()
-    );
+    println!("Added global MCP server '{name}'.");
 
     if let McpServerTransportConfig::StreamableHttp {
         url,
@@ -375,55 +311,32 @@ async fn run_add(
     Ok(())
 }
 
-async fn run_remove(
-    config_overrides: &CliConfigOverrides,
-    _cwd: Option<PathBuf>,
-    remove_args: RemoveArgs,
-) -> Result<()> {
+async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) -> Result<()> {
     config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
 
-    let RemoveArgs { name, global } = remove_args;
+    let RemoveArgs { name } = remove_args;
 
     validate_server_name(&name)?;
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
-    let cwd = std::env::current_dir().context("failed to resolve current directory")?;
-    let target_config_dir = if global {
-        codex_home.clone()
-    } else {
-        resolve_root_git_project_for_trust(&cwd)
-            .map(|repo_root| repo_root.join(".codex"))
-            .unwrap_or_else(|| codex_home.clone())
-    };
-
-    let mut servers = load_global_mcp_servers(&target_config_dir, None)
+    let mut servers = load_global_mcp_servers(&codex_home)
         .await
-        .with_context(|| {
-            format!(
-                "failed to load MCP servers from {}",
-                target_config_dir.display()
-            )
-        })?;
+        .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
     let removed = servers.remove(&name).is_some();
 
     if removed {
-        ConfigEditsBuilder::new(&target_config_dir)
+        ConfigEditsBuilder::new(&codex_home)
             .replace_mcp_servers(&servers)
             .apply()
             .await
-            .with_context(|| {
-                format!(
-                    "failed to write MCP servers to {}",
-                    target_config_dir.display()
-                )
-            })?;
+            .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
     }
 
     if removed {
-        println!("Removed MCP server '{name}'.");
+        println!("Removed global MCP server '{name}'.");
     } else {
         println!("No MCP server named '{name}' found.");
     }
@@ -431,12 +344,13 @@ async fn run_remove(
     Ok(())
 }
 
-async fn run_login(
-    config_overrides: &CliConfigOverrides,
-    cwd: Option<PathBuf>,
-    login_args: LoginArgs,
-) -> Result<()> {
-    let config = load_config(config_overrides, cwd).await?;
+async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs) -> Result<()> {
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let config = Config::load_with_cli_overrides(overrides)
+        .await
+        .context("failed to load configuration")?;
 
     if !config.features.enabled(Feature::RmcpClient) {
         bail!(
@@ -473,12 +387,13 @@ async fn run_login(
     Ok(())
 }
 
-async fn run_logout(
-    config_overrides: &CliConfigOverrides,
-    cwd: Option<PathBuf>,
-    logout_args: LogoutArgs,
-) -> Result<()> {
-    let config = load_config(config_overrides, cwd).await?;
+async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutArgs) -> Result<()> {
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let config = Config::load_with_cli_overrides(overrides)
+        .await
+        .context("failed to load configuration")?;
 
     let LogoutArgs { name } = logout_args;
 
@@ -501,12 +416,13 @@ async fn run_logout(
     Ok(())
 }
 
-async fn run_list(
-    config_overrides: &CliConfigOverrides,
-    cwd: Option<PathBuf>,
-    list_args: ListArgs,
-) -> Result<()> {
-    let config = load_config(config_overrides, cwd).await?;
+async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Result<()> {
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let config = Config::load_with_cli_overrides(overrides)
+        .await
+        .context("failed to load configuration")?;
 
     let mut entries: Vec<_> = config.mcp_servers.iter().collect();
     entries.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -757,12 +673,13 @@ async fn run_list(
     Ok(())
 }
 
-async fn run_get(
-    config_overrides: &CliConfigOverrides,
-    cwd: Option<PathBuf>,
-    get_args: GetArgs,
-) -> Result<()> {
-    let config = load_config(config_overrides, cwd).await?;
+async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<()> {
+    let overrides = config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let config = Config::load_with_cli_overrides(overrides)
+        .await
+        .context("failed to load configuration")?;
 
     let Some(server) = config.mcp_servers.get(&get_args.name) else {
         bail!("No MCP server named '{name}' found.", name = get_args.name);

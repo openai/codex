@@ -585,8 +585,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
-            | EventMsg::SubAgentRunBegin(_)
-            | EventMsg::SubAgentRunEnd(_)
+            | EventMsg::SkillsUpdateAvailable
             | EventMsg::UndoCompleted(_)
             | EventMsg::UndoStarted(_) => {}
         }

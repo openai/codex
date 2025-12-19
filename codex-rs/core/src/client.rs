@@ -45,6 +45,7 @@ use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
+use crate::features::FEATURES;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
@@ -261,6 +262,7 @@ impl ModelClient {
                 store_override: None,
                 conversation_id: Some(conversation_id.clone()),
                 session_source: Some(session_source.clone()),
+                extra_headers: beta_feature_headers(&self.config),
             };
 
             let stream_result = client
@@ -394,6 +396,27 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
         parallel_tool_calls: prompt.parallel_tool_calls,
         output_schema: prompt.output_schema.clone(),
     }
+}
+
+fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
+    let enabled = FEATURES
+        .iter()
+        .filter_map(|spec| {
+            if spec.stage.beta_menu_description().is_some() && config.features.enabled(spec.id) {
+                Some(spec.key)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let value = enabled.join(",");
+    let mut headers = ApiHeaderMap::new();
+    if !value.is_empty()
+        && let Ok(header_value) = HeaderValue::from_str(value.as_str())
+    {
+        headers.insert("x-codex-beta-features", header_value);
+    }
+    headers
 }
 
 fn map_response_stream<S>(api_stream: S, otel_manager: OtelManager) -> ResponseStream

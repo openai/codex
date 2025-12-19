@@ -36,7 +36,10 @@ class BinaryComponent:
     artifact_prefix: str  # matches the artifact filename prefix (e.g. codex-<target>.zst)
     dest_dir: str  # directory under vendor/<target>/ where the binary is installed
     binary_basename: str  # executable name inside dest_dir (before optional .exe)
+    targets: tuple[str, ...] | None = None  # limit installation to specific targets
 
+
+WINDOWS_TARGETS = tuple(target for target in BINARY_TARGETS if "windows" in target)
 
 BINARY_COMPONENTS = {
     "codex": BinaryComponent(
@@ -48,6 +51,18 @@ BINARY_COMPONENTS = {
         artifact_prefix="codex-responses-api-proxy",
         dest_dir="codex-responses-api-proxy",
         binary_basename="codex-responses-api-proxy",
+    ),
+    "codex-windows-sandbox-setup": BinaryComponent(
+        artifact_prefix="codex-windows-sandbox-setup",
+        dest_dir="codex",
+        binary_basename="codex-windows-sandbox-setup",
+        targets=WINDOWS_TARGETS,
+    ),
+    "codex-command-runner": BinaryComponent(
+        artifact_prefix="codex-command-runner",
+        dest_dir="codex",
+        binary_basename="codex-command-runner",
+        targets=WINDOWS_TARGETS,
     ),
 }
 
@@ -79,7 +94,8 @@ def parse_args() -> argparse.Namespace:
         choices=tuple(list(BINARY_COMPONENTS) + ["rg"]),
         help=(
             "Limit installation to the specified components."
-            " May be repeated. Defaults to 'codex' and 'rg'."
+            " May be repeated. Defaults to codex, codex-windows-sandbox-setup,"
+            " codex-command-runner, and rg."
         ),
     )
     parser.add_argument(
@@ -101,7 +117,12 @@ def main() -> int:
     vendor_dir = codex_cli_root / VENDOR_DIR_NAME
     vendor_dir.mkdir(parents=True, exist_ok=True)
 
-    components = args.components or ["codex", "rg"]
+    components = args.components or [
+        "codex",
+        "codex-windows-sandbox-setup",
+        "codex-command-runner",
+        "rg",
+    ]
 
     workflow_url = (args.workflow_url or DEFAULT_WORKFLOW_URL).strip()
     if not workflow_url:
@@ -116,8 +137,7 @@ def main() -> int:
         install_binary_components(
             artifacts_dir,
             vendor_dir,
-            BINARY_TARGETS,
-            [name for name in components if name in BINARY_COMPONENTS],
+            [BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS],
         )
 
     if "rg" in components:
@@ -206,23 +226,19 @@ def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
 def install_binary_components(
     artifacts_dir: Path,
     vendor_dir: Path,
-    targets: Iterable[str],
-    component_names: Sequence[str],
+    selected_components: Sequence[BinaryComponent],
 ) -> None:
-    selected_components = [BINARY_COMPONENTS[name] for name in component_names if name in BINARY_COMPONENTS]
     if not selected_components:
         return
 
-    targets = list(targets)
-    if not targets:
-        return
-
     for component in selected_components:
+        component_targets = list(component.targets or BINARY_TARGETS)
+
         print(
             f"Installing {component.binary_basename} binaries for targets: "
-            + ", ".join(targets)
+            + ", ".join(component_targets)
         )
-        max_workers = min(len(targets), max(1, (os.cpu_count() or 1)))
+        max_workers = min(len(component_targets), max(1, (os.cpu_count() or 1)))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(
@@ -232,7 +248,7 @@ def install_binary_components(
                     target,
                     component,
                 ): target
-                for target in targets
+                for target in component_targets
             }
             for future in as_completed(futures):
                 installed_path = future.result()

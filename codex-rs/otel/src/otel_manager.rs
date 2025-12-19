@@ -25,7 +25,7 @@ use std::time::Instant;
 use strum_macros::Display;
 use tokio::time::error::Elapsed;
 use tracing::Span;
-use tracing::info_span;
+use tracing::trace_span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[derive(Debug, Clone, Serialize, Display)]
@@ -67,7 +67,7 @@ impl OtelManager {
         terminal_type: String,
         session_source: SessionSource,
     ) -> OtelManager {
-        let session_span = info_span!("new_session", conversation_id = %conversation_id, session_source = %session_source);
+        let session_span = trace_span!("new_session", conversation_id = %conversation_id, session_source = %session_source);
 
         if let Some(context) = traceparent_context_from_env() {
             session_span.set_parent(context);
