@@ -677,14 +677,7 @@ pub async fn start_mock_server() -> MockServer {
         .await;
 
     // Provide a default `/models` response so tests remain hermetic when the client queries it.
-    let _ = mount_models_once(
-        &server,
-        ModelsResponse {
-            models: Vec::new(),
-            etag: String::new(),
-        },
-    )
-    .await;
+    let _ = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
 
     server
 }

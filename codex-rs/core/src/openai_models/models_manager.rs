@@ -94,12 +94,12 @@ impl ModelsManager {
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
         let client_version = format_client_version_to_whole();
-        let ModelsResponse { models, etag } = client
+        let (models, etag) = client
             .list_models(&client_version, HeaderMap::new())
             .await
             .map_err(map_api_error)?;
 
-        let etag = (!etag.is_empty()).then_some(etag);
+        let etag = etag.filter(|value| !value.is_empty());
 
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
@@ -389,7 +389,6 @@ mod tests {
             &server,
             ModelsResponse {
                 models: remote_models.clone(),
-                etag: String::new(),
             },
         )
         .await;
@@ -446,7 +445,6 @@ mod tests {
             &server,
             ModelsResponse {
                 models: remote_models.clone(),
-                etag: String::new(),
             },
         )
         .await;
@@ -501,7 +499,6 @@ mod tests {
             &server,
             ModelsResponse {
                 models: initial_models.clone(),
-                etag: String::new(),
             },
         )
         .await;
@@ -542,7 +539,6 @@ mod tests {
             &server,
             ModelsResponse {
                 models: updated_models.clone(),
-                etag: String::new(),
             },
         )
         .await;
@@ -576,7 +572,6 @@ mod tests {
             &server,
             ModelsResponse {
                 models: initial_models,
-                etag: String::new(),
             },
         )
         .await;
@@ -605,7 +600,6 @@ mod tests {
             &server,
             ModelsResponse {
                 models: refreshed_models,
-                etag: String::new(),
             },
         )
         .await;

@@ -93,7 +93,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         &server,
         ModelsResponse {
             models: vec![remote_model],
-            etag: String::new(),
         },
     )
     .await;
@@ -232,7 +231,6 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         &server,
         ModelsResponse {
             models: vec![remote_model],
-            etag: String::new(),
         },
     )
     .await;
@@ -310,7 +308,6 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
         &server,
         ModelsResponse {
             models: vec![remote_model.clone()],
-            etag: String::new(),
         },
     )
     .await;
@@ -368,7 +365,6 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
         &server,
         ModelsResponse {
             models: vec![remote_model],
-            etag: String::new(),
         },
     )
     .await;
