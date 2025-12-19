@@ -5,8 +5,6 @@ use regex::Regex;
 use shlex::split as shlex_split;
 use url::Url;
 
-use crate::powershell::strip_utf8_output_prefix;
-
 pub fn is_dangerous_command_windows(command: &[String]) -> bool {
     // Prefer structured parsing for PowerShell/CMD so we can spot URL-bearing
     // invocations of ShellExecute-style entry points before falling back to
@@ -227,7 +225,6 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
                 if idx + 2 != args.len() {
                     return None;
                 }
-                let script = strip_utf8_output_prefix(script);
                 let tokens = shlex_split(script)?;
                 return Some(ParsedPowershell { tokens });
             }
@@ -236,7 +233,6 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
                     return None;
                 }
                 let (_, script) = arg.split_once(':')?;
-                let script = strip_utf8_output_prefix(script);
                 let tokens = shlex_split(script)?;
                 return Some(ParsedPowershell { tokens });
             }

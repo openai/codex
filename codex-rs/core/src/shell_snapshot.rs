@@ -24,7 +24,7 @@ const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 impl ShellSnapshot {
     pub async fn try_new(codex_home: &Path, shell: &Shell) -> Option<Self> {
         let extension = match shell.shell_type {
-            ShellType::PowerShell { .. } => "ps1",
+            ShellType::PowerShell => "ps1",
             _ => "sh",
         };
         let path =
@@ -60,7 +60,7 @@ impl Drop for ShellSnapshot {
 
 pub async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> Result<PathBuf> {
     match shell_type {
-        ShellType::PowerShell { .. } | ShellType::Cmd => {
+        ShellType::PowerShell | ShellType::Cmd => {
             bail!("Shell snapshot not supported yet for {shell_type:?}");
         }
         _ => {}
@@ -92,7 +92,7 @@ async fn capture_snapshot(shell: &Shell) -> Result<String> {
         ShellType::Zsh => run_shell_script(shell, zsh_snapshot_script()).await,
         ShellType::Bash => run_shell_script(shell, bash_snapshot_script()).await,
         ShellType::Sh => run_shell_script(shell, sh_snapshot_script()).await,
-        ShellType::PowerShell { .. } => run_shell_script(shell, powershell_snapshot_script()).await,
+        ShellType::PowerShell => run_shell_script(shell, powershell_snapshot_script()).await,
         ShellType::Cmd => bail!("Shell snapshotting is not yet supported for {shell_type:?}"),
     }
 }

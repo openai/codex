@@ -27,7 +27,7 @@ impl Shell {
         match self.shell_type {
             ShellType::Zsh => "zsh",
             ShellType::Bash => "bash",
-            ShellType::PowerShell { .. } => "powershell",
+            ShellType::PowerShell => "powershell",
             ShellType::Sh => "sh",
             ShellType::Cmd => "cmd",
         }
