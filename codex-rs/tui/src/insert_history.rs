@@ -340,8 +340,11 @@ mod tests {
     use serial_test::serial;
 
     #[test]
+    #[serial]
     fn writes_bold_then_regular_spans() {
         use ratatui::style::Stylize;
+
+        crossterm::style::Colored::set_ansi_color_disabled(false);
 
         let spans = ["A".bold(), "B".into()];
 
@@ -365,6 +368,8 @@ mod tests {
             String::from_utf8(actual).unwrap(),
             String::from_utf8(expected).unwrap()
         );
+
+        crossterm::style::Colored::set_ansi_color_disabled(true);
     }
 
     #[test]
