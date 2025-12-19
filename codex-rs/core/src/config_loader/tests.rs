@@ -176,7 +176,7 @@ allowed_approval_policies = ["never", "on-request"]
     let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
     assert_eq!(
         config_requirements.approval_policy.value(),
-        AskForApproval::OnRequest
+        AskForApproval::Never
     );
     config_requirements
         .approval_policy
