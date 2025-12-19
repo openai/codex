@@ -1106,6 +1106,7 @@ pub(crate) fn build_specs(
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
+        let total_mcp_tools = entries.len();
         let mut failed_tools = Vec::new();
 
         for (name, tool) in entries.into_iter() {
@@ -1126,7 +1127,7 @@ pub(crate) fn build_specs(
                 "Failed to load {} out of {} MCP tools. These tools will not be available. \
                  Check MCP server configuration and tool schemas.",
                 failed_tools.len(),
-                failed_tools.len() + builder.specs().len().saturating_sub(failed_tools.len())
+                total_mcp_tools
             );
 
             // Log first few failed tools with more detail
