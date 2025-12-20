@@ -14,6 +14,7 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::ResumeSelection;
+use crate::subagent_candidates::discover_subagent_candidates;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -749,6 +750,11 @@ impl App {
             }
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
+            }
+            AppEvent::RefreshSubagents => {
+                let cwd = self.chat_widget.config_ref().cwd.clone();
+                let subagents = discover_subagent_candidates(&cwd, &self.config.codex_home).await;
+                self.chat_widget.set_subagents(subagents);
             }
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));

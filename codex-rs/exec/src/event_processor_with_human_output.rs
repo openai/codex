@@ -18,6 +18,8 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::StreamErrorEvent;
+use codex_core::protocol::SubAgentRunBeginEvent;
+use codex_core::protocol::SubAgentRunEndEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
@@ -171,6 +173,41 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self,
                     "{} {message}",
                     "warning:".style(self.yellow).style(self.bold)
+                );
+            }
+            EventMsg::SubAgentRunBegin(SubAgentRunBeginEvent {
+                call_id,
+                name,
+                description,
+                color: _,
+                prompt: _,
+            }) => {
+                ts_msg!(
+                    self,
+                    "{} {} — {}",
+                    "subagent begin:".style(self.cyan),
+                    name,
+                    description
+                );
+                ts_msg!(self, "{}", format!("call_id: {call_id}").style(self.dimmed));
+            }
+            EventMsg::SubAgentRunEnd(SubAgentRunEndEvent {
+                call_id,
+                duration_ms,
+                success,
+            }) => {
+                let status = if success {
+                    "success".style(self.green)
+                } else {
+                    "failed".style(self.red)
+                };
+                ts_msg!(
+                    self,
+                    "{} {} ({} ms) — {}",
+                    "subagent end:".style(self.cyan),
+                    call_id,
+                    duration_ms,
+                    status
                 );
             }
             EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }) => {

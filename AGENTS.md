@@ -107,3 +107,9 @@ If you don’t have the tool:
 # Headings
 
 - `codex-mine` の説明、および `codex-mine` 向けの機能・運用ルールは `README_mine.md` に追記していくこと（一般向けドキュメントや共通仕様に混ぜない）。
+
+# Git Subtree (vscode-extension)
+
+- `vscode-extension/` は `codex-mine` に subtree で取り込み済みの前提で運用する。
+- `codex-mine` と `vscode-extension` の変更は同一コミットに混在して構わない（subtree push 時に `vscode-extension/` 配下のみが抽出される）。
+- 元リポジトリと同期したい場合は手動で `git subtree pull/push` を使う（submodule のような自動リンクではない）。

@@ -21,13 +21,13 @@ use std::time::Duration;
 mod approval_overlay;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
+mod at_popup;
 mod bottom_pane_view;
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 pub mod custom_prompt_view;
 mod experimental_features_view;
-mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod prompt_args;
@@ -56,6 +56,7 @@ pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
+use crate::subagent_candidates::SubAgentCandidate;
 pub(crate) use experimental_features_view::BetaFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
@@ -141,6 +142,11 @@ impl BottomPane {
 
     pub fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.composer.set_skill_mentions(skills);
+        self.request_redraw();
+    }
+
+    pub fn set_subagents(&mut self, subagents: Vec<SubAgentCandidate>) {
+        self.composer.set_subagents(subagents);
         self.request_redraw();
     }
 

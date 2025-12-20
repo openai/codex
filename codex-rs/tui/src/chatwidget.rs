@@ -122,6 +122,7 @@ use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
+use crate::subagent_candidates::SubAgentCandidate;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod interrupts;
@@ -3293,6 +3294,10 @@ impl ChatWidget {
     /// Forward file-search results to the bottom pane.
     pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.bottom_pane.on_file_search_result(query, matches);
+    }
+
+    pub(crate) fn set_subagents(&mut self, subagents: Vec<SubAgentCandidate>) {
+        self.bottom_pane.set_subagents(subagents);
     }
 
     /// Handle Ctrl-C key press.

@@ -50,7 +50,7 @@ async fn list_and_get_render_expected_output() -> Result<()> {
     .assert()
     .success();
 
-    let mut servers = load_global_mcp_servers(codex_home.path(), None).await?;
+    let mut servers = load_global_mcp_servers(codex_home.path()).await?;
     let docs_entry = servers
         .get_mut("docs")
         .expect("docs server should exist after add");
@@ -147,7 +147,7 @@ async fn get_disabled_server_shows_single_line() -> Result<()> {
         .assert()
         .success();
 
-    let mut servers = load_global_mcp_servers(codex_home.path(), None).await?;
+    let mut servers = load_global_mcp_servers(codex_home.path()).await?;
     let docs = servers
         .get_mut("docs")
         .expect("docs server should exist after add");

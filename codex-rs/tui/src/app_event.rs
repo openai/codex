@@ -46,6 +46,9 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
+    /// Refresh discovered subagents (repo + CODEX_HOME).
+    RefreshSubagents,
+
     /// Result of refreshing rate limits
     RateLimitSnapshotFetched(RateLimitSnapshot),
 

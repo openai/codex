@@ -245,7 +245,7 @@ mod tests {
         let user_agent = get_codex_user_agent();
         let originator = regex_lite::escape(originator().value.as_str());
         let re = Regex::new(&format!(
-            r"^{originator}/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$"
+            r"^{originator}/\d+\.\d+\.\d+(?:-[A-Za-z0-9\.\-]+)? \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$"
         ))
         .unwrap();
         assert!(re.is_match(&user_agent));

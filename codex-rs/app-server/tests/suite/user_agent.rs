@@ -30,8 +30,9 @@ async fn get_user_agent_returns_current_codex_user_agent() -> Result<()> {
     let os_version = os_info.version();
     let architecture = os_info.architecture().unwrap_or("unknown");
     let terminal_ua = codex_core::terminal::user_agent();
+    let version = env!("CARGO_PKG_VERSION");
     let user_agent = format!(
-        "{originator}/0.0.0 ({os_type} {os_version}; {architecture}) {terminal_ua} (codex-app-server-tests; 0.1.0)"
+        "{originator}/{version} ({os_type} {os_version}; {architecture}) {terminal_ua} (codex-app-server-tests; 0.1.0)"
     );
 
     let received: GetUserAgentResponse = to_response(response)?;
