@@ -179,7 +179,8 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
         return;
     }
 
-    let mut queue: VecDeque<PathBuf> = VecDeque::from([root]);
+    let mut queue: VecDeque<PathBuf> = VecDeque::from([root.clone()]);
+    let mut visited: HashSet<PathBuf> = HashSet::from([root]);
     while let Some(dir) = queue.pop_front() {
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
@@ -205,11 +206,45 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
             };
 
             if file_type.is_symlink() {
+                let Ok(target_metadata) = fs::metadata(&path) else {
+                    continue;
+                };
+
+                if target_metadata.is_dir() {
+                    let Ok(target_path) = normalize_path(&path) else {
+                        continue;
+                    };
+                    if visited.insert(target_path.clone()) {
+                        queue.push_back(target_path);
+                    }
+                    continue;
+                }
+
+                if target_metadata.is_file() && file_name == SKILLS_FILENAME {
+                    match parse_skill_file(&path, scope) {
+                        Ok(skill) => {
+                            outcome.skills.push(skill);
+                        }
+                        Err(err) => {
+                            if scope != SkillScope::System {
+                                outcome.errors.push(SkillError {
+                                    path,
+                                    message: err.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
                 continue;
             }
 
             if file_type.is_dir() {
-                queue.push_back(path);
+                let Ok(dir_path) = normalize_path(&path) else {
+                    continue;
+                };
+                if visited.insert(dir_path.clone()) {
+                    queue.push_back(dir_path);
+                }
                 continue;
             }
 
@@ -460,6 +495,35 @@ mod tests {
                 .message
                 .contains("missing YAML frontmatter"),
             "expected frontmatter error"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn follows_symlinked_skill_dirs() {
+        use std::os::unix::fs::symlink;
+
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let external_root = codex_home.path().join("external-skill");
+        let external_skill =
+            write_skill_at(&external_root, "linked", "linked-skill", "via symlink");
+        let link_root = codex_home.path().join("skills/link");
+        fs::create_dir_all(link_root.parent().unwrap()).unwrap();
+        symlink(external_skill.parent().unwrap(), &link_root).unwrap();
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert_eq!(outcome.skills[0].name, "linked-skill");
+        let path_str = outcome.skills[0].path.to_string_lossy().replace('\\', "/");
+        assert!(
+            path_str.ends_with("external-skill/linked/SKILL.md"),
+            "unexpected path {path_str}"
         );
     }
 
