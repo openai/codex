@@ -16,7 +16,7 @@ use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::error::CodexErr;
 use codex_core::features::Feature;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
@@ -242,7 +242,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         ..built_in_model_providers()["openai"].clone()
     };
     let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
     // Also configure user instructions to ensure they are NOT delivered on resume.
     config.user_instructions = Some("be nice".to_string());
@@ -331,7 +331,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
 
     // Init session
     let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
 
     let conversation_manager = ConversationManager::with_models_provider_and_home(
@@ -391,7 +391,7 @@ async fn includes_base_instructions_override_in_request() {
         ..built_in_model_providers()["openai"].clone()
     };
     let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
 
     config.base_instructions = Some("test instructions".to_string());
     config.model_provider = model_provider;
@@ -455,7 +455,7 @@ async fn chatgpt_auth_sends_correct_request() {
 
     // Init session
     let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
     let conversation_manager = ConversationManager::with_models_provider_and_home(
         create_dummy_codex_auth(),
@@ -547,7 +547,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         Some("acc-123"),
     );
 
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
 
     let auth_manager =
@@ -590,7 +590,7 @@ async fn includes_user_instructions_message_in_request() {
     };
 
     let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
     config.user_instructions = Some("be nice".to_string());
 
@@ -659,7 +659,7 @@ async fn skills_append_to_instructions() {
     )
     .expect("write skill");
 
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
     config.cwd = codex_home.path().to_path_buf();
     config.features.enable(Feature::Skills);
@@ -1017,7 +1017,7 @@ async fn includes_developer_instructions_message_in_request() {
     };
 
     let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
     config.user_instructions = Some("be nice".to_string());
     config.developer_instructions = Some("be useful".to_string());
@@ -1108,7 +1108,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     };
 
     let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
     let effort = config.model_reasoning_effort;
@@ -1250,7 +1250,7 @@ async fn token_count_includes_rate_limits_snapshot() {
     provider.base_url = Some(format!("{}/v1", server.uri()));
 
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = provider;
 
     let conversation_manager = ConversationManager::with_models_provider_and_home(
@@ -1605,7 +1605,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
 
     // Init session
     let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = provider;
 
     let conversation_manager = ConversationManager::with_models_provider_and_home(
@@ -1687,7 +1687,7 @@ async fn env_var_overrides_loaded_auth() {
 
     // Init session
     let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = provider;
 
     let conversation_manager = ConversationManager::with_models_provider_and_home(
@@ -1769,7 +1769,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
 
     // Init session with isolated codex home.
     let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider = model_provider;
 
     let conversation_manager = ConversationManager::with_models_provider_and_home(

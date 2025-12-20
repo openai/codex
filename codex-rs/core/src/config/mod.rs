@@ -118,7 +118,7 @@ pub struct Config {
     /// Approval policy for executing commands.
     pub approval_policy: Constrained<AskForApproval>,
 
-    pub sandbox_policy: SandboxPolicy,
+    pub sandbox_policy: Constrained<SandboxPolicy>,
 
     /// True if the user passed in an override or set a value in config.toml
     /// for either of approval_policy or sandbox_mode.
@@ -357,8 +357,13 @@ impl ConfigBuilder {
         let cli_overrides = cli_overrides.unwrap_or_default();
         let harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
+        let cwd = match harness_overrides.cwd.as_deref() {
+            Some(path) => AbsolutePathBuf::try_from(path)?,
+            None => AbsolutePathBuf::current_dir()?,
+        };
         let config_layer_stack =
-            load_config_layers_state(&codex_home, &cli_overrides, loader_overrides).await?;
+            load_config_layers_state(&codex_home, Some(cwd), &cli_overrides, loader_overrides)
+                .await?;
         let merged_toml = config_layer_stack.effective_config();
 
         // Note that each layer in ConfigLayerStack should have resolved
@@ -412,10 +417,16 @@ impl Config {
 /// applied yet, which risks failing to enforce required constraints.
 pub async fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
+    cwd: &AbsolutePathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
-    let config_layer_stack =
-        load_config_layers_state(codex_home, &cli_overrides, LoaderOverrides::default()).await?;
+    let config_layer_stack = load_config_layers_state(
+        codex_home,
+        Some(cwd.clone()),
+        &cli_overrides,
+        LoaderOverrides::default(),
+    )
+    .await?;
 
     let merged_toml = config_layer_stack.effective_config();
     let cfg = deserialize_config_toml_with_base(merged_toml, codex_home).map_err(|e| {
@@ -449,8 +460,12 @@ pub async fn load_global_mcp_servers(
     // config layers for deprecated fields rather than reporting on the merged
     // result.
     let cli_overrides = Vec::<(String, TomlValue)>::new();
+    // There is no cwd/project context for this query, so this will not include
+    // MCP servers defined in in-repo .codex/ folders.
+    let cwd: Option<AbsolutePathBuf> = None;
     let config_layer_stack =
-        load_config_layers_state(codex_home, &cli_overrides, LoaderOverrides::default()).await?;
+        load_config_layers_state(codex_home, cwd, &cli_overrides, LoaderOverrides::default())
+            .await?;
     let merged_toml = config_layer_stack.effective_config();
     let Some(servers_value) = merged_toml.get("mcp_servers") else {
         return Ok(BTreeMap::new());
@@ -1006,14 +1021,13 @@ pub fn resolve_oss_provider(
 }
 
 impl Config {
-    /// Meant to be used exclusively for tests. For new tests, prefer using
-    /// [ConfigBuilder::build()], if possible, so ultimately we can make this
-    /// method private to this file.
-    pub fn load_from_base_config_with_overrides(
+    #[cfg(test)]
+    fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: PathBuf,
     ) -> std::io::Result<Self> {
+        // Note this ignores requirements.toml enforcement for tests.
         let requirements = ConfigRequirements::default();
         Self::load_config_with_requirements(cfg, overrides, codex_home, requirements)
     }
@@ -1251,10 +1265,14 @@ impl Config {
         // Config.
         let ConfigRequirements {
             approval_policy: mut constrained_approval_policy,
+            sandbox_policy: mut constrained_sandbox_policy,
         } = requirements;
 
         constrained_approval_policy
             .set(approval_policy)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
+        constrained_sandbox_policy
+            .set(sandbox_policy)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
         let config = Self {
@@ -1267,7 +1285,7 @@ impl Config {
             model_provider,
             cwd: resolved_cwd,
             approval_policy: constrained_approval_policy,
-            sandbox_policy,
+            sandbox_policy: constrained_sandbox_policy,
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
@@ -1701,12 +1719,12 @@ trust_level = "trusted"
                 config.forced_auto_mode_downgraded_on_windows,
                 "expected workspace-write request to be downgraded on Windows"
             );
-            match config.sandbox_policy {
-                SandboxPolicy::ReadOnly => {}
+            match config.sandbox_policy.get() {
+                &SandboxPolicy::ReadOnly => {}
                 other => panic!("expected read-only policy on Windows, got {other:?}"),
             }
         } else {
-            match config.sandbox_policy {
+            match config.sandbox_policy.get() {
                 SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
                     assert_eq!(
                         writable_roots
@@ -1838,8 +1856,8 @@ trust_level = "trusted"
         )?;
 
         assert!(matches!(
-            config.sandbox_policy,
-            SandboxPolicy::DangerFullAccess
+            config.sandbox_policy.get(),
+            &SandboxPolicy::DangerFullAccess
         ));
         assert!(config.did_user_set_custom_approval_policy_or_sandbox_mode);
 
@@ -1875,11 +1893,14 @@ trust_level = "trusted"
         )?;
 
         if cfg!(target_os = "windows") {
-            assert!(matches!(config.sandbox_policy, SandboxPolicy::ReadOnly));
+            assert!(matches!(
+                config.sandbox_policy.get(),
+                SandboxPolicy::ReadOnly
+            ));
             assert!(config.forced_auto_mode_downgraded_on_windows);
         } else {
             assert!(matches!(
-                config.sandbox_policy,
+                config.sandbox_policy.get(),
                 SandboxPolicy::WorkspaceWrite { .. }
             ));
             assert!(!config.forced_auto_mode_downgraded_on_windows);
@@ -1975,8 +1996,9 @@ trust_level = "trusted"
             managed_preferences_base64: None,
         };
 
+        let cwd = AbsolutePathBuf::try_from(codex_home.path())?;
         let config_layer_stack =
-            load_config_layers_state(codex_home.path(), &Vec::new(), overrides).await?;
+            load_config_layers_state(codex_home.path(), Some(cwd), &Vec::new(), overrides).await?;
         let cfg = deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
             codex_home.path(),
@@ -2094,8 +2116,10 @@ trust_level = "trusted"
             managed_preferences_base64: None,
         };
 
+        let cwd = AbsolutePathBuf::try_from(codex_home.path())?;
         let config_layer_stack = load_config_layers_state(
             codex_home.path(),
+            Some(cwd),
             &[("model".to_string(), TomlValue::String("cli".to_string()))],
             overrides,
         )
@@ -3078,7 +3102,7 @@ model_verbosity = "high"
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3155,7 +3179,7 @@ model_verbosity = "high"
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3247,7 +3271,7 @@ model_verbosity = "high"
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3325,7 +3349,7 @@ model_verbosity = "high"
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3671,12 +3695,15 @@ trust_level = "untrusted"
         // Verify that untrusted projects still get WorkspaceWrite sandbox (or ReadOnly on Windows)
         if cfg!(target_os = "windows") {
             assert!(
-                matches!(config.sandbox_policy, SandboxPolicy::ReadOnly),
+                matches!(config.sandbox_policy.get(), SandboxPolicy::ReadOnly),
                 "Expected ReadOnly on Windows"
             );
         } else {
             assert!(
-                matches!(config.sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }),
+                matches!(
+                    config.sandbox_policy.get(),
+                    SandboxPolicy::WorkspaceWrite { .. }
+                ),
                 "Expected WorkspaceWrite sandbox for untrusted project"
             );
         }

@@ -474,17 +474,17 @@ pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
 /// Deriving the `env` based on this policy works as follows:
 /// 1. Create an initial map based on the `inherit` policy.
 /// 2. If `ignore_default_excludes` is false, filter the map using the default
-///    exclude pattern(s), which are: `"*KEY*"` and `"*TOKEN*"`.
+///    exclude pattern(s), which are: `"*KEY*"`, `"*SECRET*"`, and `"*TOKEN*"`.
 /// 3. If `exclude` is not empty, filter the map using the provided patterns.
 /// 4. Insert any entries from `r#set` into the map.
 /// 5. If non-empty, filter the map using the `include_only` patterns.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ShellEnvironmentPolicy {
     /// Starting point when building the environment.
     pub inherit: ShellEnvironmentPolicyInherit,
 
     /// True to skip the check to exclude default environment variables that
-    /// contain "KEY" or "TOKEN" in their name.
+    /// contain "KEY", "SECRET", or "TOKEN" in their name. Defaults to true.
     pub ignore_default_excludes: bool,
 
     /// Environment variable names to exclude from the environment.
@@ -504,7 +504,7 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
     fn from(toml: ShellEnvironmentPolicyToml) -> Self {
         // Default to inheriting the full environment when not specified.
         let inherit = toml.inherit.unwrap_or(ShellEnvironmentPolicyInherit::All);
-        let ignore_default_excludes = toml.ignore_default_excludes.unwrap_or(false);
+        let ignore_default_excludes = toml.ignore_default_excludes.unwrap_or(true);
         let exclude = toml
             .exclude
             .unwrap_or_default()
@@ -527,6 +527,19 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             r#set,
             include_only,
             use_profile,
+        }
+    }
+}
+
+impl Default for ShellEnvironmentPolicy {
+    fn default() -> Self {
+        Self {
+            inherit: ShellEnvironmentPolicyInherit::All,
+            ignore_default_excludes: true,
+            exclude: Vec::new(),
+            r#set: HashMap::new(),
+            include_only: Vec::new(),
+            use_profile: false,
         }
     }
 }

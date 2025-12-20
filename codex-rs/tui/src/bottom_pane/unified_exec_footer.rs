@@ -4,13 +4,8 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
+use crate::live_wrap::take_prefix_by_width;
 use crate::render::renderable::Renderable;
-use crate::text_formatting::truncate_text;
-use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_lines;
-
-const MAX_SESSION_LABEL_GRAPHEMES: usize = 48;
-const MAX_VISIBLE_SESSIONS: usize = 2;
 
 pub(crate) struct UnifiedExecFooter {
     sessions: Vec<String>,
@@ -40,34 +35,11 @@ impl UnifiedExecFooter {
             return Vec::new();
         }
 
-        let label = "  Background terminal running:";
-        let mut spans = Vec::new();
-        spans.push(label.dim());
-        spans.push(" ".into());
-
-        let visible = self.sessions.iter().take(MAX_VISIBLE_SESSIONS);
-        let mut visible_count = 0usize;
-        for (idx, command) in visible.enumerate() {
-            if idx > 0 {
-                spans.push(" · ".dim());
-            }
-            let truncated = truncate_text(command, MAX_SESSION_LABEL_GRAPHEMES);
-            spans.push(truncated.cyan());
-            visible_count += 1;
-        }
-
-        let remaining = self.sessions.len().saturating_sub(visible_count);
-        if remaining > 0 {
-            spans.push(" · ".dim());
-            spans.push(format!("{remaining} more running").dim());
-        }
-
-        let indent = " ".repeat(label.len() + 1);
-        let line = Line::from(spans);
-        word_wrap_lines(
-            std::iter::once(line),
-            RtOptions::new(width as usize).subsequent_indent(Line::from(indent).dim()),
-        )
+        let count = self.sessions.len();
+        let plural = if count == 1 { "" } else { "s" };
+        let message = format!("  {count} background terminal{plural} running · /ps to view");
+        let (truncated, _, _) = take_prefix_by_width(&message, width as usize);
+        vec![Line::from(truncated.dim())]
     }
 }
 
@@ -98,28 +70,24 @@ mod tests {
     }
 
     #[test]
-    fn render_two_sessions() {
-        let mut footer = UnifiedExecFooter::new();
-        footer.set_sessions(vec!["echo hello".to_string(), "rg \"foo\" src".to_string()]);
-        let width = 50;
-        let height = footer.desired_height(width);
-        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-        footer.render(Rect::new(0, 0, width, height), &mut buf);
-        assert_snapshot!("render_two_sessions", format!("{buf:?}"));
-    }
-
-    #[test]
     fn render_more_sessions() {
         let mut footer = UnifiedExecFooter::new();
-        footer.set_sessions(vec![
-            "echo hello".to_string(),
-            "rg \"foo\" src".to_string(),
-            "cat README.md".to_string(),
-        ]);
+        footer.set_sessions(vec!["rg \"foo\" src".to_string()]);
         let width = 50;
         let height = footer.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
         footer.render(Rect::new(0, 0, width, height), &mut buf);
         assert_snapshot!("render_more_sessions", format!("{buf:?}"));
+    }
+
+    #[test]
+    fn render_many_sessions() {
+        let mut footer = UnifiedExecFooter::new();
+        footer.set_sessions((0..123).map(|idx| format!("cmd {idx}")).collect());
+        let width = 50;
+        let height = footer.desired_height(width);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        footer.render(Rect::new(0, 0, width, height), &mut buf);
+        assert_snapshot!("render_many_sessions", format!("{buf:?}"));
     }
 }

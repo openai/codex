@@ -106,7 +106,9 @@ pub fn main() -> Result<()> {
             SandboxPolicy::WorkspaceWrite { .. } => {
                 create_workspace_write_token_with_cap_from(base, psid_cap)
             }
-            SandboxPolicy::DangerFullAccess => unreachable!(),
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                unreachable!()
+            }
         }
     };
     let (h_token, psid_to_use) = token_res?;

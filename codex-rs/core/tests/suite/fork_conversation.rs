@@ -51,7 +51,7 @@ async fn fork_conversation_twice_drops_to_first_message() {
     };
 
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider.clone();
     let config_for_fork = config.clone();
 

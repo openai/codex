@@ -1,6 +1,12 @@
 use super::LoaderOverrides;
 use super::load_config_layers_state;
 use crate::config::CONFIG_TOML_FILE;
+use crate::config_loader::ConfigRequirements;
+use crate::config_loader::config_requirements::ConfigRequirementsToml;
+use crate::config_loader::load_requirements_toml;
+use codex_protocol::protocol::AskForApproval;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 use toml::Value as TomlValue;
 
@@ -35,9 +41,15 @@ extra = true
         managed_preferences_base64: None,
     };
 
-    let state = load_config_layers_state(tmp.path(), &[] as &[(String, TomlValue)], overrides)
-        .await
-        .expect("load config");
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let state = load_config_layers_state(
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        overrides,
+    )
+    .await
+    .expect("load config");
     let loaded = state.effective_config();
     let table = loaded.as_table().expect("top-level table expected");
 
@@ -63,9 +75,15 @@ async fn returns_empty_when_all_layers_missing() {
         managed_preferences_base64: None,
     };
 
-    let layers = load_config_layers_state(tmp.path(), &[] as &[(String, TomlValue)], overrides)
-        .await
-        .expect("load layers");
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let layers = load_config_layers_state(
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        overrides,
+    )
+    .await
+    .expect("load layers");
     assert!(
         layers.get_user_layer().is_none(),
         "no user layer when CODEX_HOME/config.toml does not exist"
@@ -133,9 +151,15 @@ flag = true
         managed_preferences_base64: Some(encoded),
     };
 
-    let state = load_config_layers_state(tmp.path(), &[] as &[(String, TomlValue)], overrides)
-        .await
-        .expect("load config");
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let state = load_config_layers_state(
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        overrides,
+    )
+    .await
+    .expect("load config");
     let loaded = state.effective_config();
     let nested = loaded
         .get("nested")
@@ -146,4 +170,41 @@ flag = true
         Some(&TomlValue::String("managed".to_string()))
     );
     assert_eq!(nested.get("flag"), Some(&TomlValue::Boolean(false)));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn load_requirements_toml_produces_expected_constraints() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_file = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+allowed_approval_policies = ["never", "on-request"]
+"#,
+    )
+    .await?;
+
+    let mut config_requirements_toml = ConfigRequirementsToml::default();
+    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+
+    assert_eq!(
+        config_requirements_toml.allowed_approval_policies,
+        Some(vec![AskForApproval::Never, AskForApproval::OnRequest])
+    );
+
+    let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
+    assert_eq!(
+        config_requirements.approval_policy.value(),
+        AskForApproval::Never
+    );
+    config_requirements
+        .approval_policy
+        .can_set(&AskForApproval::Never)?;
+    assert!(
+        config_requirements
+            .approval_policy
+            .can_set(&AskForApproval::OnFailure)
+            .is_err()
+    );
+    Ok(())
 }

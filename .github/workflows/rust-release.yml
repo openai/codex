@@ -128,11 +128,72 @@ jobs:
           account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
 
-      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
-        name: MacOS code signing
+      - if: ${{ runner.os == 'macOS' }}
+        name: MacOS code signing (binaries)
         uses: ./.github/actions/macos-code-sign
         with:
           target: ${{ matrix.target }}
+          sign-binaries: "true"
+          sign-dmg: "false"
+          apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
+          apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+
+      - if: ${{ runner.os == 'macOS' }}
+        name: Build macOS dmg
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          release_dir="target/${target}/release"
+          dmg_root="${RUNNER_TEMP}/codex-dmg-root"
+          volname="Codex (${target})"
+          dmg_path="${release_dir}/codex-${target}.dmg"
+
+          # The previous "MacOS code signing (binaries)" step signs + notarizes the
+          # built artifacts in `${release_dir}`. This step packages *those same*
+          # signed binaries into a dmg.
+          codex_binary_path="${release_dir}/codex"
+          proxy_binary_path="${release_dir}/codex-responses-api-proxy"
+
+          rm -rf "$dmg_root"
+          mkdir -p "$dmg_root"
+
+          if [[ ! -f "$codex_binary_path" ]]; then
+            echo "Binary $codex_binary_path not found"
+            exit 1
+          fi
+          if [[ ! -f "$proxy_binary_path" ]]; then
+            echo "Binary $proxy_binary_path not found"
+            exit 1
+          fi
+
+          ditto "$codex_binary_path" "${dmg_root}/codex"
+          ditto "$proxy_binary_path" "${dmg_root}/codex-responses-api-proxy"
+
+          rm -f "$dmg_path"
+          hdiutil create \
+            -volname "$volname" \
+            -srcfolder "$dmg_root" \
+            -format UDZO \
+            -ov \
+            "$dmg_path"
+
+          if [[ ! -f "$dmg_path" ]]; then
+            echo "dmg $dmg_path not found after build"
+            exit 1
+          fi
+
+      - if: ${{ runner.os == 'macOS' }}
+        name: MacOS code signing (dmg)
+        uses: ./.github/actions/macos-code-sign
+        with:
+          target: ${{ matrix.target }}
+          sign-binaries: "false"
+          sign-dmg: "true"
           apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
@@ -158,6 +219,10 @@ jobs:
           if [[ "${{ matrix.target }}" == *linux* ]]; then
             cp target/${{ matrix.target }}/release/codex.sigstore "$dest/codex-${{ matrix.target }}.sigstore"
             cp target/${{ matrix.target }}/release/codex-responses-api-proxy.sigstore "$dest/codex-responses-api-proxy-${{ matrix.target }}.sigstore"
+          fi
+
+          if [[ "${{ matrix.target }}" == *apple-darwin ]]; then
+            cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
 
       - if: ${{ matrix.runner == 'windows-11-arm' }}
@@ -194,7 +259,7 @@ jobs:
             base="$(basename "$f")"
             # Skip files that are already archives (shouldn't happen, but be
             # safe).
-            if [[ "$base" == *.tar.gz || "$base" == *.zip ]]; then
+            if [[ "$base" == *.tar.gz || "$base" == *.zip || "$base" == *.dmg ]]; then
               continue
             fi
 
