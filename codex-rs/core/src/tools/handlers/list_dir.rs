@@ -10,6 +10,7 @@ use serde::Deserialize;
 use tokio::fs;
 
 use crate::function_tool::FunctionCallError;
+use crate::project_internal_paths;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -51,7 +52,7 @@ impl ToolHandler for ListDirHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation { payload, turn, .. } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -100,7 +101,14 @@ impl ToolHandler for ListDirHandler {
             ));
         }
 
-        let entries = list_dir_slice(&path, offset, limit, depth).await?;
+        if project_internal_paths::is_path_in_project_internal_dir(&path, &turn.cwd) {
+            return Err(FunctionCallError::RespondToModel(
+                "access to `.codexel/` is blocked".to_string(),
+            ));
+        }
+
+        let internal_dir = project_internal_paths::project_internal_dir(&turn.cwd);
+        let entries = list_dir_slice(&path, offset, limit, depth, Some(&internal_dir)).await?;
         let mut output = Vec::with_capacity(entries.len() + 1);
         output.push(format!("Absolute path: {}", path.display()));
         output.extend(entries);
@@ -117,9 +125,10 @@ async fn list_dir_slice(
     offset: usize,
     limit: usize,
     depth: usize,
+    excluded_dir: Option<&Path>,
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut entries = Vec::new();
-    collect_entries(path, Path::new(""), depth, &mut entries).await?;
+    collect_entries(path, Path::new(""), depth, excluded_dir, &mut entries).await?;
 
     if entries.is_empty() {
         return Ok(Vec::new());
@@ -154,6 +163,7 @@ async fn collect_entries(
     dir_path: &Path,
     relative_prefix: &Path,
     depth: usize,
+    excluded_dir: Option<&Path>,
     entries: &mut Vec<DirEntry>,
 ) -> Result<(), FunctionCallError> {
     let mut queue = VecDeque::new();
@@ -169,6 +179,9 @@ async fn collect_entries(
         while let Some(entry) = read_dir.next_entry().await.map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
         })? {
+            if excluded_dir.is_some_and(|excluded_dir| entry.path().starts_with(excluded_dir)) {
+                continue;
+            }
             let file_type = entry.file_type().await.map_err(|err| {
                 FunctionCallError::RespondToModel(format!("failed to inspect entry: {err}"))
             })?;
@@ -307,7 +320,7 @@ mod tests {
             symlink(dir_path.join("entry.txt"), &link_path).expect("create symlink");
         }
 
-        let entries = list_dir_slice(dir_path, 1, 20, 3)
+        let entries = list_dir_slice(dir_path, 1, 20, 3, None)
             .await
             .expect("list directory");
 
@@ -341,7 +354,7 @@ mod tests {
             .await
             .expect("create sub dir");
 
-        let err = list_dir_slice(dir_path, 10, 1, 2)
+        let err = list_dir_slice(dir_path, 10, 1, 2, None)
             .await
             .expect_err("offset exceeds entries");
         assert_eq!(
@@ -368,7 +381,7 @@ mod tests {
             .await
             .expect("write deeper");
 
-        let entries_depth_one = list_dir_slice(dir_path, 1, 10, 1)
+        let entries_depth_one = list_dir_slice(dir_path, 1, 10, 1, None)
             .await
             .expect("list depth 1");
         assert_eq!(
@@ -376,7 +389,7 @@ mod tests {
             vec!["nested/".to_string(), "root.txt".to_string(),]
         );
 
-        let entries_depth_two = list_dir_slice(dir_path, 1, 20, 2)
+        let entries_depth_two = list_dir_slice(dir_path, 1, 20, 2, None)
             .await
             .expect("list depth 2");
         assert_eq!(
@@ -389,7 +402,7 @@ mod tests {
             ]
         );
 
-        let entries_depth_three = list_dir_slice(dir_path, 1, 30, 3)
+        let entries_depth_three = list_dir_slice(dir_path, 1, 30, 3, None)
             .await
             .expect("list depth 3");
         assert_eq!(
@@ -418,7 +431,7 @@ mod tests {
             .await
             .expect("write gamma");
 
-        let entries = list_dir_slice(dir_path, 2, usize::MAX, 1)
+        let entries = list_dir_slice(dir_path, 2, usize::MAX, 1, None)
             .await
             .expect("list without overflow");
         assert_eq!(
@@ -439,7 +452,7 @@ mod tests {
                 .expect("write file");
         }
 
-        let entries = list_dir_slice(dir_path, 1, 25, 1)
+        let entries = list_dir_slice(dir_path, 1, 25, 1, None)
             .await
             .expect("list directory");
         assert_eq!(entries.len(), 26);
@@ -461,7 +474,7 @@ mod tests {
         tokio::fs::write(nested.join("child.txt"), b"child").await?;
         tokio::fs::write(deeper.join("grandchild.txt"), b"deep").await?;
 
-        let entries_depth_three = list_dir_slice(dir_path, 1, 3, 3).await?;
+        let entries_depth_three = list_dir_slice(dir_path, 1, 3, 3, None).await?;
         assert_eq!(
             entries_depth_three,
             vec![
@@ -472,6 +485,21 @@ mod tests {
             ]
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hides_project_internal_dir() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let dir_path = temp.path();
+        let internal_dir = dir_path.join(project_internal_paths::PROJECT_INTERNAL_DIR_NAME);
+        tokio::fs::create_dir(&internal_dir).await?;
+        tokio::fs::write(internal_dir.join("plan.md"), b"plan").await?;
+        tokio::fs::write(dir_path.join("visible.txt"), b"visible").await?;
+
+        let entries = list_dir_slice(dir_path, 1, 20, 2, Some(&internal_dir)).await?;
+        assert!(entries.iter().all(|entry| !entry.contains(".codexel")));
+        assert!(entries.iter().any(|entry| entry.contains("visible.txt")));
         Ok(())
     }
 }

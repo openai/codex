@@ -28,6 +28,37 @@ pub(crate) fn render_approved_plan_body(out: &PlanOutputEvent) -> String {
     body
 }
 
+pub(crate) fn render_approved_plan_markdown(out: &PlanOutputEvent) -> String {
+    let mut markdown = String::new();
+    let title = out.title.trim();
+    markdown.push_str(&format!("# {title}\n\n"));
+
+    let summary = out.summary.trim();
+    if !summary.is_empty() {
+        markdown.push_str(&format!("{summary}\n\n"));
+    }
+
+    let explanation = out.plan.explanation.as_deref().unwrap_or_default().trim();
+    if !explanation.is_empty() {
+        markdown.push_str("## Explanation\n");
+        markdown.push_str(explanation);
+        markdown.push_str("\n\n");
+    }
+
+    markdown.push_str("## Steps\n");
+    if out.plan.plan.is_empty() {
+        markdown.push_str("- (no steps provided)\n");
+    } else {
+        for item in &out.plan.plan {
+            let status = step_status_label(&item.status);
+            let step = item.step.trim();
+            markdown.push_str(&format!("- [{status}] {step}\n"));
+        }
+    }
+
+    markdown
+}
+
 pub(crate) fn render_approved_plan_transcript(out: &PlanOutputEvent) -> String {
     let body = render_approved_plan_body(out);
     format!("Approved plan:\n{body}")

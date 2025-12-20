@@ -44,6 +44,7 @@ pub mod parse_command;
 pub mod path_utils;
 mod plan_output;
 pub mod powershell;
+mod project_internal_paths;
 pub mod sandboxing;
 mod stream_events_utils;
 mod text_encoding;

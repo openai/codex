@@ -7,6 +7,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::function_tool::FunctionCallError;
+use crate::project_internal_paths;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -74,6 +75,12 @@ impl ToolHandler for GrepFilesHandler {
         let limit = args.limit.min(MAX_LIMIT);
         let search_path = turn.resolve_path(args.path.clone());
 
+        if project_internal_paths::is_path_in_project_internal_dir(&search_path, &turn.cwd) {
+            return Err(FunctionCallError::RespondToModel(
+                "access to `.codexel/` is blocked".to_string(),
+            ));
+        }
+
         verify_path_exists(&search_path).await?;
 
         let include = args.include.as_deref().map(str::trim).and_then(|val| {
@@ -125,6 +132,11 @@ async fn run_rg_search(
         .arg("--regexp")
         .arg(pattern)
         .arg("--no-messages");
+
+    command.arg("--glob").arg(format!(
+        "!{}/**",
+        project_internal_paths::PROJECT_INTERNAL_DIR_NAME
+    ));
 
     if let Some(glob) = include {
         command.arg("--glob").arg(glob);
@@ -261,6 +273,24 @@ mod tests {
 
         let results = run_rg_search("alpha", None, dir, 5, dir).await?;
         assert!(results.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_search_ignores_project_internal_dir() -> anyhow::Result<()> {
+        if !rg_available() {
+            return Ok(());
+        }
+        let temp = tempdir().expect("create temp dir");
+        let dir = temp.path();
+        let internal_dir = dir.join(project_internal_paths::PROJECT_INTERNAL_DIR_NAME);
+        std::fs::create_dir(&internal_dir).unwrap();
+        std::fs::write(internal_dir.join("hidden.txt"), "alpha hidden").unwrap();
+        std::fs::write(dir.join("visible.txt"), "alpha visible").unwrap();
+
+        let results = run_rg_search("alpha", None, dir, 10, dir).await?;
+        assert!(results.iter().any(|path| path.ends_with("visible.txt")));
+        assert!(results.iter().all(|path| !path.contains(".codexel")));
         Ok(())
     }
 

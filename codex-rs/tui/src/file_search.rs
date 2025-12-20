@@ -168,7 +168,7 @@ impl FileSearchManager {
                 &query,
                 MAX_FILE_SEARCH_RESULTS,
                 &search_dir,
-                Vec::new(),
+                vec![".codexel/**".to_string()],
                 NUM_FILE_SEARCH_THREADS,
                 cancellation_token.clone(),
                 compute_indices,

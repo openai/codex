@@ -34,3 +34,7 @@ Control Codex’s behavior during an interactive session with slash commands.
 | `/feedback`     | send logs to maintainers                                                   |
 
 ---
+
+### Notes
+
+- After you approve a `/plan`, Codexel saves it to `.codexel/plan.md` under the session's working directory. `.codexel/` is hidden from the agent's built-in file tools.

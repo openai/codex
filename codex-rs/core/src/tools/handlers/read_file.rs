@@ -6,6 +6,7 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
+use crate::project_internal_paths;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -98,7 +99,7 @@ impl ToolHandler for ReadFileHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation { payload, turn, .. } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -139,6 +140,12 @@ impl ToolHandler for ReadFileHandler {
         if !path.is_absolute() {
             return Err(FunctionCallError::RespondToModel(
                 "file_path must be an absolute path".to_string(),
+            ));
+        }
+
+        if project_internal_paths::is_path_in_project_internal_dir(&path, &turn.cwd) {
+            return Err(FunctionCallError::RespondToModel(
+                "access to `.codexel/` is blocked".to_string(),
             ));
         }
 

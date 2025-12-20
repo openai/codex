@@ -88,6 +88,10 @@ When Codexel needs a decision mid-run, it may pause and show an interactive ques
 
 Use `/plan` to create a plan and approve it before making changes.
 
+When you approve a plan, Codexel writes a Markdown copy to `.codexel/plan.md` under the session's working directory. The `.codexel/` directory is treated as project-internal and is hidden from the agent's built-in file tools (and `@` file search).
+
+Tip: add `.codexel/` to your project's `.gitignore` if you don't want it committed.
+
 #### Esc—Esc to edit a previous message
 
 When the chat composer is empty, press Esc to prime “backtrack” mode. Press Esc again to open a transcript preview highlighting the last user message; press Esc repeatedly to step to older user messages. Press Enter to confirm and Codex will fork the conversation from that point, trim the visible transcript accordingly, and pre‑fill the composer with the selected user message so you can edit and resubmit it.

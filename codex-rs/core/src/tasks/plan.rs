@@ -12,13 +12,16 @@ use codex_protocol::protocol::PlanOutputEvent;
 use codex_protocol::protocol::PlanRequest;
 use codex_protocol::protocol::SubAgentSource;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_conversation_one_shot;
 use crate::plan_output;
+use crate::project_internal_paths;
 use crate::state::TaskKind;
 use codex_protocol::user_input::UserInput;
+use std::path::Path;
 use std::sync::Arc;
 
 use super::SessionTask;
@@ -74,6 +77,7 @@ Rules:
 - You may explore the repo with read-only commands, but keep it minimal (2-6 targeted commands) and avoid dumping large files.
 - Do not attempt to edit files or run mutating commands (no installs, no git writes, no redirects/heredocs that write files).
 - You may ask clarifying questions via AskUserQuestion when requirements are ambiguous or missing.
+- Do not call `spawn_subagent` in plan mode (it is not available from this session type).
 - Use `propose_plan_variants` to generate 3 alternative plans as input (at most once per plan draft). If it fails, proceed without it.
 - When you have a final plan, call `approve_plan` with:
   - Title: short and specific.
@@ -271,6 +275,11 @@ pub(crate) async fn exit_plan_mode(
     const PLAN_ASSISTANT_MESSAGE_ID: &str = "plan:rollout:assistant";
 
     session.set_pending_approved_plan(plan_output.clone()).await;
+    if let Some(out) = plan_output.as_ref()
+        && let Err(err) = persist_approved_plan_markdown(out, &ctx.cwd).await
+    {
+        warn!("failed to write approved plan markdown: {err}");
+    }
 
     let (user_message, assistant_message) = match plan_output.as_ref() {
         Some(out) => (
@@ -313,9 +322,25 @@ pub(crate) async fn exit_plan_mode(
         .await;
 }
 
+async fn persist_approved_plan_markdown(
+    out: &PlanOutputEvent,
+    cwd: &Path,
+) -> Result<(), std::io::Error> {
+    let path = project_internal_paths::approved_plan_markdown_path(cwd);
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(path, plan_output::render_approved_plan_markdown(out)).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::plan_tool::PlanItemArg;
+    use codex_protocol::plan_tool::StepStatus;
+    use codex_protocol::plan_tool::UpdatePlanArgs;
+    use tempfile::TempDir;
 
     #[test]
     fn plan_mode_does_not_override_base_instructions() {
@@ -392,5 +417,31 @@ mod tests {
         assert!(PLAN_MODE_DEVELOPER_PREFIX.contains(
             "Assumptions; Scope; Touchpoints; Approach; Risks; Acceptance criteria; Validation"
         ));
+    }
+
+    #[tokio::test]
+    async fn persist_approved_plan_writes_plan_markdown() -> anyhow::Result<()> {
+        let temp = TempDir::new().expect("tmp dir");
+        let cwd = temp.path();
+        let out = PlanOutputEvent {
+            title: "My Plan".to_string(),
+            summary: "Do the thing.".to_string(),
+            plan: UpdatePlanArgs {
+                explanation: Some("Some explanation.".to_string()),
+                plan: vec![PlanItemArg {
+                    step: "Step one".to_string(),
+                    status: StepStatus::Pending,
+                }],
+            },
+        };
+
+        persist_approved_plan_markdown(&out, cwd).await?;
+
+        let path = project_internal_paths::approved_plan_markdown_path(cwd);
+        let contents = tokio::fs::read_to_string(path).await?;
+        assert!(contents.contains("# My Plan"));
+        assert!(contents.contains("## Steps"));
+        assert!(contents.contains("- [pending] Step one"));
+        Ok(())
     }
 }
