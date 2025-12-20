@@ -55,8 +55,14 @@ const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/codex/requirements.toml"
 /// (*) Only available on macOS via managed device profiles.
 ///
 /// See https://developers.openai.com/codex/security for details.
+///
+/// When loading the config stack for a thread, there should be a `cwd`
+/// associated with it such that `cwd` should be `Some(...)`. Only for
+/// thread-agnostic config loading (e.g., for the app server's `/config`
+/// endpoint) should `cwd` be `None`.
 pub async fn load_config_layers_state(
     codex_home: &Path,
+    cwd: Option<AbsolutePathBuf>,
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
 ) -> io::Result<ConfigLayerStack> {
@@ -122,6 +128,7 @@ pub async fn load_config_layers_state(
     }
 
     // TODO(mbolin): Add layers for cwd, tree, and repo config files.
+    let _ = cwd;
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.
     if !cli_overrides.is_empty() {

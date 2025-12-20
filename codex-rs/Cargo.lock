@@ -1154,6 +1154,7 @@ dependencies = [
  "codex-stdio-to-uds",
  "codex-tui",
  "codex-tui2",
+ "codex-utils-absolute-path",
  "codex-windows-sandbox",
  "ctor 0.5.0",
  "libc",
