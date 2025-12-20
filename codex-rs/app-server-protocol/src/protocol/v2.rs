@@ -339,6 +339,7 @@ pub struct Config {
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
+    pub analytics: Option<bool>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
 }

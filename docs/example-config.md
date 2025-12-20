@@ -331,6 +331,9 @@ experimental_use_freeform_apply_patch = false
 # OpenTelemetry (OTEL) – disabled by default
 ################################################################################
 
+# Enable/disable analytics (default: true)
+analytics = true
+
 [otel]
 # Include user prompt text in logs. Default: false
 log_user_prompt = false
