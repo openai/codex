@@ -1047,7 +1047,7 @@ impl fmt::Display for FinalOutput {
             format_with_separators(token_usage.output_tokens),
             if token_usage.reasoning_output_tokens > 0 {
                 format!(
-                    " (reasoning {})",
+                    "(reasoning {})",
                     format_with_separators(token_usage.reasoning_output_tokens)
                 )
             } else {

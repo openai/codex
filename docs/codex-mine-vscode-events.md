@@ -21,7 +21,7 @@ Chat View の `blocks` / `statusText` / `latestDiff` に反映する。
 - `turn/completed`
   - UI: `sending=false`、表示はしない（「Turn completed」はカードにしない方針）
 - `thread/tokenUsage/updated`
-  - UI: `statusText` 更新（`ctx remaining=xx% (remaining/ctx)`）
+  - UI: `statusText` 更新（`remaining=xx% (remaining/ctx)`）
 - `item/agentMessage/delta`
   - UI: `assistant` ブロックにストリーミング追記
 - `item/reasoning/summaryTextDelta`
@@ -71,7 +71,7 @@ method が `codex/event/*` のとき、payload の `msg.type` に応じて処理
 - `exec_command_begin` / `exec_command_output_delta` / `terminal_interaction` / `exec_command_end`
   - UI: `command` ブロック（details）として表示（出力は折りたたみ）
 - `token_count`
-  - UI: `statusText` 更新（`ctx remaining=...`）
+  - UI: `statusText` 更新（`remaining=...`）
 - `mcp_startup_complete`
   - UI: `failed/cancelled` が空でない場合のみ Notice として表示
 - `task_started`, `task_complete`, `item_started`, `item_completed`, `user_message`, `agent_message*`
