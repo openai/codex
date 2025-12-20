@@ -22,10 +22,13 @@ edited between the markers.
 
 #### Branding & Packaging
 - chore: ignore .codexel
+- tests: keep codexel CLI suites green
 
 #### Other
 - changelog: fix 0.1.3 release ranges
 - Merge upstream/main into v0.1.3
+- changelog: filter upstream commits in generator
+- changelog: keep generators in sync
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.3] - 2025-12-20

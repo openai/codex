@@ -34,7 +34,7 @@ if not pattern.search(text):
     print("No generated details blocks found in CHANGELOG.md.", file=sys.stderr)
     sys.exit(1)
 
-def has_ref(ref: str) -> bool:
+def has_ref(ref):
     return (
         subprocess.run(
             ["git", "rev-parse", "--verify", "--quiet", ref],
@@ -46,33 +46,33 @@ def has_ref(ref: str) -> bool:
 
 HAS_UPSTREAM = has_ref("upstream/main")
 
-def group_for_subject(subject: str) -> str:
-    if re.match(r"^feat", subject):
+def group_for_subject(subject):
+    if re.match(r"^feat", subject, re.I):
         return "Features"
-    if re.match(r"^fix", subject):
+    if re.match(r"^fix", subject, re.I):
         return "Fixes"
-    if re.match(r"^docs", subject):
+    if re.match(r"^docs", subject, re.I):
         return "Documentation"
-    if re.match(r"^tui", subject):
+    if re.match(r"^tui", subject, re.I):
         return "TUI"
-    if re.match(r"^core", subject):
+    if re.match(r"^core", subject, re.I):
         return "Core"
-    if re.match(r"^plan", subject) or re.search(r"(?i)\bplan\b|plan mode", subject):
+    if re.match(r"^plan", subject, re.I) or re.search(r"(?i)\bplan\b|plan mode", subject):
         return "Plan Mode"
     if re.search(r"(?i)rebrand|codexel|@ixe1/codexel", subject):
         return "Branding & Packaging"
-    if re.match(r"^(chore|build|ci)", subject):
+    if re.match(r"^(chore|build|ci)", subject, re.I):
         return "Chores"
     return "Other"
 
-def git_lines(args: list[str]) -> list[str]:
+def git_lines(args):
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode != 0:
         sys.stderr.write(result.stderr)
         raise SystemExit(f"git failed: {' '.join(args)}")
     return [line for line in result.stdout.splitlines() if line.strip()]
 
-def commit_body(sha: str) -> str:
+def commit_body(sha):
     result = subprocess.run(
         ["git", "show", "-s", "--format=%B", sha],
         capture_output=True,
@@ -83,7 +83,7 @@ def commit_body(sha: str) -> str:
         raise SystemExit(f"git show failed for {sha}")
     return result.stdout.replace("\r\n", "\n").replace("\r", "\n").rstrip()
 
-def render_details(range_: str) -> str:
+def render_details(range_):
     rev_args = ["git", "rev-list", "--reverse", range_]
     if HAS_UPSTREAM:
         rev_args += ["--not", "upstream/main"]
@@ -127,7 +127,7 @@ def render_details(range_: str) -> str:
 
     return "\n".join(out).strip()
 
-def render(match: re.Match[str]) -> str:
+def render(match):
     range_ = match.group("range")
     details = render_details(range_)
     if not details:
