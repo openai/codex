@@ -14,7 +14,7 @@ use ts_rs::TS;
 /// guaranteed to be canonicalized or exist on the filesystem).
 ///
 /// IMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set
-/// using `AbsolutePathBufGuard::new(base_path)`. If no base path is set, the
+/// using [AbsolutePathBufGuard::new]. If no base path is set, the
 /// deserialization will fail unless the path being deserialized is already
 /// absolute.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema, TS)]
@@ -112,6 +112,10 @@ thread_local! {
     static ABSOLUTE_PATH_BASE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
+/// Ensure this guard is held while deserializing `AbsolutePathBuf` values to
+/// provide a base path for resolving relative paths. Because this relies on
+/// thread-local storage, the deserialization must be single-threaded and
+/// occur on the same thread that created the guard.
 pub struct AbsolutePathBufGuard;
 
 impl AbsolutePathBufGuard {
