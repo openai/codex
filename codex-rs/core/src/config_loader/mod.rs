@@ -57,6 +57,7 @@ const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/codex/requirements.toml"
 /// See https://developers.openai.com/codex/security for details.
 pub async fn load_config_layers_state(
     codex_home: &Path,
+    cwd: Option<AbsolutePathBuf>,
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
 ) -> io::Result<ConfigLayerStack> {
@@ -122,6 +123,7 @@ pub async fn load_config_layers_state(
     }
 
     // TODO(mbolin): Add layers for cwd, tree, and repo config files.
+    let _ = cwd;
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.
     if !cli_overrides.is_empty() {

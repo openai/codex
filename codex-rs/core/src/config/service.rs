@@ -132,7 +132,7 @@ impl ConfigService {
         params: ConfigReadParams,
     ) -> Result<ConfigReadResponse, ConfigServiceError> {
         let layers = self
-            .load_layers_state()
+            .load_thread_agnostic_config()
             .await
             .map_err(|err| ConfigServiceError::io("failed to read configuration layers", err))?;
 
@@ -185,7 +185,7 @@ impl ConfigService {
         &self,
     ) -> Result<codex_app_server_protocol::UserSavedConfig, ConfigServiceError> {
         let layers = self
-            .load_layers_state()
+            .load_thread_agnostic_config()
             .await
             .map_err(|err| ConfigServiceError::io("failed to load configuration", err))?;
 
@@ -219,7 +219,7 @@ impl ConfigService {
         }
 
         let layers = self
-            .load_layers_state()
+            .load_thread_agnostic_config()
             .await
             .map_err(|err| ConfigServiceError::io("failed to load configuration", err))?;
         let user_layer = match layers.get_user_layer() {
@@ -328,9 +328,14 @@ impl ConfigService {
         })
     }
 
-    async fn load_layers_state(&self) -> std::io::Result<ConfigLayerStack> {
+    /// Loads a "thread-agnostic" config, which means the config layers do not
+    /// include any in-repo .codex/ folders because there is no cwd/project root
+    /// associated with this query.
+    async fn load_thread_agnostic_config(&self) -> std::io::Result<ConfigLayerStack> {
+        let cwd: Option<AbsolutePathBuf> = None;
         load_config_layers_state(
             &self.codex_home,
+            cwd,
             &self.cli_overrides,
             self.loader_overrides.clone(),
         )
