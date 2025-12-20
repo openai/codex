@@ -329,8 +329,10 @@ impl ConfigService {
     }
 
     async fn load_layers_state(&self) -> std::io::Result<ConfigLayerStack> {
+        let cwd = AbsolutePathBuf::try_from(std::env::current_dir()?)?;
         load_config_layers_state(
             &self.codex_home,
+            &cwd,
             &self.cli_overrides,
             self.loader_overrides.clone(),
         )
