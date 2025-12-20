@@ -11,12 +11,17 @@ edited between the markers.
 
 ### Highlights
 
-- _No fork-only changes yet._
+- Fix: keep `spawn_subagent` history entries updating even when other messages are inserted.
 
 ### Details
 
 <!-- BEGIN GENERATED DETAILS: range=520d3fdf1ea7114bdabafd975c76895c83e47eeb..HEAD -->
-_No fork-only changes yet._
+#### TUI
+- Keep subagent history updating
+
+
+#### Other
+- Cut 0.1.3
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.3] - 2025-12-20
