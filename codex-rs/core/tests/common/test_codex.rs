@@ -184,7 +184,7 @@ impl TestCodexBuilder {
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
         }
-        if let Ok(cmd) = assert_cmd::Command::cargo_bin("codex") {
+        if let Ok(cmd) = assert_cmd::Command::cargo_bin("codexel") {
             config.codex_linux_sandbox_exe = Some(PathBuf::from(cmd.get_program().to_os_string()));
         }
 

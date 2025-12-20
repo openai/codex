@@ -143,7 +143,7 @@ prefix_rule(
 
 fn ensure_codex_cli() -> Result<PathBuf> {
     let codex_cli = PathBuf::from(
-        assert_cmd::Command::cargo_bin("codex")?
+        assert_cmd::Command::cargo_bin("codexel")?
             .get_program()
             .to_os_string(),
     );
@@ -156,14 +156,14 @@ fn ensure_codex_cli() -> Result<PathBuf> {
     })?;
     ensure!(
         metadata.is_file(),
-        "expected codex binary at {} to be a file; run `cargo build -p codex-cli --bin codex` before this test",
+        "expected codex binary at {} to be a file; run `cargo build -p codex-cli --bin codexel` before this test",
         codex_cli.display()
     );
 
     let mode = metadata.permissions().mode();
     ensure!(
         mode & 0o111 != 0,
-        "codex binary at {} is not executable (mode {mode:o}); run `cargo build -p codex-cli --bin codex` before this test",
+        "codex binary at {} is not executable (mode {mode:o}); run `cargo build -p codex-cli --bin codexel` before this test",
         codex_cli.display()
     );
 

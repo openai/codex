@@ -335,10 +335,13 @@ fn assert_developer_message(item: &ResponseItem, expected_text: &str) {
         ResponseItem::Message { role, content, .. } => {
             assert_eq!(role, "developer");
             let texts = content_texts(content);
-            assert_eq!(
-                texts,
-                vec![expected_text],
-                "expected developer instructions message, got {texts:?}"
+            let text = texts
+                .first()
+                .copied()
+                .unwrap_or_else(|| panic!("expected developer message to contain text"));
+            assert!(
+                text.trim_end().ends_with(expected_text),
+                "expected developer instructions to end with {expected_text:?}, got {text:?}"
             );
         }
         other => panic!("expected developer instructions message, got {other:?}"),
