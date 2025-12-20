@@ -57,9 +57,14 @@ const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/codex/requirements.toml"
 /// See https://developers.openai.com/codex/security for details.
 pub async fn load_config_layers_state(
     codex_home: &Path,
+    cwd: Option<AbsolutePathBuf>,
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
 ) -> io::Result<ConfigLayerStack> {
+    // `cwd` will be used in follow-up changes to add project-aware config
+    // layers; when `None`, callers are intentionally loading config in a
+    // project-agnostic way (e.g., CLI metadata endpoints).
+    let _ = cwd;
     let mut config_requirements_toml = ConfigRequirementsToml::default();
 
     // TODO(mbolin): Support an entry in MDM for config requirements and use it
@@ -122,6 +127,7 @@ pub async fn load_config_layers_state(
     }
 
     // TODO(mbolin): Add layers for cwd, tree, and repo config files.
+    let _ = cwd;
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.
     if !cli_overrides.is_empty() {

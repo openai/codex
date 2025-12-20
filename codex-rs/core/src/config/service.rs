@@ -331,6 +331,7 @@ impl ConfigService {
     async fn load_layers_state(&self) -> std::io::Result<ConfigLayerStack> {
         load_config_layers_state(
             &self.codex_home,
+            None,
             &self.cli_overrides,
             self.loader_overrides.clone(),
         )
