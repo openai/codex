@@ -51,8 +51,7 @@ We normalize by converting raw events into tick-equivalents:
 
 Per-terminal defaults come from the probe logs (Appendix), and users can override them.
 
-Note: the config key is historically named `tui.scroll_events_per_line`, but in TUI2 it is treated
-as an events-per-wheel-tick factor.
+Config key: `tui.scroll_events_per_tick`.
 
 ### 3. Wheel vs trackpad behavior (and why it is heuristic)
 
@@ -122,11 +121,15 @@ Events-per-tick defaults derived from `wheel_single` medians:
 - WarpTerminal: 9
 - WezTerm: 1
 - Alacritty: 3
-- Ghostty: 9
+- Ghostty: 3
 - Iterm2: 1
 - VsCode: 1
 - Kitty: 3
 - Unknown: 3
+
+Note: probe logs measured Ghostty at ~9 events per tick, but we default to 3 because an upstream
+Ghostty change is expected to reduce wheel event density. Users can override with
+`tui.scroll_events_per_tick`.
 
 Auto-mode wheel promotion thresholds can also be tuned per terminal if needed (see config below).
 
@@ -134,35 +137,53 @@ Auto-mode wheel promotion thresholds can also be tuned per terminal if needed (s
 
 These are user-facing knobs in `config.toml` under `[tui]`:
 
-- `scroll_events_per_line` (number):
-  - Historic name; treated as `events_per_tick` for TUI2.
-  - Larger values slow down wheel ticks (more events required per tick-equivalent).
+In this repo, "tick" always refers to a physical mouse wheel notch. Trackpads do not have ticks, so
+trackpad settings are expressed in terms of "tick-equivalents" (raw events normalized to a common
+scale).
+
+The core normalization formulas are:
+
+- Wheel-like streams:
+  - `lines_per_event = scroll_wheel_lines / scroll_events_per_tick`
+- Trackpad-like streams:
+  - `lines_per_event = scroll_trackpad_lines / min(scroll_events_per_tick, 3)`
+  - (plus bounded acceleration from `scroll_trackpad_accel_*` and fractional carry across streams)
+
+Keys:
+
+- `scroll_events_per_tick` (number):
+  - Raw vertical scroll events per physical wheel notch in your terminal (normalization input).
+  - Affects wheel-like scroll speed and auto-mode wheel promotion timing.
+  - Trackpad-like mode uses `min(..., 3)` as the divisor so dense wheel ticks (e.g. 9 events per
+    notch) do not make trackpads feel artificially slow.
 - `scroll_wheel_lines` (number):
-  - Lines per physical wheel tick (default 3).
+  - Lines per physical wheel notch (default 3).
+  - Change this if you want "classic" wheel scrolling to be more/less aggressive globally.
 - `scroll_trackpad_lines` (number):
-  - Lines per tick-equivalent in trackpad-like mode (default 1).
+  - Baseline trackpad sensitivity in trackpad-like mode (default 1).
+  - Change this if your trackpad feels consistently too slow/fast for small motions.
 - `scroll_trackpad_accel_events` (number):
-  - Trackpad acceleration tuning; smaller value accelerates earlier (default 30).
+  - Trackpad acceleration tuning (default 30). Smaller values accelerate earlier.
+  - Trackpad-like streams compute a multiplier:
+    - `multiplier = clamp(1 + abs(events) / scroll_trackpad_accel_events, 1..scroll_trackpad_accel_max)`
+  - The multiplier is applied to the trackpad stream’s computed line delta (including any carried
+    fractional remainder).
 - `scroll_trackpad_accel_max` (number):
-  - Trackpad acceleration cap (default 3).
+  - Trackpad acceleration cap (default 3). Set to 1 to effectively disable acceleration.
 - `scroll_mode` (`auto` | `wheel` | `trackpad`):
-  - Force scroll interpretation or use auto heuristic (default `auto`).
+  - `auto` (default): infer wheel-like vs trackpad-like per stream.
+  - `wheel`: always wheel-like (good for wheel-only setups; trackpads will feel jumpy).
+  - `trackpad`: always trackpad-like (good if auto misclassifies; wheels may feel slow).
 - `scroll_wheel_tick_detect_max_ms` (number):
-  - Auto-mode promotion threshold for "first tick arrives quickly".
+  - Auto-mode promotion threshold: how quickly the first tick-worth of events must arrive to
+    consider the stream wheel-like.
+  - If wheel feels slow in a dense-wheel terminal, increasing this is usually better than changing
+    `scroll_events_per_tick`.
 - `scroll_wheel_like_max_duration_ms` (number):
-  - Auto-mode fallback for 1-event-per-tick terminals.
+  - Auto-mode fallback for 1-event-per-tick terminals (WezTerm/iTerm/VS Code).
+  - If wheel feels like trackpad (too slow) in those terminals, increasing this can help.
 - `scroll_invert` (bool):
   - Invert direction after terminal detection; applies consistently to wheel and trackpad.
-
-## Known issues and TODOs
-
-- Ghostty: wheel/trackpad behavior still needs more validation from real hardware.
-  - TODO: investigate "Ghostty mouse wheel scroll" discrepancies and decide whether the fix is
-    (a) per-terminal `events_per_tick`, (b) auto-mode promotion thresholds, or (c) a Ghostty-specific
-    override/config recommendation.
-- More data:
-  - TODO: collect probe logs from additional terminals/versions and non-macOS platforms.
-  - TODO: revisit per-terminal defaults once we have enough samples to justify version splits.
 
 ## Previous approaches tried (and why they were replaced)
 
@@ -243,7 +264,9 @@ Wheel_single medians (events per tick) in the latest logs:
 - Warp: 9
 - WezTerm: 1
 - alacritty: 3
-- ghostty: 9
+- ghostty: 9 (measured); TUI2 defaults use 3 because an upstream Ghostty change is expected to
+  reduce wheel event density. If your Ghostty build still emits ~9 events per wheel tick, set
+  `tui.scroll_events_per_tick = 9`.
 - iTerm: 1
 - VS Code: 1
 - Kitty: 3
@@ -255,6 +278,10 @@ It is intentionally not rewritten so the data and rationale remain auditable.
 
 Note: the original text uses "events per line" terminology; the implementation treats this as an
 events-per-wheel-tick normalization factor (see "Normalization: events-per-tick").
+
+Note: the pseudocode in the preserved spec is not the exact current implementation; it is kept as
+historical context for how the probe data originally mapped into an algorithm. The current
+implementation is described in the sections above.
 
 ## 1. TL;DR
 
@@ -387,76 +414,173 @@ Why these values:
 ## 7. Pseudocode (Rust-oriented)
 
 ```rust
-struct ScrollStream {
-    start: Instant,
-    last: Instant,
-    last_dir: i32,
-    event_count: usize,
-    accumulated_events: i32,
-    accumulated_lines: f32,
+// This is intentionally a simplified sketch of the current implementation.
+// For the authoritative behavior, see `codex-rs/tui2/src/tui/scrolling/mouse.rs`.
+
+enum StreamKind {
+    Unknown,
+    Wheel,
+    Trackpad,
 }
 
-fn on_scroll_event(dir: i32, now: Instant, state: &mut State) {
-    if let Some(stream) = &mut state.stream {
-        let gap_ms = now.duration_since(stream.last).as_millis() as u64;
-        if gap_ms > STREAM_GAP_MS || dir != stream.last_dir {
-            finalize_stream(state);
-            state.stream = None;
+struct Stream {
+    start: Instant,
+    last: Instant,
+    dir: i32,
+    event_count: usize,
+    accumulated_events: i32,
+    applied_lines: i32,
+    kind: StreamKind,
+    just_promoted: bool,
+}
+
+struct State {
+    stream: Option<Stream>,
+    carry_lines: f32,
+    last_redraw_at: Instant,
+    cfg: Config,
+}
+
+struct Config {
+    events_per_tick: u16,
+    wheel_lines_per_tick: u16,
+    trackpad_lines_per_tick: u16,
+    trackpad_accel_events: u16,
+    trackpad_accel_max: u16,
+    wheel_tick_detect_max: Duration,
+}
+
+fn on_scroll_event(dir: i32, now: Instant, st: &mut State) -> i32 {
+    // Close stream on idle gap or direction flip.
+    if let Some(stream) = st.stream.as_ref() {
+        let gap = now.duration_since(stream.last);
+        if gap > STREAM_GAP || stream.dir != dir {
+            finalize_stream(now, st);
+            st.stream = None;
         }
     }
 
-    let stream = state.stream.get_or_insert_with(|| ScrollStream {
+    let stream = st.stream.get_or_insert_with(|| Stream {
         start: now,
         last: now,
-        last_dir: dir,
+        dir,
         event_count: 0,
         accumulated_events: 0,
-        accumulated_lines: 0.0,
+        applied_lines: 0,
+        kind: StreamKind::Unknown,
+        just_promoted: false,
     });
 
     stream.last = now;
-    stream.last_dir = dir;
-    stream.event_count = stream.event_count.saturating_add(1).min(MAX_EVENTS_PER_STREAM);
-    stream.accumulated_events += dir;
+    stream.dir = dir;
+    stream.event_count = (stream.event_count + 1).min(MAX_EVENTS_PER_STREAM);
+    stream.accumulated_events =
+        (stream.accumulated_events + dir).clamp(-(MAX_EVENTS_PER_STREAM as i32), MAX_EVENTS_PER_STREAM as i32);
 
-    let epl = state.events_per_line as f32;
-    stream.accumulated_lines += (dir as f32) / epl;
-
-    if state.last_redraw.elapsed().as_millis() as u64 >= REDRAW_CADENCE_MS {
-        flush_lines(state, stream, false);
-    }
-}
-
-fn on_tick(now: Instant, state: &mut State) {
-    if let Some(stream) = &mut state.stream {
-        let gap_ms = now.duration_since(stream.last).as_millis() as u64;
-        if gap_ms > STREAM_GAP_MS {
-            finalize_stream(state);
-            state.stream = None;
+    // Auto-mode promotion: promote to wheel-like when the first tick-worth of events arrives quickly.
+    if matches!(stream.kind, StreamKind::Unknown) {
+        let ept = st.cfg.events_per_tick.max(1) as usize;
+        if ept >= 2 && stream.event_count >= ept && now.duration_since(stream.start) <= st.cfg.wheel_tick_detect_max {
+            stream.kind = StreamKind::Wheel;
+            stream.just_promoted = true;
         }
     }
+
+    flush_lines(now, st)
 }
 
-fn finalize_stream(state: &mut State) {
-    if let Some(stream) = &mut state.stream {
-        let duration_ms = stream.last.duration_since(stream.start).as_millis() as u64;
-        let discrete = stream.event_count <= DISCRETE_MAX_EVENTS
-            && duration_ms <= DISCRETE_MAX_DURATION_MS;
-        flush_lines(state, stream, discrete);
+fn on_tick(now: Instant, st: &mut State) -> i32 {
+    if let Some(stream) = st.stream.as_ref() {
+        let gap = now.duration_since(stream.last);
+        if gap > STREAM_GAP {
+            return finalize_stream(now, st);
+        }
     }
+    flush_lines(now, st)
 }
 
-fn flush_lines(state: &mut State, stream: &mut ScrollStream, discrete: bool) {
-    let mut lines = stream.accumulated_lines.trunc() as i32;
-    if discrete && lines == 0 && stream.accumulated_events != 0 {
-        lines = stream.accumulated_events.signum() * MIN_LINES_PER_DISCRETE_STREAM;
+fn finalize_stream(now: Instant, st: &mut State) -> i32 {
+    // In auto mode, any stream that isn't wheel-like by promotion stays trackpad-like.
+    if let Some(stream) = st.stream.as_mut() {
+        if matches!(stream.kind, StreamKind::Unknown) {
+            stream.kind = StreamKind::Trackpad;
+        }
     }
 
-    if lines != 0 {
-        apply_scroll(lines.clamp(-MAX_ACCUMULATED_LINES, MAX_ACCUMULATED_LINES));
-        stream.accumulated_lines -= lines as f32;
-        state.last_redraw = Instant::now();
+    let lines = flush_lines(now, st);
+
+    // Carry fractional remainder across streams for trackpad-like input.
+    if let Some(stream) = st.stream.as_ref() {
+        if matches!(stream.kind, StreamKind::Trackpad) {
+            st.carry_lines = desired_lines_f32(st, stream) - stream.applied_lines as f32;
+        } else {
+            st.carry_lines = 0.0;
+        }
     }
+
+    lines
+}
+
+fn flush_lines(now: Instant, st: &mut State) -> i32 {
+    let Some(stream) = st.stream.as_mut() else { return 0; };
+
+    let wheel_like = matches!(stream.kind, StreamKind::Wheel);
+    let cadence_elapsed = now.duration_since(st.last_redraw_at) >= REDRAW_CADENCE;
+    let should_flush = wheel_like || cadence_elapsed || stream.just_promoted;
+    if !should_flush {
+        return 0;
+    }
+
+    let desired_total = desired_lines_f32(st, stream);
+    let mut desired_lines = desired_total.trunc() as i32;
+
+    // Wheel guardrail: ensure we never produce a "dead tick" for non-zero input.
+    if wheel_like && desired_lines == 0 && stream.accumulated_events != 0 {
+        desired_lines = stream.accumulated_events.signum() * MIN_LINES_PER_DISCRETE_STREAM;
+    }
+
+    let mut delta = desired_lines - stream.applied_lines;
+    if delta == 0 {
+        return 0;
+    }
+
+    delta = delta.clamp(-MAX_ACCUMULATED_LINES, MAX_ACCUMULATED_LINES);
+    stream.applied_lines += delta;
+    stream.just_promoted = false;
+    st.last_redraw_at = now;
+    delta
+}
+
+fn desired_lines_f32(st: &State, stream: &Stream) -> f32 {
+    let wheel_like = matches!(stream.kind, StreamKind::Wheel);
+
+    let events_per_tick = if wheel_like {
+        st.cfg.events_per_tick.max(1) as f32
+    } else {
+        // Trackpad divisor is capped so dense wheel terminals don't feel slow for trackpads.
+        st.cfg.events_per_tick.clamp(1, DEFAULT_EVENTS_PER_LINE).max(1) as f32
+    };
+
+    let lines_per_tick = if wheel_like {
+        st.cfg.wheel_lines_per_tick.max(1) as f32
+    } else {
+        st.cfg.trackpad_lines_per_tick.max(1) as f32
+    };
+
+    let mut total = (stream.accumulated_events as f32 * (lines_per_tick / events_per_tick))
+        .clamp(-(MAX_ACCUMULATED_LINES as f32), MAX_ACCUMULATED_LINES as f32);
+
+    if !wheel_like {
+        total = (total + st.carry_lines).clamp(-(MAX_ACCUMULATED_LINES as f32), MAX_ACCUMULATED_LINES as f32);
+
+        // Bounded acceleration for large swipes (keep small swipes precise).
+        let event_count = stream.accumulated_events.abs() as f32;
+        let accel = (1.0 + (event_count / st.cfg.trackpad_accel_events.max(1) as f32))
+            .clamp(1.0, st.cfg.trackpad_accel_max.max(1) as f32);
+        total = (total * accel).clamp(-(MAX_ACCUMULATED_LINES as f32), MAX_ACCUMULATED_LINES as f32);
+    }
+
+    total
 }
 ```
 
@@ -484,14 +608,3 @@ If terminal is not matched, use `DEFAULT_EVENTS_PER_LINE = 3`.
 - Horizontal scroll events (12-35% of trackpad events in some terminals) must be ignored for vertical scrolling.
 - Direction inversion is user-configurable in terminals; always use event direction and expose an application-level invert setting.
 - Guard against floods: cap event counts and accumulated line deltas per stream.
-
-## 10. Implementation checklist
-
-- [ ] introduce constants above and wire them into TUI2 scroll handling
-- [ ] implement stream detection with `STREAM_GAP_MS` and direction-change breaks
-- [ ] normalize events-per-line using per-terminal overrides
-- [ ] apply discrete vs continuous handling based on event count + duration
-- [ ] coalesce redraws to `REDRAW_CADENCE_MS`
-- [ ] ignore horizontal events for vertical scrolling
-- [ ] clamp accumulated lines and event counts
-- [ ] add a minimal config hook for `EVENTS_PER_LINE`, wheel lines, and invert direction

@@ -45,7 +45,6 @@ fn default_wheel_tick_detect_max_ms_for_terminal(name: TerminalName) -> u64 {
     // milliseconds; a tight global threshold causes those wheel ticks to be misclassified as
     // trackpad-like and feel too slow.
     match name {
-        TerminalName::Ghostty => 120,
         TerminalName::WarpTerminal => 20,
         _ => DEFAULT_WHEEL_TICK_DETECT_MAX_MS,
     }
@@ -93,7 +92,7 @@ impl ScrollDirection {
 ///
 /// See `codex-rs/tui2/docs/scroll_input_model.md` for the probe data and rationale.
 /// User-facing overrides are exposed via `config.toml` as:
-/// - `tui.scroll_events_per_line`
+/// - `tui.scroll_events_per_tick`
 /// - `tui.scroll_wheel_lines`
 /// - `tui.scroll_invert`
 #[derive(Clone, Copy, Debug)]
@@ -106,7 +105,7 @@ pub(crate) struct ScrollConfig {
     /// Each raw scroll event contributes `1 / events_per_tick` ticks. That tick value is then
     /// scaled to lines depending on the active scroll mode (wheel vs trackpad).
     ///
-    /// User-facing name: `tui.scroll_events_per_line` (historic name; see docs).
+    /// User-facing name: `tui.scroll_events_per_tick`.
     events_per_tick: u16,
 
     /// Lines applied per mouse wheel tick.
@@ -187,7 +186,7 @@ impl ScrollConfig {
             TerminalName::WarpTerminal => 9,
             TerminalName::WezTerm => 1,
             TerminalName::Alacritty => 3,
-            TerminalName::Ghostty => 9,
+            TerminalName::Ghostty => 3,
             TerminalName::Iterm2 => 1,
             TerminalName::VsCode => 1,
             TerminalName::Kitty => 3,
@@ -656,13 +655,17 @@ mod tests {
     }
 
     #[test]
-    fn terminal_overrides_match_probe_defaults() {
+    fn terminal_overrides_match_current_defaults() {
         let wezterm = ScrollConfig::from_terminal(
             &terminal_info_named(TerminalName::WezTerm),
             ScrollConfigOverrides::default(),
         );
         let warp = ScrollConfig::from_terminal(
             &terminal_info_named(TerminalName::WarpTerminal),
+            ScrollConfigOverrides::default(),
+        );
+        let ghostty = ScrollConfig::from_terminal(
+            &terminal_info_named(TerminalName::Ghostty),
             ScrollConfigOverrides::default(),
         );
         let unknown = ScrollConfig::from_terminal(
@@ -673,6 +676,7 @@ mod tests {
         assert_eq!(wezterm.events_per_tick, 1);
         assert_eq!(wezterm.wheel_lines_per_tick, DEFAULT_WHEEL_LINES_PER_TICK);
         assert_eq!(warp.events_per_tick, 9);
+        assert_eq!(ghostty.events_per_tick, 3);
         assert_eq!(unknown.events_per_tick, DEFAULT_EVENTS_PER_TICK);
     }
 

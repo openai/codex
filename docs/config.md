@@ -886,17 +886,40 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 # Defaults to true.
 animations = false
 
-# Override scroll normalization (events per wheel tick). TUI2 only.
-scroll_events_per_line = 3
+# TUI2 mouse scrolling (wheel + trackpad)
+#
+# Terminals emit different numbers of raw scroll events per physical wheel notch (commonly 1, 3,
+# or 9+). TUI2 normalizes raw event density into consistent wheel behavior (default: ~3 lines per
+# wheel notch) while keeping trackpad input higher fidelity via fractional accumulation.
+#
+# See `codex-rs/tui2/docs/scroll_input_model.md` for the model and probe data.
 
-# Override wheel scroll lines per tick (classic feel). TUI2 only.
+# Override *wheel* event density (raw events per physical wheel notch). TUI2 only.
+#
+# Wheel-like per-event contribution is:
+# - `scroll_wheel_lines / scroll_events_per_tick`
+#
+# Trackpad-like streams use `min(scroll_events_per_tick, 3)` as the divisor so dense wheel ticks
+# (e.g. 9 events per notch) do not make trackpads feel artificially slow.
+scroll_events_per_tick = 3
+
+# Override wheel scroll lines per physical wheel notch (classic feel). TUI2 only.
 scroll_wheel_lines = 3
 
-# Override trackpad scroll sensitivity (lines per tick-equivalent). TUI2 only.
+# Override baseline trackpad sensitivity (lines per tick-equivalent). TUI2 only.
+#
+# Trackpad-like per-event contribution is:
+# - `scroll_trackpad_lines / min(scroll_events_per_tick, 3)`
 scroll_trackpad_lines = 1
 
 # Trackpad acceleration (optional). TUI2 only.
 # These keep small swipes precise while letting large/faster swipes cover more content.
+#
+# Concretely, TUI2 computes:
+# - `multiplier = clamp(1 + abs(events) / scroll_trackpad_accel_events, 1..scroll_trackpad_accel_max)`
+#
+# The multiplier is applied to the trackpad-like stream’s computed line delta (including any
+# carried fractional remainder).
 scroll_trackpad_accel_events = 30
 scroll_trackpad_accel_max = 3
 
@@ -917,7 +940,7 @@ scroll_invert = false
 
 > [!NOTE] > `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
 
-Scroll settings (`tui.scroll_events_per_line`, `tui.scroll_wheel_lines`, `tui.scroll_trackpad_lines`, `tui.scroll_mode`, `tui.scroll_invert`) currently apply to the TUI2 viewport scroll implementation.
+Scroll settings (`tui.scroll_events_per_tick`, `tui.scroll_wheel_lines`, `tui.scroll_trackpad_lines`, `tui.scroll_trackpad_accel_*`, `tui.scroll_mode`, `tui.scroll_wheel_*`, `tui.scroll_invert`) currently apply to the TUI2 viewport scroll implementation.
 
 ## Authentication and authorization
 
@@ -1002,9 +1025,9 @@ Valid values:
 | `file_opener`                                    | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`).                                                                         |
 | `tui`                                            | table                                                             | TUI‑specific options.                                                                                                           |
 | `tui.notifications`                              | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: true).                                                                        |
-| `tui.scroll_events_per_line`                     | number                                                            | Override events-per-tick normalization for TUI2 scrolling (default: terminal-specific; fallback: 3).                            |
-| `tui.scroll_wheel_lines`                         | number                                                            | Lines to apply per wheel tick for TUI2 scrolling (default: 3).                                                                  |
-| `tui.scroll_trackpad_lines`                      | number                                                            | Lines per tick-equivalent for trackpad scrolling in TUI2 (default: 1).                                                          |
+| `tui.scroll_events_per_tick`                     | number                                                            | Raw events per wheel notch (normalization input; default: terminal-specific; fallback: 3).                                      |
+| `tui.scroll_wheel_lines`                         | number                                                            | Lines per physical wheel notch in wheel-like mode (default: 3).                                                                 |
+| `tui.scroll_trackpad_lines`                      | number                                                            | Baseline trackpad sensitivity in trackpad-like mode (default: 1).                                                               |
 | `tui.scroll_trackpad_accel_events`               | number                                                            | Trackpad acceleration: events per +1x speed in TUI2 (default: 30).                                                              |
 | `tui.scroll_trackpad_accel_max`                  | number                                                            | Trackpad acceleration: max multiplier in TUI2 (default: 3).                                                                     |
 | `tui.scroll_mode`                                | `auto` \| `wheel` \| `trackpad`                                    | How to interpret scroll input in TUI2 (default: `auto`).                                                                        |

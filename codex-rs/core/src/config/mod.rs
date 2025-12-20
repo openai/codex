@@ -179,12 +179,12 @@ pub struct Config {
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
 
-    /// Override the events-per-tick factor for TUI2 scroll normalization.
+    /// Override the events-per-wheel-tick factor for TUI2 scroll normalization.
     ///
-    /// This is the same `tui.scroll_events_per_line` value from `config.toml`, plumbed through the
+    /// This is the same `tui.scroll_events_per_tick` value from `config.toml`, plumbed through the
     /// merged [`Config`] object (see [`Tui`]) so TUI2 can normalize scroll event density per
-    /// terminal. Despite the historic name, the value is treated as "events per wheel tick".
-    pub tui_scroll_events_per_line: Option<u16>,
+    /// terminal.
+    pub tui_scroll_events_per_tick: Option<u16>,
 
     /// Override the number of lines applied per wheel tick in TUI2.
     ///
@@ -1399,7 +1399,7 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
-            tui_scroll_events_per_line: cfg.tui.as_ref().and_then(|t| t.scroll_events_per_line),
+            tui_scroll_events_per_tick: cfg.tui.as_ref().and_then(|t| t.scroll_events_per_tick),
             tui_scroll_wheel_lines: cfg.tui.as_ref().and_then(|t| t.scroll_wheel_lines),
             tui_scroll_trackpad_lines: cfg.tui.as_ref().and_then(|t| t.scroll_trackpad_lines),
             tui_scroll_trackpad_accel_events: cfg
@@ -1592,17 +1592,23 @@ persistence = "none"
             .expect("TUI config without notifications should succeed");
         let tui = parsed.tui.expect("config should include tui section");
 
-        assert_eq!(tui.notifications, Notifications::Enabled(true));
-        assert!(tui.show_tooltips);
-        assert!(tui.scroll_events_per_line.is_none());
-        assert!(tui.scroll_wheel_lines.is_none());
-        assert!(tui.scroll_trackpad_lines.is_none());
-        assert!(tui.scroll_trackpad_accel_events.is_none());
-        assert!(tui.scroll_trackpad_accel_max.is_none());
-        assert_eq!(tui.scroll_mode, ScrollInputMode::Auto);
-        assert!(tui.scroll_wheel_tick_detect_max_ms.is_none());
-        assert!(tui.scroll_wheel_like_max_duration_ms.is_none());
-        assert!(!tui.scroll_invert);
+        assert_eq!(
+            tui,
+            Tui {
+                notifications: Notifications::Enabled(true),
+                animations: true,
+                show_tooltips: true,
+                scroll_events_per_tick: None,
+                scroll_wheel_lines: None,
+                scroll_trackpad_lines: None,
+                scroll_trackpad_accel_events: None,
+                scroll_trackpad_accel_max: None,
+                scroll_mode: ScrollInputMode::Auto,
+                scroll_wheel_tick_detect_max_ms: None,
+                scroll_wheel_like_max_duration_ms: None,
+                scroll_invert: false,
+            }
+        );
     }
 
     #[test]
@@ -3202,7 +3208,7 @@ model_verbosity = "high"
                 tui_notifications: Default::default(),
                 animations: true,
                 show_tooltips: true,
-                tui_scroll_events_per_line: None,
+                tui_scroll_events_per_tick: None,
                 tui_scroll_wheel_lines: None,
                 tui_scroll_trackpad_lines: None,
                 tui_scroll_trackpad_accel_events: None,
@@ -3286,7 +3292,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            tui_scroll_events_per_line: None,
+            tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
             tui_scroll_trackpad_accel_events: None,
@@ -3385,7 +3391,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            tui_scroll_events_per_line: None,
+            tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
             tui_scroll_trackpad_accel_events: None,
@@ -3470,7 +3476,7 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
-            tui_scroll_events_per_line: None,
+            tui_scroll_events_per_tick: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
             tui_scroll_trackpad_accel_events: None,

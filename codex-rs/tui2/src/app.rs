@@ -491,7 +491,7 @@ impl App {
         let scroll_config = ScrollConfig::from_terminal(
             &terminal_info(),
             ScrollConfigOverrides {
-                events_per_tick: config.tui_scroll_events_per_line,
+                events_per_tick: config.tui_scroll_events_per_tick,
                 wheel_lines_per_tick: config.tui_scroll_wheel_lines,
                 trackpad_lines_per_tick: config.tui_scroll_trackpad_lines,
                 trackpad_accel_events: config.tui_scroll_trackpad_accel_events,
