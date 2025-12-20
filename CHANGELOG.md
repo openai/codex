@@ -11,8 +11,23 @@ edited between the markers.
 
 ### Highlights
 
+- _No fork-only changes yet._
+
+### Details
+
+<!-- BEGIN GENERATED DETAILS: range=520d3fdf1ea7114bdabafd975c76895c83e47eeb..HEAD -->
+_No fork-only changes yet._
+<!-- END GENERATED DETAILS -->
+
+## [0.1.3] - 2025-12-20
+
+Upstream baseline: openai/codex@be274cbe6273cb17d756a6cda729d537f15ae49a
+Release commit: 520d3fdf1ea7114bdabafd975c76895c83e47eeb
+
+### Highlights
+
 - Add a read-only spawn_subagent tool for parallel exploration and research.
-- Show spawn_subagent tool calls in chat history and stop them on Esc.
+- Show spawn_subagent tool calls in chat history, including live activity and token usage, and stop them on Esc.
 - Skip macOS rust-ci jobs on pull requests to avoid flaky PR runs.
 - Skip upstream npm package staging in CI for forks.
 - Fix sdk workflow to build the codexel binary.
@@ -20,7 +35,15 @@ edited between the markers.
 
 ### Details
 
-<!-- BEGIN GENERATED DETAILS: range=79d019672838ccc532247588d31d2eda81fb42d8..HEAD -->
+<!-- BEGIN GENERATED DETAILS: range=79d019672838ccc532247588d31d2eda81fb42d8..520d3fdf1ea7114bdabafd975c76895c83e47eeb -->
+#### TUI
+- Show subagent tool calls in history
+
+
+#### Plan Mode
+- Stream activity and match plan-variants UI
+
+
 #### Branding & Packaging
 - Fix sdk workflow codexel build
 
@@ -37,6 +60,9 @@ edited between the markers.
 - Format markdown and workflow files
 - Fix update checks and codex home isolation
 - Add spawn_subagent tool
+- Show spawn_subagent tool calls in history
+- Stream token counts
+- Bump workspace version to 0.1.3
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.2] - 2025-12-19
