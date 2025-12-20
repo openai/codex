@@ -33,9 +33,23 @@ const DEFAULT_TRACKPAD_LINES_PER_TICK: u16 = 1;
 const DEFAULT_SCROLL_MODE: ScrollInputMode = ScrollInputMode::Auto;
 const DEFAULT_WHEEL_TICK_DETECT_MAX_MS: u64 = 12;
 const DEFAULT_WHEEL_LIKE_MAX_DURATION_MS: u64 = 200;
+const DEFAULT_TRACKPAD_ACCEL_EVENTS: u16 = 30;
+const DEFAULT_TRACKPAD_ACCEL_MAX: u16 = 3;
 const MAX_EVENTS_PER_STREAM: usize = 256;
 const MAX_ACCUMULATED_LINES: i32 = 256;
 const MIN_LINES_PER_WHEEL_STREAM: i32 = 1;
+
+fn default_wheel_tick_detect_max_ms_for_terminal(name: TerminalName) -> u64 {
+    // This threshold is only used for the "promote to wheel-like" fast path in auto mode.
+    // We keep it per-terminal because some terminals emit wheel ticks spread over tens of
+    // milliseconds; a tight global threshold causes those wheel ticks to be misclassified as
+    // trackpad-like and feel too slow.
+    match name {
+        TerminalName::Ghostty => 120,
+        TerminalName::WarpTerminal => 20,
+        _ => DEFAULT_WHEEL_TICK_DETECT_MAX_MS,
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ScrollStreamKind {
@@ -108,6 +122,18 @@ pub(crate) struct ScrollConfig {
     /// event and accumulate fractions until they cross a whole line.
     trackpad_lines_per_tick: u16,
 
+    /// Trackpad acceleration: the approximate number of events required to gain +1x speed.
+    ///
+    /// This is a pragmatic UX knob: in some terminals the vertical event density for trackpad
+    /// input can be relatively low, which makes large/faster swipes feel sluggish even when small
+    /// swipes feel correct.
+    trackpad_accel_events: u16,
+
+    /// Trackpad acceleration: maximum multiplier applied to trackpad-like streams.
+    ///
+    /// Set to 1 to effectively disable acceleration.
+    trackpad_accel_max: u16,
+
     /// Force wheel/trackpad behavior, or infer it per stream.
     mode: ScrollInputMode,
 
@@ -141,6 +167,8 @@ pub(crate) struct ScrollConfigOverrides {
     pub(crate) events_per_tick: Option<u16>,
     pub(crate) wheel_lines_per_tick: Option<u16>,
     pub(crate) trackpad_lines_per_tick: Option<u16>,
+    pub(crate) trackpad_accel_events: Option<u16>,
+    pub(crate) trackpad_accel_max: Option<u16>,
     pub(crate) mode: Option<ScrollInputMode>,
     pub(crate) wheel_tick_detect_max_ms: Option<u64>,
     pub(crate) wheel_like_max_duration_ms: Option<u64>,
@@ -180,11 +208,20 @@ impl ScrollConfig {
             trackpad_lines_per_tick = override_value.max(1);
         }
 
-        let wheel_tick_detect_max = Duration::from_millis(
-            overrides
-                .wheel_tick_detect_max_ms
-                .unwrap_or(DEFAULT_WHEEL_TICK_DETECT_MAX_MS),
-        );
+        let mut trackpad_accel_events = DEFAULT_TRACKPAD_ACCEL_EVENTS;
+        if let Some(override_value) = overrides.trackpad_accel_events {
+            trackpad_accel_events = override_value.max(1);
+        }
+
+        let mut trackpad_accel_max = DEFAULT_TRACKPAD_ACCEL_MAX;
+        if let Some(override_value) = overrides.trackpad_accel_max {
+            trackpad_accel_max = override_value.max(1);
+        }
+
+        let wheel_tick_detect_max_ms = overrides
+            .wheel_tick_detect_max_ms
+            .unwrap_or_else(|| default_wheel_tick_detect_max_ms_for_terminal(terminal.name));
+        let wheel_tick_detect_max = Duration::from_millis(wheel_tick_detect_max_ms);
         let wheel_like_max_duration = Duration::from_millis(
             overrides
                 .wheel_like_max_duration_ms
@@ -195,6 +232,8 @@ impl ScrollConfig {
             events_per_tick,
             wheel_lines_per_tick,
             trackpad_lines_per_tick,
+            trackpad_accel_events,
+            trackpad_accel_max,
             mode: overrides.mode.unwrap_or(DEFAULT_SCROLL_MODE),
             wheel_tick_detect_max,
             wheel_like_max_duration,
@@ -214,6 +253,24 @@ impl ScrollConfig {
         self.trackpad_lines_per_tick.max(1) as f32
     }
 
+    fn trackpad_events_per_tick_f32(self) -> f32 {
+        // `events_per_tick` is derived from wheel behavior and can be much larger than the actual
+        // trackpad event density for the same physical movement. If we use it directly for
+        // trackpads, terminals like Ghostty/Warp can feel artificially slow.
+        //
+        // We cap at the global "typical" wheel tick size (3) which produces more consistent
+        // trackpad feel across terminals while keeping wheel normalization intact.
+        self.events_per_tick.clamp(1, DEFAULT_EVENTS_PER_TICK) as f32
+    }
+
+    fn trackpad_accel_events_f32(self) -> f32 {
+        self.trackpad_accel_events.max(1) as f32
+    }
+
+    fn trackpad_accel_max_f32(self) -> f32 {
+        self.trackpad_accel_max.max(1) as f32
+    }
+
     fn apply_direction(self, direction: ScrollDirection) -> ScrollDirection {
         if self.invert_direction {
             direction.inverted()
@@ -229,6 +286,8 @@ impl Default for ScrollConfig {
             events_per_tick: DEFAULT_EVENTS_PER_TICK,
             wheel_lines_per_tick: DEFAULT_WHEEL_LINES_PER_TICK,
             trackpad_lines_per_tick: DEFAULT_TRACKPAD_LINES_PER_TICK,
+            trackpad_accel_events: DEFAULT_TRACKPAD_ACCEL_EVENTS,
+            trackpad_accel_max: DEFAULT_TRACKPAD_ACCEL_MAX,
             mode: DEFAULT_SCROLL_MODE,
             wheel_tick_detect_max: Duration::from_millis(DEFAULT_WHEEL_TICK_DETECT_MAX_MS),
             wheel_like_max_duration: Duration::from_millis(DEFAULT_WHEEL_LIKE_MAX_DURATION_MS),
@@ -548,7 +607,11 @@ impl ScrollStream {
     }
 
     fn desired_lines_f32(&self, carry_lines: f32) -> f32 {
-        let events_per_tick = self.config.events_per_tick_f32();
+        let events_per_tick = if self.is_wheel_like() {
+            self.config.events_per_tick_f32()
+        } else {
+            self.config.trackpad_events_per_tick_f32()
+        };
         let lines_per_tick = self.effective_lines_per_tick_f32();
 
         // Note: clamping here is a guardrail; the primary protection is limiting event_count.
@@ -559,6 +622,16 @@ impl ScrollStream {
             );
         if !self.is_wheel_like() {
             total = (total + carry_lines).clamp(
+                -(MAX_ACCUMULATED_LINES as f32),
+                MAX_ACCUMULATED_LINES as f32,
+            );
+
+            // Trackpad acceleration: keep small swipes precise, but speed up large/fast swipes so
+            // they can cover more content. This is intentionally simple and bounded.
+            let event_count = self.accumulated_events.abs() as f32;
+            let accel = (1.0 + (event_count / self.config.trackpad_accel_events_f32()))
+                .clamp(1.0, self.config.trackpad_accel_max_f32());
+            total = (total * accel).clamp(
                 -(MAX_ACCUMULATED_LINES as f32),
                 MAX_ACCUMULATED_LINES as f32,
             );
@@ -697,6 +770,73 @@ mod tests {
         );
 
         assert_eq!(first.lines + second.lines + third.lines, 2);
+    }
+
+    #[test]
+    fn ghostty_trackpad_is_not_penalized_by_wheel_event_density() {
+        let config = ScrollConfig::from_terminal(
+            &terminal_info_named(TerminalName::Ghostty),
+            ScrollConfigOverrides {
+                events_per_tick: Some(9),
+                mode: Some(ScrollInputMode::Trackpad),
+                ..ScrollConfigOverrides::default()
+            },
+        );
+        let base = Instant::now();
+        let mut state = MouseScrollState::new_at(base);
+
+        let _ = state.on_scroll_event_at(
+            base + Duration::from_millis(1),
+            ScrollDirection::Down,
+            config,
+        );
+        let _ = state.on_scroll_event_at(
+            base + Duration::from_millis(2),
+            ScrollDirection::Down,
+            config,
+        );
+        let update = state.on_scroll_event_at(
+            base + Duration::from_millis(REDRAW_CADENCE_MS + 1),
+            ScrollDirection::Down,
+            config,
+        );
+
+        // Trackpad mode uses a capped events-per-tick for normalization, so 3 events should
+        // produce at least one line even when the wheel tick size is 9.
+        assert_eq!(update.lines, 1);
+    }
+
+    #[test]
+    fn trackpad_acceleration_speeds_up_large_swipes_without_affecting_small_swipes_too_much() {
+        let config = ScrollConfig::from_terminal(
+            &terminal_info_named(TerminalName::Ghostty),
+            ScrollConfigOverrides {
+                events_per_tick: Some(9),
+                trackpad_accel_events: Some(30),
+                trackpad_accel_max: Some(3),
+                mode: Some(ScrollInputMode::Trackpad),
+                ..ScrollConfigOverrides::default()
+            },
+        );
+        let base = Instant::now();
+        let mut state = MouseScrollState::new_at(base);
+
+        let mut total_lines = 0;
+        for idx in 0..60u64 {
+            let update = state.on_scroll_event_at(
+                base + Duration::from_millis((idx + 1) * (REDRAW_CADENCE_MS + 1)),
+                ScrollDirection::Down,
+                config,
+            );
+            total_lines += update.lines;
+        }
+        total_lines += state
+            .on_tick_at(base + Duration::from_millis(60 * (REDRAW_CADENCE_MS + 1)) + STREAM_GAP)
+            .lines;
+
+        // Without acceleration, 60 events at 1/3 line each would be ~20 lines. With acceleration,
+        // we should be meaningfully faster.
+        assert!(total_lines >= 30, "total_lines={total_lines}");
     }
 
     #[test]

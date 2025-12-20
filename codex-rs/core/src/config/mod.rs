@@ -198,6 +198,16 @@ pub struct Config {
     /// This is the same `tui.scroll_trackpad_lines` value from `config.toml` (see [`Tui`]).
     pub tui_scroll_trackpad_lines: Option<u16>,
 
+    /// Trackpad acceleration: approximate number of events required to gain +1x speed in TUI2.
+    ///
+    /// This is the same `tui.scroll_trackpad_accel_events` value from `config.toml` (see [`Tui`]).
+    pub tui_scroll_trackpad_accel_events: Option<u16>,
+
+    /// Trackpad acceleration: maximum multiplier applied to trackpad-like streams in TUI2.
+    ///
+    /// This is the same `tui.scroll_trackpad_accel_max` value from `config.toml` (see [`Tui`]).
+    pub tui_scroll_trackpad_accel_max: Option<u16>,
+
     /// Control how TUI2 interprets mouse scroll input (wheel vs trackpad).
     ///
     /// This is the same `tui.scroll_mode` value from `config.toml` (see [`Tui`]).
@@ -1392,6 +1402,14 @@ impl Config {
             tui_scroll_events_per_line: cfg.tui.as_ref().and_then(|t| t.scroll_events_per_line),
             tui_scroll_wheel_lines: cfg.tui.as_ref().and_then(|t| t.scroll_wheel_lines),
             tui_scroll_trackpad_lines: cfg.tui.as_ref().and_then(|t| t.scroll_trackpad_lines),
+            tui_scroll_trackpad_accel_events: cfg
+                .tui
+                .as_ref()
+                .and_then(|t| t.scroll_trackpad_accel_events),
+            tui_scroll_trackpad_accel_max: cfg
+                .tui
+                .as_ref()
+                .and_then(|t| t.scroll_trackpad_accel_max),
             tui_scroll_mode: cfg.tui.as_ref().map(|t| t.scroll_mode).unwrap_or_default(),
             tui_scroll_wheel_tick_detect_max_ms: cfg
                 .tui
@@ -1579,6 +1597,8 @@ persistence = "none"
         assert!(tui.scroll_events_per_line.is_none());
         assert!(tui.scroll_wheel_lines.is_none());
         assert!(tui.scroll_trackpad_lines.is_none());
+        assert!(tui.scroll_trackpad_accel_events.is_none());
+        assert!(tui.scroll_trackpad_accel_max.is_none());
         assert_eq!(tui.scroll_mode, ScrollInputMode::Auto);
         assert!(tui.scroll_wheel_tick_detect_max_ms.is_none());
         assert!(tui.scroll_wheel_like_max_duration_ms.is_none());
@@ -3185,6 +3205,8 @@ model_verbosity = "high"
                 tui_scroll_events_per_line: None,
                 tui_scroll_wheel_lines: None,
                 tui_scroll_trackpad_lines: None,
+                tui_scroll_trackpad_accel_events: None,
+                tui_scroll_trackpad_accel_max: None,
                 tui_scroll_mode: ScrollInputMode::Auto,
                 tui_scroll_wheel_tick_detect_max_ms: None,
                 tui_scroll_wheel_like_max_duration_ms: None,
@@ -3267,6 +3289,8 @@ model_verbosity = "high"
             tui_scroll_events_per_line: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
+            tui_scroll_trackpad_accel_events: None,
+            tui_scroll_trackpad_accel_max: None,
             tui_scroll_mode: ScrollInputMode::Auto,
             tui_scroll_wheel_tick_detect_max_ms: None,
             tui_scroll_wheel_like_max_duration_ms: None,
@@ -3364,6 +3388,8 @@ model_verbosity = "high"
             tui_scroll_events_per_line: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
+            tui_scroll_trackpad_accel_events: None,
+            tui_scroll_trackpad_accel_max: None,
             tui_scroll_mode: ScrollInputMode::Auto,
             tui_scroll_wheel_tick_detect_max_ms: None,
             tui_scroll_wheel_like_max_duration_ms: None,
@@ -3447,6 +3473,8 @@ model_verbosity = "high"
             tui_scroll_events_per_line: None,
             tui_scroll_wheel_lines: None,
             tui_scroll_trackpad_lines: None,
+            tui_scroll_trackpad_accel_events: None,
+            tui_scroll_trackpad_accel_max: None,
             tui_scroll_mode: ScrollInputMode::Auto,
             tui_scroll_wheel_tick_detect_max_ms: None,
             tui_scroll_wheel_like_max_duration_ms: None,

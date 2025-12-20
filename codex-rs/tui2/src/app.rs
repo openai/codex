@@ -494,6 +494,8 @@ impl App {
                 events_per_tick: config.tui_scroll_events_per_line,
                 wheel_lines_per_tick: config.tui_scroll_wheel_lines,
                 trackpad_lines_per_tick: config.tui_scroll_trackpad_lines,
+                trackpad_accel_events: config.tui_scroll_trackpad_accel_events,
+                trackpad_accel_max: config.tui_scroll_trackpad_accel_max,
                 mode: Some(config.tui_scroll_mode),
                 wheel_tick_detect_max_ms: config.tui_scroll_wheel_tick_detect_max_ms,
                 wheel_like_max_duration_ms: config.tui_scroll_wheel_like_max_duration_ms,

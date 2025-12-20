@@ -435,6 +435,17 @@ pub struct Tui {
     /// Defaults to 1, meaning one tick-equivalent maps to one transcript line.
     pub scroll_trackpad_lines: Option<u16>,
 
+    /// Trackpad acceleration: approximate number of events required to gain +1x speed.
+    ///
+    /// This keeps small swipes precise while allowing large/faster swipes to cover more content.
+    /// Defaults are chosen to address terminals where trackpad event density is comparatively low.
+    pub scroll_trackpad_accel_events: Option<u16>,
+
+    /// Trackpad acceleration: maximum multiplier applied to trackpad-like streams.
+    ///
+    /// Set to 1 to effectively disable trackpad acceleration.
+    pub scroll_trackpad_accel_max: Option<u16>,
+
     /// Select how TUI2 interprets mouse scroll input.
     ///
     /// - `auto` (default): infer wheel vs trackpad per scroll stream.

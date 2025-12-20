@@ -895,6 +895,11 @@ scroll_wheel_lines = 3
 # Override trackpad scroll sensitivity (lines per tick-equivalent). TUI2 only.
 scroll_trackpad_lines = 1
 
+# Trackpad acceleration (optional). TUI2 only.
+# These keep small swipes precise while letting large/faster swipes cover more content.
+scroll_trackpad_accel_events = 30
+scroll_trackpad_accel_max = 3
+
 # Force scroll interpretation. TUI2 only.
 # Valid values: "auto" (default), "wheel", "trackpad"
 scroll_mode = "auto"
@@ -1000,6 +1005,8 @@ Valid values:
 | `tui.scroll_events_per_line`                     | number                                                            | Override events-per-tick normalization for TUI2 scrolling (default: terminal-specific; fallback: 3).                            |
 | `tui.scroll_wheel_lines`                         | number                                                            | Lines to apply per wheel tick for TUI2 scrolling (default: 3).                                                                  |
 | `tui.scroll_trackpad_lines`                      | number                                                            | Lines per tick-equivalent for trackpad scrolling in TUI2 (default: 1).                                                          |
+| `tui.scroll_trackpad_accel_events`               | number                                                            | Trackpad acceleration: events per +1x speed in TUI2 (default: 30).                                                              |
+| `tui.scroll_trackpad_accel_max`                  | number                                                            | Trackpad acceleration: max multiplier in TUI2 (default: 3).                                                                     |
 | `tui.scroll_mode`                                | `auto` \| `wheel` \| `trackpad`                                    | How to interpret scroll input in TUI2 (default: `auto`).                                                                        |
 | `tui.scroll_wheel_tick_detect_max_ms`            | number                                                            | Auto-mode threshold (ms) for promoting a stream to wheel-like behavior (default: 12).                                           |
 | `tui.scroll_wheel_like_max_duration_ms`          | number                                                            | Auto-mode fallback duration (ms) used for 1-event-per-tick terminals (default: 200).                                            |

@@ -101,12 +101,17 @@ Implementation highlights (current working tree):
     - Streams start trackpad-like by default (safer: avoids end-of-stream jumps).
     - Promote a stream to wheel-like when the first tick-worth of events arrives quickly
       (`tui.scroll_wheel_tick_detect_max_ms`, default 12ms).
+    - Note: the built-in default for `scroll_wheel_tick_detect_max_ms` is now *per-terminal*
+      (e.g., Ghostty uses a larger threshold) because Ghostty wheel ticks may arrive spread out
+      enough to miss a tight global threshold and feel slow.
     - For terminals that emit ~1 event per tick (WezTerm/iTerm/VS Code), there is no "tick completion"
       signal, so we use a small end-of-stream fallback for very small bursts
       (`tui.scroll_wheel_like_max_duration_ms`, default 200ms).
     - Users can force behavior with `tui.scroll_mode` when the heuristic is wrong.
   - Wheel-like streams flush immediately (not cadence-gated) so the wheel feels snappy.
   - Trackpad-like streams still coalesce redraw to ~60Hz and carry fractional remainder across streams.
+  - Trackpad normalization uses a capped "events per tick" value (max 3) instead of the wheel-derived
+    `events_per_tick` so Ghostty/Warp trackpad does not become artificially slow.
 - `codex-rs/core/src/config/types.rs`, `codex-rs/core/src/config/mod.rs`, `docs/config.md`
   - Added config knobs (see below) and updated documentation.
 
@@ -139,6 +144,8 @@ Config knobs (TUI2-only):
 - `tui.scroll_events_per_line`: override events-per-tick normalization factor (historic name).
 - `tui.scroll_wheel_lines`: lines per wheel tick (classic feel; default 3).
 - `tui.scroll_trackpad_lines`: trackpad sensitivity (lines per tick-equivalent; default 1).
+- `tui.scroll_trackpad_accel_events`: trackpad acceleration events per +1x speed (default 30).
+- `tui.scroll_trackpad_accel_max`: trackpad acceleration max multiplier (default 3).
 - `tui.scroll_mode`: `auto`/`wheel`/`trackpad`.
 - `tui.scroll_wheel_tick_detect_max_ms`: auto-mode promotion threshold (default 12ms).
 - `tui.scroll_wheel_like_max_duration_ms`: auto-mode fallback for 1-event-per-tick terminals (default 200ms).

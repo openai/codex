@@ -25,8 +25,13 @@ The implementation (see `codex-rs/tui2/src/tui/scrolling/mouse.rs`) follows this
   - Users can force `wheel` or `trackpad` behavior with `tui.scroll_mode` if auto misclassifies.
 - Scaling:
   - Wheel-like: each event contributes `scroll_wheel_lines / events_per_tick` lines.
-  - Trackpad-like: each event contributes `scroll_trackpad_lines / events_per_tick` lines, with
-    fractional accumulation carried across streams.
+  - Trackpad-like: each event contributes `scroll_trackpad_lines / trackpad_events_per_tick` lines
+    with fractional accumulation carried across streams. `trackpad_events_per_tick` is derived from
+    `events_per_tick` but capped at the global default (3) so terminals with dense wheel ticks
+    (e.g., Ghostty/Warp) do not become artificially slow for trackpad input.
+  - Trackpad acceleration: for large/faster swipes, a bounded multiplier is applied so scrolling can
+    cover more content without making small swipes imprecise. This is controlled by
+    `tui.scroll_trackpad_accel_events` and `tui.scroll_trackpad_accel_max`.
 - Redraw coalescing: apply whole-line deltas at `REDRAW_CADENCE_MS` (~60 Hz) while input is active.
 - Direction: use raw event direction; user inversion is controlled by `tui.scroll_invert` rather than inferred.
 - Horizontal events: ignored for vertical scrolling (TUI2 currently receives only vertical scroll in the main app event loop).
