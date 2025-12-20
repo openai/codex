@@ -240,6 +240,14 @@ pub enum ConfigLayerSource {
         file: AbsolutePathBuf,
     },
 
+    /// Path to a .codex/ folder within a project. There could be multiple of
+    /// these between `cwd` and the project/repo root.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Project {
+        dot_codex_folder: AbsolutePathBuf,
+    },
+
     /// Session-layer overrides supplied via `-c`/`--config`.
     SessionFlags,
 
@@ -247,6 +255,8 @@ pub enum ConfigLayerSource {
     /// as the last layer on top of everything else. This scheme did not quite
     /// work out as intended, but we keep this variant as a "best effort" while
     /// we phase out `managed_config.toml` in favor of `requirements.toml`.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     LegacyManagedConfigTomlFromFile {
         file: AbsolutePathBuf,
     },
@@ -262,6 +272,7 @@ impl ConfigLayerSource {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
             ConfigLayerSource::User { .. } => 20,
+            ConfigLayerSource::Project { .. } => 25,
             ConfigLayerSource::SessionFlags => 30,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm => 50,
