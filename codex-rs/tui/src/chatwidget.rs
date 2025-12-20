@@ -4,7 +4,6 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use codex_app_server_protocol::AuthMode;
@@ -320,7 +319,6 @@ pub(crate) struct ChatWidget {
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
-    active_subagent_group: Option<Arc<Mutex<SubAgentToolCallGroupCell>>>,
     config: Config,
     model_family: ModelFamily,
     auth_manager: Arc<AuthManager>,
@@ -1726,28 +1724,18 @@ impl ChatWidget {
             call_id,
             invocation,
         } = ev;
-        if let Some(group) = self.active_subagent_group.clone() {
-            let mut did_push = false;
-            {
-                let mut group = group
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if !group.is_complete() && group.can_accept_begin() {
-                    group.push_begin(call_id.clone(), invocation.clone());
-                    did_push = true;
-                }
-            }
-            if did_push {
-                self.request_redraw();
-                return;
-            }
+        if let Some(active) = self.active_cell.as_mut().and_then(|cell| {
+            cell.as_any_mut()
+                .downcast_mut::<SubAgentToolCallGroupCell>()
+        }) && active.can_accept_begin()
+        {
+            active.push_begin(call_id, invocation);
+        } else {
+            self.flush_active_cell();
+            self.active_cell = Some(Box::new(history_cell::new_active_subagent_tool_call_group(
+                call_id, invocation,
+            )));
         }
-
-        let group = Arc::new(Mutex::new(
-            history_cell::new_active_subagent_tool_call_group(call_id, invocation),
-        ));
-        self.active_subagent_group = Some(group.clone());
-        self.add_boxed_history(Box::new(history_cell::SharedHistoryCell::new(group)));
         self.request_redraw();
     }
 
@@ -1762,69 +1750,48 @@ impl ChatWidget {
             result,
         } = ev;
 
-        if let Some(group) = self.active_subagent_group.clone() {
-            let contains = {
-                let group = group
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                group.contains_call_id(&call_id)
-            };
-            if contains {
-                let is_complete = {
-                    let mut group = group
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    group.complete_call(&call_id, duration, tokens, result);
-                    group.is_complete()
-                };
-                if is_complete {
-                    self.active_subagent_group = None;
-                }
+        if let Some(active) = self.active_cell.as_mut().and_then(|cell| {
+            cell.as_any_mut()
+                .downcast_mut::<SubAgentToolCallGroupCell>()
+        }) && active.contains_call_id(&call_id)
+        {
+            active.complete_call(&call_id, duration, tokens, result);
+            if active.is_complete() {
+                self.flush_active_cell();
+            } else {
                 self.request_redraw();
-                return;
             }
+            return;
         }
 
+        self.flush_active_cell();
         let mut cell =
             history_cell::new_active_subagent_tool_call_group(call_id.clone(), invocation);
         cell.complete_call(&call_id, duration, tokens, result);
-        self.add_boxed_history(Box::new(cell));
+        self.active_cell = Some(Box::new(cell));
+        self.flush_active_cell();
         self.request_redraw();
     }
 
     pub(crate) fn handle_subagent_activity_now(&mut self, ev: SubAgentToolCallActivityEvent) {
-        if let Some(group) = self.active_subagent_group.clone() {
-            let mut updated = false;
-            {
-                let mut group = group
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if group.contains_call_id(&ev.call_id) {
-                    group.set_activity(&ev.call_id, ev.activity);
-                    updated = true;
-                }
-            }
-            if updated {
-                self.request_redraw();
-            }
+        if let Some(active) = self.active_cell.as_mut().and_then(|cell| {
+            cell.as_any_mut()
+                .downcast_mut::<SubAgentToolCallGroupCell>()
+        }) && active.contains_call_id(&ev.call_id)
+        {
+            active.set_activity(&ev.call_id, ev.activity);
+            self.request_redraw();
         }
     }
 
     pub(crate) fn handle_subagent_tokens_now(&mut self, ev: SubAgentToolCallTokensEvent) {
-        if let Some(group) = self.active_subagent_group.clone() {
-            let mut updated = false;
-            {
-                let mut group = group
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if group.contains_call_id(&ev.call_id) {
-                    group.set_tokens(&ev.call_id, ev.tokens);
-                    updated = true;
-                }
-            }
-            if updated {
-                self.request_redraw();
-            }
+        if let Some(active) = self.active_cell.as_mut().and_then(|cell| {
+            cell.as_any_mut()
+                .downcast_mut::<SubAgentToolCallGroupCell>()
+        }) && active.contains_call_id(&ev.call_id)
+        {
+            active.set_tokens(&ev.call_id, ev.tokens);
+            self.request_redraw();
         }
     }
 
@@ -1867,7 +1834,6 @@ impl ChatWidget {
                 skills: None,
             }),
             active_cell: None,
-            active_subagent_group: None,
             config,
             model_family,
             auth_manager,
@@ -1952,7 +1918,6 @@ impl ChatWidget {
                 skills: None,
             }),
             active_cell: None,
-            active_subagent_group: None,
             config,
             model_family,
             auth_manager,
@@ -2278,7 +2243,14 @@ impl ChatWidget {
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
         if !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
-            self.flush_active_cell();
+            let preserve_active_subagent_group = self
+                .active_cell
+                .as_ref()
+                .and_then(|cell| cell.as_any().downcast_ref::<SubAgentToolCallGroupCell>())
+                .is_some_and(|cell| !cell.is_complete());
+            if !preserve_active_subagent_group {
+                self.flush_active_cell();
+            }
             self.needs_final_message_separator = true;
         }
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
@@ -2654,13 +2626,6 @@ impl ChatWidget {
                 tool.mark_failed();
             }
             self.add_boxed_history(cell);
-        }
-
-        if let Some(group) = self.active_subagent_group.take() {
-            let mut group = group
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            group.mark_failed();
         }
     }
 

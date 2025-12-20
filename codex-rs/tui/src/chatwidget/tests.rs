@@ -494,7 +494,6 @@ fn make_chatwidget_manual(
         codex_op_tx: op_tx,
         bottom_pane: bottom,
         active_cell: None,
-        active_subagent_group: None,
         config: cfg.clone(),
         model_family: ModelsManager::construct_model_family_offline(&resolved_model, &cfg),
         auth_manager: auth_manager.clone(),
@@ -1520,18 +1519,13 @@ fn subagent_history_cell_keeps_updating_after_other_history_is_inserted() {
         },
     });
 
-    let mut inserted: Vec<Box<dyn HistoryCell>> = Vec::new();
-    while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = ev {
-            inserted.push(cell);
-        }
-    }
-    assert_eq!(
-        inserted.len(),
-        1,
-        "expected exactly one subagent history cell"
+    assert!(
+        chat.active_cell
+            .as_ref()
+            .and_then(|cell| cell.as_any().downcast_ref::<SubAgentToolCallGroupCell>())
+            .is_some(),
+        "expected a live subagent cell"
     );
-    let subagent_cell = inserted.remove(0);
 
     chat.dispatch_command(SlashCommand::Status);
     let _ = drain_insert_history(&mut rx);
@@ -1541,7 +1535,8 @@ fn subagent_history_cell_keeps_updating_after_other_history_is_inserted() {
         tokens: 1300,
     });
 
-    let rendered = lines_to_single_string(&subagent_cell.display_lines(80));
+    let active = chat.active_cell.as_ref().expect("active cell");
+    let rendered = lines_to_single_string(&active.display_lines(80));
     assert!(
         rendered.contains("1.3k tok"),
         "expected live token count after /status: {rendered}"
