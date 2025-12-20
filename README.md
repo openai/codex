@@ -10,8 +10,8 @@
   <br />
   This repository is community-maintained and is not an official OpenAI project.
   <br /><br />
-  IDE extension: <a href="https://developers.openai.com/codex/ide">developers.openai.com/codex/ide</a>
-  · Hosted agent: <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>
+  IDE extension: <a href="https://developers.openai.com/codex/ide">developers.openai.com/codex/ide</a><br />
+  Hosted agent: <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>
 </p>
 
 <p align="center">
@@ -29,7 +29,7 @@ Codexel is a fork of upstream Codex CLI with extra UX and workflow improvements.
 - `spawn_subagent`: a read-only parallel research tool surfaced in the TUI (with live activity and token usage).
 - TUI improvements for streaming status, tool visibility, and long-running work.
 - Isolated state by default in `~/.codexel` (separate from the legacy `~/.codex`).
-- Packaging and update-check fixes for Codexel’s release channels.
+- Packaging and update-check fixes for Codexel's release channels.
 
 For the full list of Codexel-only changes, see [CHANGELOG.md](./CHANGELOG.md).
 
