@@ -18,10 +18,12 @@ edited between the markers.
 <!-- BEGIN GENERATED DETAILS: range=520d3fdf1ea7114bdabafd975c76895c83e47eeb..HEAD -->
 #### TUI
 - Keep subagent history updating
+- Keep subagent cell live during inserts
 
 
 #### Other
 - Cut 0.1.3
+- Update unreleased
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.3] - 2025-12-20
