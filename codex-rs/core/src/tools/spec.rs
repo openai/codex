@@ -24,22 +24,60 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 pub(crate) const ASK_USER_QUESTION_DEVELOPER_INSTRUCTIONS: &str = r#"## AskUserQuestion
-Use `ask_user_question` when you need the user to make a decision or clarify requirements during execution.
+Use `ask_user_question` when you need user input to proceed during execution. This helps you:
+1. Gather preferences or requirements (e.g., scope, trade-offs).
+2. Clarify ambiguous instructions.
+3. Get a decision on implementation choices as you work.
+4. Offer a small set of clear options when multiple directions are reasonable.
 
-- Do not ask these questions in plain text. Immediately call `ask_user_question` and wait for the tool result.
-- If you have multiple questions, include them in a single `ask_user_question` call (up to 4).
-- Use `multiSelect: true` when multiple answers are allowed.
-- Do not include an "Other" option; the UI provides it automatically.
+Usage notes:
+- Do not ask questions in plain text; call `ask_user_question` and wait for the tool result.
+- If you have multiple questions, include them in a single call (up to 4).
+- Users can always select "Other" to provide custom text input; do not include an "Other" option yourself.
+- Use `multiSelect: true` only when multiple answers are allowed.
+- If you recommend an option, make it the first option and add "(Recommended)" to the label.
 - Do not include numbering in option labels (e.g. "1:", "2.", "A)"); the UI provides numbering.
-- If you recommend an option, put it first and add "(Recommended)" to its label.
+
+Example:
+Call `ask_user_question` with a single question and a few options, then wait for the answer and proceed.
 "#;
 
 pub(crate) const SPAWN_SUBAGENT_DEVELOPER_INSTRUCTIONS: &str = r#"## SpawnSubagent
 Use `spawn_subagent` to delegate short, read-only research tasks. Subagents cannot edit files, cannot ask the user questions, and should return a concise plain-text response.
 
-- Use for parallel exploration or focused research when the main agent should not block.
-- Provide a clear, self-contained prompt; subagents do not see hidden context.
-- Keep prompts small and scoped; avoid large file dumps.
+When to use it:
+- Broad context gathering (you don't know the entry point yet).
+- Parallel exploration (delegate while you continue other work).
+- Focused research tasks (e.g. “find where X is configured”, “summarize how Y works”).
+
+When not to use it:
+- Needle queries where you already know the file/symbol, or you're only checking 1–3 files (do a direct `rg` / targeted read instead).
+- Anything that requires writing code or asking the user a question.
+
+Requirements:
+- Always provide `description`: a short, one-sentence summary of the task (shown in history).
+- Provide a clear, self-contained `prompt`; subagents do not see hidden context.
+- Use `label` only as an optional identifier; do not rely on it for user-facing text.
+
+Prompt tips:
+- Ask for specific outputs (e.g. “list the relevant files and explain the control flow”).
+- Prefer small, targeted file reads over dumping large files.
+
+Parallelism:
+- If you have multiple independent research questions, prefer launching multiple subagents in parallel rather than running them serially.
+
+Using results:
+- The subagent response is input for you. Summarize the relevant findings back to the user (include key file paths and small snippets when helpful).
+
+Notes:
+- `spawn_subagent` does not support agent types, background runs, or resuming prior subagent context; each call is a fresh, read-only run.
+
+Example tool call:
+`spawn_subagent({ "description": "Find where auth tokens are loaded", "prompt": "Search for token-loading code and list the relevant files + key functions.", "label": "auth_tokens" })`
+
+Example (parallel):
+`spawn_subagent({ "description": "Locate config schema for auth", "prompt": "Find where auth config is defined and how it is loaded. Return files + key functions.", "label": "auth_cfg" })`
+`spawn_subagent({ "description": "Trace token usage in requests", "prompt": "Find where tokens are attached to outbound requests. Return files + key call sites.", "label": "auth_use" })`
 "#;
 
 pub(crate) fn prepend_ask_user_question_developer_instructions(
@@ -526,6 +564,14 @@ fn create_propose_plan_variants_tool() -> ToolSpec {
 fn create_spawn_subagent_tool() -> ToolSpec {
     let mut root_props = BTreeMap::new();
     root_props.insert(
+        "description".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Required one-sentence, human-friendly description shown in history.".to_string(),
+            ),
+        },
+    );
+    root_props.insert(
         "prompt".to_string(),
         JsonSchema::String {
             description: Some("Prompt to send to the read-only subagent.".to_string()),
@@ -549,7 +595,7 @@ fn create_spawn_subagent_tool() -> ToolSpec {
         strict: false,
         parameters: JsonSchema::Object {
             properties: root_props,
-            required: Some(vec!["prompt".to_string()]),
+            required: Some(vec!["description".to_string(), "prompt".to_string()]),
             additional_properties: Some(false.into()),
         },
     })

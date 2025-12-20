@@ -77,7 +77,7 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
   - `EventMsg::ExecApprovalRequest` – Request approval from user to execute a command
   - `EventMsg::AskUserQuestionRequest` – Ask the user a multiple-choice question and await an answer
   - `EventMsg::PlanApprovalRequest` – Ask the user to approve / revise / reject a proposed plan
-  - `EventMsg::SubAgentToolCallBegin` – Tool call begin event for `spawn_subagent` (label + prompt)
+  - `EventMsg::SubAgentToolCallBegin` – Tool call begin event for `spawn_subagent` (description + label + prompt)
   - `EventMsg::SubAgentToolCallEnd` – Tool call end event for `spawn_subagent` (duration + tokens + result)
   - `EventMsg::EnteredPlanMode` – Notify the UI that plan mode started
   - `EventMsg::ExitedPlanMode` – Notify the UI that plan mode ended (optional final plan included)

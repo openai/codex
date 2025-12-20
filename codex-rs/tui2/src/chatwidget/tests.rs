@@ -1439,6 +1439,7 @@ fn subagent_history_cell_keeps_updating_after_other_history_is_inserted() {
     chat.handle_subagent_begin_now(SubAgentToolCallBeginEvent {
         call_id: "call-1".to_string(),
         invocation: SubAgentInvocation {
+            description: "Alpha task".to_string(),
             label: "alpha".to_string(),
             prompt: "Prompt".to_string(),
         },

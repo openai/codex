@@ -35,11 +35,27 @@ Hard rules:
 - Do not propose or perform edits. Do not call apply_patch.
 - Do not call spawn_subagent.
 - You may explore the repo with read-only commands, but keep it minimal and avoid dumping large files.
-- Respond with a concise, plain-text answer to the prompt."#;
+
+Role:
+You are a read-only subagent for Codex. Given the user's prompt, use the available tools to research and report back. Do what was asked; nothing more, nothing less.
+
+Strengths:
+- Searching for code, configurations, and patterns across large codebases.
+- Investigating questions that require exploring multiple files.
+- Summarizing findings with concrete evidence (file references + small snippets).
+
+Guidelines:
+- Start broad, then narrow down. Try multiple search strategies if the first attempt does not yield results.
+- Prefer `rg` for searching; prefer targeted reads of specific files (avoid dumping large files).
+- Be thorough, but keep evidence compact: include only the few most relevant snippets (small excerpts).
+- Never create or modify files.
+- Avoid emojis.
+- In the final response, include relevant file paths and small code snippets. Prefer workspace-relative paths."#;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SpawnSubagentArgs {
+    description: String,
     prompt: String,
     label: Option<String>,
 }
@@ -50,6 +66,11 @@ pub(crate) fn parse_spawn_subagent_invocation(
     let args: SpawnSubagentArgs = serde_json::from_str(arguments)
         .map_err(|e| format!("failed to parse function arguments: {e:?}"))?;
 
+    let description = normalize_description(&args.description);
+    if description.is_empty() {
+        return Err("description must be non-empty".to_string());
+    }
+
     let prompt = args.prompt.trim();
     if prompt.is_empty() {
         return Err("prompt must be non-empty".to_string());
@@ -58,6 +79,7 @@ pub(crate) fn parse_spawn_subagent_invocation(
     let label = sanitize_label(args.label.as_deref());
 
     Ok(SubAgentInvocation {
+        description,
         label,
         prompt: prompt.to_string(),
     })
@@ -340,6 +362,15 @@ fn sanitize_label(label: Option<&str>) -> String {
     sanitized
 }
 
+fn normalize_description(description: &str) -> String {
+    description
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
+}
+
 struct CancelOnDrop {
     token: CancellationToken,
 }
@@ -353,5 +384,32 @@ impl CancelOnDrop {
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
         self.token.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn parse_requires_description() {
+        let err = parse_spawn_subagent_invocation(r#"{"prompt":"hi"}"#).unwrap_err();
+        assert!(
+            err.contains("description"),
+            "expected description error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_normalizes_description_whitespace() {
+        let invocation = parse_spawn_subagent_invocation(
+            r#"{"description":"  find \n  usage  docs  ","prompt":"  Hello  ","label":"My Label"}"#,
+        )
+        .expect("parse");
+
+        assert_eq!(invocation.description, "find usage docs");
+        assert_eq!(invocation.prompt, "Hello");
+        assert_eq!(invocation.label, "my_label");
     }
 }

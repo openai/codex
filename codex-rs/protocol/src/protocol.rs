@@ -1145,6 +1145,9 @@ pub struct McpInvocation {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
 pub struct SubAgentInvocation {
+    /// Human-friendly, one-sentence description shown in history UIs.
+    #[serde(default)]
+    pub description: String,
     /// Subagent label (sanitized).
     pub label: String,
     /// Prompt sent to the subagent.

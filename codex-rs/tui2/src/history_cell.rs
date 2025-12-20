@@ -1787,6 +1787,11 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
 }
 
 fn subagent_summary(invocation: &SubAgentInvocation) -> String {
+    let description = invocation.description.trim();
+    if !description.is_empty() {
+        return truncate_text(description, 64);
+    }
+
     if invocation.label != "subagent" {
         return invocation.label.clone();
     }
@@ -1882,6 +1887,16 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
+    }
+
+    #[test]
+    fn subagent_summary_prefers_description() {
+        let invocation = SubAgentInvocation {
+            description: "Summarize the auth flow".to_string(),
+            label: "alpha".to_string(),
+            prompt: "Prompt".to_string(),
+        };
+        assert_eq!(subagent_summary(&invocation), "Summarize the auth flow");
     }
 
     #[test]
