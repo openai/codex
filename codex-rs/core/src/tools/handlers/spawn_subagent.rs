@@ -134,7 +134,9 @@ impl ToolHandler for SpawnSubagentHandler {
         cfg.features = features;
         cfg.approval_policy =
             crate::config::Constrained::allow_any(codex_protocol::protocol::AskForApproval::Never);
-        cfg.sandbox_policy = codex_protocol::protocol::SandboxPolicy::ReadOnly;
+        cfg.sandbox_policy = crate::config::Constrained::allow_any(
+            codex_protocol::protocol::SandboxPolicy::ReadOnly,
+        );
 
         session
             .send_event(

@@ -3571,7 +3571,7 @@ mod tests {
 
     #[tokio::test]
     async fn approved_plan_is_pinned_into_next_cli_turn_developer_instructions() {
-        let (session, _turn_context, _rx) = make_session_and_context_with_rx();
+        let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
         {
             let mut state = session.state.lock().await;
             state.session_configuration.session_source = SessionSource::Cli;
@@ -3608,7 +3608,7 @@ mod tests {
 
     #[tokio::test]
     async fn approved_plan_is_not_consumed_for_subagent_turns() {
-        let (session, _turn_context, _rx) = make_session_and_context_with_rx();
+        let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
         {
             let mut state = session.state.lock().await;
             state.session_configuration.session_source =

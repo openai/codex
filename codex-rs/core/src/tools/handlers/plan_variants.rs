@@ -366,7 +366,8 @@ async fn run_one_variant(
     cfg.features = features;
     cfg.approval_policy =
         crate::config::Constrained::allow_any(codex_protocol::protocol::AskForApproval::Never);
-    cfg.sandbox_policy = codex_protocol::protocol::SandboxPolicy::ReadOnly;
+    cfg.sandbox_policy =
+        crate::config::Constrained::allow_any(codex_protocol::protocol::SandboxPolicy::ReadOnly);
 
     let input = vec![UserInput::Text {
         text: format!("Goal: {goal}\n\nReturn plan variant #{idx}."),
@@ -529,8 +530,8 @@ mod tests {
         assert_eq!(ev.title, "Correctness");
     }
 
-    #[test]
-    fn plan_variants_do_not_override_base_instructions() {
+    #[tokio::test]
+    async fn plan_variants_do_not_override_base_instructions() {
         let codex_home = tempfile::TempDir::new().expect("tmp dir");
         let overrides = {
             #[cfg(target_os = "linux")]
@@ -545,12 +546,12 @@ mod tests {
                 crate::config::ConfigOverrides::default()
             }
         };
-        let mut cfg = crate::config::Config::load_from_base_config_with_overrides(
-            crate::config::ConfigToml::default(),
-            overrides,
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load test config");
+        let mut cfg = crate::config::ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(overrides)
+            .build()
+            .await
+            .expect("load test config");
 
         cfg.base_instructions = None;
         cfg.developer_instructions = Some("existing developer instructions".to_string());

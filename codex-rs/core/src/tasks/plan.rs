@@ -192,7 +192,8 @@ async fn start_plan_conversation(
 
     sub_agent_config.approval_policy =
         crate::config::Constrained::allow_any(codex_protocol::protocol::AskForApproval::Never);
-    sub_agent_config.sandbox_policy = codex_protocol::protocol::SandboxPolicy::ReadOnly;
+    sub_agent_config.sandbox_policy =
+        crate::config::Constrained::allow_any(codex_protocol::protocol::SandboxPolicy::ReadOnly);
 
     let input: Vec<UserInput> = vec![UserInput::Text {
         text: format!("User goal: {}", request.goal.trim()),
@@ -342,8 +343,8 @@ mod tests {
     use codex_protocol::plan_tool::UpdatePlanArgs;
     use tempfile::TempDir;
 
-    #[test]
-    fn plan_mode_does_not_override_base_instructions() {
+    #[tokio::test]
+    async fn plan_mode_does_not_override_base_instructions() {
         // This test guards against regressions where plan mode sets custom base/system prompts,
         // which can break in environments that restrict system prompts.
         let codex_home = tempfile::TempDir::new().expect("tmp dir");
@@ -360,12 +361,12 @@ mod tests {
                 crate::config::ConfigOverrides::default()
             }
         };
-        let mut cfg = crate::config::Config::load_from_base_config_with_overrides(
-            crate::config::ConfigToml::default(),
-            overrides,
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load test config");
+        let mut cfg = crate::config::ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(overrides)
+            .build()
+            .await
+            .expect("load test config");
 
         cfg.base_instructions = None;
         cfg.developer_instructions = Some("existing developer instructions".to_string());
