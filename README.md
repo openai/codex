@@ -20,6 +20,21 @@
 
 ---
 
+## What's different in Codexel?
+
+Codexel is a fork of upstream Codex CLI with extra UX and workflow improvements. Recent highlights include:
+
+- Plan Mode: `/plan` with plan approval, plan variants, and automatic execution after approval.
+- `ask_user_question`: a tool to ask structured multiple-choice clarifying questions.
+- `spawn_subagent`: a read-only parallel research tool surfaced in the TUI (with live activity and token usage).
+- TUI improvements for streaming status, tool visibility, and long-running work.
+- Isolated state by default in `~/.codexel` (separate from the legacy `~/.codex`).
+- Packaging and update-check fixes for Codexel’s release channels.
+
+For the full list of Codexel-only changes, see [CHANGELOG.md](./CHANGELOG.md).
+
+---
+
 ## Quickstart
 
 ### Install
@@ -85,18 +100,6 @@ Common next steps:
 - [Model Context Protocol (MCP)](./docs/config.md#mcp_servers)
 
 ---
-
-## What's different in Codexel?
-
-Codexel is a fork of upstream Codex CLI with extra UX and workflow improvements. Recent highlights include:
-
-- Plan Mode: `/plan` with plan approval, plan variants, and automatic execution after approval.
-- `spawn_subagent`: a read-only parallel research tool surfaced in the TUI (with live activity and token usage).
-- TUI improvements for streaming status, tool visibility, and long-running work.
-- Isolated state by default in `~/.codexel` (separate from the legacy `~/.codex`).
-- Packaging and update-check fixes for Codexel’s release channels.
-
-For the full list of Codexel-only changes, see [CHANGELOG.md](./CHANGELOG.md).
 
 ## Docs
 
