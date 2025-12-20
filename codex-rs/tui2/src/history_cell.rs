@@ -1020,6 +1020,7 @@ pub(crate) struct SubAgentToolCallCell {
     invocation: SubAgentInvocation,
     start_time: Instant,
     duration: Option<Duration>,
+    activity: Option<String>,
     tokens: Option<i64>,
     result: Option<Result<String, String>>,
 }
@@ -1031,6 +1032,7 @@ impl SubAgentToolCallCell {
             invocation,
             start_time: Instant::now(),
             duration: None,
+            activity: None,
             tokens: None,
             result: None,
         }
@@ -1055,6 +1057,15 @@ impl SubAgentToolCallCell {
         self.result = Some(result);
     }
 
+    pub(crate) fn set_activity(&mut self, activity: String) {
+        let activity = activity.trim();
+        if activity.is_empty() {
+            self.activity = None;
+        } else {
+            self.activity = Some(activity.to_string());
+        }
+    }
+
     fn success(&self) -> Option<bool> {
         match self.result.as_ref() {
             Some(Ok(_)) => Some(true),
@@ -1069,44 +1080,20 @@ impl SubAgentToolCallCell {
         self.tokens = None;
         self.result = Some(Err("interrupted".to_string()));
     }
-
-    fn wrap_detail(label: &str, text: &str, detail_wrap_width: usize) -> Vec<Line<'static>> {
-        if text.trim().is_empty() {
-            return Vec::new();
-        }
-
-        let formatted =
-            format_and_truncate_tool_result(text, TOOL_CALL_MAX_LINES, detail_wrap_width);
-        if formatted.is_empty() {
-            return Vec::new();
-        }
-
-        let line = Line::from(format!("{label}: {formatted}").dim());
-        let wrapped = word_wrap_line(
-            &line,
-            RtOptions::new(detail_wrap_width)
-                .initial_indent("".into())
-                .subsequent_indent("    ".into()),
-        );
-        wrapped.iter().map(line_to_static).collect()
-    }
 }
 
 impl HistoryCell for SubAgentToolCallCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let status = self.success();
         let indicator = match status {
-            Some(true) => "+".green().bold(),
-            Some(false) => "x".red().bold(),
-            None => ".".dim(),
+            Some(true) => "✓".green(),
+            Some(false) => "✗".red(),
+            None => "●".cyan(),
         };
 
         let summary = subagent_summary(&self.invocation);
-        let elapsed = self
-            .duration
-            .unwrap_or_else(|| self.start_time.elapsed())
-            .as_secs();
-        let elapsed = super::status_indicator_widget::fmt_elapsed_compact(elapsed);
+        let elapsed = self.duration.unwrap_or_else(|| self.start_time.elapsed());
+        let elapsed = fmt_subagent_duration(elapsed);
 
         let mut header_spans: Vec<Span<'static>> = vec![
             indicator,
@@ -1116,7 +1103,7 @@ impl HistoryCell for SubAgentToolCallCell {
             summary.into(),
         ];
         let mut meta = format!(" ({elapsed}");
-        if let Some(tokens) = self.tokens {
+        if let Some(tokens) = self.tokens.and_then(fmt_subagent_tokens) {
             meta.push_str(&format!(", {tokens} tok"));
         }
         meta.push(')');
@@ -1125,40 +1112,24 @@ impl HistoryCell for SubAgentToolCallCell {
         let mut lines: Vec<Line<'static>> = vec![header_spans.into()];
 
         let detail_wrap_width = (width as usize).saturating_sub(4).max(1);
-        let mut detail_lines: Vec<Line<'static>> = Vec::new();
-        match &self.result {
-            None => {
-                let prompt = format_and_truncate_tool_result(
-                    self.invocation.prompt.trim(),
-                    TOOL_CALL_MAX_LINES,
-                    detail_wrap_width,
-                );
-                if !prompt.is_empty() {
-                    let line = Line::from(prompt);
-                    let wrapped = word_wrap_line(
-                        &line,
-                        RtOptions::new(detail_wrap_width)
-                            .initial_indent("".into())
-                            .subsequent_indent("    ".into()),
-                    );
-                    detail_lines.extend(wrapped.iter().map(line_to_static));
-                }
-            }
-            Some(Ok(response)) => {
-                detail_lines.push(Line::from("done".dim()));
-                if !response.trim().is_empty() {
-                    detail_lines.extend(Self::wrap_detail("response", response, detail_wrap_width));
-                }
-            }
-            Some(Err(err)) => {
-                detail_lines.push(Line::from("failed".red().bold()));
-                detail_lines.extend(Self::wrap_detail("error", err, detail_wrap_width));
-            }
-        }
+        let activity = self.activity.as_deref().unwrap_or("working…");
+        let activity = activity.strip_prefix("shell ").unwrap_or(activity).trim();
+        let detail_span = match &self.result {
+            Some(Ok(_)) => "done".dim(),
+            Some(Err(_)) => "failed".red(),
+            None => activity.to_string().dim(),
+        };
 
-        if !detail_lines.is_empty() {
-            // ASCII prefix to avoid mojibake on some Windows consoles.
-            lines.extend(prefix_lines(detail_lines, "  |- ".dim(), "     ".into()));
+        if !activity.is_empty() || self.result.is_some() {
+            let line = Line::from(vec![detail_span]);
+            let wrapped = word_wrap_line(
+                &line,
+                RtOptions::new(detail_wrap_width)
+                    .initial_indent("".into())
+                    .subsequent_indent("".into()),
+            );
+            let detail_lines = wrapped.iter().map(line_to_static).collect();
+            lines.extend(prefix_lines(detail_lines, "  └ ".dim(), "    ".dim()));
         }
 
         lines
@@ -1190,6 +1161,21 @@ impl SubAgentToolCallGroupCell {
 
     pub(crate) fn contains_call_id(&self, call_id: &str) -> bool {
         self.calls.iter().any(|cell| cell.call_id() == call_id)
+    }
+
+    pub(crate) fn set_activity(&mut self, call_id: &str, activity: String) -> bool {
+        match self
+            .calls
+            .iter_mut()
+            .rev()
+            .find(|cell| cell.call_id() == call_id)
+        {
+            Some(cell) => {
+                cell.set_activity(activity);
+                true
+            }
+            None => false,
+        }
     }
 
     pub(crate) fn complete_call(
@@ -1750,6 +1736,40 @@ fn subagent_summary(invocation: &SubAgentInvocation) -> String {
     }
 
     truncate_text(first_line, 64)
+}
+
+fn fmt_subagent_duration(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs_f64();
+    if secs < 60.0 {
+        return format!("{secs:.1}s");
+    }
+
+    let whole_secs = elapsed.as_secs();
+    let minutes = whole_secs / 60;
+    let seconds = whole_secs % 60;
+    format!("{minutes}m {seconds:02}s")
+}
+
+fn fmt_subagent_tokens(tokens: i64) -> Option<String> {
+    if tokens <= 0 {
+        return None;
+    }
+
+    let tokens_f = tokens as f64;
+    if tokens < 1_000 {
+        return Some(format!("{tokens}"));
+    }
+    if tokens < 100_000 {
+        return Some(format!("{:.1}k", tokens_f / 1_000.0));
+    }
+    if tokens < 1_000_000 {
+        return Some(format!("{}k", tokens / 1_000));
+    }
+    if tokens < 100_000_000 {
+        return Some(format!("{:.1}M", tokens_f / 1_000_000.0));
+    }
+
+    Some(format!("{}M", tokens / 1_000_000))
 }
 
 #[cfg(test)]

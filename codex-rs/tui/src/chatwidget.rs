@@ -54,6 +54,7 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SkillsListEntry;
 use codex_core::protocol::StreamErrorEvent;
+use codex_core::protocol::SubAgentToolCallActivityEvent;
 use codex_core::protocol::SubAgentToolCallBeginEvent;
 use codex_core::protocol::SubAgentToolCallEndEvent;
 use codex_core::protocol::TaskCompleteEvent;
@@ -1175,6 +1176,14 @@ impl ChatWidget {
         );
     }
 
+    fn on_subagent_tool_call_activity(&mut self, ev: SubAgentToolCallActivityEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_subagent_activity(ev),
+            |s| s.handle_subagent_activity_now(ev2),
+        );
+    }
+
     fn on_subagent_tool_call_end(&mut self, ev: SubAgentToolCallEndEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(
@@ -1749,6 +1758,17 @@ impl ChatWidget {
         cell.complete_call(&call_id, duration, tokens, result);
         self.active_cell = Some(Box::new(cell));
         self.flush_active_cell();
+    }
+
+    pub(crate) fn handle_subagent_activity_now(&mut self, ev: SubAgentToolCallActivityEvent) {
+        if let Some(active) = self.active_cell.as_mut().and_then(|cell| {
+            cell.as_any_mut()
+                .downcast_mut::<SubAgentToolCallGroupCell>()
+        }) && active.contains_call_id(&ev.call_id)
+        {
+            active.set_activity(&ev.call_id, ev.activity);
+            self.request_redraw();
+        }
     }
 
     pub(crate) fn new(
@@ -2389,6 +2409,7 @@ impl ChatWidget {
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::SubAgentToolCallBegin(ev) => self.on_subagent_tool_call_begin(ev),
+            EventMsg::SubAgentToolCallActivity(ev) => self.on_subagent_tool_call_activity(ev),
             EventMsg::SubAgentToolCallEnd(ev) => self.on_subagent_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
             EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),

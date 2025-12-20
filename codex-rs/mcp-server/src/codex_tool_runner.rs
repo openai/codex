@@ -307,6 +307,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::McpToolCallBegin(_)
                     | EventMsg::McpToolCallEnd(_)
                     | EventMsg::SubAgentToolCallBegin(_)
+                    | EventMsg::SubAgentToolCallActivity(_)
                     | EventMsg::SubAgentToolCallEnd(_)
                     | EventMsg::McpListToolsResponse(_)
                     | EventMsg::ListCustomPromptsResponse(_)

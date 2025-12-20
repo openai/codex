@@ -4,6 +4,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentInvocation;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SubAgentToolCallActivityEvent;
 use codex_protocol::protocol::SubAgentToolCallBeginEvent;
 use codex_protocol::protocol::SubAgentToolCallEndEvent;
 use codex_protocol::protocol::TokenCountEvent;
@@ -121,6 +122,15 @@ impl ToolHandler for SpawnSubagentHandler {
                 }),
             )
             .await;
+        session
+            .send_event(
+                turn.as_ref(),
+                EventMsg::SubAgentToolCallActivity(SubAgentToolCallActivityEvent {
+                    call_id: call_id.clone(),
+                    activity: "starting".to_string(),
+                }),
+            )
+            .await;
 
         let started_at = Instant::now();
         let cancel = session
@@ -165,7 +175,43 @@ impl ToolHandler for SpawnSubagentHandler {
             }
         };
 
-        let (response, tokens) = collect_subagent_response(io.rx_event).await;
+        let mut last_agent_message: Option<String> = None;
+        let mut last_activity: Option<String> = None;
+        let mut tokens: i64 = 0;
+        while let Ok(event) = io.rx_event.recv().await {
+            let Event { id: _, msg } = event;
+
+            if let Some(activity) = activity_for_event(&msg)
+                && last_activity.as_deref() != Some(activity.as_str()) {
+                    last_activity = Some(activity.clone());
+                    session
+                        .send_event(
+                            turn.as_ref(),
+                            EventMsg::SubAgentToolCallActivity(SubAgentToolCallActivityEvent {
+                                call_id: call_id.clone(),
+                                activity,
+                            }),
+                        )
+                        .await;
+                }
+
+            match msg {
+                EventMsg::TaskComplete(ev) => {
+                    last_agent_message = ev.last_agent_message;
+                    break;
+                }
+                EventMsg::TurnAborted(_) => break,
+                EventMsg::TokenCount(TokenCountEvent {
+                    info: Some(info), ..
+                }) => {
+                    tokens = tokens.saturating_add(info.last_token_usage.total_tokens.max(0));
+                }
+                _ => {}
+            }
+        }
+
+        let response = last_agent_message.unwrap_or_default().trim().to_string();
+        let tokens = if tokens > 0 { Some(tokens) } else { None };
         let result = Ok(response.clone());
         session
             .send_event(
@@ -189,6 +235,55 @@ impl ToolHandler for SpawnSubagentHandler {
             content_items: None,
             success: Some(true),
         })
+    }
+}
+
+fn fmt_exec_activity_command(command: &[String]) -> String {
+    if command.is_empty() {
+        return "shell".to_string();
+    }
+
+    let cmd = if let Some((_shell, script)) = crate::parse_command::extract_shell_command(command) {
+        let script = script.trim();
+        if script.is_empty() {
+            "shell".to_string()
+        } else {
+            script
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+    } else {
+        crate::parse_command::shlex_join(command)
+    };
+
+    if cmd.is_empty() {
+        "shell".to_string()
+    } else {
+        cmd
+    }
+}
+
+fn activity_for_event(msg: &EventMsg) -> Option<String> {
+    match msg {
+        EventMsg::TaskStarted(_) => Some("starting".to_string()),
+        EventMsg::UserMessage(_) => Some("sending prompt".to_string()),
+        EventMsg::AgentReasoning(_)
+        | EventMsg::AgentReasoningDelta(_)
+        | EventMsg::AgentReasoningRawContent(_)
+        | EventMsg::AgentReasoningRawContentDelta(_)
+        | EventMsg::AgentReasoningSectionBreak(_) => Some("thinking".to_string()),
+        EventMsg::AgentMessage(_) | EventMsg::AgentMessageDelta(_) => Some("writing".to_string()),
+        EventMsg::ExecCommandBegin(ev) => Some(fmt_exec_activity_command(&ev.command)),
+        EventMsg::McpToolCallBegin(ev) => Some(format!(
+            "mcp {}/{}",
+            ev.invocation.server.trim(),
+            ev.invocation.tool.trim()
+        )),
+        EventMsg::WebSearchBegin(_) => Some("web_search".to_string()),
+        _ => None,
     }
 }
 
@@ -234,29 +329,4 @@ impl Drop for CancelOnDrop {
     fn drop(&mut self) {
         self.token.cancel();
     }
-}
-
-async fn collect_subagent_response(
-    rx_event: async_channel::Receiver<Event>,
-) -> (String, Option<i64>) {
-    let mut last_agent_message: Option<String> = None;
-    let mut tokens: i64 = 0;
-    while let Ok(event) = rx_event.recv().await {
-        match event.msg {
-            EventMsg::TaskComplete(ev) => {
-                last_agent_message = ev.last_agent_message;
-                break;
-            }
-            EventMsg::TurnAborted(_) => break,
-            EventMsg::TokenCount(TokenCountEvent {
-                info: Some(info), ..
-            }) => {
-                tokens = tokens.saturating_add(info.last_token_usage.total_tokens.max(0));
-            }
-            _ => {}
-        }
-    }
-    let message = last_agent_message.unwrap_or_default().trim().to_string();
-    let tokens = if tokens > 0 { Some(tokens) } else { None };
-    (message, tokens)
 }

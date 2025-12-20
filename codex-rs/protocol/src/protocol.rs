@@ -599,6 +599,9 @@ pub enum EventMsg {
 
     SubAgentToolCallBegin(SubAgentToolCallBeginEvent),
 
+    /// Live activity updates for an in-progress `spawn_subagent` tool call.
+    SubAgentToolCallActivity(SubAgentToolCallActivityEvent),
+
     SubAgentToolCallEnd(SubAgentToolCallEndEvent),
 
     WebSearchBegin(WebSearchBeginEvent),
@@ -1157,6 +1160,14 @@ pub struct SubAgentToolCallBeginEvent {
     /// Identifier so this can be paired with the SubAgentToolCallEnd event.
     pub call_id: String,
     pub invocation: SubAgentInvocation,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
+pub struct SubAgentToolCallActivityEvent {
+    /// Identifier for the corresponding SubAgentToolCallBegin that is in progress.
+    pub call_id: String,
+    /// Human-friendly activity description (empty string clears the current activity).
+    pub activity: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
