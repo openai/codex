@@ -27,8 +27,8 @@ Control Codex’s behavior during an interactive session with slash commands.
 | `/experimental` | open the experimental menu to enable features from our beta program        |
 | `/skills`       | browse and insert skills (experimental; see [docs/skills.md](./skills.md)) |
 | `/logout`       | log out of Codex                                                           |
-| `/quit`         | exit Codex                                                                 |
-| `/exit`         | exit Codex                                                                 |
+| `/quit`         | quit the current Codex session                                             |
+| `/exit`         | exit Codex and return to shell                                             |
 | `/feedback`     | send logs to maintainers                                                   |
 
 ---
