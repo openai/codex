@@ -906,20 +906,20 @@ impl App {
 
         match mouse_event.kind {
             MouseEventKind::ScrollUp => {
-                let update = self.mouse_scroll_update(ScrollDirection::Up);
+                let scroll_update = self.mouse_scroll_update(ScrollDirection::Up);
                 self.apply_scroll_update(
                     tui,
-                    update,
+                    scroll_update,
                     transcript_area.height as usize,
                     transcript_area.width,
                     true,
                 );
             }
             MouseEventKind::ScrollDown => {
-                let update = self.mouse_scroll_update(ScrollDirection::Down);
+                let scroll_update = self.mouse_scroll_update(ScrollDirection::Down);
                 self.apply_scroll_update(
                     tui,
-                    update,
+                    scroll_update,
                     transcript_area.height as usize,
                     transcript_area.width,
                     true,
