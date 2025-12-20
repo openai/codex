@@ -1713,7 +1713,6 @@ impl ChatWidget {
             self.active_cell = Some(Box::new(history_cell::new_active_subagent_tool_call_group(
                 ev.call_id,
                 ev.invocation,
-                self.config.animations,
             )));
         }
         self.request_redraw();
@@ -1745,11 +1744,8 @@ impl ChatWidget {
         }
 
         self.flush_active_cell();
-        let mut cell = history_cell::new_active_subagent_tool_call_group(
-            call_id.clone(),
-            invocation,
-            self.config.animations,
-        );
+        let mut cell =
+            history_cell::new_active_subagent_tool_call_group(call_id.clone(), invocation);
         cell.complete_call(&call_id, duration, tokens, result);
         self.active_cell = Some(Box::new(cell));
         self.flush_active_cell();

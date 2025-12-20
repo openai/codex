@@ -1088,15 +1088,10 @@ pub(crate) struct SubAgentToolCallCell {
     duration: Option<Duration>,
     tokens: Option<i64>,
     result: Option<Result<String, String>>,
-    animations_enabled: bool,
 }
 
 impl SubAgentToolCallCell {
-    pub(crate) fn new(
-        call_id: String,
-        invocation: SubAgentInvocation,
-        animations_enabled: bool,
-    ) -> Self {
+    pub(crate) fn new(call_id: String, invocation: SubAgentInvocation) -> Self {
         Self {
             call_id,
             invocation,
@@ -1104,7 +1099,6 @@ impl SubAgentToolCallCell {
             duration: None,
             tokens: None,
             result: None,
-            animations_enabled,
         }
     }
 
@@ -1162,64 +1156,69 @@ impl SubAgentToolCallCell {
 
 impl HistoryCell for SubAgentToolCallCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
         let status = self.success();
-        let bullet = match status {
-            Some(true) => "â€¢".green().bold(),
-            Some(false) => "â€¢".red().bold(),
-            None => spinner(Some(self.start_time), self.animations_enabled),
+        let indicator = match status {
+            Some(true) => "+".green().bold(),
+            Some(false) => "x".red().bold(),
+            None => ".".dim(),
         };
-        let header_text = if status.is_some() {
-            "Spawned"
-        } else {
-            "Spawning"
-        };
+        let summary = subagent_summary(&self.invocation);
+        let elapsed = self
+            .duration
+            .unwrap_or_else(|| self.start_time.elapsed())
+            .as_secs();
+        let elapsed = super::status_indicator_widget::fmt_elapsed_compact(elapsed);
 
-        let invocation_line = line_to_static(&format_subagent_invocation(self.invocation.clone()));
-        let mut compact_spans = vec![bullet.clone(), " ".into(), header_text.bold(), " ".into()];
-        let mut compact_header = Line::from(compact_spans.clone());
-        let reserved = compact_header.width();
-
-        let inline_invocation =
-            invocation_line.width() <= (width as usize).saturating_sub(reserved);
-
-        if inline_invocation {
-            compact_header.extend(invocation_line.spans.clone());
-            lines.push(compact_header);
-        } else {
-            compact_spans.pop();
-            lines.push(Line::from(compact_spans));
-
-            let opts = RtOptions::new((width as usize).saturating_sub(4))
-                .initial_indent("".into())
-                .subsequent_indent("    ".into());
-            let wrapped = word_wrap_line(&invocation_line, opts);
-            let body_lines: Vec<Line<'static>> = wrapped.iter().map(line_to_static).collect();
-            lines.extend(prefix_lines(body_lines, "  â”” ".dim(), "    ".into()));
+        let mut header_spans: Vec<Span<'static>> = vec![
+            indicator,
+            " ".into(),
+            "Subagent:".bold(),
+            " ".into(),
+            summary.into(),
+        ];
+        let mut meta = format!(" ({elapsed}");
+        if let Some(tokens) = self.tokens {
+            meta.push_str(&format!(", {tokens} tok"));
         }
+        meta.push(')');
+        header_spans.push(meta.dim());
+
+        let mut lines: Vec<Line<'static>> = vec![header_spans.into()];
 
         let detail_wrap_width = (width as usize).saturating_sub(4).max(1);
-        let mut detail_lines =
-            Self::wrap_detail("prompt", &self.invocation.prompt, detail_wrap_width);
-
-        if let Some(result) = &self.result {
-            match result {
-                Ok(response) => {
+        let mut detail_lines: Vec<Line<'static>> = Vec::new();
+        match &self.result {
+            None => {
+                let prompt = format_and_truncate_tool_result(
+                    self.invocation.prompt.trim(),
+                    TOOL_CALL_MAX_LINES,
+                    detail_wrap_width,
+                );
+                if !prompt.is_empty() {
+                    let line = Line::from(prompt);
+                    let wrapped = word_wrap_line(
+                        &line,
+                        RtOptions::new(detail_wrap_width)
+                            .initial_indent("".into())
+                            .subsequent_indent("    ".into()),
+                    );
+                    detail_lines.extend(wrapped.iter().map(line_to_static));
+                }
+            }
+            Some(Ok(response)) => {
+                detail_lines.push(Line::from("done".dim()));
+                if !response.trim().is_empty() {
                     detail_lines.extend(Self::wrap_detail("response", response, detail_wrap_width));
                 }
-                Err(err) => {
-                    detail_lines.extend(Self::wrap_detail("error", err, detail_wrap_width));
-                }
+            }
+            Some(Err(err)) => {
+                detail_lines.push(Line::from("failed".red().bold()));
+                detail_lines.extend(Self::wrap_detail("error", err, detail_wrap_width));
             }
         }
 
         if !detail_lines.is_empty() {
-            let initial_prefix: Span<'static> = if inline_invocation {
-                "  â”” ".dim()
-            } else {
-                "    ".into()
-            };
-            lines.extend(prefix_lines(detail_lines, initial_prefix, "    ".into()));
+            lines.extend(prefix_lines(detail_lines, "  |- ".dim(), "     ".into()));
         }
 
         lines
@@ -1229,15 +1228,11 @@ impl HistoryCell for SubAgentToolCallCell {
 #[derive(Debug)]
 pub(crate) struct SubAgentToolCallGroupCell {
     calls: Vec<SubAgentToolCallCell>,
-    animations_enabled: bool,
 }
 
 impl SubAgentToolCallGroupCell {
-    pub(crate) fn new(animations_enabled: bool) -> Self {
-        Self {
-            calls: Vec::new(),
-            animations_enabled,
-        }
+    pub(crate) fn new() -> Self {
+        Self { calls: Vec::new() }
     }
 
     pub(crate) fn can_accept_begin(&self) -> bool {
@@ -1253,11 +1248,8 @@ impl SubAgentToolCallGroupCell {
     }
 
     pub(crate) fn push_begin(&mut self, call_id: String, invocation: SubAgentInvocation) {
-        self.calls.push(SubAgentToolCallCell::new(
-            call_id,
-            invocation,
-            self.animations_enabled,
-        ));
+        self.calls
+            .push(SubAgentToolCallCell::new(call_id, invocation));
     }
 
     pub(crate) fn contains_call_id(&self, call_id: &str) -> bool {
@@ -1318,9 +1310,8 @@ pub(crate) fn new_active_mcp_tool_call(
 pub(crate) fn new_active_subagent_tool_call_group(
     call_id: String,
     invocation: SubAgentInvocation,
-    animations_enabled: bool,
 ) -> SubAgentToolCallGroupCell {
-    let mut group = SubAgentToolCallGroupCell::new(animations_enabled);
+    let mut group = SubAgentToolCallGroupCell::new();
     group.push_begin(call_id, invocation);
     group
 }
@@ -1791,13 +1782,17 @@ impl HistoryCell for FinalMessageSeparator {
     }
 }
 
-fn format_subagent_invocation<'a>(invocation: SubAgentInvocation) -> Line<'a> {
-    let mut spans = vec!["subagent".into()];
+fn subagent_summary(invocation: &SubAgentInvocation) -> String {
     if invocation.label != "subagent" {
-        spans.push(" ".into());
-        spans.push(invocation.label.dim());
+        return invocation.label.clone();
     }
-    spans.into()
+
+    let first_line = invocation.prompt.lines().next().unwrap_or_default().trim();
+    if first_line.is_empty() {
+        return "subagent".to_string();
+    }
+
+    truncate_text(first_line, 64)
 }
 
 fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
