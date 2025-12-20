@@ -17,8 +17,14 @@ pub struct ReadFileHandler;
 const MAX_LINE_LENGTH: usize = 500;
 const TAB_WIDTH: usize = 4;
 
-// TODO(jif) add support for block comments
-const COMMENT_PREFIXES: &[&str] = &["#", "//", "--"];
+const LINE_COMMENT_PREFIXES: &[&str] = &["#", "//", "--"];
+const BLOCK_COMMENT_START: &str = "/*";
+const BLOCK_COMMENT_END: &str = "*/";
+
+#[derive(Clone, Copy, Default)]
+struct BlockCommentState {
+    in_block: bool,
+}
 
 /// JSON arguments accepted by the `read_file` tool handler.
 #[derive(Deserialize)]
@@ -71,6 +77,7 @@ struct LineRecord {
     raw: String,
     display: String,
     indent: usize,
+    is_comment: bool,
 }
 
 impl LineRecord {
@@ -83,9 +90,7 @@ impl LineRecord {
     }
 
     fn is_comment(&self) -> bool {
-        COMMENT_PREFIXES
-            .iter()
-            .any(|prefix| self.raw.trim().starts_with(prefix))
+        self.is_comment
     }
 }
 
@@ -224,10 +229,12 @@ mod slice {
 
 mod indentation {
     use crate::function_tool::FunctionCallError;
+    use crate::tools::handlers::read_file::BlockCommentState;
     use crate::tools::handlers::read_file::IndentationArgs;
     use crate::tools::handlers::read_file::LineRecord;
     use crate::tools::handlers::read_file::TAB_WIDTH;
     use crate::tools::handlers::read_file::format_line;
+    use crate::tools::handlers::read_file::is_comment_line;
     use crate::tools::handlers::read_file::trim_empty_lines;
     use std::collections::VecDeque;
     use std::path::Path;
@@ -376,6 +383,7 @@ mod indentation {
         let mut buffer = Vec::new();
         let mut lines = Vec::new();
         let mut number = 0usize;
+        let mut comment_state = BlockCommentState::default();
 
         loop {
             buffer.clear();
@@ -398,11 +406,13 @@ mod indentation {
             let raw = String::from_utf8_lossy(&buffer).into_owned();
             let indent = measure_indent(&raw);
             let display = format_line(&buffer);
+            let is_comment = is_comment_line(&raw, &mut comment_state);
             lines.push(LineRecord {
                 number,
                 raw,
                 display,
                 indent,
+                is_comment,
             });
         }
 
@@ -438,6 +448,36 @@ fn format_line(bytes: &[u8]) -> String {
     } else {
         decoded.into_owned()
     }
+}
+
+fn is_comment_line(raw: &str, state: &mut BlockCommentState) -> bool {
+    let trimmed = raw.trim_start();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    if state.in_block {
+        if trimmed.contains(BLOCK_COMMENT_END) {
+            state.in_block = false;
+        }
+        return true;
+    }
+
+    if LINE_COMMENT_PREFIXES
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix))
+    {
+        return true;
+    }
+
+    if trimmed.starts_with(BLOCK_COMMENT_START) {
+        if !trimmed.contains(BLOCK_COMMENT_END) {
+            state.in_block = true;
+        }
+        return true;
+    }
+
+    false
 }
 
 fn trim_empty_lines(out: &mut VecDeque<&LineRecord>) {
@@ -923,6 +963,44 @@ private:
                 "L21:                 return fallback();".to_string(),
                 "L22:         }".to_string(),
                 "L23:     }".to_string(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn indentation_mode_includes_block_comment_header() -> anyhow::Result<()> {
+        let mut temp = NamedTempFile::new()?;
+        use std::io::Write as _;
+        write!(
+            temp,
+            "fn root() {{
+    /* block comment
+     * line two
+     */
+    if cond {{
+        inner();
+    }}
+}}
+"
+        )?;
+
+        let options = IndentationArgs {
+            anchor_line: Some(6),
+            max_levels: 1,
+            ..Default::default()
+        };
+
+        let lines = read_block(temp.path(), 6, 20, options).await?;
+        assert_eq!(
+            lines,
+            vec![
+                "L2:     /* block comment".to_string(),
+                "L3:      * line two".to_string(),
+                "L4:      */".to_string(),
+                "L5:     if cond {".to_string(),
+                "L6:         inner();".to_string(),
+                "L7:     }".to_string(),
             ]
         );
         Ok(())
