@@ -967,11 +967,34 @@ impl App {
         }
     }
 
+    /// Convert a single mouse scroll direction event into a normalized scroll update.
+    ///
+    /// This delegates to [`MouseScrollState::on_scroll_event`] using the current [`ScrollConfig`].
+    /// The returned [`ScrollUpdate`] contains:
+    ///
+    /// - `lines`: the viewport line delta to apply *immediately* (may be 0 for trackpad-like
+    ///   streams while fractional lines are still accumulating).
+    /// - `next_tick_in`: an optional delay after which the caller should trigger a follow-up tick
+    ///   (see [`App::apply_scroll_update`] and [`App::handle_scroll_tick`]).
+    ///
+    /// In TUI2, that follow-up tick is driven via `TuiEvent::Draw`: we schedule a frame, and on
+    /// the next draw we call [`MouseScrollState::on_tick`] to close idle streams and flush any
+    /// newly-reached whole lines. This prevents perceived "stop lag" where accumulated scroll only
+    /// applies once the next user input arrives.
     fn mouse_scroll_update(&mut self, direction: ScrollDirection) -> ScrollUpdate {
         self.scroll_state
             .on_scroll_event(direction, self.scroll_config)
     }
 
+    /// Apply a [`ScrollUpdate`] to the transcript viewport and schedule any needed follow-up tick.
+    ///
+    /// `update.lines` is applied immediately via [`App::scroll_transcript`]. If
+    /// `update.next_tick_in` is `Some`, we schedule a future frame so `TuiEvent::Draw` can call
+    /// [`App::handle_scroll_tick`] and close the stream after it goes idle.
+    ///
+    /// `schedule_frame` is forwarded to [`App::scroll_transcript`] and controls whether scrolling
+    /// should request an additional draw. Pass `false` when applying scroll during a
+    /// `TuiEvent::Draw` tick to avoid redundant frames.
     fn apply_scroll_update(
         &mut self,
         tui: &mut tui::Tui,
@@ -988,6 +1011,16 @@ impl App {
         }
     }
 
+    /// Drive stream closure and cadence-based flushing for mouse scrolling.
+    ///
+    /// This is called on every `TuiEvent::Draw`. If a scroll stream is active, it may:
+    ///
+    /// - Close the stream once it has been idle for longer than the stream-gap threshold.
+    /// - Flush whole-line deltas on the redraw cadence for trackpad-like streams, even if no new
+    ///   events arrive.
+    ///
+    /// The resulting update is applied with `schedule_frame = false` because we are already in a
+    /// draw tick.
     fn handle_scroll_tick(&mut self, tui: &mut tui::Tui) {
         let Some((visible_lines, width)) = self.transcript_scroll_dimensions(tui) else {
             return;
@@ -996,6 +1029,11 @@ impl App {
         self.apply_scroll_update(tui, update, visible_lines, width, false);
     }
 
+    /// Compute the transcript viewport dimensions used for scrolling.
+    ///
+    /// Mouse scrolling is applied in terms of "visible transcript lines", which is the terminal
+    /// height minus the chat composer height. This helper returns `None` when the terminal is not
+    /// yet sized or the chat area consumes the full height.
     fn transcript_scroll_dimensions(&self, tui: &tui::Tui) -> Option<(usize, u16)> {
         let size = tui.terminal.last_known_screen_size;
         let width = size.width;
