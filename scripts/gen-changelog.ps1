@@ -7,7 +7,6 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $changelogPath = Join-Path $repoRoot "CHANGELOG.md"
-$configPath = Join-Path $repoRoot "cliff.toml"
 
 function Require-Command([string]$Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -16,7 +15,6 @@ function Require-Command([string]$Name) {
 }
 
 Require-Command git
-Require-Command git-cliff
 
 if (-not (Test-Path $changelogPath)) {
     throw "CHANGELOG.md not found at $changelogPath"
@@ -24,6 +22,82 @@ if (-not (Test-Path $changelogPath)) {
 
 $text = Get-Content -Raw -Path $changelogPath
 $newline = if ($text -match "`r`n") { "`r`n" } else { "`n" }
+
+$hasUpstream = $false
+& git rev-parse --verify --quiet upstream/main | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    $hasUpstream = $true
+}
+
+function Get-GroupForSubject([string]$Subject) {
+    if ($Subject -match '^feat') { return "Features" }
+    if ($Subject -match '^fix') { return "Fixes" }
+    if ($Subject -match '^docs') { return "Documentation" }
+    if ($Subject -match '^tui') { return "TUI" }
+    if ($Subject -match '^core') { return "Core" }
+    if ($Subject -match '^plan' -or $Subject -match '(?i)\bplan\b|plan mode') { return "Plan Mode" }
+    if ($Subject -match '(?i)rebrand|codexel|@ixe1/codexel') { return "Branding & Packaging" }
+    if ($Subject -match '^(chore|build|ci)') { return "Chores" }
+    return "Other"
+}
+
+function Render-Details([string]$Range) {
+    $revArgs = @("rev-list", "--reverse", $Range)
+    if ($hasUpstream) {
+        $revArgs += @("--not", "upstream/main")
+    }
+    $shas = & git @revArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "git rev-list failed for range $Range"
+    }
+
+    if (-not $shas -or $shas.Count -eq 0) {
+        return ""
+    }
+
+    $groups = [ordered]@{
+        "Features"              = @()
+        "Fixes"                 = @()
+        "Documentation"         = @()
+        "TUI"                   = @()
+        "Core"                  = @()
+        "Plan Mode"             = @()
+        "Branding & Packaging"  = @()
+        "Chores"                = @()
+        "Other"                 = @()
+    }
+
+    foreach ($sha in $shas) {
+        $subject = (& git show -s --format=%s $sha).TrimEnd()
+        if ([string]::IsNullOrWhiteSpace($subject)) {
+            continue
+        }
+
+        $body = (& git show -s --format=%B $sha) -replace "\r\n|\r|\n", "`n"
+        $body = $body.TrimEnd()
+        if ([string]::IsNullOrWhiteSpace($body)) {
+            continue
+        }
+
+        $group = Get-GroupForSubject $subject
+        $lines = $body -split "`n", -1
+        $lines[0] = "- " + $lines[0]
+        $entry = ($lines -join $newline).TrimEnd()
+        $groups[$group] += $entry
+    }
+
+    $out = @()
+    foreach ($kvp in $groups.GetEnumerator()) {
+        if ($kvp.Value.Count -eq 0) {
+            continue
+        }
+        $out += "#### $($kvp.Key)"
+        $out += $kvp.Value
+        $out += ""
+    }
+
+    return ($out -join $newline).Trim()
+}
 
 $pattern = '<!-- BEGIN GENERATED DETAILS: range=(?<range>[^ ]+) -->\s*(?<content>.*?)\s*<!-- END GENERATED DETAILS -->'
 $matches = [regex]::Matches($text, $pattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
@@ -34,12 +108,7 @@ if ($matches.Count -eq 0) {
 $updated = [regex]::Replace($text, $pattern, {
     param($match)
     $range = $match.Groups["range"].Value
-    $details = & git-cliff -c $configPath -- $range | Out-String
-    if ($LASTEXITCODE -ne 0) {
-        throw "git-cliff failed for range $range"
-    }
-    $details = $details -replace "\r\n|\r|\n", $newline
-    $details = $details.Trim()
+    $details = Render-Details $range
     if ([string]::IsNullOrWhiteSpace($details)) {
         $details = "_No fork-only changes yet._"
     }

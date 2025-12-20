@@ -15,11 +15,6 @@ if ! command -v git >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v git-cliff >/dev/null 2>&1; then
-  echo "Missing required command: git-cliff" >&2
-  exit 1
-fi
-
 python3 - "$changelog" "$config" "$check" <<'PY'
 import pathlib
 import re
@@ -39,17 +34,102 @@ if not pattern.search(text):
     print("No generated details blocks found in CHANGELOG.md.", file=sys.stderr)
     sys.exit(1)
 
-def render(match: re.Match[str]) -> str:
-    range_ = match.group("range")
+def has_ref(ref: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", ref],
+            capture_output=True,
+            text=True,
+        ).returncode
+        == 0
+    )
+
+HAS_UPSTREAM = has_ref("upstream/main")
+
+def group_for_subject(subject: str) -> str:
+    if re.match(r"^feat", subject):
+        return "Features"
+    if re.match(r"^fix", subject):
+        return "Fixes"
+    if re.match(r"^docs", subject):
+        return "Documentation"
+    if re.match(r"^tui", subject):
+        return "TUI"
+    if re.match(r"^core", subject):
+        return "Core"
+    if re.match(r"^plan", subject) or re.search(r"(?i)\bplan\b|plan mode", subject):
+        return "Plan Mode"
+    if re.search(r"(?i)rebrand|codexel|@ixe1/codexel", subject):
+        return "Branding & Packaging"
+    if re.match(r"^(chore|build|ci)", subject):
+        return "Chores"
+    return "Other"
+
+def git_lines(args: list[str]) -> list[str]:
+    result = subprocess.run(args, capture_output=True, text=True)
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr)
+        raise SystemExit(f"git failed: {' '.join(args)}")
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+def commit_body(sha: str) -> str:
     result = subprocess.run(
-        ["git-cliff", "-c", config, "--", range_],
+        ["git", "show", "-s", "--format=%B", sha],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
         sys.stderr.write(result.stderr)
-        raise SystemExit(f"git-cliff failed for range {range_}")
-    details = result.stdout.replace("\r\n", "\n").replace("\r", "\n").strip()
+        raise SystemExit(f"git show failed for {sha}")
+    return result.stdout.replace("\r\n", "\n").replace("\r", "\n").rstrip()
+
+def render_details(range_: str) -> str:
+    rev_args = ["git", "rev-list", "--reverse", range_]
+    if HAS_UPSTREAM:
+        rev_args += ["--not", "upstream/main"]
+    shas = git_lines(rev_args)
+    if not shas:
+        return ""
+
+    group_order = [
+        "Features",
+        "Fixes",
+        "Documentation",
+        "TUI",
+        "Core",
+        "Plan Mode",
+        "Branding & Packaging",
+        "Chores",
+        "Other",
+    ]
+    grouped: dict[str, list[str]] = {k: [] for k in group_order}
+
+    for sha in shas:
+        body = commit_body(sha)
+        if not body.strip():
+            continue
+        lines = body.split("\n")
+        subject = lines[0].strip()
+        if not subject:
+            continue
+        group = group_for_subject(subject)
+        lines[0] = f"- {lines[0]}"
+        grouped[group].append("\n".join(lines))
+
+    out: list[str] = []
+    for group in group_order:
+        commits = grouped[group]
+        if not commits:
+            continue
+        out.append(f"#### {group}")
+        out.extend(commits)
+        out.append("")
+
+    return "\n".join(out).strip()
+
+def render(match: re.Match[str]) -> str:
+    range_ = match.group("range")
+    details = render_details(range_)
     if not details:
         details = "_No fork-only changes yet._"
     details = details.replace("\n", newline)

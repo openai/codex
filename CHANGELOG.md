@@ -11,12 +11,21 @@ edited between the markers.
 
 ### Highlights
 
-- _No fork-only changes yet._
+- Merge latest `upstream/main` into `v0.1.3`.
+- Fix subagent config constraint handling after upstream merge.
 
 ### Details
 
 <!-- BEGIN GENERATED DETAILS: range=b432d87d8ad02c1cd091072c32d42c545b07965a..HEAD -->
-_No fork-only changes yet._
+#### Core
+- core: fix subagent config constraints
+
+#### Branding & Packaging
+- chore: ignore .codexel
+
+#### Other
+- changelog: fix 0.1.3 release ranges
+- Merge upstream/main into v0.1.3
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.3] - 2025-12-20
@@ -38,29 +47,25 @@ Release commit: b432d87d8ad02c1cd091072c32d42c545b07965a
 ### Details
 
 <!-- BEGIN GENERATED DETAILS: range=79d019672838ccc532247588d31d2eda81fb42d8..b432d87d8ad02c1cd091072c32d42c545b07965a -->
-#### Documentation
-- Clarify Codexel fork positioning
+#### Fixes
+- Fix sdk workflow codexel build
+- Fix update checks and codex home isolation
 
+#### Documentation
+- docs: clarify Codexel fork positioning
 
 #### TUI
-- Show subagent tool calls in history
-- Keep subagent history updating
-- Keep subagent cell live during inserts
-
+- tui: show subagent tool calls in history
+- tui: keep subagent history updating
+- tui: keep subagent cell live during inserts
 
 #### Plan Mode
-- Stream activity and match plan-variants UI
+- subagent: stream activity and match plan-variants UI
 - Persist approved plan and hide .codexel
 
-
-#### Branding & Packaging
-- Fix sdk workflow codexel build
-
-
 #### Chores
-- Update login flow and tui snapshots
-- Regenerate changelog
-
+- chore: update login flow and tui snapshots
+- chore: regenerate changelog
 
 #### Other
 - Update changelog for 0.1.2 release
@@ -68,14 +73,13 @@ Release commit: b432d87d8ad02c1cd091072c32d42c545b07965a
 - Skip macOS rust-ci jobs on PRs
 - Skip upstream npm staging in CI for forks
 - Format markdown and workflow files
-- Fix update checks and codex home isolation
 - Add spawn_subagent tool
 - Show spawn_subagent tool calls in history
-- Stream token counts
-- Bump workspace version to 0.1.3
-- Cut 0.1.3
-- Update unreleased
-- Update
+- subagent: stream token counts
+- release: bump workspace version to 0.1.3
+- changelog: cut 0.1.3
+- changelog: update unreleased
+- changelog: update
 - Require spawn_subagent description and refresh snapshots
 <!-- END GENERATED DETAILS -->
 
@@ -92,14 +96,14 @@ Release commit: 79d019672838ccc532247588d31d2eda81fb42d8
 ### Details
 
 <!-- BEGIN GENERATED DETAILS: range=d02343f99e3260308b2355f26e382ae04b14d7e7..79d019672838ccc532247588d31d2eda81fb42d8 -->
+#### Fixes
+- Fix Codexel update actions
+
 #### Plan Mode
 - Deduplicate plan updates in history
 
-
 #### Branding & Packaging
-- Fix Codexel update actions
 - Add GitHub Release publishing for Codexel
-
 
 #### Other
 - Update changelog for 0.1.1 (mac build)
@@ -123,19 +127,19 @@ Release commit: d02343f99e3260308b2355f26e382ae04b14d7e7
 ### Details
 
 <!-- BEGIN GENERATED DETAILS: range=3e57f558eff5b400292a6ad3c9df2721648aed6f..d02343f99e3260308b2355f26e382ae04b14d7e7 -->
-#### Documentation
-- Document changelog workflow in AGENTS
-- Remove interactive questions from AGENTS
+#### Fixes
+- Fix npm publish workflow yaml
 
+#### Documentation
+- docs: document changelog workflow in AGENTS
+- docs: remove interactive questions from AGENTS
 
 #### Branding & Packaging
-- Add Codexel changelog and generator
+- changelog: add Codexel changelog and generator
 - Prepare Codexel npm 0.1.1 release
-
 
 #### Other
 - Update changelog for 0.1.1
-- Fix npm publish workflow yaml
 - Skip macOS in npm publish workflow
 <!-- END GENERATED DETAILS -->
 
@@ -155,61 +159,53 @@ Release commit: 3e57f558eff5b400292a6ad3c9df2721648aed6f
 
 <!-- BEGIN GENERATED DETAILS: range=be274cbe6273cb17d756a6cda729d537f15ae49a..3e57f558eff5b400292a6ad3c9df2721648aed6f -->
 #### Features
-- Add /plan mode with plan approval
-
+- feat: add /plan mode with plan approval
 
 #### Fixes
-- Drop disabled_reason from ask_user_question rows
-
+- fix(tui2): drop disabled_reason from ask_user_question rows
 
 #### Documentation
-- Document AskUserQuestion
-- Add Windows notes for just
-- Fix plan mode note apostrophe
-
+- docs: document AskUserQuestion
+- docs: add Windows notes for just
+- docs: fix plan mode note apostrophe
 
 #### TUI
-- Show plan-variant progress
-- Show plan subagent checklist
-- Auto-execute approved plans
-- Polish plan-variants progress
-- Fix /plan cursor position
-- Add review step for ask_user_question
-- Taller plan approval overlay and wrapped summary
-- Make Plan Mode placeholder generic
-
+- tui: show plan-variant progress
+- tui: show plan subagent checklist
+- tui: auto-execute approved plans
+- tui: polish plan-variants progress
+- tui: fix /plan cursor position
+- tui: add review step for ask_user_question
+- tui: taller plan approval overlay and wrapped summary
+- tui: make Plan Mode placeholder generic
 
 #### Core
-- Keep plan subagents aligned with session model
-- Make Plan Mode outputs junior-executable
-- Pin approved plan into developer instructions
-- Emit immediate plan progress on approval
-
+- core: keep plan subagents aligned with session model
+- core: make Plan Mode outputs junior-executable
+- core: pin approved plan into developer instructions
+- core: emit immediate plan progress on approval
 
 #### Plan Mode
-- Run variants in parallel with status
-- Show subagent thinking/writing status
-- Show per-variant token usage
-- Prevent nested plan variants and shrink prompts
-- Tighten prompts to avoid retry loops
+- plan: run variants in parallel with status
+- plan: show subagent thinking/writing status
+- plan: show per-variant token usage
+- plan: prevent nested plan variants and shrink prompts
+- plan: tighten prompts to avoid retry loops
 - Improve /plan detail and plan variants
 - Use ASCII ranges in plan prompts
 - Tidy plan mode prompt bullets
 - Improve plan approval UI and auto-execute after /plan
 - Add configurable plan model setting
-- Humanize exec activity + multiline goal
-
+- plan: humanize exec activity + multiline goal
 
 #### Branding & Packaging
 - Rebrand Codex CLI as Codexel
 - Use @ixe1/codexel npm scope
 - Rebrand headers to Codexel
 
-
 #### Chores
-- Fix build after rebasing onto upstream/main
-- Sync built-in prompts with upstream
-
+- chore: fix build after rebasing onto upstream/main
+- chore(core): sync built-in prompts with upstream
 
 #### Other
 - Add ask_user_question tool
