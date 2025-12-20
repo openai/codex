@@ -382,6 +382,11 @@ Notes:
 - `no_proxy` entries bypass the proxy; defaults include localhost + private network ranges. Use sparingly because bypassed traffic is not filtered by the proxy policy.
 - `[network_proxy.policy]` can optionally allow localhost binding or Unix socket access (macOS only) when proxy-restricted network access is active.
 - When `prompt_on_block = true`, Codex polls the proxy admin API (`/blocked`) and surfaces a prompt to allow for the session, allow always (add to allowlist), or deny (add to denylist). Allow/deny decisions update `~/.codex/config.toml` under `[network_proxy.policy]`, then Codex calls `/reload`.
+- On macOS, `network_proxy.policy.allow_unix_sockets` is useful for local IPC that relies on Unix domain sockets (most commonly the SSH agent). Entries can be:
+  - absolute socket paths (or directories containing sockets),
+  - `$SSH_AUTH_SOCK` / `${SSH_AUTH_SOCK}`,
+  - the preset `ssh-agent` (alias: `ssh_auth_sock`, `ssh_auth_socket`).
+  When approvals are enabled, Codex may prompt to allow the SSH agent socket before running commands that appear to require it (e.g. `ssh`, `scp`, `sftp`, `ssh-add`, or `git` over SSH).
 
 ### tools.\*
 
@@ -984,7 +989,7 @@ Valid values:
 | `network_proxy.policy.allowed_domains`             | array<string>                                                     | Allowlist of domain patterns (denylist takes precedence).                                                                        |
 | `network_proxy.policy.denied_domains`              | array<string>                                                     | Denylist of domain patterns (takes precedence over allowlist).                                                                   |
 | `network_proxy.policy.allow_local_binding`         | boolean                                                           | Allow localhost binding when proxy-restricted (macOS only, default: false).                                                      |
-| `network_proxy.policy.allow_unix_sockets`          | array<string>                                                     | Allow specific Unix socket paths when proxy-restricted (macOS only, default: []).                                                |
+| `network_proxy.policy.allow_unix_sockets`          | array<string>                                                     | Allow Unix socket paths when proxy-restricted (macOS only, default: []). Supports `$SSH_AUTH_SOCK` and the `ssh-agent` preset.   |
 | `network_proxy.mitm.enabled`                       | boolean                                                           | Enable HTTPS MITM for read-only enforcement in limited mode (default: false).                                                    |
 | `network_proxy.mitm.inspect`                       | boolean                                                           | Enable body inspection in MITM mode (default: false).                                                                            |
 | `network_proxy.mitm.max_body_bytes`                | number                                                            | Max body bytes to buffer when inspection is enabled (default: 4096).                                                             |

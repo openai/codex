@@ -80,6 +80,15 @@ Network access is controlled through a proxy server running outside the sandbox:
 
 On macOS, `[network_proxy.policy]` can also allow localhost binding or Unix socket paths when proxy-restricted network access is active. These settings influence the Seatbelt profile.
 
+Unix sockets are deny-by-default. If you run tools that rely on local IPC (most commonly the SSH agent via `SSH_AUTH_SOCK`), you can allow them via:
+
+```toml
+[network_proxy.policy]
+allow_unix_sockets = ["$SSH_AUTH_SOCK"]
+```
+
+When approvals are enabled, Codex may prompt to allow the SSH agent socket before running commands that appear to require it (for example `ssh`, `scp`, `sftp`, `ssh-add`, or `git` over SSH). “Allow always” records `$SSH_AUTH_SOCK`; “Allow for session” records the resolved socket path and is removed when Codex exits.
+
 When MITM is enabled in the proxy config, Codex injects common CA environment variables (for example `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `PIP_CERT`, and `NPM_CONFIG_CAFILE`) pointing at the proxy CA cert to reduce per‑tool configuration.
 
 ### Sandbox mechanics by platform

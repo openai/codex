@@ -133,6 +133,10 @@ poll_interval_ms = 1000
 # Allow localhost binds inside the sandbox (macOS only). Default: false
 allow_local_binding = false
 # Allow Unix socket paths inside the sandbox (macOS only). Default: []
+# Common values:
+# - "$SSH_AUTH_SOCK" (recommended) or "${SSH_AUTH_SOCK}"
+# - "ssh-agent" (alias: "ssh_auth_sock", "ssh_auth_socket")
+# - an absolute socket path like "/private/tmp/..." (or a directory containing sockets)
 allow_unix_sockets = []
 # Optional domain allow/deny lists (denylist wins)
 allowed_domains = []

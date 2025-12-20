@@ -212,10 +212,7 @@ fn resolve_proxy_endpoints(network_proxy: &NetworkProxyConfig) -> ProxyEndpoints
         })
     };
     let mut socks = if is_socks {
-        Some(ProxyEndpoint {
-            host: host.clone(),
-            port,
-        })
+        Some(ProxyEndpoint { host, port })
     } else {
         None
     };

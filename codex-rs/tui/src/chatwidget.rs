@@ -88,6 +88,7 @@ use tokio::task::JoinHandle;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
+use crate::app_event::UnixSocketApprovalRequest;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BetaFeatureItem;
@@ -358,6 +359,7 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
     pending_exec_approval: Option<PendingExecApproval>,
     network_proxy_session_allow: HashSet<String>,
+    unix_socket_session_allow: HashSet<String>,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
@@ -366,10 +368,15 @@ pub(crate) struct ChatWidget {
     current_rollout_path: Option<PathBuf>,
 }
 
+enum PendingExecBlock {
+    NetworkHost(String),
+    UnixSocket(String),
+}
+
 struct PendingExecApproval {
     id: String,
     event: ExecApprovalRequestEvent,
-    host: String,
+    block: PendingExecBlock,
 }
 
 struct UserMessage {
@@ -865,6 +872,14 @@ impl ChatWidget {
         );
     }
 
+    pub(crate) fn on_unix_socket_approval_request(&mut self, request: UnixSocketApprovalRequest) {
+        let request2 = request.clone();
+        self.defer_or_handle(
+            |q| q.push_unix_socket_approval(request),
+            |s| s.handle_unix_socket_approval_request(request2),
+        );
+    }
+
     fn on_elicitation_request(&mut self, ev: ElicitationRequestEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(
@@ -1208,6 +1223,18 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         if self.pending_exec_approval.is_none()
+            && let Some(request) = self.preflight_unix_socket_request(&ev.command)
+        {
+            self.pending_exec_approval = Some(PendingExecApproval {
+                id: id.clone(),
+                event: ev,
+                block: PendingExecBlock::UnixSocket(request.socket_path.clone()),
+            });
+            self.app_event_tx
+                .send(AppEvent::UnixSocketApprovalRequest(request));
+            return;
+        }
+        if self.pending_exec_approval.is_none()
             && let Some(mut request) = self.preflight_network_request(&ev.command)
         {
             if request.reason.trim().eq_ignore_ascii_case("denied") {
@@ -1225,7 +1252,7 @@ impl ChatWidget {
             self.pending_exec_approval = Some(PendingExecApproval {
                 id,
                 event: ev,
-                host: request.host.clone(),
+                block: PendingExecBlock::NetworkHost(request.host.clone()),
             });
             self.app_event_tx
                 .send(AppEvent::NetworkProxyApprovalRequest(request));
@@ -1261,16 +1288,21 @@ impl ChatWidget {
                 });
                 return;
             }
-            self.show_exec_approval(pending.id, pending.event);
+            self.handle_exec_approval_now(pending.id, pending.event);
         }
     }
 
     pub(crate) fn reject_pending_exec_approval(&mut self) {
         if let Some(pending) = self.pending_exec_approval.take() {
-            self.add_to_history(history_cell::new_error_event(format!(
-                "Exec canceled because network access to {} was denied.",
-                pending.host
-            )));
+            let reason = match pending.block {
+                PendingExecBlock::NetworkHost(host) => {
+                    format!("Exec canceled because network access to {host} was denied.")
+                }
+                PendingExecBlock::UnixSocket(socket_path) => {
+                    format!("Exec canceled because Unix socket access to {socket_path} was denied.")
+                }
+            };
+            self.add_to_history(history_cell::new_error_event(reason));
             self.submit_op(Op::ExecApproval {
                 id: pending.id,
                 decision: ReviewDecision::Denied,
@@ -1284,6 +1316,14 @@ impl ChatWidget {
             return;
         }
         self.network_proxy_session_allow.insert(host);
+    }
+
+    pub(crate) fn add_unix_socket_session_allow(&mut self, socket_path: String) {
+        let socket_path = socket_path.trim().to_string();
+        if socket_path.is_empty() {
+            return;
+        }
+        self.unix_socket_session_allow.insert(socket_path);
     }
 
     pub(crate) fn network_session_allow(&self) -> HashSet<String> {
@@ -1303,6 +1343,14 @@ impl ChatWidget {
             .contains(normalized.as_str())
     }
 
+    fn is_unix_socket_session_allowed(&self, socket_path: &str) -> bool {
+        let socket_path = socket_path.trim();
+        if socket_path.is_empty() {
+            return false;
+        }
+        self.unix_socket_session_allow.contains(socket_path)
+    }
+
     fn preflight_network_request(&self, command: &[String]) -> Option<NetworkProxyBlockedRequest> {
         let blocked = match network_proxy::preflight_blocked_request_if_enabled(
             &self.config.network_proxy,
@@ -1320,6 +1368,33 @@ impl ChatWidget {
             return None;
         }
         Some(request)
+    }
+
+    fn preflight_unix_socket_request(
+        &self,
+        command: &[String],
+    ) -> Option<UnixSocketApprovalRequest> {
+        let blocked = match network_proxy::preflight_blocked_unix_socket_if_enabled(
+            &self.config.network_proxy,
+            &self.config.sandbox_policy,
+            command,
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                tracing::debug!(error = %err, "unix socket preflight failed");
+                None
+            }
+        };
+        let blocked = blocked?;
+        let socket_path = blocked.socket_path.to_string_lossy().to_string();
+        if self.is_unix_socket_session_allowed(&socket_path) {
+            return None;
+        }
+        Some(UnixSocketApprovalRequest {
+            label: "SSH agent socket".to_string(),
+            socket_path,
+            allow_entry: blocked.suggested_allow_entry,
+        })
     }
 
     pub(crate) fn handle_apply_patch_approval_now(
@@ -1350,6 +1425,18 @@ impl ChatWidget {
         self.notify(Notification::NetworkApprovalRequested { host });
         self.bottom_pane
             .push_approval_request(ApprovalRequest::Network { request }, &self.config.features);
+        self.request_redraw();
+    }
+
+    pub(crate) fn handle_unix_socket_approval_request(
+        &mut self,
+        request: UnixSocketApprovalRequest,
+    ) {
+        self.flush_answer_stream_with_separator();
+        self.bottom_pane.push_approval_request(
+            ApprovalRequest::UnixSocket { request },
+            &self.config.features,
+        );
         self.request_redraw();
     }
 
@@ -1552,6 +1639,7 @@ impl ChatWidget {
             needs_final_message_separator: false,
             pending_exec_approval: None,
             network_proxy_session_allow: HashSet::new(),
+            unix_socket_session_allow: HashSet::new(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -1640,6 +1728,7 @@ impl ChatWidget {
             needs_final_message_separator: false,
             pending_exec_approval: None,
             network_proxy_session_allow: HashSet::new(),
+            unix_socket_session_allow: HashSet::new(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,

@@ -33,6 +33,10 @@ poll_interval_ms = 1000
 [network_proxy.policy]
 allowed_domains = ["example.com", "*.github.com"]
 denied_domains = ["metadata.google.internal", "169.254.*"]
+# macOS only: allow specific local IPC when proxy-restricted.
+allow_local_binding = false
+# Example: allow SSH agent socket for git/ssh.
+allow_unix_sockets = ["$SSH_AUTH_SOCK"]
 
 [network_proxy.mitm]
 enabled = false

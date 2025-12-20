@@ -45,7 +45,7 @@ flowchart LR
 The proxy reads `~/.codex/config.toml`:
 
 - `[network_proxy]` for endpoints, mode, and toggles.
-- `[network_proxy.policy]` for `allowed_domains` / `denied_domains`.
+- `[network_proxy.policy]` for `allowed_domains` / `denied_domains` (and, on macOS, optional local IPC allowances).
 - `[network_proxy.mitm]` for MITM CA paths and inspection settings.
 
 Codex is the source of truth. Approval actions update the config and trigger a proxy reload.
@@ -55,6 +55,19 @@ Codex is the source of truth. Approval actions update the config and trigger a p
 - **Allow/deny precedence:** denylist wins; allowlist is required for access.
 - **Limited mode:** only GET/HEAD/OPTIONS are permitted. HTTPS requires MITM to enforce method constraints; otherwise CONNECT is blocked with a clear reason.
 - **Full mode:** all methods allowed; CONNECT tunneling is permitted without MITM.
+
+## macOS Sandbox Integration (Seatbelt)
+
+On macOS, Codex uses Seatbelt (`sandbox-exec`) for OS-level enforcement.
+
+Key points:
+
+- **Per-domain gating happens in the proxy**, not in Seatbelt: Seatbelt network rules are intentionally limited to loopback proxy ports (e.g. `localhost:3128` / `localhost:8081`) so all outbound traffic is forced through the proxy, which then applies the allow/deny policy and prompts.
+- **Local IPC is deny-by-default** when proxy-restricted network access is active. Some tools rely on Unix domain sockets (e.g. the SSH agent). These are blocked unless explicitly allowed via:
+  - `network_proxy.policy.allow_unix_sockets` (absolute socket paths, `$SSH_AUTH_SOCK`, or the `ssh-agent` preset), and/or
+  - `network_proxy.policy.allow_local_binding` (if you need to bind/listen on localhost ports).
+
+When approvals are enabled, Codex can preflight commands that appear to require the SSH agent and prompt to allow the SSH agent socket before running.
 
 ## Logging and Auditability
 

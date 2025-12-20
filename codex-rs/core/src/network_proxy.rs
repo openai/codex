@@ -14,6 +14,7 @@ use shlex::split as shlex_split;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
+use std::path::PathBuf;
 use toml_edit::Array as TomlArray;
 use toml_edit::DocumentMut;
 use toml_edit::InlineTable;
@@ -25,6 +26,7 @@ const NETWORK_PROXY_TABLE: &str = "network_proxy";
 const NETWORK_PROXY_POLICY_TABLE: &str = "policy";
 const ALLOWED_DOMAINS_KEY: &str = "allowed_domains";
 const DENIED_DOMAINS_KEY: &str = "denied_domains";
+const ALLOW_UNIX_SOCKETS_KEY: &str = "allow_unix_sockets";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct NetworkProxyBlockedRequest {
@@ -144,6 +146,14 @@ pub fn add_denied_domain(config_path: &Path, host: &str) -> Result<bool> {
     update_domain_list(config_path, host, DomainListKind::Deny)
 }
 
+pub fn add_allowed_unix_socket(config_path: &Path, socket: &str) -> Result<bool> {
+    update_unix_socket_list(config_path, socket, UnixSocketListKind::Allow)
+}
+
+pub fn remove_allowed_unix_socket(config_path: &Path, socket: &str) -> Result<bool> {
+    update_unix_socket_list(config_path, socket, UnixSocketListKind::Remove)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct DomainState {
     pub allowed: bool,
@@ -193,6 +203,20 @@ pub fn set_domain_state(config_path: &Path, host: &str, state: DomainState) -> R
     Ok(changed)
 }
 
+pub fn unix_socket_allowed(config_path: &Path, socket_path: &Path) -> Result<bool> {
+    let policy = load_network_policy(config_path)?;
+    let allowed = resolve_unix_socket_allowlist(&policy.allow_unix_sockets);
+    if allowed.is_empty() {
+        return Ok(false);
+    }
+    let canonical_socket = socket_path
+        .canonicalize()
+        .unwrap_or_else(|_| socket_path.to_path_buf());
+    Ok(allowed
+        .iter()
+        .any(|allowed_path| canonical_socket.starts_with(allowed_path)))
+}
+
 pub fn should_preflight_network(
     network_proxy: &NetworkProxyConfig,
     sandbox_policy: &SandboxPolicy,
@@ -237,6 +261,43 @@ pub fn preflight_blocked_request_if_enabled(
         })),
         None => Ok(None),
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct UnixSocketPreflightMatch {
+    /// Socket path that needs to be allowed (canonicalized when possible).
+    pub socket_path: PathBuf,
+    /// Suggested config entry to add for a persistent allow (e.g. `$SSH_AUTH_SOCK`).
+    pub suggested_allow_entry: String,
+    pub reason: String,
+}
+
+pub fn preflight_blocked_unix_socket_if_enabled(
+    network_proxy: &NetworkProxyConfig,
+    sandbox_policy: &SandboxPolicy,
+    command: &[String],
+) -> Result<Option<UnixSocketPreflightMatch>> {
+    if !cfg!(target_os = "macos") {
+        return Ok(None);
+    }
+    if !should_preflight_network(network_proxy, sandbox_policy) {
+        return Ok(None);
+    }
+
+    let Some(socket_path) = ssh_auth_sock_if_needed(command) else {
+        return Ok(None);
+    };
+
+    let config_path = config::default_config_path()?;
+    if unix_socket_allowed(&config_path, &socket_path)? {
+        return Ok(None);
+    }
+
+    Ok(Some(UnixSocketPreflightMatch {
+        socket_path,
+        suggested_allow_entry: "$SSH_AUTH_SOCK".to_string(),
+        reason: "not_allowed_unix_socket".to_string(),
+    }))
 }
 
 pub fn apply_mitm_ca_env_if_enabled(
@@ -397,6 +458,34 @@ fn update_domain_list(config_path: &Path, host: &str, list: DomainListKind) -> R
     Ok(changed)
 }
 
+#[derive(Copy, Clone)]
+enum UnixSocketListKind {
+    Allow,
+    Remove,
+}
+
+fn update_unix_socket_list(
+    config_path: &Path,
+    socket: &str,
+    action: UnixSocketListKind,
+) -> Result<bool> {
+    let socket = socket.trim();
+    if socket.is_empty() {
+        return Err(anyhow!("socket is empty"));
+    }
+    let mut doc = load_document(config_path)?;
+    let policy = ensure_policy_table(&mut doc);
+    let list = ensure_array(policy, ALLOW_UNIX_SOCKETS_KEY);
+    let changed = match action {
+        UnixSocketListKind::Allow => add_domain(list, socket),
+        UnixSocketListKind::Remove => remove_domain(list, socket),
+    };
+    if changed {
+        write_document(config_path, &doc)?;
+    }
+    Ok(changed)
+}
+
 fn load_document(path: &Path) -> Result<DocumentMut> {
     if !path.exists() {
         return Ok(DocumentMut::new());
@@ -429,6 +518,88 @@ pub(crate) struct NetworkPolicy {
     pub(crate) allow_unix_sockets: Vec<String>,
     #[serde(default, rename = "allow_local_binding", alias = "allowLocalBinding")]
     pub(crate) allow_local_binding: bool,
+}
+
+pub(crate) fn resolve_unix_socket_allowlist(entries: &[String]) -> Vec<PathBuf> {
+    let mut resolved = Vec::new();
+    let mut seen = HashSet::new();
+
+    for entry in entries {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        for candidate in resolve_unix_socket_entry(entry) {
+            if !seen.insert(candidate.clone()) {
+                continue;
+            }
+            resolved.push(candidate);
+        }
+    }
+
+    resolved.sort();
+    resolved
+}
+
+fn resolve_unix_socket_entry(entry: &str) -> Vec<PathBuf> {
+    // Presets are intentionally simple: they resolve to a path (or set of paths)
+    // and are ultimately translated into Seatbelt `subpath` rules.
+    let entry = entry.trim();
+    if entry.is_empty() {
+        return Vec::new();
+    }
+
+    let mut candidates: Vec<String> = Vec::new();
+    match entry {
+        "ssh-agent" | "ssh_auth_sock" | "ssh_auth_socket" => {
+            if let Some(value) = std::env::var_os("SSH_AUTH_SOCK") {
+                candidates.push(value.to_string_lossy().to_string());
+            }
+        }
+        _ => {
+            if let Some(var) = entry.strip_prefix('$') {
+                candidates.extend(resolve_env_unix_socket(var));
+            } else if entry.starts_with("${") && entry.ends_with('}') {
+                candidates.extend(resolve_env_unix_socket(&entry[2..entry.len() - 1]));
+            } else {
+                candidates.push(entry.to_string());
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .filter_map(|candidate| parse_unix_socket_candidate(&candidate))
+        .collect()
+}
+
+fn resolve_env_unix_socket(var: &str) -> Vec<String> {
+    let var = var.trim();
+    if var.is_empty() {
+        return Vec::new();
+    }
+    std::env::var_os(var)
+        .map(|value| vec![value.to_string_lossy().to_string()])
+        .unwrap_or_default()
+}
+
+fn parse_unix_socket_candidate(candidate: &str) -> Option<PathBuf> {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = if let Some(rest) = trimmed.strip_prefix("unix://") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("unix:") {
+        rest
+    } else {
+        trimmed
+    };
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        return None;
+    }
+    Some(path.canonicalize().unwrap_or(path))
 }
 
 pub(crate) fn load_network_policy(config_path: &Path) -> Result<NetworkPolicy> {
@@ -476,6 +647,39 @@ fn extract_hosts_from_command(command: &[String]) -> Vec<String> {
         extract_hosts_from_tokens(&tokens, &mut hosts);
     }
     hosts.into_iter().collect()
+}
+
+fn ssh_auth_sock_if_needed(command: &[String]) -> Option<PathBuf> {
+    let Some(cmd0) = command.first() else {
+        return None;
+    };
+    let cmd = std::path::Path::new(cmd0)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let needs_sock = match cmd {
+        "ssh" | "scp" | "sftp" | "ssh-add" => true,
+        "git" => command
+            .iter()
+            .skip(1)
+            .any(|arg| arg.contains("ssh://") || looks_like_scp_host(arg)),
+        _ => false,
+    };
+    if !needs_sock {
+        return None;
+    }
+    let sock = std::env::var_os("SSH_AUTH_SOCK")?;
+    let sock = sock.to_string_lossy().to_string();
+    parse_unix_socket_candidate(&sock)
+}
+
+fn looks_like_scp_host(value: &str) -> bool {
+    // e.g. git@github.com:owner/repo.git
+    let value = value.trim();
+    if value.is_empty() || value.starts_with('-') {
+        return false;
+    }
+    value.contains('@') && value.contains(':') && !value.contains("://")
 }
 
 fn extract_hosts_from_tokens(tokens: &[String], hosts: &mut HashSet<String>) {

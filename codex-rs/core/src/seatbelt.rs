@@ -2,7 +2,6 @@
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::ffi::CStr;
 use std::path::Path;
 use std::path::PathBuf;
@@ -55,50 +54,6 @@ pub async fn spawn_command_under_seatbelt(
     .await
 }
 
-fn proxy_allowlist_from_env(env: &HashMap<String, String>) -> Vec<String> {
-    let mut allowlist = Vec::new();
-    let mut seen = HashSet::new();
-
-    for key in PROXY_ENV_KEYS {
-        let Some(proxy_url) = env.get(*key) else {
-            continue;
-        };
-        let Some((host, port)) = network_proxy::proxy_host_port(proxy_url) else {
-            continue;
-        };
-        for entry in proxy_allowlist_entries(&host, port) {
-            if seen.insert(entry.clone()) {
-                allowlist.push(entry);
-            }
-        }
-    }
-
-    allowlist
-}
-
-fn proxy_allowlist_entries(host: &str, port: i64) -> Vec<String> {
-    let mut entries = Vec::new();
-    let is_loopback = is_loopback_host(host);
-
-    if is_loopback {
-        for candidate in ["localhost", "127.0.0.1", "::1"] {
-            entries.push(format_proxy_host_port(candidate, port));
-        }
-    } else {
-        entries.push(format_proxy_host_port(host, port));
-    }
-
-    entries
-}
-
-fn format_proxy_host_port(host: &str, port: i64) -> String {
-    if host.contains(':') {
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
-    }
-}
-
 fn is_loopback_host(host: &str) -> bool {
     let host_lower = host.to_ascii_lowercase();
     host_lower == "localhost" || host == "127.0.0.1" || host == "::1"
@@ -108,16 +63,21 @@ fn is_loopback_host(host: &str) -> bool {
 struct ProxyPorts {
     http: Vec<u16>,
     socks: Vec<u16>,
+    has_proxy_env: bool,
+    has_non_loopback_proxy_env: bool,
 }
 
 fn proxy_ports_from_env(env: &HashMap<String, String>) -> ProxyPorts {
     let mut http_ports = BTreeSet::new();
     let mut socks_ports = BTreeSet::new();
+    let mut has_proxy_env = false;
+    let mut has_non_loopback_proxy_env = false;
 
     for key in PROXY_ENV_KEYS {
         let Some(proxy_url) = env.get(*key) else {
             continue;
         };
+        has_proxy_env = true;
         let Some((host, port)) = network_proxy::proxy_host_port(proxy_url) else {
             continue;
         };
@@ -125,6 +85,7 @@ fn proxy_ports_from_env(env: &HashMap<String, String>) -> ProxyPorts {
             continue;
         };
         if !is_loopback_host(&host) {
+            has_non_loopback_proxy_env = true;
             continue;
         }
         let scheme = proxy_url_scheme(proxy_url).unwrap_or("http");
@@ -138,6 +99,8 @@ fn proxy_ports_from_env(env: &HashMap<String, String>) -> ProxyPorts {
     ProxyPorts {
         http: http_ports.into_iter().collect(),
         socks: socks_ports.into_iter().collect(),
+        has_proxy_env,
+        has_non_loopback_proxy_env,
     }
 }
 
@@ -153,31 +116,16 @@ fn normalize_proxy_port(port: i64) -> Option<u16> {
     }
 }
 
-fn normalize_unix_socket_path(path: &str) -> Option<String> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let path_buf = PathBuf::from(trimmed);
-    let normalized = if path_buf.is_absolute() {
-        path_buf.canonicalize().unwrap_or(path_buf)
-    } else {
-        path_buf
-    };
-    Some(normalized.to_string_lossy().to_string())
-}
-
 fn escape_sbpl_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn build_network_policy(
-    proxy_allowlist: &[String],
-    policy: &network_proxy::NetworkPolicy,
-    proxy_ports: &ProxyPorts,
-) -> String {
+fn build_network_policy(policy: &network_proxy::NetworkPolicy, proxy_ports: &ProxyPorts) -> String {
     let mut network_rules = String::from("; Network\n");
-    if proxy_allowlist.is_empty() {
+    // On macOS, `sandbox-exec` only accepts `localhost` or `*` in network
+    // addresses. We use loopback proxy ports + the network proxy itself to
+    // enforce per-domain policy and prompting.
+    if !proxy_ports.has_proxy_env {
         network_rules.push_str("(allow network*)\n");
         return format!("{network_rules}{MACOS_SEATBELT_NETWORK_POLICY_BASE}");
     }
@@ -189,15 +137,9 @@ fn build_network_policy(
     }
 
     if !policy.allow_unix_sockets.is_empty() {
-        let mut seen = HashSet::new();
-        for socket_path in &policy.allow_unix_sockets {
-            let Some(normalized) = normalize_unix_socket_path(socket_path) else {
-                continue;
-            };
-            if !seen.insert(normalized.clone()) {
-                continue;
-            }
-            let escaped = escape_sbpl_string(&normalized);
+        for socket_path in network_proxy::resolve_unix_socket_allowlist(&policy.allow_unix_sockets)
+        {
+            let escaped = escape_sbpl_string(&socket_path.to_string_lossy());
             network_rules.push_str(&format!("(allow network* (subpath \"{escaped}\"))\n"));
         }
     }
@@ -226,12 +168,10 @@ fn build_network_policy(
         ));
     }
 
-    let mut outbound = String::from("(allow network-outbound\n");
-    for endpoint in proxy_allowlist {
-        outbound.push_str(&format!("  (remote tcp \"{endpoint}\")\n"));
+    if proxy_ports.has_non_loopback_proxy_env {
+        network_rules
+            .push_str("; NOTE: Non-loopback proxies are not supported under `sandbox-exec`.\n");
     }
-    outbound.push_str(")\n");
-    network_rules.push_str(&outbound);
 
     format!("{network_rules}{MACOS_SEATBELT_NETWORK_POLICY_BASE}")
 }
@@ -307,13 +247,12 @@ pub(crate) fn create_seatbelt_command_args(
 
     // TODO(mbolin): apply_patch calls must also honor the SandboxPolicy.
     let network_policy = if sandbox_policy.has_full_network_access() {
-        let proxy_allowlist = proxy_allowlist_from_env(env);
         let proxy_ports = proxy_ports_from_env(env);
         let policy = config::default_config_path()
             .ok()
             .and_then(|path| network_proxy::load_network_policy(&path).ok())
             .unwrap_or_default();
-        build_network_policy(&proxy_allowlist, &policy, &proxy_ports)
+        build_network_policy(&policy, &proxy_ports)
     } else {
         String::new()
     };
@@ -382,17 +321,24 @@ mod tests {
     impl CodexHomeGuard {
         fn new(path: &Path) -> Self {
             let previous = std::env::var("CODEX_HOME").ok();
-            std::env::set_var("CODEX_HOME", path);
+            // SAFETY: these tests execute serially, and we restore the original value in Drop.
+            unsafe {
+                std::env::set_var("CODEX_HOME", path);
+            }
             Self { previous }
         }
     }
 
     impl Drop for CodexHomeGuard {
         fn drop(&mut self) {
-            if let Some(previous) = self.previous.take() {
-                std::env::set_var("CODEX_HOME", previous);
-            } else {
-                std::env::remove_var("CODEX_HOME");
+            // SAFETY: these tests execute serially, and we restore the original value before other
+            // tests run.
+            unsafe {
+                if let Some(previous) = self.previous.take() {
+                    std::env::set_var("CODEX_HOME", previous);
+                } else {
+                    std::env::remove_var("CODEX_HOME");
+                }
             }
         }
     }
@@ -506,6 +452,7 @@ mod tests {
             .current_dir(&cwd)
             .output()
             .expect("execute seatbelt command");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         assert_eq!(
             "sandbox_mode = \"read-only\"\n",
             String::from_utf8_lossy(&fs::read(&config_toml).expect("read config.toml")),
@@ -516,8 +463,14 @@ mod tests {
             "command to write {} should fail under seatbelt",
             &config_toml.display()
         );
+        if stderr.starts_with("sandbox-exec: sandbox_apply:") {
+            // Some environments (including Codex's own test harness) run the process under a
+            // Seatbelt sandbox already, which prevents nested `sandbox-exec` usage. In that case,
+            // we can still validate policy generation but cannot validate enforcement.
+            return;
+        }
         assert_eq!(
-            String::from_utf8_lossy(&output.stderr),
+            stderr,
             format!("bash: {}: Operation not permitted\n", config_toml.display()),
         );
 
@@ -730,8 +683,12 @@ mod tests {
             "expected seatbelt policy to allow local proxy outbound"
         );
         assert!(
-            policy_text.contains("(remote tcp \"127.0.0.1:3128\")"),
-            "expected seatbelt policy to include the proxy allowlist"
+            !policy_text.contains("(remote tcp"),
+            "`sandbox-exec` network addresses only support `localhost` or `*`, so we must not emit host allowlists"
+        );
+        assert!(
+            !policy_text.contains("127.0.0.1:3128"),
+            "seatbelt policy must not include numeric loopback hosts (it will fail to parse)"
         );
         assert!(
             !policy_text.contains("localhost:*"),

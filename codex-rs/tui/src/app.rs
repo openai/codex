@@ -318,6 +318,8 @@ pub(crate) struct App {
 
     network_proxy_pending: HashSet<String>,
     network_proxy_session_restore: HashMap<String, network_proxy::DomainState>,
+    unix_socket_pending: HashSet<String>,
+    unix_socket_session_restore: HashSet<String>,
 }
 
 impl App {
@@ -450,6 +452,8 @@ impl App {
             skip_world_writable_scan_once: false,
             network_proxy_pending: HashSet::new(),
             network_proxy_session_restore: HashMap::new(),
+            unix_socket_pending: HashSet::new(),
+            unix_socket_session_restore: HashSet::new(),
         };
 
         if app.config.network_proxy.enabled && app.config.network_proxy.prompt_on_block {
@@ -1164,6 +1168,32 @@ impl App {
                     let _ = tui.enter_alt_screen();
                     self.overlay = Some(Overlay::new_static_with_lines(lines, "N E T".to_string()));
                 }
+                ApprovalRequest::UnixSocket { request } => {
+                    let mut lines = Vec::new();
+                    if !request.label.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            "Resource: ".into(),
+                            request.label.clone().bold(),
+                        ]));
+                    }
+                    if !request.socket_path.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            "Socket: ".into(),
+                            request.socket_path.clone().dim(),
+                        ]));
+                    }
+                    if !request.allow_entry.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            "Allow entry: ".into(),
+                            request.allow_entry.clone().dim(),
+                        ]));
+                    }
+                    let _ = tui.enter_alt_screen();
+                    self.overlay = Some(Overlay::new_static_with_lines(
+                        lines,
+                        "S O C K E T".to_string(),
+                    ));
+                }
                 ApprovalRequest::McpElicitation {
                     server_name,
                     message,
@@ -1191,20 +1221,20 @@ impl App {
                     return Ok(true);
                 }
                 let reason = request.reason.trim();
-                if reason.eq_ignore_ascii_case("not_allowed") {
-                    if let Ok(config_path) = codex_config_path() {
-                        match network_proxy::preflight_host(&config_path, &host) {
-                            Ok(None) => {
-                                self.chat_widget.resume_pending_exec_approval();
-                                return Ok(true);
-                            }
-                            Ok(Some(_)) => {}
-                            Err(err) => {
-                                tracing::debug!(
-                                    error = %err,
-                                    "network proxy preflight host check failed"
-                                );
-                            }
+                if reason.eq_ignore_ascii_case("not_allowed")
+                    && let Ok(config_path) = codex_config_path()
+                {
+                    match network_proxy::preflight_host(&config_path, &host) {
+                        Ok(None) => {
+                            self.chat_widget.resume_pending_exec_approval();
+                            return Ok(true);
+                        }
+                        Ok(Some(_)) => {}
+                        Err(err) => {
+                            tracing::debug!(
+                                error = %err,
+                                "network proxy preflight host check failed"
+                            );
                         }
                     }
                 }
@@ -1220,6 +1250,30 @@ impl App {
                 }
                 self.network_proxy_pending.insert(host);
                 self.chat_widget.on_network_approval_request(request);
+            }
+            AppEvent::UnixSocketApprovalRequest(request) => {
+                if !self.config.network_proxy.prompt_on_block {
+                    return Ok(true);
+                }
+                let socket_path = request.socket_path.trim().to_string();
+                if socket_path.is_empty() || self.unix_socket_pending.contains(&socket_path) {
+                    return Ok(true);
+                }
+                if let Ok(config_path) = codex_config_path() {
+                    let socket = std::path::Path::new(&socket_path);
+                    match network_proxy::unix_socket_allowed(&config_path, socket) {
+                        Ok(true) => {
+                            self.chat_widget.resume_pending_exec_approval();
+                            return Ok(true);
+                        }
+                        Ok(false) => {}
+                        Err(err) => {
+                            tracing::debug!(error = %err, "unix socket preflight check failed");
+                        }
+                    }
+                }
+                self.unix_socket_pending.insert(socket_path);
+                self.chat_widget.on_unix_socket_approval_request(request);
             }
             AppEvent::NetworkProxyDecision { host, decision } => {
                 let host = host.trim().to_string();
@@ -1321,6 +1375,71 @@ impl App {
                     self.chat_widget.reject_pending_exec_approval();
                 }
             }
+            AppEvent::UnixSocketDecision {
+                socket_path,
+                allow_entry,
+                decision,
+            } => {
+                let socket_path = socket_path.trim().to_string();
+                if socket_path.is_empty() {
+                    return Ok(true);
+                }
+                self.unix_socket_pending.remove(&socket_path);
+                let config_path = codex_config_path()?;
+                let mut should_resume_exec = matches!(
+                    decision,
+                    crate::app_event::UnixSocketDecision::AllowSession
+                        | crate::app_event::UnixSocketDecision::AllowAlways
+                );
+                match decision {
+                    crate::app_event::UnixSocketDecision::AllowSession => {
+                        match network_proxy::add_allowed_unix_socket(&config_path, &socket_path) {
+                            Ok(changed) => {
+                                if changed {
+                                    self.unix_socket_session_restore.insert(socket_path.clone());
+                                }
+                                self.chat_widget
+                                    .add_unix_socket_session_allow(socket_path.clone());
+                            }
+                            Err(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to allow Unix socket {socket_path} for this session: {err}"
+                                ));
+                                should_resume_exec = false;
+                            }
+                        }
+                    }
+                    crate::app_event::UnixSocketDecision::AllowAlways => {
+                        if allow_entry.trim().is_empty() {
+                            self.chat_widget.add_error_message(
+                                "Failed to allow Unix socket permanently: missing allow entry"
+                                    .to_string(),
+                            );
+                            should_resume_exec = false;
+                        } else {
+                            match network_proxy::add_allowed_unix_socket(&config_path, &allow_entry)
+                            {
+                                Ok(_) => {
+                                    self.chat_widget
+                                        .add_unix_socket_session_allow(socket_path.clone());
+                                }
+                                Err(err) => {
+                                    self.chat_widget.add_error_message(format!(
+                                        "Failed to add Unix socket allow entry {allow_entry}: {err}"
+                                    ));
+                                    should_resume_exec = false;
+                                }
+                            }
+                        }
+                    }
+                    crate::app_event::UnixSocketDecision::Deny => {}
+                }
+                if should_resume_exec {
+                    self.chat_widget.resume_pending_exec_approval();
+                } else {
+                    self.chat_widget.reject_pending_exec_approval();
+                }
+            }
         }
         Ok(true)
     }
@@ -1348,7 +1467,9 @@ impl App {
     }
 
     async fn restore_network_proxy_approvals(&mut self) -> Result<()> {
-        if self.network_proxy_session_restore.is_empty() {
+        if self.network_proxy_session_restore.is_empty()
+            && self.unix_socket_session_restore.is_empty()
+        {
             return Ok(());
         }
         let config_path = codex_config_path()?;
@@ -1380,6 +1501,10 @@ impl App {
             network_proxy::reload(&client, &admin_url)
                 .await
                 .map_err(|err| color_eyre::eyre::eyre!(err))?;
+        }
+
+        for socket_path in self.unix_socket_session_restore.drain() {
+            let _ = network_proxy::remove_allowed_unix_socket(&config_path, &socket_path);
         }
         Ok(())
     }
@@ -1566,6 +1691,8 @@ mod tests {
             skip_world_writable_scan_once: false,
             network_proxy_pending: HashSet::new(),
             network_proxy_session_restore: HashMap::new(),
+            unix_socket_pending: HashSet::new(),
+            unix_socket_session_restore: HashSet::new(),
         }
     }
 
@@ -1608,6 +1735,8 @@ mod tests {
                 skip_world_writable_scan_once: false,
                 network_proxy_pending: HashSet::new(),
                 network_proxy_session_restore: HashMap::new(),
+                unix_socket_pending: HashSet::new(),
+                unix_socket_session_restore: HashSet::new(),
             },
             rx,
             op_rx,

@@ -175,10 +175,20 @@ pub(crate) enum AppEvent {
     /// Prompt for a blocked network request from the proxy.
     NetworkProxyApprovalRequest(NetworkProxyBlockedRequest),
 
+    /// Prompt to allow a Unix socket path inside the sandbox (macOS only).
+    UnixSocketApprovalRequest(UnixSocketApprovalRequest),
+
     /// User decision for a blocked network request.
     NetworkProxyDecision {
         host: String,
         decision: NetworkProxyDecision,
+    },
+
+    /// User decision for a Unix socket approval request.
+    UnixSocketDecision {
+        socket_path: String,
+        allow_entry: String,
+        decision: UnixSocketDecision,
     },
 
     /// Open the feedback note entry overlay after the user selects a category.
@@ -195,6 +205,20 @@ pub(crate) enum AppEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NetworkProxyDecision {
+    AllowSession,
+    AllowAlways,
+    Deny,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UnixSocketApprovalRequest {
+    pub label: String,
+    pub socket_path: String,
+    pub allow_entry: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnixSocketDecision {
     AllowSession,
     AllowAlways,
     Deny,
