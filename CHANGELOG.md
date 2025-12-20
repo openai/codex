@@ -12,6 +12,7 @@ edited between the markers.
 ### Highlights
 
 - Add a read-only spawn_subagent tool for parallel exploration and research.
+- Show spawn_subagent tool calls in chat history and stop them on Esc.
 - Skip macOS rust-ci jobs on pull requests to avoid flaky PR runs.
 - Skip upstream npm package staging in CI for forks.
 - Fix sdk workflow to build the codexel binary.
@@ -35,6 +36,7 @@ edited between the markers.
 - Skip upstream npm staging in CI for forks
 - Format markdown and workflow files
 - Fix update checks and codex home isolation
+- Add spawn_subagent tool
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.2] - 2025-12-19

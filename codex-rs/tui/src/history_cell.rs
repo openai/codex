@@ -30,6 +30,7 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::SubAgentInvocation;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::openai_models::ReasoningSummaryFormat;
 use codex_protocol::plan_tool::PlanItemArg;
@@ -1079,12 +1080,249 @@ impl HistoryCell for McpToolCallCell {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct SubAgentToolCallCell {
+    call_id: String,
+    invocation: SubAgentInvocation,
+    start_time: Instant,
+    duration: Option<Duration>,
+    tokens: Option<i64>,
+    result: Option<Result<String, String>>,
+    animations_enabled: bool,
+}
+
+impl SubAgentToolCallCell {
+    pub(crate) fn new(
+        call_id: String,
+        invocation: SubAgentInvocation,
+        animations_enabled: bool,
+    ) -> Self {
+        Self {
+            call_id,
+            invocation,
+            start_time: Instant::now(),
+            duration: None,
+            tokens: None,
+            result: None,
+            animations_enabled,
+        }
+    }
+
+    pub(crate) fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    pub(crate) fn complete(
+        &mut self,
+        duration: Duration,
+        tokens: Option<i64>,
+        result: Result<String, String>,
+    ) {
+        self.duration = Some(duration);
+        self.tokens = tokens;
+        self.result = Some(result);
+    }
+
+    fn success(&self) -> Option<bool> {
+        match self.result.as_ref() {
+            Some(Ok(_)) => Some(true),
+            Some(Err(_)) => Some(false),
+            None => None,
+        }
+    }
+
+    pub(crate) fn mark_failed(&mut self) {
+        let elapsed = self.start_time.elapsed();
+        self.duration = Some(elapsed);
+        self.tokens = None;
+        self.result = Some(Err("interrupted".to_string()));
+    }
+
+    fn wrap_detail(label: &str, text: &str, detail_wrap_width: usize) -> Vec<Line<'static>> {
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
+
+        let formatted =
+            format_and_truncate_tool_result(text, TOOL_CALL_MAX_LINES, detail_wrap_width);
+        if formatted.is_empty() {
+            return Vec::new();
+        }
+
+        let line = Line::from(format!("{label}: {formatted}").dim());
+        let wrapped = word_wrap_line(
+            &line,
+            RtOptions::new(detail_wrap_width)
+                .initial_indent("".into())
+                .subsequent_indent("    ".into()),
+        );
+        wrapped.iter().map(line_to_static).collect()
+    }
+}
+
+impl HistoryCell for SubAgentToolCallCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let status = self.success();
+        let bullet = match status {
+            Some(true) => "â€¢".green().bold(),
+            Some(false) => "â€¢".red().bold(),
+            None => spinner(Some(self.start_time), self.animations_enabled),
+        };
+        let header_text = if status.is_some() {
+            "Spawned"
+        } else {
+            "Spawning"
+        };
+
+        let invocation_line = line_to_static(&format_subagent_invocation(self.invocation.clone()));
+        let mut compact_spans = vec![bullet.clone(), " ".into(), header_text.bold(), " ".into()];
+        let mut compact_header = Line::from(compact_spans.clone());
+        let reserved = compact_header.width();
+
+        let inline_invocation =
+            invocation_line.width() <= (width as usize).saturating_sub(reserved);
+
+        if inline_invocation {
+            compact_header.extend(invocation_line.spans.clone());
+            lines.push(compact_header);
+        } else {
+            compact_spans.pop();
+            lines.push(Line::from(compact_spans));
+
+            let opts = RtOptions::new((width as usize).saturating_sub(4))
+                .initial_indent("".into())
+                .subsequent_indent("    ".into());
+            let wrapped = word_wrap_line(&invocation_line, opts);
+            let body_lines: Vec<Line<'static>> = wrapped.iter().map(line_to_static).collect();
+            lines.extend(prefix_lines(body_lines, "  â”” ".dim(), "    ".into()));
+        }
+
+        let detail_wrap_width = (width as usize).saturating_sub(4).max(1);
+        let mut detail_lines =
+            Self::wrap_detail("prompt", &self.invocation.prompt, detail_wrap_width);
+
+        if let Some(result) = &self.result {
+            match result {
+                Ok(response) => {
+                    detail_lines.extend(Self::wrap_detail("response", response, detail_wrap_width));
+                }
+                Err(err) => {
+                    detail_lines.extend(Self::wrap_detail("error", err, detail_wrap_width));
+                }
+            }
+        }
+
+        if !detail_lines.is_empty() {
+            let initial_prefix: Span<'static> = if inline_invocation {
+                "  â”” ".dim()
+            } else {
+                "    ".into()
+            };
+            lines.extend(prefix_lines(detail_lines, initial_prefix, "    ".into()));
+        }
+
+        lines
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SubAgentToolCallGroupCell {
+    calls: Vec<SubAgentToolCallCell>,
+    animations_enabled: bool,
+}
+
+impl SubAgentToolCallGroupCell {
+    pub(crate) fn new(animations_enabled: bool) -> Self {
+        Self {
+            calls: Vec::new(),
+            animations_enabled,
+        }
+    }
+
+    pub(crate) fn can_accept_begin(&self) -> bool {
+        self.calls
+            .iter()
+            .filter(|cell| cell.result.is_none())
+            .count()
+            < 3
+    }
+
+    pub(crate) fn is_complete(&self) -> bool {
+        self.calls.iter().all(|cell| cell.result.is_some())
+    }
+
+    pub(crate) fn push_begin(&mut self, call_id: String, invocation: SubAgentInvocation) {
+        self.calls.push(SubAgentToolCallCell::new(
+            call_id,
+            invocation,
+            self.animations_enabled,
+        ));
+    }
+
+    pub(crate) fn contains_call_id(&self, call_id: &str) -> bool {
+        self.calls.iter().any(|cell| cell.call_id() == call_id)
+    }
+
+    pub(crate) fn complete_call(
+        &mut self,
+        call_id: &str,
+        duration: Duration,
+        tokens: Option<i64>,
+        result: Result<String, String>,
+    ) -> bool {
+        match self
+            .calls
+            .iter_mut()
+            .rev()
+            .find(|cell| cell.call_id() == call_id)
+        {
+            Some(cell) => {
+                cell.complete(duration, tokens, result);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub(crate) fn mark_failed(&mut self) {
+        for cell in self.calls.iter_mut() {
+            if cell.result.is_none() {
+                cell.mark_failed();
+            }
+        }
+    }
+}
+
+impl HistoryCell for SubAgentToolCallGroupCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        for (idx, cell) in self.calls.iter().enumerate() {
+            if idx != 0 {
+                out.push(Line::from(""));
+            }
+            out.extend(cell.display_lines(width));
+        }
+        out
+    }
+}
+
 pub(crate) fn new_active_mcp_tool_call(
     call_id: String,
     invocation: McpInvocation,
     animations_enabled: bool,
 ) -> McpToolCallCell {
     McpToolCallCell::new(call_id, invocation, animations_enabled)
+}
+
+pub(crate) fn new_active_subagent_tool_call_group(
+    call_id: String,
+    invocation: SubAgentInvocation,
+    animations_enabled: bool,
+) -> SubAgentToolCallGroupCell {
+    let mut group = SubAgentToolCallGroupCell::new(animations_enabled);
+    group.push_begin(call_id, invocation);
+    group
 }
 
 pub(crate) fn new_web_search_call(query: String) -> PrefixedWrappedHistoryCell {
@@ -1551,6 +1789,15 @@ impl HistoryCell for FinalMessageSeparator {
             vec![Line::from_iter(["─".repeat(width as usize).dim()])]
         }
     }
+}
+
+fn format_subagent_invocation<'a>(invocation: SubAgentInvocation) -> Line<'a> {
+    let mut spans = vec!["subagent".into()];
+    if invocation.label != "subagent" {
+        spans.push(" ".into());
+        spans.push(invocation.label.dim());
+    }
+    spans.into()
 }
 
 fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {

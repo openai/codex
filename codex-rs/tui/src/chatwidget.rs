@@ -54,6 +54,8 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SkillsListEntry;
 use codex_core::protocol::StreamErrorEvent;
+use codex_core::protocol::SubAgentToolCallBeginEvent;
+use codex_core::protocol::SubAgentToolCallEndEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TerminalInteractionEvent;
 use codex_core::protocol::TokenUsage;
@@ -118,6 +120,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::SubAgentToolCallGroupCell;
 use crate::markdown::append_markdown;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
@@ -1164,6 +1167,22 @@ impl ChatWidget {
         self.defer_or_handle(|q| q.push_mcp_end(ev), |s| s.handle_mcp_end_now(ev2));
     }
 
+    fn on_subagent_tool_call_begin(&mut self, ev: SubAgentToolCallBeginEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_subagent_begin(ev),
+            |s| s.handle_subagent_begin_now(ev2),
+        );
+    }
+
+    fn on_subagent_tool_call_end(&mut self, ev: SubAgentToolCallEndEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_subagent_end(ev),
+            |s| s.handle_subagent_end_now(ev2),
+        );
+    }
+
     fn on_web_search_begin(&mut self, _ev: WebSearchBeginEvent) {
         self.flush_answer_stream_with_separator();
     }
@@ -1679,6 +1698,61 @@ impl ChatWidget {
         if let Some(extra) = extra_cell {
             self.add_boxed_history(extra);
         }
+    }
+
+    pub(crate) fn handle_subagent_begin_now(&mut self, ev: SubAgentToolCallBeginEvent) {
+        self.flush_answer_stream_with_separator();
+        if let Some(active) = self.active_cell.as_mut().and_then(|cell| {
+            cell.as_any_mut()
+                .downcast_mut::<SubAgentToolCallGroupCell>()
+        }) && active.can_accept_begin()
+        {
+            active.push_begin(ev.call_id, ev.invocation);
+        } else {
+            self.flush_active_cell();
+            self.active_cell = Some(Box::new(history_cell::new_active_subagent_tool_call_group(
+                ev.call_id,
+                ev.invocation,
+                self.config.animations,
+            )));
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn handle_subagent_end_now(&mut self, ev: SubAgentToolCallEndEvent) {
+        self.flush_answer_stream_with_separator();
+
+        let SubAgentToolCallEndEvent {
+            call_id,
+            invocation,
+            duration,
+            tokens,
+            result,
+        } = ev;
+
+        if let Some(active) = self.active_cell.as_mut().and_then(|cell| {
+            cell.as_any_mut()
+                .downcast_mut::<SubAgentToolCallGroupCell>()
+        }) && active.contains_call_id(&call_id)
+        {
+            active.complete_call(&call_id, duration, tokens, result);
+            if active.is_complete() {
+                self.flush_active_cell();
+            } else {
+                self.request_redraw();
+            }
+            return;
+        }
+
+        self.flush_active_cell();
+        let mut cell = history_cell::new_active_subagent_tool_call_group(
+            call_id.clone(),
+            invocation,
+            self.config.animations,
+        );
+        cell.complete_call(&call_id, duration, tokens, result);
+        self.active_cell = Some(Box::new(cell));
+        self.flush_active_cell();
     }
 
     pub(crate) fn new(
@@ -2318,6 +2392,8 @@ impl ChatWidget {
             EventMsg::ViewImageToolCall(ev) => self.on_view_image_tool_call(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
+            EventMsg::SubAgentToolCallBegin(ev) => self.on_subagent_tool_call_begin(ev),
+            EventMsg::SubAgentToolCallEnd(ev) => self.on_subagent_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
             EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
@@ -2493,6 +2569,11 @@ impl ChatWidget {
             if let Some(exec) = cell.as_any_mut().downcast_mut::<ExecCell>() {
                 exec.mark_failed();
             } else if let Some(tool) = cell.as_any_mut().downcast_mut::<McpToolCallCell>() {
+                tool.mark_failed();
+            } else if let Some(tool) = cell
+                .as_any_mut()
+                .downcast_mut::<SubAgentToolCallGroupCell>()
+            {
                 tool.mark_failed();
             }
             self.add_boxed_history(cell);

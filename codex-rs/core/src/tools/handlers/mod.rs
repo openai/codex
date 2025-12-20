@@ -34,6 +34,7 @@ pub use shell::ShellHandler;
 pub(crate) use spawn_subagent::SPAWN_SUBAGENT_LABEL_PREFIX;
 pub(crate) use spawn_subagent::SPAWN_SUBAGENT_TOOL_NAME;
 pub use spawn_subagent::SpawnSubagentHandler;
+pub(crate) use spawn_subagent::parse_spawn_subagent_invocation;
 pub use test_sync::TestSyncHandler;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;

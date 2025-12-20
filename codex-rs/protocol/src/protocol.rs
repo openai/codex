@@ -597,6 +597,10 @@ pub enum EventMsg {
 
     McpToolCallEnd(McpToolCallEndEvent),
 
+    SubAgentToolCallBegin(SubAgentToolCallBeginEvent),
+
+    SubAgentToolCallEnd(SubAgentToolCallEndEvent),
+
     WebSearchBegin(WebSearchBeginEvent),
 
     WebSearchEnd(WebSearchEndEvent),
@@ -1134,10 +1138,25 @@ pub struct McpInvocation {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
+pub struct SubAgentInvocation {
+    /// Subagent label (sanitized).
+    pub label: String,
+    /// Prompt sent to the subagent.
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
 pub struct McpToolCallBeginEvent {
     /// Identifier so this can be paired with the McpToolCallEnd event.
     pub call_id: String,
     pub invocation: McpInvocation,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
+pub struct SubAgentToolCallBeginEvent {
+    /// Identifier so this can be paired with the SubAgentToolCallEnd event.
+    pub call_id: String,
+    pub invocation: SubAgentInvocation,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
@@ -1158,6 +1177,21 @@ impl McpToolCallEndEvent {
             Err(_) => false,
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
+pub struct SubAgentToolCallEndEvent {
+    /// Identifier for the corresponding SubAgentToolCallBegin that finished.
+    pub call_id: String,
+    pub invocation: SubAgentInvocation,
+    #[ts(type = "string")]
+    pub duration: Duration,
+    /// Total tokens consumed by the subagent run, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tokens: Option<i64>,
+    /// Result of the subagent call. Note this could be an error.
+    pub result: Result<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

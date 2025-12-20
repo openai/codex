@@ -1715,6 +1715,14 @@ impl Session {
         }
     }
 
+    pub async fn turn_cancellation_token(&self, sub_id: &str) -> Option<CancellationToken> {
+        let active = self.active_turn.lock().await;
+        active
+            .as_ref()
+            .and_then(|turn| turn.tasks.get(sub_id))
+            .map(|task| task.cancellation_token.clone())
+    }
+
     pub async fn list_resources(
         &self,
         server: &str,
