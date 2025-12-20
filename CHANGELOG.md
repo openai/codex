@@ -11,33 +11,23 @@ edited between the markers.
 
 ### Highlights
 
-- Merge latest `upstream/main` into `v0.1.3`.
-- Fix subagent config constraint handling after upstream merge.
+- _No fork-only changes yet._
 
 ### Details
 
-<!-- BEGIN GENERATED DETAILS: range=b432d87d8ad02c1cd091072c32d42c545b07965a..HEAD -->
-#### Core
-- core: fix subagent config constraints
-
-#### Branding & Packaging
-- chore: ignore .codexel
-- tests: keep codexel CLI suites green
-
-#### Other
-- changelog: fix 0.1.3 release ranges
-- Merge upstream/main into v0.1.3
-- changelog: filter upstream commits in generator
-- changelog: keep generators in sync
+<!-- BEGIN GENERATED DETAILS: range=44f8df17aa11051fcf3919a9c16fe3b9c3296d66..HEAD -->
+_No fork-only changes yet._
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.3] - 2025-12-20
 
-Upstream baseline: openai/codex@be274cbe6273cb17d756a6cda729d537f15ae49a
-Release commit: b432d87d8ad02c1cd091072c32d42c545b07965a
+Upstream baseline: openai/codex@a6974087e5c04fc711af68f70fe93f7f5d2b0981
+Release commit: 44f8df17aa11051fcf3919a9c16fe3b9c3296d66
 
 ### Highlights
 
+- Merge latest `upstream/main` into `v0.1.3`.
+- Fix subagent config constraint handling after upstream merge.
 - Add a read-only spawn_subagent tool for parallel exploration and research.
 - Show spawn_subagent tool calls in chat history, including live activity and token usage, and stop them on Esc.
 - Fix: keep `spawn_subagent` history entries updating even when other messages are inserted.
@@ -49,22 +39,30 @@ Release commit: b432d87d8ad02c1cd091072c32d42c545b07965a
 
 ### Details
 
-<!-- BEGIN GENERATED DETAILS: range=79d019672838ccc532247588d31d2eda81fb42d8..b432d87d8ad02c1cd091072c32d42c545b07965a -->
+<!-- BEGIN GENERATED DETAILS: range=79d019672838ccc532247588d31d2eda81fb42d8..44f8df17aa11051fcf3919a9c16fe3b9c3296d66 -->
 #### Fixes
 - Fix sdk workflow codexel build
 - Fix update checks and codex home isolation
 
 #### Documentation
 - docs: clarify Codexel fork positioning
+- docs: move What's different up and mention ask_user_question
 
 #### TUI
 - tui: show subagent tool calls in history
 - tui: keep subagent history updating
 - tui: keep subagent cell live during inserts
 
+#### Core
+- core: fix subagent config constraints
+
 #### Plan Mode
 - subagent: stream activity and match plan-variants UI
 - Persist approved plan and hide .codexel
+
+#### Branding & Packaging
+- chore: ignore .codexel
+- tests: keep codexel CLI suites green
 
 #### Chores
 - chore: update login flow and tui snapshots
@@ -84,6 +82,10 @@ Release commit: b432d87d8ad02c1cd091072c32d42c545b07965a
 - changelog: update unreleased
 - changelog: update
 - Require spawn_subagent description and refresh snapshots
+- changelog: fix 0.1.3 release ranges
+- Merge upstream/main into v0.1.3
+- changelog: filter upstream commits in generator
+- changelog: keep generators in sync
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.2] - 2025-12-19
