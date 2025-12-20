@@ -346,8 +346,13 @@ impl ConfigBuilder {
         let cli_overrides = cli_overrides.unwrap_or_default();
         let harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
+        let cwd = match harness_overrides.cwd.as_deref() {
+            Some(path) => AbsolutePathBuf::try_from(path)?,
+            None => AbsolutePathBuf::current_dir()?,
+        };
         let config_layer_stack =
-            load_config_layers_state(&codex_home, &cli_overrides, loader_overrides).await?;
+            load_config_layers_state(&codex_home, Some(cwd), &cli_overrides, loader_overrides)
+                .await?;
         let merged_toml = config_layer_stack.effective_config();
 
         // Note that each layer in ConfigLayerStack should have resolved
@@ -401,10 +406,16 @@ impl Config {
 /// applied yet, which risks failing to enforce required constraints.
 pub async fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
+    cwd: &AbsolutePathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
-    let config_layer_stack =
-        load_config_layers_state(codex_home, &cli_overrides, LoaderOverrides::default()).await?;
+    let config_layer_stack = load_config_layers_state(
+        codex_home,
+        Some(cwd.clone()),
+        &cli_overrides,
+        LoaderOverrides::default(),
+    )
+    .await?;
 
     let merged_toml = config_layer_stack.effective_config();
     let cfg = deserialize_config_toml_with_base(merged_toml, codex_home).map_err(|e| {
@@ -439,7 +450,8 @@ pub async fn load_global_mcp_servers(
     // result.
     let cli_overrides = Vec::<(String, TomlValue)>::new();
     let config_layer_stack =
-        load_config_layers_state(codex_home, &cli_overrides, LoaderOverrides::default()).await?;
+        load_config_layers_state(codex_home, None, &cli_overrides, LoaderOverrides::default())
+            .await?;
     let merged_toml = config_layer_stack.effective_config();
     let Some(servers_value) = merged_toml.get("mcp_servers") else {
         return Ok(BTreeMap::new());
@@ -1953,8 +1965,9 @@ trust_level = "trusted"
             managed_preferences_base64: None,
         };
 
+        let cwd = AbsolutePathBuf::try_from(codex_home.path())?;
         let config_layer_stack =
-            load_config_layers_state(codex_home.path(), &Vec::new(), overrides).await?;
+            load_config_layers_state(codex_home.path(), Some(cwd), &Vec::new(), overrides).await?;
         let cfg = deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
             codex_home.path(),
@@ -2072,8 +2085,10 @@ trust_level = "trusted"
             managed_preferences_base64: None,
         };
 
+        let cwd = AbsolutePathBuf::try_from(codex_home.path())?;
         let config_layer_stack = load_config_layers_state(
             codex_home.path(),
+            Some(cwd),
             &[("model".to_string(), TomlValue::String("cli".to_string()))],
             overrides,
         )
