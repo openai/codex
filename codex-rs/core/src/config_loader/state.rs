@@ -171,6 +171,7 @@ fn verify_layer_ordering(layers: &[ConfigLayerEntry]) -> std::io::Result<Option<
     }
 
     let mut user_layer_index: Option<usize> = None;
+    let mut previous_project: Option<&AbsolutePathBuf> = None;
     for (index, layer) in layers.iter().enumerate() {
         if matches!(layer.name, ConfigLayerSource::User { .. }) {
             if user_layer_index.is_some() {
@@ -180,6 +181,26 @@ fn verify_layer_ordering(layers: &[ConfigLayerEntry]) -> std::io::Result<Option<
                 ));
             }
             user_layer_index = Some(index);
+        }
+
+        if let ConfigLayerSource::Project {
+            dot_codex_folder: current,
+        } = &layer.name
+        {
+            if let Some(previous) = previous_project {
+                if previous == current
+                    || !current
+                        .as_path()
+                        .ancestors()
+                        .any(|ancestor| ancestor == previous.as_path().parent().unwrap_or_else(|| previous.as_path()))
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "project layers are not ordered from root to cwd",
+                    ));
+                }
+            }
+            previous_project = Some(current);
         }
     }
 

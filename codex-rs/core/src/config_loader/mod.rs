@@ -17,9 +17,11 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use toml::Value as TomlValue;
 
 pub use config_requirements::ConfigRequirements;
@@ -127,8 +129,11 @@ pub async fn load_config_layers_state(
         }
     }
 
-    // TODO(mbolin): Add layers for cwd, tree, and repo config files.
-    let _ = cwd;
+    if let Some(cwd) = cwd {
+        let project_root = find_project_root(&cwd).await?;
+        let project_layers = load_project_layers(&cwd, &project_root).await?;
+        layers.extend(project_layers);
+    }
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.
     if !cli_overrides.is_empty() {
@@ -233,6 +238,85 @@ async fn load_requirements_from_legacy_scheme(
     }
 
     Ok(())
+}
+
+async fn find_project_root(cwd: &AbsolutePathBuf) -> io::Result<AbsolutePathBuf> {
+    for ancestor in cwd.as_path().ancestors() {
+        let git_dir = ancestor.join(".git");
+        if tokio::fs::metadata(&git_dir).await.is_ok() {
+            return AbsolutePathBuf::from_absolute_path(ancestor);
+        }
+    }
+    Ok(cwd.clone())
+}
+
+/// Return the appropriate list of layers (each with
+/// [ConfigLayerSource::Project] as the source) between `cwd` and
+/// `project_root`, inclusive. The list is ordered in _increasing_ precdence,
+/// starting from folders closest to `project_root` (which is the lowest
+/// precedence) to those closest to `cwd` (which si the highest precedence).
+async fn load_project_layers(
+    cwd: &AbsolutePathBuf,
+    project_root: &AbsolutePathBuf,
+) -> io::Result<Vec<ConfigLayerEntry>> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut current = Some(cwd.as_path());
+    while let Some(dir) = current {
+        dirs.push(dir.to_path_buf());
+        if dir == project_root.as_path() {
+            break;
+        }
+        current = dir.parent();
+    }
+    dirs.reverse();
+
+    let mut layers = Vec::new();
+    for dir in dirs {
+        let dot_codex = dir.join(".codex");
+        if !tokio::fs::metadata(&dot_codex)
+            .await
+            .map(|meta| meta.is_dir())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let dot_codex_abs = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
+        let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
+        match tokio::fs::read_to_string(&config_file).await {
+            Ok(contents) => {
+                let _guard = AbsolutePathBufGuard::new(dot_codex_abs.as_path());
+                let config: TomlValue = toml::from_str(&contents).map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "Error parsing project config file {}: {e}",
+                            config_file.as_path().display(),
+                        ),
+                    )
+                })?;
+                layers.push(ConfigLayerEntry::new(
+                    ConfigLayerSource::Project {
+                        dot_codex_folder: dot_codex_abs,
+                    },
+                    config,
+                ));
+            }
+            Err(err) => {
+                if err.kind() != io::ErrorKind::NotFound {
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!(
+                            "Failed to read project config file {}: {err}",
+                            config_file.as_path().display(),
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(layers)
 }
 
 /// The legacy mechanism for specifying admin-enforced configuration is to read

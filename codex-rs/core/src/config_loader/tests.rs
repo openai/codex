@@ -208,3 +208,58 @@ allowed_approval_policies = ["never", "on-request"]
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn project_layers_prefer_closest_cwd() {
+    let tmp = tempdir().expect("tempdir");
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    std::fs::create_dir_all(nested.join(".codex")).expect("dirs");
+    std::fs::create_dir_all(project_root.join(".codex")).expect("dirs");
+    std::fs::write(project_root.join(".git"), "gitdir: here").expect("git marker");
+
+    std::fs::write(
+        project_root.join(".codex").join(CONFIG_TOML_FILE),
+        "foo = \"root\"\n",
+    )
+    .expect("root config");
+    std::fs::write(
+        nested.join(".codex").join(CONFIG_TOML_FILE),
+        "foo = \"child\"\n",
+    )
+    .expect("nested config");
+
+    let codex_home = tmp.path().join("home");
+    std::fs::create_dir_all(&codex_home).expect("home");
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested).expect("cwd");
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+    )
+    .await
+    .expect("load layers");
+
+    let project_layers: Vec<_> = layers
+        .layers_high_to_low()
+        .into_iter()
+        .filter_map(|layer| match &layer.name {
+            super::ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(project_layers.len(), 2);
+    assert_eq!(project_layers[0].as_path(), nested.join(".codex").as_path());
+    assert_eq!(
+        project_layers[1].as_path(),
+        project_root.join(".codex").as_path()
+    );
+
+    let config = layers.effective_config();
+    let foo = config
+        .get("foo")
+        .and_then(TomlValue::as_str)
+        .expect("foo entry");
+    assert_eq!(foo, "child");
+}
