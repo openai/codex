@@ -54,6 +54,8 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
@@ -126,6 +128,46 @@ impl dyn HistoryCell {
 
     pub(crate) fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SharedHistoryCell<T> {
+    inner: Arc<Mutex<T>>,
+}
+
+impl<T> SharedHistoryCell<T> {
+    pub(crate) fn new(inner: Arc<Mutex<T>>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<T> HistoryCell for SharedHistoryCell<T>
+where
+    T: HistoryCell,
+{
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.display_lines(width)
+    }
+
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.transcript_lines(width)
+    }
+
+    fn is_stream_continuation(&self) -> bool {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.is_stream_continuation()
     }
 }
 

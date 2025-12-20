@@ -39,6 +39,9 @@ use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::StreamErrorEvent;
+use codex_core::protocol::SubAgentInvocation;
+use codex_core::protocol::SubAgentToolCallBeginEvent;
+use codex_core::protocol::SubAgentToolCallTokensEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
 use codex_core::protocol::TokenCountEvent;
@@ -457,6 +460,7 @@ fn make_chatwidget_manual(
         codex_op_tx: op_tx,
         bottom_pane: bottom,
         active_cell: None,
+        active_subagent_group: None,
         config: cfg.clone(),
         model_family: ModelsManager::construct_model_family_offline(&resolved_model, &cfg),
         auth_manager: auth_manager.clone(),
@@ -1425,6 +1429,46 @@ fn slash_rollout_handles_missing_path() {
     assert!(
         rendered.contains("not available"),
         "expected missing rollout path message: {rendered}"
+    );
+}
+
+#[test]
+fn subagent_history_cell_keeps_updating_after_other_history_is_inserted() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
+
+    chat.handle_subagent_begin_now(SubAgentToolCallBeginEvent {
+        call_id: "call-1".to_string(),
+        invocation: SubAgentInvocation {
+            label: "alpha".to_string(),
+            prompt: "Prompt".to_string(),
+        },
+    });
+
+    let mut inserted: Vec<Box<dyn HistoryCell>> = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev {
+            inserted.push(cell);
+        }
+    }
+    assert_eq!(
+        inserted.len(),
+        1,
+        "expected exactly one subagent history cell"
+    );
+    let subagent_cell = inserted.remove(0);
+
+    chat.dispatch_command(SlashCommand::Status);
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_subagent_tokens_now(SubAgentToolCallTokensEvent {
+        call_id: "call-1".to_string(),
+        tokens: 1300,
+    });
+
+    let rendered = lines_to_single_string(&subagent_cell.display_lines(80));
+    assert!(
+        rendered.contains("1.3k tok"),
+        "expected live token count after /status: {rendered}"
     );
 }
 
