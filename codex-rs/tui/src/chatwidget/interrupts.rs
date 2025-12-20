@@ -12,6 +12,7 @@ use codex_core::protocol::PlanApprovalRequestEvent;
 use codex_core::protocol::SubAgentToolCallActivityEvent;
 use codex_core::protocol::SubAgentToolCallBeginEvent;
 use codex_core::protocol::SubAgentToolCallEndEvent;
+use codex_core::protocol::SubAgentToolCallTokensEvent;
 use codex_protocol::approvals::ElicitationRequestEvent;
 
 use super::ChatWidget;
@@ -29,6 +30,7 @@ pub(crate) enum QueuedInterrupt {
     McpEnd(McpToolCallEndEvent),
     SubAgentBegin(SubAgentToolCallBeginEvent),
     SubAgentActivity(SubAgentToolCallActivityEvent),
+    SubAgentTokens(SubAgentToolCallTokensEvent),
     SubAgentEnd(SubAgentToolCallEndEvent),
     PatchEnd(PatchApplyEndEvent),
 }
@@ -100,6 +102,10 @@ impl InterruptManager {
         self.queue.push_back(QueuedInterrupt::SubAgentActivity(ev));
     }
 
+    pub(crate) fn push_subagent_tokens(&mut self, ev: SubAgentToolCallTokensEvent) {
+        self.queue.push_back(QueuedInterrupt::SubAgentTokens(ev));
+    }
+
     pub(crate) fn push_subagent_end(&mut self, ev: SubAgentToolCallEndEvent) {
         self.queue.push_back(QueuedInterrupt::SubAgentEnd(ev));
     }
@@ -128,6 +134,7 @@ impl InterruptManager {
                 QueuedInterrupt::McpEnd(ev) => chat.handle_mcp_end_now(ev),
                 QueuedInterrupt::SubAgentBegin(ev) => chat.handle_subagent_begin_now(ev),
                 QueuedInterrupt::SubAgentActivity(ev) => chat.handle_subagent_activity_now(ev),
+                QueuedInterrupt::SubAgentTokens(ev) => chat.handle_subagent_tokens_now(ev),
                 QueuedInterrupt::SubAgentEnd(ev) => chat.handle_subagent_end_now(ev),
                 QueuedInterrupt::PatchEnd(ev) => chat.handle_patch_apply_end_now(ev),
             }

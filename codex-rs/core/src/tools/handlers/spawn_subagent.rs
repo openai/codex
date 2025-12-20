@@ -7,6 +7,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::SubAgentToolCallActivityEvent;
 use codex_protocol::protocol::SubAgentToolCallBeginEvent;
 use codex_protocol::protocol::SubAgentToolCallEndEvent;
+use codex_protocol::protocol::SubAgentToolCallTokensEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
@@ -178,22 +179,25 @@ impl ToolHandler for SpawnSubagentHandler {
         let mut last_agent_message: Option<String> = None;
         let mut last_activity: Option<String> = None;
         let mut tokens: i64 = 0;
+        let mut last_reported_tokens: Option<i64> = None;
+        let mut last_reported_at = Instant::now();
         while let Ok(event) = io.rx_event.recv().await {
             let Event { id: _, msg } = event;
 
             if let Some(activity) = activity_for_event(&msg)
-                && last_activity.as_deref() != Some(activity.as_str()) {
-                    last_activity = Some(activity.clone());
-                    session
-                        .send_event(
-                            turn.as_ref(),
-                            EventMsg::SubAgentToolCallActivity(SubAgentToolCallActivityEvent {
-                                call_id: call_id.clone(),
-                                activity,
-                            }),
-                        )
-                        .await;
-                }
+                && last_activity.as_deref() != Some(activity.as_str())
+            {
+                last_activity = Some(activity.clone());
+                session
+                    .send_event(
+                        turn.as_ref(),
+                        EventMsg::SubAgentToolCallActivity(SubAgentToolCallActivityEvent {
+                            call_id: call_id.clone(),
+                            activity,
+                        }),
+                    )
+                    .await;
+            }
 
             match msg {
                 EventMsg::TaskComplete(ev) => {
@@ -205,6 +209,27 @@ impl ToolHandler for SpawnSubagentHandler {
                     info: Some(info), ..
                 }) => {
                     tokens = tokens.saturating_add(info.last_token_usage.total_tokens.max(0));
+                    let now = Instant::now();
+                    let should_report =
+                        match (last_reported_tokens, last_reported_at.elapsed().as_secs()) {
+                            (Some(prev), secs) => {
+                                tokens > prev && (tokens - prev >= 250 || secs >= 2)
+                            }
+                            (None, _) => tokens > 0,
+                        };
+                    if should_report {
+                        session
+                            .send_event(
+                                turn.as_ref(),
+                                EventMsg::SubAgentToolCallTokens(SubAgentToolCallTokensEvent {
+                                    call_id: call_id.clone(),
+                                    tokens,
+                                }),
+                            )
+                            .await;
+                        last_reported_tokens = Some(tokens);
+                        last_reported_at = now;
+                    }
                 }
                 _ => {}
             }

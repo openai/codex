@@ -1128,6 +1128,10 @@ impl SubAgentToolCallCell {
         }
     }
 
+    pub(crate) fn set_tokens(&mut self, tokens: i64) {
+        self.tokens = if tokens > 0 { Some(tokens) } else { None };
+    }
+
     fn success(&self) -> Option<bool> {
         match self.result.as_ref() {
             Some(Ok(_)) => Some(true),
@@ -1238,6 +1242,21 @@ impl SubAgentToolCallGroupCell {
         {
             Some(cell) => {
                 cell.set_activity(activity);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub(crate) fn set_tokens(&mut self, call_id: &str, tokens: i64) -> bool {
+        match self
+            .calls
+            .iter_mut()
+            .rev()
+            .find(|cell| cell.call_id() == call_id)
+        {
+            Some(cell) => {
+                cell.set_tokens(tokens);
                 true
             }
             None => false,

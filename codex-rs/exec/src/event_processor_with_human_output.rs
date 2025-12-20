@@ -615,6 +615,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::UndoStarted(_)
             | EventMsg::SubAgentToolCallBegin(_)
             | EventMsg::SubAgentToolCallActivity(_)
+            | EventMsg::SubAgentToolCallTokens(_)
             | EventMsg::SubAgentToolCallEnd(_) => {}
         }
         CodexStatus::Running
