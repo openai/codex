@@ -1,18 +1,19 @@
 ## Contributing
 
-This project is under active development and the code will likely change pretty significantly.
+Codexel is a community-maintained fork of upstream OpenAI Codex CLI. Contributions are welcome, especially:
 
-**At the moment, we only plan to prioritize reviewing external contributions for bugs or security fixes.**
+- Bug fixes and security hardening
+- UX improvements (TUI, plan mode, approvals/sandbox ergonomics)
+- Documentation fixes and examples
+- Tests and CI reliability
 
-If you want to add a new feature or change the behavior of an existing one, please open an issue proposing the feature and get approval from an OpenAI team member before spending time building it.
-
-**New contributions that don't go through this process may be closed** if they aren't aligned with our current roadmap or conflict with other priorities/upcoming features.
+For larger features or behavior changes, open an issue first so we can agree on scope and direction. If the issue reproduces in upstream Codex CLI too, it may be a better fit as an upstream PR (or at least worth reporting upstream as well).
 
 ### Development workflow
 
 - Create a _topic branch_ from `main` - e.g. `feat/interactive-prompt`.
 - Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
-- Ensure your change is free of lint warnings and test failures.
+- Ensure your change is free of lint warnings and test failures. Prefer the repo `just` helpers where possible (see `docs/install.md`).
 
 ### Changelog (Codexel fork)
 
@@ -29,14 +30,14 @@ If you want to add a new feature or change the behavior of an existing one, plea
 
 1. **Start with an issue.** Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
 2. **Add or update tests.** Every new feature or bug-fix should come with test coverage that fails before your change and passes afterwards. 100% coverage is not required, but aim for meaningful assertions.
-3. **Document behaviour.** If your change affects user-facing behaviour, update the README, inline help (`codexel --help`), or relevant example projects. Avoid changing the system prompt unless absolutely necessary; prefer adding developer-instruction guidance that is easy to merge and iterate on.
+3. **Document behavior.** If your change affects user-facing behavior, update the README, inline help (`codexel --help`), or relevant docs under `docs/`.
 4. **Keep commits atomic.** Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
 
 ### Opening a pull request
 
 - Fill in the PR template (or include similar information) - **What? Why? How?**
 - Include a link to a bug report or enhancement request in the issue tracker
-- Run **all** checks locally. Use the root `just` helpers so you stay consistent with the rest of the workspace: `just fmt`, `just fix -p <crate>` for the crate you touched, and the relevant tests (e.g., `cargo test -p codex-tui` or `just test` if you need a full sweep). CI failures that could have been caught locally slow down the process.
+- Run the relevant checks locally. Use the root `just` helpers so you stay consistent with the rest of the workspace: `just fmt`, `just fix -p <crate>` for the crate you touched, and the relevant tests (e.g., `cargo test -p codex-tui`).
 - Make sure your branch is up-to-date with `main` and that you have resolved merge conflicts.
 - Mark the PR as **Ready for review** only when you believe it is in a merge-able state.
 
@@ -55,33 +56,8 @@ If you want to add a new feature or change the behavior of an existing one, plea
 
 ### Getting help
 
-If you run into problems setting up the project, would like feedback on an idea, or just want to say _hi_ - please open a Discussion or jump into the relevant issue. We are happy to help.
-
-Together we can make Codexel an incredible tool. **Happy hacking!** :rocket:
-
-### Contributor license agreement (CLA)
-
-All contributors **must** accept the CLA. The process is lightweight:
-
-1. Open your pull request.
-2. Paste the following comment (or reply `recheck` if you've signed before):
-
-   ```text
-   I have read the CLA Document and I hereby sign the CLA
-   ```
-
-3. The CLA-Assistant bot records your signature in the repo and marks the status check as passed.
-
-No special Git commands, email attachments, or commit footers required.
-
-#### Quick fixes
-
-| Scenario          | Command                                          |
-| ----------------- | ------------------------------------------------ |
-| Amend last commit | `git commit --amend -s --no-edit && git push -f` |
-
-The **DCO check** blocks merges until every commit in the PR carries the footer (with squash this is just the one).
+If you run into problems setting up the project or want feedback on an idea, please open a Discussion or jump into the relevant issue.
 
 ### Security & responsible AI
 
-Have you discovered a vulnerability or have concerns about model output? Please e-mail **security@openai.com** and we will respond promptly.
+If you discover a security issue, prefer opening a GitHub Security Advisory for this repository. If that's not possible, open an issue with minimal details and we’ll follow up.
