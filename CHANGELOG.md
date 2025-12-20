@@ -11,40 +11,25 @@ edited between the markers.
 
 ### Highlights
 
-- Fix: keep `spawn_subagent` history entries updating even when other messages are inserted.
+- _No fork-only changes yet._
 
 ### Details
 
-<!-- BEGIN GENERATED DETAILS: range=520d3fdf1ea7114bdabafd975c76895c83e47eeb..HEAD -->
-#### Documentation
-- Clarify Codexel fork positioning
-
-
-#### TUI
-- Keep subagent history updating
-- Keep subagent cell live during inserts
-
-
-#### Plan Mode
-- Persist approved plan and hide .codexel
-
-
-#### Other
-- Cut 0.1.3
-- Update unreleased
-- Update
-- Require spawn_subagent description and refresh snapshots
+<!-- BEGIN GENERATED DETAILS: range=b432d87d8ad02c1cd091072c32d42c545b07965a..HEAD -->
+_No fork-only changes yet._
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.3] - 2025-12-20
 
 Upstream baseline: openai/codex@be274cbe6273cb17d756a6cda729d537f15ae49a
-Release commit: 520d3fdf1ea7114bdabafd975c76895c83e47eeb
+Release commit: b432d87d8ad02c1cd091072c32d42c545b07965a
 
 ### Highlights
 
 - Add a read-only spawn_subagent tool for parallel exploration and research.
 - Show spawn_subagent tool calls in chat history, including live activity and token usage, and stop them on Esc.
+- Fix: keep `spawn_subagent` history entries updating even when other messages are inserted.
+- Plan Mode: persist approved plans under `.codexel/plan.md` (and hide `.codexel/` from built-in file tools).
 - Skip macOS rust-ci jobs on pull requests to avoid flaky PR runs.
 - Skip upstream npm package staging in CI for forks.
 - Fix sdk workflow to build the codexel binary.
@@ -52,13 +37,20 @@ Release commit: 520d3fdf1ea7114bdabafd975c76895c83e47eeb
 
 ### Details
 
-<!-- BEGIN GENERATED DETAILS: range=79d019672838ccc532247588d31d2eda81fb42d8..520d3fdf1ea7114bdabafd975c76895c83e47eeb -->
+<!-- BEGIN GENERATED DETAILS: range=79d019672838ccc532247588d31d2eda81fb42d8..b432d87d8ad02c1cd091072c32d42c545b07965a -->
+#### Documentation
+- Clarify Codexel fork positioning
+
+
 #### TUI
 - Show subagent tool calls in history
+- Keep subagent history updating
+- Keep subagent cell live during inserts
 
 
 #### Plan Mode
 - Stream activity and match plan-variants UI
+- Persist approved plan and hide .codexel
 
 
 #### Branding & Packaging
@@ -67,6 +59,7 @@ Release commit: 520d3fdf1ea7114bdabafd975c76895c83e47eeb
 
 #### Chores
 - Update login flow and tui snapshots
+- Regenerate changelog
 
 
 #### Other
@@ -80,6 +73,10 @@ Release commit: 520d3fdf1ea7114bdabafd975c76895c83e47eeb
 - Show spawn_subagent tool calls in history
 - Stream token counts
 - Bump workspace version to 0.1.3
+- Cut 0.1.3
+- Update unreleased
+- Update
+- Require spawn_subagent description and refresh snapshots
 <!-- END GENERATED DETAILS -->
 
 ## [0.1.2] - 2025-12-19
