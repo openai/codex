@@ -149,8 +149,6 @@ use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
-#[cfg(test)]
-use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::otel_manager::OtelManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
@@ -2746,6 +2744,7 @@ mod tests {
     use crate::function_tool::FunctionCallError;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
+    use codex_execpolicy::Policy as ExecPolicy;
     use codex_protocol::models::FunctionCallOutputPayload;
 
     use crate::protocol::CompactedItem;
