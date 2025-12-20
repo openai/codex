@@ -306,7 +306,21 @@ pub(crate) struct ScrollUpdate {
     pub(crate) next_tick_in: Option<Duration>,
 }
 
-/// Tracks active scroll input streams and coalesces redraws to a fixed cadence.
+/// Tracks mouse scroll input streams and coalesces redraws.
+///
+/// This is the state machine that turns discrete terminal scroll events (`ScrollUp`/`ScrollDown`)
+/// into viewport line deltas. It implements the stream-based model described in
+/// `codex-rs/tui2/docs/scroll_input_model.md`:
+///
+/// - **Streams**: a sequence of events is treated as one user gesture until a gap larger than
+///   [`STREAM_GAP`] or a direction flip closes the stream.
+/// - **Normalization**: streams are converted to line deltas using [`ScrollConfig`] (per-terminal
+///   `events_per_tick`, per-mode lines-per-tick, and optional invert).
+/// - **Coalescing**: trackpad-like streams are flushed at most every [`REDRAW_CADENCE`] to avoid
+///   floods in very dense terminals; wheel-like streams flush immediately to feel responsive.
+/// - **Follow-up ticks**: because stream closure is defined by a *time gap*, callers must schedule
+///   periodic ticks while a stream is active. The returned [`ScrollUpdate::next_tick_in`] provides
+///   the next suggested wake-up.
 ///
 /// Typical usage:
 /// - Call [`MouseScrollState::on_scroll_event`] for each vertical scroll event.
@@ -322,6 +336,11 @@ pub(crate) struct MouseScrollState {
 }
 
 impl MouseScrollState {
+    /// Create a new scroll state with a deterministic time origin.
+    ///
+    /// This is primarily used by unit tests so they can control the coalescing and stream-gap
+    /// behavior by choosing `now` values. Production code generally uses [`Default`] and the
+    /// `Instant::now()`-based entrypoints.
     fn new_at(now: Instant) -> Self {
         Self {
             stream: None,
@@ -332,6 +351,15 @@ impl MouseScrollState {
     }
 
     /// Handle a scroll event using the current time.
+    ///
+    /// This is the normal production entrypoint used by the TUI event loop. It forwards to
+    /// [`MouseScrollState::on_scroll_event_at`] using `Instant::now()`.
+    ///
+    /// If the returned [`ScrollUpdate::next_tick_in`] is `Some`, callers should schedule a future
+    /// tick (typically by requesting a frame) and call [`MouseScrollState::on_tick`] (or
+    /// [`MouseScrollState::on_tick_at`] in tests) so we can close the stream after it goes idle.
+    /// Without those ticks, streams would only close when a *new* scroll event arrives, which can
+    /// leave fractional trackpad scroll unflushed and make stop behavior feel laggy.
     pub(crate) fn on_scroll_event(
         &mut self,
         direction: ScrollDirection,
@@ -340,7 +368,26 @@ impl MouseScrollState {
         self.on_scroll_event_at(Instant::now(), direction, config)
     }
 
-    /// Handle a scroll event at a specific time (for tests).
+    /// Handle a scroll event at a specific time.
+    ///
+    /// This is the deterministic entrypoint for the scroll stream state machine. It exists so we
+    /// can write unit tests that exercise stream splitting, coalesced redraw, and end-of-stream
+    /// flushing without depending on wall-clock time.
+    ///
+    /// Behavior is identical to [`MouseScrollState::on_scroll_event`], except the caller provides
+    /// the timestamp (`now`). In the real app, the timestamp comes from `Instant::now()`.
+    ///
+    /// Key details (see `codex-rs/tui2/docs/scroll_input_model.md` for the full model):
+    ///
+    /// - **Stream boundaries**: a gap larger than [`STREAM_GAP`] or a direction flip closes the
+    ///   previous stream and starts a new one.
+    /// - **Wheel vs trackpad**: the stream kind may be promoted to wheel-like in auto mode when a
+    ///   tick-worth of events arrives quickly; otherwise it remains trackpad-like.
+    /// - **Redraw coalescing**: wheel-like streams flush immediately; trackpad-like streams flush
+    ///   at most every [`REDRAW_CADENCE`].
+    /// - **Follow-up ticks**: the returned [`ScrollUpdate::next_tick_in`] tells the caller when it
+    ///   should call [`MouseScrollState::on_tick_at`] to close idle streams and flush any remaining
+    ///   whole lines. In TUI2 this is wired through the app’s frame scheduler.
     pub(crate) fn on_scroll_event_at(
         &mut self,
         now: Instant,
@@ -395,6 +442,15 @@ impl MouseScrollState {
     }
 
     /// Check whether an active stream has ended at a specific time (for tests).
+    ///
+    /// This should be called even when no new scroll events are arriving, while a stream is still
+    /// considered active. It has two roles:
+    ///
+    /// - **Stream closure**: if the stream has been idle for longer than [`STREAM_GAP`], we close
+    ///   it and flush any remaining whole-line scroll.
+    /// - **Coalesced flush**: for trackpad-like streams, we also flush on [`REDRAW_CADENCE`] even
+    ///   without new events. This avoids a perceived "late jump" when the stream finally closes
+    ///   (users interpret that as overshoot).
     pub(crate) fn on_tick_at(&mut self, now: Instant) -> ScrollUpdate {
         let mut lines = 0;
         if let Some(mut stream) = self.stream.take() {
@@ -423,6 +479,12 @@ impl MouseScrollState {
         }
     }
 
+    /// Finalize a stream and update the trackpad carry state.
+    ///
+    /// Callers invoke this when a stream is known to have ended (gap/direction flip). It forces
+    /// a final wheel/trackpad classification for auto mode, flushes any whole-line deltas, and
+    /// persists any remaining fractional scroll for trackpad-like streams so the next stream
+    /// continues smoothly.
     fn finalize_stream_at(&mut self, now: Instant, stream: &mut ScrollStream) -> i32 {
         stream.finalize_kind();
         let lines = Self::flush_lines_at(&mut self.last_redraw_at, self.carry_lines, now, stream);
@@ -438,6 +500,14 @@ impl MouseScrollState {
         lines
     }
 
+    /// Compute and apply any newly-reached whole-line deltas for the active stream.
+    ///
+    /// This converts the stream’s accumulated events to a *desired total line position*,
+    /// truncates to whole lines, and returns the delta relative to what has already been applied
+    /// for this stream.
+    ///
+    /// For wheel-like streams we also apply a minimum of ±1 line for any non-zero input so wheel
+    /// notches never become "dead" due to rounding or mis-detection.
     fn flush_lines_at(
         last_redraw_at: &mut Instant,
         carry_lines: f32,
@@ -464,6 +534,15 @@ impl MouseScrollState {
         delta
     }
 
+    /// Determine when the caller should next call [`MouseScrollState::on_tick_at`].
+    ///
+    /// While a stream is active, we need follow-up ticks for two reasons:
+    ///
+    /// - **Stream closure**: once idle for [`STREAM_GAP`], we finalize the stream.
+    /// - **Trackpad coalescing**: if whole lines are pending but we haven't hit
+    ///   [`REDRAW_CADENCE`] yet, we schedule an earlier tick so the viewport updates promptly.
+    ///
+    /// Returning `None` means no stream is active (or it is already past the gap threshold).
     fn next_tick_in(&self, now: Instant) -> Option<Duration> {
         let stream = self.stream.as_ref()?;
         let gap = now.duration_since(stream.last);
@@ -498,6 +577,22 @@ impl Default for MouseScrollState {
 }
 
 #[derive(Clone, Debug)]
+/// Per-stream state accumulated while the user performs one scroll gesture.
+///
+/// A "stream" corresponds to one contiguous gesture as defined by [`STREAM_GAP`] (silence) and
+/// direction changes. The stream accumulates raw event counts and converts them into a desired
+/// total line position via [`ScrollConfig`]. The outer [`MouseScrollState`] then applies only the
+/// delta between `desired_total` and `applied_lines` so callers can treat scroll updates as
+/// incremental line deltas.
+///
+/// This type is intentionally not exposed outside this module. The public API is the pair of
+/// entrypoints:
+///
+/// - [`MouseScrollState::on_scroll_event_at`] for new events.
+/// - [`MouseScrollState::on_tick_at`] for idle-gap closure and coalesced flush.
+///
+/// See `codex-rs/tui2/docs/scroll_input_model.md` for the full rationale and probe-derived
+/// constants.
 struct ScrollStream {
     start: Instant,
     last: Instant,
@@ -512,6 +607,11 @@ struct ScrollStream {
 }
 
 impl ScrollStream {
+    /// Start a new stream at `now`.
+    ///
+    /// The initial `kind` is [`ScrollStreamKind::Unknown`]. In auto mode, streams begin behaving
+    /// like trackpads (to avoid overshoot) until [`ScrollStream::maybe_promote_kind`] promotes the
+    /// stream to wheel-like.
     fn new(now: Instant, direction: ScrollDirection, config: ScrollConfig) -> Self {
         Self {
             start: now,
@@ -527,6 +627,10 @@ impl ScrollStream {
         }
     }
 
+    /// Record one raw event in the stream.
+    ///
+    /// This updates the stream's last-seen timestamp, direction, and counters. Counters are
+    /// clamped to avoid floods and numeric blowups when terminals emit extremely dense streams.
     fn push_event(&mut self, now: Instant, direction: ScrollDirection) {
         self.last = now;
         self.direction = direction;
@@ -540,6 +644,16 @@ impl ScrollStream {
         );
     }
 
+    /// Promote an auto-mode stream to wheel-like if the first tick completes quickly.
+    ///
+    /// Terminals often batch a wheel notch into a short burst of `events_per_tick` raw events.
+    /// When we observe at least that many events and they arrived within
+    /// [`ScrollConfig::wheel_tick_detect_max`], we treat the stream as wheel-like so a notch
+    /// scrolls a fixed multi-line amount (classic feel).
+    ///
+    /// We only attempt this when `events_per_tick >= 2`. In 1-event-per-tick terminals there is
+    /// no "tick completion time" signal; auto-mode handles those via
+    /// [`ScrollStream::finalize_kind`]'s end-of-stream fallback.
     fn maybe_promote_kind(&mut self, now: Instant) {
         if self.config.mode != ScrollInputMode::Auto {
             return;
@@ -559,6 +673,14 @@ impl ScrollStream {
         }
     }
 
+    /// Finalize wheel/trackpad classification for the stream.
+    ///
+    /// In forced modes (`wheel`/`trackpad`), this simply sets the stream kind.
+    ///
+    /// In auto mode, streams that were not promoted to wheel-like remain trackpad-like, except
+    /// for a small end-of-stream fallback for 1-event-per-tick terminals. That fallback treats a
+    /// very small, short-lived stream as wheel-like so wheels in WezTerm/iTerm/VS Code still get
+    /// the expected multi-line notch behavior.
     fn finalize_kind(&mut self) {
         match self.config.mode {
             ScrollInputMode::Wheel => self.kind = ScrollStreamKind::Wheel,
@@ -584,6 +706,11 @@ impl ScrollStream {
         }
     }
 
+    /// Whether this stream should currently behave like a wheel.
+    ///
+    /// In auto mode, streams are wheel-like only after we promote them (or after the 1-event
+    /// fallback triggers on finalization). While `kind` is still unknown, we treat the stream as
+    /// trackpad-like to avoid overshooting.
     fn is_wheel_like(&self) -> bool {
         match self.config.mode {
             ScrollInputMode::Wheel => true,
@@ -592,6 +719,9 @@ impl ScrollStream {
         }
     }
 
+    /// The per-mode lines-per-tick scaling factor.
+    ///
+    /// In auto mode, unknown streams use the trackpad factor until promoted.
     fn effective_lines_per_tick_f32(&self) -> f32 {
         match self.config.mode {
             ScrollInputMode::Wheel => self.config.wheel_lines_per_tick_f32(),
@@ -605,6 +735,15 @@ impl ScrollStream {
         }
     }
 
+    /// Compute the desired total line position for this stream (including trackpad carry).
+    ///
+    /// This converts raw event counts into line units using the appropriate divisor and scaling:
+    ///
+    /// - Wheel-like: `lines = events * (wheel_lines_per_tick / events_per_tick)`
+    /// - Trackpad-like: `lines = events * (trackpad_lines_per_tick / min(events_per_tick, 3))`
+    ///
+    /// For trackpad-like streams we also add `carry_lines` (fractional remainder from previous
+    /// streams) and then apply bounded acceleration. The returned value is clamped as a guardrail.
     fn desired_lines_f32(&self, carry_lines: f32) -> f32 {
         let events_per_tick = if self.is_wheel_like() {
             self.config.events_per_tick_f32()
