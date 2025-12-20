@@ -252,8 +252,9 @@ impl ShellHandler {
         emitter.begin(event_ctx).await;
 
         let features = session.features();
+        let exec_policy = session.services.exec_policy.current();
         let exec_approval_requirement = create_exec_approval_requirement_for_command(
-            &turn.exec_policy,
+            exec_policy.as_ref(),
             &features,
             &exec_params.command,
             turn.approval_policy,
