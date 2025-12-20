@@ -160,8 +160,10 @@ impl RestoreMode {
     }
 }
 
+/// Flush the underlying stdin buffer to clear any input that may be buffered at the terminal level.
+/// For example, clears any user input that occurred while the crossterm EventStream was dropped.
 #[cfg(unix)]
-pub(crate) fn flush_terminal_input_buffer() {
+fn flush_terminal_input_buffer() {
     // Safety: flushing the stdin queue is safe and does not move ownership.
     let result = unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) };
     if result != 0 {
@@ -170,8 +172,10 @@ pub(crate) fn flush_terminal_input_buffer() {
     }
 }
 
+/// Flush the underlying stdin buffer to clear any input that may be buffered at the terminal level.
+/// For example, clears any user input that occurred while the crossterm EventStream was dropped.
 #[cfg(windows)]
-pub(crate) fn flush_terminal_input_buffer() {
+fn flush_terminal_input_buffer() {
     use windows_sys::Win32::Foundation::GetLastError;
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::Console::FlushConsoleInputBuffer;

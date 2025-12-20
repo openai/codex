@@ -183,7 +183,7 @@ pub(crate) enum AppEvent {
     },
 
     /// Launch the external editor after a normal draw has completed.
-    LaunchExternalEditorAfterDraw,
+    LaunchExternalEditor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

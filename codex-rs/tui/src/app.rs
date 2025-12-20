@@ -515,10 +515,6 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
-        // If the external editor is active, don't process any tui events.
-        if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
-            return Ok(true);
-        }
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -554,8 +550,7 @@ impl App {
                     if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
                         self.chat_widget
                             .set_external_editor_state(ExternalEditorState::Active);
-                        self.app_event_tx
-                            .send(AppEvent::LaunchExternalEditorAfterDraw);
+                        self.app_event_tx.send(AppEvent::LaunchExternalEditor);
                     }
                 }
             }
@@ -811,7 +806,7 @@ impl App {
             AppEvent::OpenFeedbackConsent { category } => {
                 self.chat_widget.open_feedback_consent(category);
             }
-            AppEvent::LaunchExternalEditorAfterDraw => {
+            AppEvent::LaunchExternalEditor => {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
                     self.launch_external_editor(tui).await;
                 }
