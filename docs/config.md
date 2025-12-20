@@ -942,6 +942,21 @@ scroll_invert = false
 
 Scroll settings (`tui.scroll_events_per_tick`, `tui.scroll_wheel_lines`, `tui.scroll_trackpad_lines`, `tui.scroll_trackpad_accel_*`, `tui.scroll_mode`, `tui.scroll_wheel_*`, `tui.scroll_invert`) currently apply to the TUI2 viewport scroll implementation.
 
+> [!NOTE] > `tui.scroll_events_per_tick` has terminal-specific defaults derived from mouse scroll probe logs
+> collected on macOS for a small set of terminals:
+>
+> - Terminal.app: 3
+> - Warp: 9
+> - WezTerm: 1
+> - Alacritty: 3
+> - Ghostty: 3 (stopgap; one probe measured ~9)
+> - iTerm2: 1
+> - VS Code terminal: 1
+> - Kitty: 3
+>
+> We should augment these defaults with data from more terminals and other platforms over time.
+> Unknown terminals fall back to 3 and can be overridden via `tui.scroll_events_per_tick`.
+
 ## Authentication and authorization
 
 ### Forcing a login method
@@ -1030,7 +1045,7 @@ Valid values:
 | `tui.scroll_trackpad_lines`                      | number                                                            | Baseline trackpad sensitivity in trackpad-like mode (default: 1).                                                               |
 | `tui.scroll_trackpad_accel_events`               | number                                                            | Trackpad acceleration: events per +1x speed in TUI2 (default: 30).                                                              |
 | `tui.scroll_trackpad_accel_max`                  | number                                                            | Trackpad acceleration: max multiplier in TUI2 (default: 3).                                                                     |
-| `tui.scroll_mode`                                | `auto` \| `wheel` \| `trackpad`                                    | How to interpret scroll input in TUI2 (default: `auto`).                                                                        |
+| `tui.scroll_mode`                                | `auto` \| `wheel` \| `trackpad`                                   | How to interpret scroll input in TUI2 (default: `auto`).                                                                        |
 | `tui.scroll_wheel_tick_detect_max_ms`            | number                                                            | Auto-mode threshold (ms) for promoting a stream to wheel-like behavior (default: 12).                                           |
 | `tui.scroll_wheel_like_max_duration_ms`          | number                                                            | Auto-mode fallback duration (ms) used for 1-event-per-tick terminals (default: 200).                                            |
 | `tui.scroll_invert`                              | boolean                                                           | Invert mouse scroll direction in TUI2 (default: false).                                                                         |
