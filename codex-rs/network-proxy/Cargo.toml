@@ -1,0 +1,43 @@
+[package]
+name = "codex-network-proxy"
+edition = "2024"
+version = { workspace = true }
+
+[[bin]]
+name = "codex-network-proxy"
+path = "src/main.rs"
+
+[lib]
+name = "codex_network_proxy"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[features]
+default = ["mitm"]
+mitm = [
+    "tokio-rustls",
+    "rustls",
+    "rustls-native-certs",
+    "rustls-pemfile",
+    "rcgen",
+]
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-core = { workspace = true }
+globset = { workspace = true }
+hyper = { version = "0.14", features = ["full"] }
+rcgen = { version = "0.13", features = ["pem", "x509-parser"], optional = true }
+rustls = { version = "0.21", optional = true }
+rustls-native-certs = { version = "0.6", optional = true }
+rustls-pemfile = { version = "1", optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-rustls = { version = "0.24", optional = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt"] }
