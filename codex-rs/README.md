@@ -11,7 +11,7 @@ npm i -g @ixe1/codexel
 codexel
 ```
 
-You can also install via Homebrew (`brew install --cask codexel`) or download a platform-specific release directly from [GitHub Releases](../../releases).
+You can also install via Homebrew (`brew install --cask Ixe1/tap/codexel`) or download a platform-specific release directly from [GitHub Releases](../../releases).
 
 ## Documentation quickstart
 

@@ -1,0 +1,166 @@
+name: homebrew-cask-codexel
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing Codexel tag (e.g. codexel-v0.1.3)"
+        required: true
+        type: string
+
+jobs:
+  build-macos:
+    name: Build macOS assets - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: macos-13
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@1.90
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ${{ github.workspace }}/codex-rs/target/
+          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cargo build
+        shell: bash
+        run: cargo build --target ${{ matrix.target }} --release --bin codexel
+
+      - name: Package tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          out_dir="${GITHUB_WORKSPACE}/dist"
+          mkdir -p "$out_dir"
+          bin_path="target/${{ matrix.target }}/release/codexel"
+          chmod +x "$bin_path"
+          tar -C "$(dirname "$bin_path")" -czf "$out_dir/codexel-${{ matrix.target }}.tar.gz" codexel
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: codexel-${{ matrix.target }}-tarball
+          path: dist/codexel-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  publish-homebrew:
+    name: Upload assets + update tap cask
+    needs: build-macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Validate tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${{ inputs.tag }}" =~ ^codexel-v[0-9]+\.[0-9]+\.[0-9]+(-((alpha|beta)\.[0-9]+))?$ ]] \
+            || { echo "Tag '${{ inputs.tag }}' doesn't match expected format"; exit 1; }
+
+      - name: Download tarballs
+        uses: actions/download-artifact@v7
+        with:
+          path: dist
+
+      - name: Move tarballs into dist/
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for tarball in dist/*/codexel-*-apple-darwin.tar.gz; do
+            mv "$tarball" dist/
+          done
+          ls -la dist
+
+      - name: Upload macOS assets to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "${{ inputs.tag }}" dist/codexel-*-apple-darwin.tar.gz \
+            --repo Ixe1/codexel \
+            --clobber
+
+      - name: Compute sha256
+        id: shas
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha_arm=$(sha256sum dist/codexel-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
+          sha_intel=$(sha256sum dist/codexel-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
+          echo "arm=$sha_arm" >> "$GITHUB_OUTPUT"
+          echo "intel=$sha_intel" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Homebrew tap
+        if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        uses: actions/checkout@v6
+        with:
+          repository: Ixe1/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update cask
+        if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.tag }}"
+          version="${version#codexel-v}"
+          sha_arm="${{ steps.shas.outputs.arm }}"
+          sha_intel="${{ steps.shas.outputs.intel }}"
+
+          mkdir -p homebrew-tap/Casks
+          cat > homebrew-tap/Casks/codexel.rb <<EOF
+cask "codexel" do
+  version "${version}"
+  sha256 arm: "${sha_arm}",
+         intel: "${sha_intel}"
+
+  url "https://github.com/Ixe1/codexel/releases/download/codexel-v#{version}/codexel-#{arch}.tar.gz",
+      arch: {
+        arm: "aarch64-apple-darwin",
+        intel: "x86_64-apple-darwin",
+      }
+  name "Codexel"
+  desc "Codex CLI community fork"
+  homepage "https://github.com/Ixe1/codexel"
+  license "Apache-2.0"
+
+  binary "codexel"
+end
+EOF
+
+      - name: Commit and push
+        if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        working-directory: homebrew-tap
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.tag }}"
+          version="${version#codexel-v}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/codexel.rb
+          git commit -m "codexel ${version}" || exit 0
+          git push

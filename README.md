@@ -1,6 +1,6 @@
 <p align="center">
   <code>npm i -g @ixe1/codexel</code><br />
-  <code>brew install --cask codexel</code><br />
+  <code>brew install --cask Ixe1/tap/codexel</code><br />
   or download from <a href="../../releases/latest">GitHub Releases</a>
 </p>
 
@@ -48,7 +48,7 @@ npm install -g @ixe1/codexel
 Alternatively, if you use Homebrew:
 
 ```shell
-brew install --cask codexel
+brew install --cask Ixe1/tap/codexel
 ```
 
 Then run `codexel`:
@@ -71,7 +71,7 @@ Each GitHub Release contains many executables, but in practice, you likely want 
   - x86_64: `codexel-x86_64-unknown-linux-musl.tar.gz`
   - arm64: `codexel-aarch64-unknown-linux-musl.tar.gz`
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codexel-x86_64-unknown-linux-musl`), so you likely want to rename it to `codexel` after extracting it.
+Each archive contains a single `codexel` binary.
 
 </details>
 

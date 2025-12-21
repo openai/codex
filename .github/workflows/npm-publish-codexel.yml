@@ -1,12 +1,25 @@
 name: npm-publish-codexel
 
 on:
-  push:
-    tags:
-      - "codexel-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing Codexel tag (e.g. codexel-v0.1.3)"
+        required: true
+        type: string
+      publish_npm:
+        description: "Publish @ixe1/codexel to npm"
+        required: true
+        default: false
+        type: boolean
+      update_homebrew:
+        description: "Update the Homebrew cask in Ixe1/homebrew-tap"
+        required: true
+        default: true
+        type: boolean
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ inputs.tag }}
   cancel-in-progress: true
 
 jobs:
@@ -18,6 +31,8 @@ jobs:
       should_publish: ${{ steps.validate.outputs.should_publish }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
 
       - name: Validate tag matches codex-cli package version
         id: validate
@@ -26,12 +41,11 @@ jobs:
           set -euo pipefail
           echo "::group::Tag validation"
 
-          [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
-            || { echo "Not a tag push"; exit 1; }
-          [[ "${GITHUB_REF_NAME}" =~ ^codexel-v[0-9]+\.[0-9]+\.[0-9]+(-((alpha|beta)\.[0-9]+))?$ ]] \
-            || { echo "Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
+          tag="${{ inputs.tag }}"
+          [[ "${tag}" =~ ^codexel-v[0-9]+\.[0-9]+\.[0-9]+(-((alpha|beta)\.[0-9]+))?$ ]] \
+            || { echo "Tag '${tag}' doesn't match expected format"; exit 1; }
 
-          tag_version="${GITHUB_REF_NAME#codexel-v}"
+          tag_version="${tag#codexel-v}"
           package_version=$(python -c 'import json; print(json.load(open("codex-cli/package.json", "r", encoding="utf-8"))["version"])')
 
           if [[ "${package_version}" == *-dev ]]; then
@@ -74,6 +88,10 @@ jobs:
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             install_musl: true
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: macos-13
+            target: x86_64-apple-darwin
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
           - runner: windows-11-arm
@@ -81,6 +99,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
       - uses: dtolnay/rust-toolchain@1.90
         with:
           targets: ${{ matrix.target }}
@@ -136,6 +156,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -203,6 +225,8 @@ jobs:
           targets=(
             "aarch64-unknown-linux-musl"
             "x86_64-unknown-linux-musl"
+            "aarch64-apple-darwin"
+            "x86_64-apple-darwin"
             "aarch64-pc-windows-msvc"
             "x86_64-pc-windows-msvc"
           )
@@ -268,6 +292,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      HOMEBREW_TAP_REPO: Ixe1/homebrew-tap
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v7
@@ -291,6 +317,8 @@ jobs:
               cp "$codex_dir/codexel.exe" "dist/codexel-${target}.exe"
             elif [[ -f "$codex_dir/codexel" ]]; then
               cp "$codex_dir/codexel" "dist/codexel-${target}"
+              chmod +x "$codex_dir/codexel"
+              tar -C "$codex_dir" -czf "dist/codexel-${target}.tar.gz" codexel
             else
               echo "No codexel binary found in $codex_dir" >&2
               exit 1
@@ -302,7 +330,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#codexel-v}"
+          version="${{ inputs.tag }}"
+          version="${version#codexel-v}"
           prerelease="false"
           if [[ "${version}" == *-* ]]; then
             prerelease="true"
@@ -314,10 +343,55 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ steps.release_meta.outputs.version }}
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ inputs.tag }}
           files: dist/**
           prerelease: ${{ steps.release_meta.outputs.prerelease }}
           generate_release_notes: true
+
+      - name: Checkout Homebrew tap
+        if: ${{ inputs.update_homebrew && secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.HOMEBREW_TAP_REPO }}
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update Homebrew cask
+        if: ${{ inputs.update_homebrew && secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.release_meta.outputs.version }}"
+          sha_arm=$(sha256sum "dist/codexel-aarch64-apple-darwin.tar.gz" | cut -d' ' -f1)
+          sha_intel=$(sha256sum "dist/codexel-x86_64-apple-darwin.tar.gz" | cut -d' ' -f1)
+
+          mkdir -p homebrew-tap/Casks
+          cat > homebrew-tap/Casks/codexel.rb <<EOF
+          cask "codexel" do
+            version "${version}"
+            sha256 arm: "${sha_arm}",
+                   intel: "${sha_intel}"
+
+            url "https://github.com/Ixe1/codexel/releases/download/codexel-v#{version}/codexel-#{arch}.tar.gz",
+                arch: {
+                  arm: "aarch64-apple-darwin",
+                  intel: "x86_64-apple-darwin",
+                }
+            name "Codexel"
+            desc "Codex CLI community fork"
+            homepage "https://github.com/Ixe1/codexel"
+            license "Apache-2.0"
+
+            binary "codexel"
+          end
+          EOF
+
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/codexel.rb
+          git commit -m "codexel ${version}" || exit 0
+          git push
 
   publish:
     name: Publish npm package
@@ -325,7 +399,7 @@ jobs:
       - tag-check
       - package
       - smoke-test
-    if: ${{ needs.tag-check.outputs.should_publish == 'true' }}
+    if: ${{ inputs.publish_npm && needs.tag-check.outputs.should_publish == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write

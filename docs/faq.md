@@ -45,11 +45,12 @@ Follow the quick setup in [Install & build](./install.md) and then jump into [Ge
 
 ### `brew upgrade codexel` isn't upgrading me
 
-If you're running Codexel v0.46.0 or older, `brew upgrade codexel` will not move you to the latest version because we migrated from a Homebrew formula to a cask. To upgrade, uninstall the existing oudated formula and then install the new cask:
+If Homebrew isn't picking up the latest version, ensure you're using the Codexel tap and reinstall the cask:
 
 ```bash
-brew uninstall --formula codexel
-brew install --cask codexel
+brew update
+brew uninstall --cask codexel
+brew install --cask Ixe1/tap/codexel
 ```
 
 After reinstalling, `brew upgrade --cask codexel` will keep future releases up to date.
