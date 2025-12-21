@@ -409,7 +409,7 @@ enum FeaturesSubcommand {
 
 #[derive(Debug, Args)]
 struct FeaturesListArgs {
-    /// Output format (plain, table, json, toml)
+    /// Output format (plain, table, markdown, json)
     #[arg(long, value_enum, default_value_t = FeaturesListFormat::Plain)]
     format: FeaturesListFormat,
 }
@@ -418,8 +418,8 @@ struct FeaturesListArgs {
 enum FeaturesListFormat {
     Plain,
     Table,
+    Markdown,
     Json,
-    Toml,
 }
 
 fn stage_str(stage: codex_core::features::Stage) -> &'static str {
@@ -454,7 +454,12 @@ fn write_features_list(rows: &[FeaturesListRow], format: FeaturesListFormat) -> 
         }
         FeaturesListFormat::Table => {
             let mut table = tabled::Table::new(rows.to_vec());
-            table.with(tabled::settings::Style::psql());
+            table.with(tabled::settings::Style::modern_rounded());
+            println!("{table}");
+        }
+        FeaturesListFormat::Markdown => {
+            let mut table = tabled::Table::new(rows.to_vec());
+            table.with(tabled::settings::Style::markdown());
             println!("{table}");
         }
         FeaturesListFormat::Json => {
@@ -463,13 +468,6 @@ fn write_features_list(rows: &[FeaturesListRow], format: FeaturesListFormat) -> 
             };
             let json = serde_json::to_string_pretty(&output)?;
             println!("{json}");
-        }
-        FeaturesListFormat::Toml => {
-            let output = FeaturesListOutput {
-                features: rows.to_vec(),
-            };
-            let toml = toml::to_string_pretty(&output)?;
-            println!("{toml}");
         }
     }
     Ok(())
