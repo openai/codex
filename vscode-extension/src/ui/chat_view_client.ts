@@ -27,6 +27,7 @@ type ChatBlock =
   | { id: string; type: "user"; text: string }
   | { id: string; type: "assistant"; text: string }
   | { id: string; type: "divider"; text: string }
+  | { id: string; type: "note"; text: string }
   | { id: string; type: "info"; title: string; text: string }
   | { id: string; type: "webSearch"; query: string; status: string }
   | {
@@ -188,6 +189,16 @@ function main(): void {
       logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight <= slackPx
     );
   };
+
+  const MAX_INPUT_HEIGHT_PX = 200;
+  const MIN_INPUT_HEIGHT_PX = 30;
+  function autosizeInput(): void {
+    inputEl.style.height = "auto";
+    const nextHeight = Math.min(MAX_INPUT_HEIGHT_PX, inputEl.scrollHeight);
+    inputEl.style.height = `${Math.max(MIN_INPUT_HEIGHT_PX, nextHeight)}px`;
+    inputEl.style.overflowY =
+      inputEl.scrollHeight > MAX_INPUT_HEIGHT_PX ? "auto" : "hidden";
+  }
   logEl.addEventListener("scroll", () => {
     stickLogToBottom = isLogNearBottom();
   });
@@ -921,11 +932,14 @@ function main(): void {
     statusTextEl.title = fullStatus;
     statusTextEl.style.display = shortStatus ? "" : "none";
     diffBtn.disabled = !s.latestDiff;
-    sendBtn.disabled = !s.activeSession || s.sending;
+    sendBtn.disabled = !s.activeSession;
+    sendBtn.dataset.mode = s.sending ? "stop" : "send";
+    sendBtn.setAttribute("aria-label", s.sending ? "Stop" : "Send");
+    sendBtn.title = s.sending ? "Stop (Esc)" : "Send (Enter)";
     statusBtn.disabled = !s.activeSession || s.sending;
-    // NOTE: Keep input enabled while sending so the user can compose the next message.
-    // Sending again is still blocked via sendBtn.disabled and sendCurrentInput() guard.
-    inputEl.disabled = !s.activeSession;
+    // Keep input enabled so the user can draft messages even before selecting a session.
+    // Sending is still guarded by sendBtn.disabled and sendCurrentInput().
+    inputEl.disabled = false;
 
     tabsEl.innerHTML = "";
     (s.sessions || []).forEach((sess, idx) => {
@@ -1089,6 +1103,14 @@ function main(): void {
         continue;
       }
 
+      if (block.type === "note") {
+        const key = "b:" + block.id;
+        const div = ensureDiv(key, "note");
+        const text = String(block.text ?? "");
+        if (div.textContent !== text) div.textContent = text;
+        continue;
+      }
+
       if (block.type === "webSearch") {
         const q = String(block.query || "");
         const summaryQ = truncateOneLine(q, 120);
@@ -1129,12 +1151,6 @@ function main(): void {
       if (block.type === "reasoning") {
         const summary = (block.summaryParts || []).filter(Boolean).join("");
         const raw = (block.rawParts || []).filter(Boolean).join("");
-
-        // Avoid showing "empty shells" that look broken.
-        if (!summary && !raw && block.status !== "inProgress") {
-          removeBlockEl("reasoning:" + block.id);
-          continue;
-        }
 
         const id = "reasoning:" + block.id;
         const det = ensureDetails(
@@ -1395,10 +1411,19 @@ function sendCurrentInput(): void {
 
     inputEl.value = "";
     inputEl.setSelectionRange(0, 0);
+    autosizeInput();
     updateSuggestions();
   }
 
-  sendBtn.addEventListener("click", () => sendCurrentInput());
+  function stopCurrentTurn(): void {
+    if (!state.activeSession) return;
+    if (!state.sending) return;
+    vscode.postMessage({ type: "stop" });
+  }
+
+  sendBtn.addEventListener("click", () =>
+    state.sending ? stopCurrentTurn() : sendCurrentInput(),
+  );
   newBtn.addEventListener("click", () =>
     vscode.postMessage({ type: "newSession" }),
   );
@@ -1410,6 +1435,7 @@ function sendCurrentInput(): void {
   );
 
   inputEl.addEventListener("input", () => updateSuggestions());
+  inputEl.addEventListener("input", () => autosizeInput());
   inputEl.addEventListener("click", () => updateSuggestions());
   inputEl.addEventListener("keyup", (e) => {
     const key = (e as KeyboardEvent).key;
@@ -1436,6 +1462,11 @@ function sendCurrentInput(): void {
       }
       e.preventDefault();
       sendCurrentInput();
+      return;
+    }
+    if ((e as KeyboardEvent).key === "Escape" && state.sending) {
+      e.preventDefault();
+      stopCurrentTurn();
       return;
     }
     if ((e as KeyboardEvent).key === "ArrowDown" && suggestItems.length > 0) {
@@ -1475,6 +1506,7 @@ function sendCurrentInput(): void {
       inputEl.value = inputHistory[historyIndex] || "";
       const pos = inputEl.value.length;
       inputEl.setSelectionRange(pos, pos);
+      autosizeInput();
       updateSuggestions();
       return;
     }
@@ -1499,6 +1531,7 @@ function sendCurrentInput(): void {
       }
       const pos = inputEl.value.length;
       inputEl.setSelectionRange(pos, pos);
+      autosizeInput();
       updateSuggestions();
       return;
     }
@@ -1518,6 +1551,7 @@ function sendCurrentInput(): void {
     if (anyMsg.type === "state") {
       receivedState = true;
       render(anyMsg.state as ChatViewState);
+      autosizeInput();
       return;
     }
     if (anyMsg.type === "fileIndex") {

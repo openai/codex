@@ -1,6 +1,6 @@
 {
   "name": "codex-ui-vscode-extension",
-  "version": "0.0.7",
+  "version": "0.1.0",
   "displayName": "Codex UI",
   "publisher": "harukary7518",
   "description": "Use Codex CLI (app-server) inside VS Code: sessions, chat, tools, diffs.",
@@ -29,6 +29,7 @@
     "onCommand:codexMine.closeSession",
     "onCommand:codexMine.respondApproval",
     "onCommand:codexMine.showStatus",
+    "onCommand:codexMine.interruptTurn",
     "onView:codexMine.chatView",
     "onView:codexMine.sessionsView"
   ],
@@ -81,6 +82,10 @@
       {
         "command": "codexMine.showStatus",
         "title": "Codex UI: Status"
+      },
+      {
+        "command": "codexMine.interruptTurn",
+        "title": "Codex UI: Interrupt Turn"
       }
     ],
     "menus": {

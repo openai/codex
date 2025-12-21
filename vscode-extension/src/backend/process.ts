@@ -12,6 +12,8 @@ import type { ThreadResumeParams } from "../generated/v2/ThreadResumeParams";
 import type { ThreadResumeResponse } from "../generated/v2/ThreadResumeResponse";
 import type { TurnStartParams } from "../generated/v2/TurnStartParams";
 import type { TurnStartResponse } from "../generated/v2/TurnStartResponse";
+import type { TurnInterruptParams } from "../generated/v2/TurnInterruptParams";
+import type { TurnInterruptResponse } from "../generated/v2/TurnInterruptResponse";
 import type { ModelListParams } from "../generated/v2/ModelListParams";
 import type { ModelListResponse } from "../generated/v2/ModelListResponse";
 import type { ThreadArchiveParams } from "../generated/v2/ThreadArchiveParams";
@@ -129,6 +131,15 @@ export class BackendProcess implements vscode.Disposable {
   public async turnStart(params: TurnStartParams): Promise<TurnStartResponse> {
     return this.rpc.request<TurnStartResponse>({
       method: "turn/start",
+      params,
+    });
+  }
+
+  public async turnInterrupt(
+    params: TurnInterruptParams,
+  ): Promise<TurnInterruptResponse> {
+    return this.rpc.request<TurnInterruptResponse>({
+      method: "turn/interrupt",
       params,
     });
   }

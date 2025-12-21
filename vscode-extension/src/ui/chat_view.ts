@@ -7,6 +7,7 @@ export type ChatBlock =
   | { id: string; type: "user"; text: string }
   | { id: string; type: "assistant"; text: string }
   | { id: string; type: "divider"; text: string }
+  | { id: string; type: "note"; text: string }
   | { id: string; type: "info"; title: string; text: string }
   | { id: string; type: "webSearch"; query: string; status: string }
   | {
@@ -164,6 +165,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const text = anyMsg["text"];
       if (typeof text !== "string") return;
       await this.onSend(text);
+      return;
+    }
+
+    if (type === "stop") {
+      await vscode.commands.executeCommand("codexMine.interruptTurn");
       return;
     }
 
@@ -426,6 +432,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .actions { display: flex; gap: 8px; }
       button { padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(127,127,127,0.35); background: transparent; color: inherit; cursor: pointer; }
       button:disabled { opacity: 0.5; cursor: default; }
+      button.iconBtn { width: 30px; min-width: 30px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+      button.iconBtn::before { content: "➤"; font-size: 14px; opacity: 0.95; }
+      button.iconBtn[data-mode="stop"]::before { content: "■"; font-size: 12px; }
       .footerBar { border-top: 1px solid rgba(127,127,127,0.25); padding: 8px 12px 10px; display: flex; flex-wrap: nowrap; gap: 10px; align-items: center; }
       .modelBar { display: flex; flex-wrap: nowrap; gap: 8px; align-items: center; margin: 0; min-width: 0; flex: 1 1 auto; overflow: hidden; }
       .modelSelect { background: var(--vscode-input-background); color: inherit; border: 1px solid rgba(127,127,127,0.35); border-radius: 6px; padding: 4px 6px; }
@@ -441,6 +450,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .approvalTitle { font-weight: 600; margin-bottom: 6px; }
       .approvalActions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
       .msg { margin: 10px 0; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(127,127,127,0.25); }
+      .note { margin: 8px 2px; font-size: 12px; opacity: 0.7; color: var(--vscode-descriptionForeground, inherit); }
       /* Keep user distinct from webSearch (both were blue-ish in dark themes). */
       .user { background: rgba(255,255,255,0.035); border-color: rgba(0, 120, 212, 0.35); }
       .assistant { background: rgba(0,0,0,0.06); }
@@ -455,7 +465,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       details.notice { background: rgba(127,127,127,0.04); }
       details.notice.info { background: rgba(255,255,255,0.06); }
       details.notice.debug { background: rgba(255, 185, 0, 0.08); }
-      details > summary { cursor: pointer; font-weight: 600; position: relative; padding-right: 28px; }
+      details > summary { cursor: pointer; font-weight: 600; position: relative; padding-right: 8px; display: flex; align-items: center; gap: 8px; }
+      details > summary > span[data-k="summaryText"] { flex: 1 1 auto; min-width: 0; }
+      details > summary > span.statusIcon { position: static; top: auto; right: auto; transform: none; margin-left: auto; }
       .webSearchCard { position: relative; padding-right: 28px; }
       .webSearchCard .statusIcon { top: 12px; transform: none; }
       .webSearchRow { position: relative; }
@@ -499,7 +511,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .md a { color: var(--vscode-textLink-foreground, rgba(0,120,212,0.9)); text-decoration: underline; }
       .md a:hover { color: var(--vscode-textLink-activeForeground, rgba(0,120,212,1)); }
       .composer { border-top: 1px solid rgba(127,127,127,0.3); padding: 10px 12px; display: flex; gap: 8px; position: relative; }
-      textarea { flex: 1; resize: none; border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); padding: 8px 10px; background: transparent; color: inherit; font-family: var(--cm-editor-font-family); font-size: var(--cm-editor-font-size); font-weight: var(--cm-editor-font-weight); }
+      textarea { flex: 1; resize: none; box-sizing: border-box; border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); padding: 6px 10px; background: transparent; color: inherit; font-family: var(--cm-editor-font-family); font-size: var(--cm-editor-font-size); font-weight: var(--cm-editor-font-weight); line-height: 1.2; overflow-y: hidden; min-height: 30px; max-height: 200px; }
       .suggest { position: absolute; left: 12px; right: 12px; bottom: calc(100% + 8px); border: 1px solid var(--vscode-editorSuggestWidget-border, rgba(127,127,127,0.35)); border-radius: 10px; background: var(--vscode-editorSuggestWidget-background, rgba(30,30,30,0.95)); color: var(--vscode-editorSuggestWidget-foreground, inherit); max-height: 160px; overflow: auto; display: none; z-index: 20; box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
       .suggestItem { padding: 8px 10px; cursor: pointer; display: flex; justify-content: space-between; gap: 10px; }
       .suggestItem:hover { background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.06)); }
@@ -527,8 +539,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <div id="approvals" class="approvals" style="display:none"></div>
     <div id="log" class="log"></div>
     <div class="composer">
-      <textarea id="input" rows="2" placeholder="Type a message (Enter to send / Shift+Enter for newline)"></textarea>
-      <button id="send">Send</button>
+      <textarea id="input" rows="1" placeholder="Type a message (Enter to send / Shift+Enter for newline)"></textarea>
+      <button id="send" class="iconBtn" data-mode="send" aria-label="Send" title="Send (Esc: stop)"></button>
       <div id="suggest" class="suggest"></div>
     </div>
 	    <div class="footerBar">

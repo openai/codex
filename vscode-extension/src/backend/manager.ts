@@ -340,6 +340,22 @@ export class BackendManager implements vscode.Disposable {
     this.streamState.set(session.threadId, { activeTurnId: turn.turn.id });
   }
 
+  public async interruptTurn(session: Session, turnId: string): Promise<void> {
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+
+    await this.startForWorkspaceFolder(folder);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+
+    await proc.turnInterrupt({ threadId: session.threadId, turnId });
+  }
+
   private toReasoningEffort(effort: string | null): ReasoningEffort | null {
     if (!effort) return null;
     const e = effort.trim();

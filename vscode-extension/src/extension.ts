@@ -1,4 +1,5 @@
 import { parse as parseToml } from "@iarna/toml";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -54,6 +55,7 @@ type SessionRuntime = {
   statusText: string | null;
   tokenUsage: ThreadTokenUsage | null;
   sending: boolean;
+  activeTurnId: string | null;
   lastTurnStartedAtMs: number | null;
   lastTurnCompletedAtMs: number | null;
   blockIndexById: Map<string, number>;
@@ -228,7 +230,33 @@ export function activate(context: vscode.ExtensionContext): void {
       setActiveSession(session.id);
       void ensureModelsFetched(session);
       await showCodexMineViewContainer();
-      output.show(true);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexMine.interruptTurn", async () => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      if (!sessions) throw new Error("sessions is not initialized");
+
+      const session = activeSessionId ? sessions.getById(activeSessionId) : null;
+      if (!session) return;
+
+      const rt = ensureRuntime(session.id);
+      const turnId = rt.activeTurnId;
+      if (!turnId) return;
+
+      try {
+        await backendManager.interruptTurn(session, turnId);
+      } catch (err) {
+        output.appendLine(`[turn] Failed to interrupt: ${String(err)}`);
+        upsertBlock(session.id, {
+          id: newLocalId("error"),
+          type: "error",
+          title: "Interrupt failed",
+          text: String(err),
+        });
+        chatView?.refresh();
+      }
     }),
   );
 
@@ -457,7 +485,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
         setActiveSession(session.id);
         await showCodexMineViewContainer();
-        output.show(true);
       },
     ),
   );
@@ -485,7 +512,6 @@ export function activate(context: vscode.ExtensionContext): void {
       setActiveSession(session.id);
       refreshCustomPromptsFromDisk();
       await showCodexMineViewContainer();
-      output.show(true);
       },
     ),
   );
@@ -541,7 +567,6 @@ export function activate(context: vscode.ExtensionContext): void {
       hydrateRuntimeFromThread(session.id, res.thread);
       setActiveSession(session.id);
       await showCodexMineViewContainer();
-      output.show(true);
     },
     ),
   );
@@ -1384,6 +1409,7 @@ function ensureRuntime(sessionId: string): SessionRuntime {
     statusText: null,
     tokenUsage: null,
     sending: false,
+    activeTurnId: null,
     lastTurnStartedAtMs: null,
     lastTurnCompletedAtMs: null,
     blockIndexById: new Map(),
@@ -1512,8 +1538,26 @@ function applyServerNotification(
   const rt = ensureRuntime(sessionId);
   schedulePersistRuntime(sessionId);
   switch (n.method) {
+    case "rawResponseItem/completed":
+      // Internal-only (Codex Cloud). Avoid flooding "Other events (debug)".
+      return;
     case "thread/started":
       return;
+    case "deprecationNotice": {
+      const p = (n as any).params as { summary?: unknown; details?: unknown };
+      const summary = String(p?.summary ?? "").trim();
+      const details =
+        typeof p?.details === "string" ? String(p.details).trim() : "";
+      const id = deprecationNoticeId(summary, details);
+      upsertGlobal({
+        id,
+        type: "info",
+        title: "Deprecation notice",
+        text: details ? `${summary}\n\n${details}` : summary,
+      });
+      chatView?.refresh();
+      return;
+    }
     case "thread/compacted": {
       const turnId = String((n as any).params?.turnId ?? "");
       const workedSeconds = computeWorkedSeconds(rt);
@@ -1532,11 +1576,13 @@ function applyServerNotification(
       rt.sending = true;
       rt.lastTurnStartedAtMs = Date.now();
       rt.lastTurnCompletedAtMs = null;
+      rt.activeTurnId = String((n as any).params?.turn?.id ?? "") || null;
       chatView?.refresh();
       return;
     case "turn/completed":
       rt.sending = false;
       rt.lastTurnCompletedAtMs = Date.now();
+      rt.activeTurnId = null;
       chatView?.refresh();
       return;
     case "thread/tokenUsage/updated":
@@ -1968,6 +2014,12 @@ function formatK(n: number): string {
   return `${Math.round(v / 1000)}k`;
 }
 
+function deprecationNoticeId(summary: string, details: string): string {
+  const key = `${summary}\n${details}`.trim();
+  const hash = crypto.createHash("sha1").update(key).digest("hex").slice(0, 10);
+  return `global:deprecationNotice:${hash}`;
+}
+
 function formatTokenUsageStatus(tokenUsage: ThreadTokenUsage): string {
   const { total, modelContextWindow } = tokenUsage;
   if (modelContextWindow !== null && modelContextWindow > 0) {
@@ -2027,6 +2079,24 @@ function removeGlobalWhere(pred: (b: ChatBlock) => boolean): void {
 
 function applyGlobalNotification(n: AnyServerNotification): void {
   switch (n.method) {
+    case "rawResponseItem/completed":
+      // Internal-only (Codex Cloud). Avoid flooding "Other events (debug)".
+      return;
+    case "deprecationNotice": {
+      const p = (n as any).params as { summary?: unknown; details?: unknown };
+      const summary = String(p?.summary ?? "").trim();
+      const details =
+        typeof p?.details === "string" ? String(p.details).trim() : "";
+      const id = deprecationNoticeId(summary, details);
+      upsertGlobal({
+        id,
+        type: "info",
+        title: "Deprecation notice",
+        text: details ? `${summary}\n\n${details}` : summary,
+      });
+      chatView?.refresh();
+      return;
+    }
     case "thread/started": {
       const thread = (n as any).params?.thread as {
         id?: unknown;
@@ -2342,6 +2412,11 @@ function applyGlobalCodexEvent(method: string, params: unknown): void {
     return;
   }
 
+  if (type === "turn_aborted") {
+    // Prefer v2 turn lifecycle events; don't spam global "Other events (debug)" on interrupts.
+    return;
+  }
+
   // Ignore noisy per-token / per-item legacy events.
   if (
     type === "task_started" ||
@@ -2560,6 +2635,19 @@ function applyCodexEvent(
     } else if (ctx) {
       rt.statusText = `ctx=${String(ctx)}`;
     }
+    return;
+  }
+
+  if (type === "turn_aborted") {
+    const reason = typeof msg.reason === "string" ? msg.reason : "unknown";
+    rt.sending = false;
+    rt.lastTurnCompletedAtMs = Date.now();
+    rt.activeTurnId = null;
+    upsertBlock(sessionId, {
+      id: newLocalId("turnAborted"),
+      type: "note",
+      text: reason === "interrupted" ? "Interrupted" : `Aborted (${reason})`,
+    });
     return;
   }
 
