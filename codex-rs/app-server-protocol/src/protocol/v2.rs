@@ -1302,6 +1302,8 @@ pub struct TurnStartParams {
     pub effort: Option<ReasoningEffort>,
     /// Override the reasoning summary for this turn and subsequent turns.
     pub summary: Option<ReasoningSummary>,
+    /// Optional JSON Schema used to constrain the final assistant message for this turn.
+    pub output_schema: Option<JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

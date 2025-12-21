@@ -7,6 +7,7 @@ mod fuzzy_file_search;
 mod interrupt;
 mod list_resume;
 mod login;
+mod output_schema;
 mod send_message;
 mod set_default_model;
 mod user_agent;

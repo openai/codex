@@ -162,7 +162,7 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 - `{"type":"image","url":"https://…png"}`
 - `{"type":"localImage","path":"/tmp/screenshot.png"}`
 
-You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread.
+You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn.
 
 ```json
 { "method": "turn/start", "id": 30, "params": {
@@ -178,7 +178,14 @@ You can optionally specify config overrides on the new turn. If specified, these
     },
     "model": "gpt-5.1-codex",
     "effort": "medium",
-    "summary": "concise"
+    "summary": "concise",
+    // Optional JSON Schema to constrain the final assistant message for this turn.
+    "outputSchema": {
+        "type": "object",
+        "properties": { "answer": { "type": "string" } },
+        "required": ["answer"],
+        "additionalProperties": false
+    }
 } }
 { "id": 30, "result": { "turn": {
     "id": "turn_456",

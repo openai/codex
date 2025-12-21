@@ -1767,7 +1767,16 @@ mod handlers {
                     final_output_json_schema: Some(final_output_json_schema),
                 },
             ),
-            Op::UserInput { items } => (items, SessionSettingsUpdate::default()),
+            Op::UserInput {
+                items,
+                final_output_json_schema,
+            } => (
+                items,
+                SessionSettingsUpdate {
+                    final_output_json_schema: Some(final_output_json_schema),
+                    ..Default::default()
+                },
+            ),
             _ => unreachable!(),
         };
 

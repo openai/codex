@@ -102,6 +102,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
@@ -111,6 +112,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
@@ -175,6 +177,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 
@@ -184,6 +187,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 
@@ -238,6 +242,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
@@ -247,6 +252,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
@@ -307,6 +313,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
@@ -334,6 +341,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             items: vec![UserInput::Text {
                 text: "hello 2".into(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
@@ -412,6 +420,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
             items: vec![UserInput::Text {
                 text: "first message".into(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
 
@@ -504,6 +513,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             items: vec![UserInput::Text {
                 text: "hello 1".into(),
             }],
+            final_output_json_schema: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
