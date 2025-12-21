@@ -30,8 +30,8 @@ mode = "limited" # or "full"
 poll_interval_ms = 1000
 
 [network_proxy.policy]
-allowed_domains = ["example.com", "*.github.com"]
-denied_domains = ["metadata.google.internal", "169.254.*"]
+allowed_domains = ["azure.com", "*.openai.com"]
+denied_domains = ["169.254.*"]
 # macOS only: allow specific local IPC when proxy-restricted.
 allow_local_binding = false
 # Example: allow SSH agent socket for git/ssh.
