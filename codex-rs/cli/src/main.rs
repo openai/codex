@@ -404,7 +404,22 @@ struct FeaturesCli {
 #[derive(Debug, Parser)]
 enum FeaturesSubcommand {
     /// List known features with their stage and effective state.
-    List,
+    List(FeaturesListArgs),
+}
+
+#[derive(Debug, Args)]
+struct FeaturesListArgs {
+    /// Output format (plain, table, json, toml)
+    #[arg(long, value_enum, default_value_t = FeaturesListFormat::Plain)]
+    format: FeaturesListFormat,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum FeaturesListFormat {
+    Plain,
+    Table,
+    Json,
+    Toml,
 }
 
 fn stage_str(stage: codex_core::features::Stage) -> &'static str {
@@ -416,6 +431,48 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
         Stage::Deprecated => "deprecated",
         Stage::Removed => "removed",
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize, tabled::Tabled)]
+struct FeaturesListRow {
+    name: String,
+    stage: String,
+    enabled: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct FeaturesListOutput {
+    features: Vec<FeaturesListRow>,
+}
+
+fn write_features_list(rows: &[FeaturesListRow], format: FeaturesListFormat) -> anyhow::Result<()> {
+    match format {
+        FeaturesListFormat::Plain => {
+            for row in rows {
+                println!("{}\t{}\t{}", row.name, row.stage, row.enabled);
+            }
+        }
+        FeaturesListFormat::Table => {
+            let mut table = tabled::Table::new(rows.to_vec());
+            table.with(tabled::settings::Style::psql());
+            println!("{table}");
+        }
+        FeaturesListFormat::Json => {
+            let output = FeaturesListOutput {
+                features: rows.to_vec(),
+            };
+            let json = serde_json::to_string_pretty(&output)?;
+            println!("{json}");
+        }
+        FeaturesListFormat::Toml => {
+            let output = FeaturesListOutput {
+                features: rows.to_vec(),
+            };
+            let toml = toml::to_string_pretty(&output)?;
+            println!("{toml}");
+        }
+    }
+    Ok(())
 }
 
 /// As early as possible in the process lifecycle, apply hardening measures. We
@@ -612,7 +669,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 .await??;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
-            FeaturesSubcommand::List => {
+            FeaturesSubcommand::List(list_args) => {
                 // Respect root-level `-c` overrides plus top-level flags like `--profile`.
                 let mut cli_kv_overrides = root_config_overrides
                     .parse_overrides()
@@ -637,12 +694,15 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     overrides,
                 )
                 .await?;
-                for def in codex_core::features::FEATURES.iter() {
-                    let name = def.key;
-                    let stage = stage_str(def.stage);
-                    let enabled = config.features.enabled(def.id);
-                    println!("{name}\t{stage}\t{enabled}");
-                }
+                let rows = codex_core::features::FEATURES
+                    .iter()
+                    .map(|def| FeaturesListRow {
+                        name: def.key.to_string(),
+                        stage: stage_str(def.stage).to_string(),
+                        enabled: config.features.enabled(def.id),
+                    })
+                    .collect::<Vec<_>>();
+                write_features_list(&rows, list_args.format)?;
             }
         },
     }

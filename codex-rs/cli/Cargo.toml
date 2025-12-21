@@ -42,8 +42,10 @@ ctor = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
+tabled = "0.20.0"
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
