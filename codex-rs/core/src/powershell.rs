@@ -24,7 +24,7 @@ pub(crate) fn prefix_powershell_script_with_utf8(command: &[String]) -> Vec<Stri
         format!("{UTF8_OUTPUT_PREFIX}{script}")
     };
 
-    let mut command: Vec<String> = command[..command.len()]
+    let mut command: Vec<String> = command[..(command.len() - 1)]
         .iter()
         .map(std::string::ToString::to_string)
         .collect();
@@ -159,7 +159,6 @@ fn is_powershellish_executable_available(powershell_or_pwsh_exe: &std::path::Pat
 
 #[cfg(test)]
 mod tests {
-    use super::UTF8_OUTPUT_PREFIX;
     use super::extract_powershell_command;
 
     #[test]
