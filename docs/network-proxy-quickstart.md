@@ -27,7 +27,6 @@ enabled = true
 proxy_url = "http://127.0.0.1:3128"
 admin_url = "http://127.0.0.1:8080"
 mode = "limited" # or "full"
-prompt_on_block = true
 poll_interval_ms = 1000
 
 [network_proxy.policy]

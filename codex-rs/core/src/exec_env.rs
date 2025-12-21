@@ -447,7 +447,6 @@ mod tests {
             admin_url: "http://localhost:8080".to_string(),
             mode: NetworkProxyMode::Full,
             no_proxy: vec!["localhost".to_string(), "127.0.0.1".to_string()],
-            prompt_on_block: true,
             poll_interval_ms: 1000,
             mitm_ca_cert_path: None,
         };

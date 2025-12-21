@@ -370,7 +370,6 @@ no_proxy = [
   "172.16.0.0/12",
   "192.168.0.0/16",
 ]
-prompt_on_block = true
 poll_interval_ms = 1000
 ```
 
@@ -381,7 +380,7 @@ Notes:
 - When `proxy_url` points at localhost, Codex also assumes a SOCKS5 proxy on `localhost:8081` for `ALL_PROXY`, `GRPC_PROXY`, `FTP_PROXY`, `RSYNC_PROXY`, and (macOS only) `GIT_SSH_COMMAND`.
 - `no_proxy` entries bypass the proxy; defaults include localhost + private network ranges. Use sparingly because bypassed traffic is not filtered by the proxy policy.
 - `[network_proxy.policy]` can optionally allow localhost binding or Unix socket access (macOS only) when proxy-restricted network access is active.
-- When `prompt_on_block = true`, Codex polls the proxy admin API (`/blocked`) and surfaces a prompt to allow for the session, allow always (add to allowlist), or deny (add to denylist). Allow/deny decisions update `~/.codex/config.toml` under `[network_proxy.policy]`, then Codex calls `/reload`.
+- When enabled, Codex polls the proxy admin API (`/blocked`) and surfaces a prompt to allow for the session, allow always (add to allowlist), or deny (add to denylist). Allow/deny decisions update `~/.codex/config.toml` under `[network_proxy.policy]`, then Codex calls `/reload`.
 - On macOS, `network_proxy.policy.allow_unix_sockets` is useful for local IPC that relies on Unix domain sockets (most commonly the SSH agent). Entries can be:
   - absolute socket paths (or directories containing sockets),
   - `$SSH_AUTH_SOCK` / `${SSH_AUTH_SOCK}`,
@@ -984,7 +983,6 @@ Valid values:
 | `network_proxy.admin_url`                          | string                                                            | Proxy admin API base URL (default: `http://127.0.0.1:8080`).                                                                    |
 | `network_proxy.mode`                               | `limited` \| `full`                                                | Default proxy mode for policy hints (default: `full`).                                                                          |
 | `network_proxy.no_proxy`                           | array<string>                                                     | Hosts/IPs that bypass the proxy (default includes localhost + private network ranges).                                           |
-| `network_proxy.prompt_on_block`                    | boolean                                                           | Poll `/blocked` and prompt on denied requests (default: true).                                                                  |
 | `network_proxy.poll_interval_ms`                   | number                                                            | Admin poll interval in ms (default: 1000).                                                                                     |
 | `network_proxy.policy.allowed_domains`             | array<string>                                                     | Allowlist of domain patterns (denylist takes precedence).                                                                        |
 | `network_proxy.policy.denied_domains`              | array<string>                                                     | Denylist of domain patterns (takes precedence over allowlist).                                                                   |

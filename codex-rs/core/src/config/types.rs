@@ -451,7 +451,6 @@ pub struct NetworkProxyConfigToml {
     pub admin_url: Option<String>,
     pub mode: Option<NetworkProxyMode>,
     pub no_proxy: Option<Vec<String>>,
-    pub prompt_on_block: Option<bool>,
     pub poll_interval_ms: Option<i64>,
     #[serde(default)]
     pub mitm: Option<NetworkProxyMitmConfigToml>,
@@ -473,7 +472,6 @@ pub struct NetworkProxyConfig {
     pub admin_url: String,
     pub mode: NetworkProxyMode,
     pub no_proxy: Vec<String>,
-    pub prompt_on_block: bool,
     pub poll_interval_ms: i64,
     pub mitm_ca_cert_path: Option<PathBuf>,
 }

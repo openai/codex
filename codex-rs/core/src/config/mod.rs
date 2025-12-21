@@ -748,7 +748,6 @@ fn default_network_proxy_config() -> NetworkProxyConfig {
             .iter()
             .map(|entry| (*entry).to_string())
             .collect(),
-        prompt_on_block: true,
         poll_interval_ms: 1000,
         mitm_ca_cert_path: None,
     }
@@ -783,9 +782,6 @@ fn resolve_network_proxy_config(cfg: &ConfigToml, codex_home: &Path) -> NetworkP
         resolved.no_proxy = normalize_no_proxy_entries(no_proxy);
     }
     ensure_default_no_proxy_entries(&mut resolved.no_proxy);
-    if let Some(prompt_on_block) = network_proxy.prompt_on_block {
-        resolved.prompt_on_block = prompt_on_block;
-    }
     if let Some(poll_interval_ms) = network_proxy.poll_interval_ms
         && poll_interval_ms > 0
     {

@@ -221,7 +221,7 @@ pub fn should_preflight_network(
     network_proxy: &NetworkProxyConfig,
     sandbox_policy: &SandboxPolicy,
 ) -> bool {
-    if !network_proxy.enabled || !network_proxy.prompt_on_block {
+    if !network_proxy.enabled {
         return false;
     }
     match sandbox_policy {

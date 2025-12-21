@@ -456,7 +456,7 @@ impl App {
             unix_socket_session_restore: HashSet::new(),
         };
 
-        if app.config.network_proxy.enabled && app.config.network_proxy.prompt_on_block {
+        if app.config.network_proxy.enabled && app.config.sandbox_policy.has_full_network_access() {
             Self::spawn_network_proxy_poller(
                 app.config.network_proxy.clone(),
                 app.app_event_tx.clone(),
@@ -1213,7 +1213,7 @@ impl App {
                 }
             },
             AppEvent::NetworkProxyApprovalRequest(request) => {
-                if !self.config.network_proxy.prompt_on_block {
+                if !self.config.network_proxy.enabled {
                     return Ok(true);
                 }
                 let host = request.host.trim().to_string();
@@ -1252,7 +1252,7 @@ impl App {
                 self.chat_widget.on_network_approval_request(request);
             }
             AppEvent::UnixSocketApprovalRequest(request) => {
-                if !self.config.network_proxy.prompt_on_block {
+                if !self.config.network_proxy.enabled {
                     return Ok(true);
                 }
                 let socket_path = request.socket_path.trim().to_string();
@@ -1575,7 +1575,7 @@ impl App {
     }
 
     fn spawn_network_proxy_poller(network_proxy: NetworkProxyConfig, tx: AppEventSender) {
-        if !network_proxy.enabled || !network_proxy.prompt_on_block {
+        if !network_proxy.enabled {
             return;
         }
         let poll_interval_ms = if network_proxy.poll_interval_ms > 0 {

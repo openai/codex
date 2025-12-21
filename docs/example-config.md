@@ -124,9 +124,7 @@ no_proxy = [
   "172.16.0.0/12",
   "192.168.0.0/16",
 ]
-# Poll proxy /blocked and prompt the user. Default: true
-prompt_on_block = true
-# Poll interval in milliseconds. Default: 1000
+# Poll interval (ms) for checking proxy /blocked. Default: 1000
 poll_interval_ms = 1000
 
 [network_proxy.policy]
