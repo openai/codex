@@ -2,6 +2,7 @@ use crate::config::OtelExporter;
 use crate::config::OtelHttpProtocol;
 use crate::config::OtelSettings;
 use crate::config::OtelTlsConfig;
+use crate::metrics::MetricsClient;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use http::Uri;
 use opentelemetry::Context;
@@ -67,6 +68,7 @@ pub struct OtelProvider {
     pub logger: Option<SdkLoggerProvider>,
     pub tracer_provider: Option<SdkTracerProvider>,
     pub tracer: Option<Tracer>,
+    pub metrics: Option<MetricsClient>,
 }
 
 impl OtelProvider {
@@ -77,14 +79,23 @@ impl OtelProvider {
         if let Some(tracer_provider) = &self.tracer_provider {
             let _ = tracer_provider.shutdown();
         }
+        if let Some(metrics) = &self.metrics {
+            let _ = metrics.shutdown();
+        }
     }
 
     pub fn from(settings: &OtelSettings) -> Result<Option<Self>, Box<dyn Error>> {
         let log_enabled = !matches!(settings.exporter, OtelExporter::None);
         let trace_enabled = !matches!(settings.trace_exporter, OtelExporter::None);
 
-        if !log_enabled && !trace_enabled {
-            debug!("No exporter enabled in OTLP settings.");
+        let metrics = settings
+            .metrics
+            .clone()
+            .map(MetricsClient::new)
+            .transpose()?;
+
+        if !log_enabled && !trace_enabled && metrics.is_none() {
+            debug!("No OTEL exporter enabled in settings.");
             return Ok(None);
         }
 
@@ -113,6 +124,7 @@ impl OtelProvider {
             logger,
             tracer_provider,
             tracer,
+            metrics,
         }))
     }
 
@@ -140,6 +152,10 @@ impl OtelProvider {
 
     pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
         meta.target().starts_with("codex_otel")
+    }
+
+    pub fn metrics(&self) -> Option<&MetricsClient> {
+        self.metrics.as_ref()
     }
 }
 

@@ -71,6 +71,7 @@ pub fn build_provider(
         environment: config.otel.environment.to_string(),
         exporter,
         trace_exporter,
+        metrics: None,
     })
 }
 

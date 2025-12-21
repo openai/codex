@@ -5,6 +5,7 @@ use crate::metrics::MetricsConfig;
 use crate::metrics::Result as MetricsResult;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
+use crate::traces::otel_provider::OtelProvider;
 use crate::traces::otel_provider::traceparent_context_from_env;
 use chrono::SecondsFormat;
 use chrono::Utc;
@@ -122,6 +123,13 @@ impl OtelManager {
     pub fn with_metrics_config(self, config: MetricsConfig) -> MetricsResult<Self> {
         let metrics = MetricsClient::new(config)?;
         Ok(self.with_metrics(metrics))
+    }
+
+    pub fn with_provider_metrics(self, provider: &OtelProvider) -> Self {
+        match provider.metrics() {
+            Some(metrics) => self.with_metrics(metrics.clone()),
+            None => self,
+        }
     }
 
     pub fn current_span(&self) -> &Span {

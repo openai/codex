@@ -63,6 +63,10 @@ manager.counter("codex.session_started", 1, &[("source", "tui")])?;
 manager.histogram("codex.request_latency", 83, &buckets, &[("route", "chat")])?;
 ```
 
+If you set `metrics: Some(MetricsConfig)` on `OtelSettings` and build an
+`OtelProvider`, you can reuse that client via
+`OtelManager::with_provider_metrics(&provider)`.
+
 ## Configuration
 
 `MetricsConfig` lets you specify:

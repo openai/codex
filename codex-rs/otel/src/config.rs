@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::metrics::MetricsConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[derive(Clone, Debug)]
@@ -11,6 +12,7 @@ pub struct OtelSettings {
     pub codex_home: PathBuf,
     pub exporter: OtelExporter,
     pub trace_exporter: OtelExporter,
+    pub metrics: Option<MetricsConfig>,
 }
 
 #[derive(Clone, Debug)]

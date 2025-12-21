@@ -36,6 +36,7 @@ let settings = OtelSettings {
         protocol: OtelHttpProtocol::Binary,
         tls: None,
     },
+    metrics: None,
 };
 
 if let Some(provider) = OtelProvider::from(&settings)? {
@@ -92,12 +93,47 @@ metrics.counter("codex.session_started", 1, &[("source", "tui")])?;
 
 ## Metrics via OtelManager
 
-Attach a metrics client (or config) to `OtelManager` to reuse metadata:
+Attach metrics once in `OtelSettings.metrics` and reuse them from
+`OtelManager`:
 
 ```rust
-use codex_otel::metrics::HistogramBuckets;
-use codex_otel::metrics::MetricsConfig;
+use codex_otel::config::{OtelExporter, OtelHttpProtocol, OtelSettings};
+use codex_otel::metrics::{HistogramBuckets, MetricsConfig};
 use codex_otel::traces::otel_manager::OtelManager;
+use codex_otel::traces::otel_provider::OtelProvider;
+use tracing_subscriber::prelude::*;
+
+let settings = OtelSettings {
+    environment: "dev".into(),
+    service_name: "codex-cli".into(),
+    service_version: env!("CARGO_PKG_VERSION").into(),
+    codex_home: std::path::PathBuf::from("/tmp"),
+    exporter: OtelExporter::OtlpHttp {
+        endpoint: "https://otlp.example.com".into(),
+        headers: std::collections::HashMap::new(),
+        protocol: OtelHttpProtocol::Binary,
+        tls: None,
+    },
+    trace_exporter: OtelExporter::OtlpHttp {
+        endpoint: "https://otlp.example.com".into(),
+        headers: std::collections::HashMap::new(),
+        protocol: OtelHttpProtocol::Binary,
+        tls: None,
+    },
+    metrics: Some(
+        MetricsConfig::new("<statsig-api-key>")
+            .with_endpoint("<statsig-otlp-metrics-endpoint>")
+            .with_api_key_header("<statsig-api-key-header>"),
+    ),
+};
+
+let provider = OtelProvider::from(&settings)?;
+if let Some(p) = &provider {
+    tracing_subscriber::registry()
+        .with(p.logger_layer())
+        .with(p.tracing_layer())
+        .init();
+}
 
 let manager = OtelManager::new(
     conversation_id,
@@ -109,12 +145,11 @@ let manager = OtelManager::new(
     log_user_prompts,
     terminal_type,
     session_source,
-)
-.with_metrics_config(
-    MetricsConfig::new("<statsig-api-key>")
-        .with_endpoint("<statsig-otlp-metrics-endpoint>")
-        .with_api_key_header("<statsig-api-key-header>"),
-)?;
+);
+let manager = provider
+    .as_ref()
+    .map(|p| manager.with_provider_metrics(p))
+    .unwrap_or(manager);
 
 let buckets = HistogramBuckets::from_values(&[25, 50, 100, 250, 500])?;
 manager.counter("codex.session_started", 1, &[("source", "tui")])?;
