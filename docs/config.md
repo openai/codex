@@ -39,16 +39,18 @@ web_search_request = true        # allow the model to request web searches
 
 Supported features:
 
-| Key                                   | Default | Stage        | Description                                           |
-| ------------------------------------- | :-----: | ------------ | ----------------------------------------------------- |
-| `unified_exec`                        |  false  | Experimental | Use the unified PTY-backed exec tool                  |
-| `apply_patch_freeform`                |  false  | Beta         | Include the freeform `apply_patch` tool               |
-| `view_image_tool`                     |  true   | Stable       | Include the `view_image` tool                         |
-| `web_search_request`                  |  false  | Stable       | Allow the model to issue web searches                 |
-| `ghost_commit`                        |  false  | Experimental | Create a ghost commit each turn                       |
-| `enable_experimental_windows_sandbox` |  false  | Experimental | Use the Windows restricted-token sandbox              |
-| `tui2`                                |  false  | Experimental | Use the experimental TUI v2 (viewport) implementation |
-| `skills`                              |  false  | Experimental | Enable discovery and injection of skills              |
+| Key                                   | Default | Stage        | Description                                                                         |
+| ------------------------------------- | :-----: | ------------ | ----------------------------------------------------------------------------------- |
+| `unified_exec`                        |  false  | Experimental | Use the unified PTY-backed exec tool                                                |
+| `apply_patch_freeform`                |  false  | Beta         | Include the freeform `apply_patch` tool                                             |
+| `view_image_tool`                     |  true   | Stable       | Include the `view_image` tool                                                       |
+| `web_search_request`                  |  false  | Stable       | Allow the model to issue web searches                                               |
+| `ghost_commit`                        |  false  | Experimental | Create a ghost commit each turn                                                     |
+| `enable_experimental_windows_sandbox` |  false  | Experimental | Use the Windows restricted-token sandbox                                            |
+| `tui2`                                |  false  | Experimental | Use the experimental TUI v2 (viewport) implementation                               |
+| `skills`                              |  false  | Experimental | Enable discovery and injection of skills                                            |
+| `backgrond_terminal`                  |  true   | Experimental | Run long-running terminal commands in the background                                |
+| `shell_snapshot`                      |  false  | Experimental | Snapshot your shell environment to avoid re-running login scripts for every command |
 
 Notes:
 
