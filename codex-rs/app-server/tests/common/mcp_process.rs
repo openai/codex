@@ -21,6 +21,7 @@ use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::FeedbackUploadParams;
+use codex_app_server_protocol::ForkConversationParams;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::InitializeParams;
@@ -43,6 +44,7 @@ use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -308,6 +310,15 @@ impl McpProcess {
         self.send_request("thread/resume", params).await
     }
 
+    /// Send a `thread/fork` JSON-RPC request.
+    pub async fn send_thread_fork_request(
+        &mut self,
+        params: ThreadForkParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/fork", params).await
+    }
+
     /// Send a `thread/archive` JSON-RPC request.
     pub async fn send_thread_archive_request(
         &mut self,
@@ -351,6 +362,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("resumeConversation", params).await
+    }
+
+    /// Send a `forkConversation` JSON-RPC request.
+    pub async fn send_fork_conversation_request(
+        &mut self,
+        params: ForkConversationParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("forkConversation", params).await
     }
 
     /// Send a `loginApiKey` JSON-RPC request.
