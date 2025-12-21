@@ -1,6 +1,6 @@
 {
   "name": "codex-ui-vscode-extension",
-  "version": "0.0.3",
+  "version": "0.0.7",
   "displayName": "Codex UI",
   "publisher": "harukary7518",
   "description": "Use Codex CLI (app-server) inside VS Code: sessions, chat, tools, diffs.",
@@ -28,7 +28,9 @@
     "onCommand:codexMine.hideSessionTab",
     "onCommand:codexMine.closeSession",
     "onCommand:codexMine.respondApproval",
-    "onView:codexMine.chatView"
+    "onCommand:codexMine.showStatus",
+    "onView:codexMine.chatView",
+    "onView:codexMine.sessionsView"
   ],
   "contributes": {
     "commands": [
@@ -75,6 +77,10 @@
       {
         "command": "codexMine.respondApproval",
         "title": "Codex UI: Respond Approval"
+      },
+      {
+        "command": "codexMine.showStatus",
+        "title": "Codex UI: Status"
       }
     ],
     "menus": {
@@ -153,6 +159,7 @@
     "regen:protocol": "node ./scripts/regen-protocol.js"
   },
   "dependencies": {
+    "@iarna/toml": "^2.2.5",
     "shell-quote": "^1.8.1"
   },
   "devDependencies": {

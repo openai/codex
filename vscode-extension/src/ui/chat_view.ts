@@ -66,6 +66,20 @@ export type ChatViewState = {
   latestDiff: string | null;
   sending: boolean;
   statusText?: string | null;
+  modelState?: {
+    model: string | null;
+    provider: string | null;
+    reasoning: string | null;
+  } | null;
+  models?: Array<{
+    id: string;
+    model: string;
+    displayName: string;
+    description: string;
+    supportedReasoningEfforts: Array<{ reasoningEffort: string; description: string }>;
+    defaultReasoningEffort: string;
+    isDefault: boolean;
+  }> | null;
   approvals: Array<{
     requestKey: string;
     title: string;
@@ -73,6 +87,32 @@ export type ChatViewState = {
     canAcceptForSession: boolean;
   }>;
 };
+
+let sessionModelState: {
+  model: string | null;
+  provider: string | null;
+  reasoning: string | null;
+} = { model: null, provider: null, reasoning: null };
+
+export function getSessionModelState(): {
+  model: string | null;
+  provider: string | null;
+  reasoning: string | null;
+} {
+  return sessionModelState;
+}
+
+export function setSessionModelState(state: {
+  model: string | null;
+  provider: string | null;
+  reasoning: string | null;
+}): void {
+  sessionModelState = state;
+}
+
+function asNullableString(v: unknown): string | null {
+  return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
+}
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "codexMine.chatView";
@@ -156,6 +196,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     if (type === "newSession") {
       await vscode.commands.executeCommand("codexMine.newSession");
+      return;
+    }
+
+    if (type === "showStatus") {
+      await vscode.commands.executeCommand("codexMine.showStatus");
+      return;
+    }
+
+    if (type === "setModel") {
+      const model = asNullableString(anyMsg["model"]);
+      const provider = asNullableString(anyMsg["provider"]);
+      const reasoning = asNullableString(anyMsg["reasoning"]);
+      setSessionModelState({ model, provider, reasoning });
+      this.refresh();
       return;
     }
 
@@ -309,13 +363,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const stack = anyMsg["stack"];
       const details =
         typeof message === "string"
-          ? message + (typeof stack === "string" && stack ? "\n" + stack : "")
+          ? message +
+            (typeof stack === "string" && stack ? "\n" + stack : "")
           : JSON.stringify(anyMsg, null, 2);
       console.error("[codex-mine] webview error:", details);
       return;
     }
   }
-
   private postState(): void {
     if (!this.view) return;
     this.view.webview.postMessage({ type: "state", state: this.getState() });
@@ -372,6 +426,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .actions { display: flex; gap: 8px; }
       button { padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(127,127,127,0.35); background: transparent; color: inherit; cursor: pointer; }
       button:disabled { opacity: 0.5; cursor: default; }
+      .footerBar { border-top: 1px solid rgba(127,127,127,0.25); padding: 8px 12px 10px; display: flex; flex-wrap: nowrap; gap: 10px; align-items: center; }
+      .modelBar { display: flex; flex-wrap: nowrap; gap: 8px; align-items: center; margin: 0; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+      .modelSelect { background: var(--vscode-input-background); color: inherit; border: 1px solid rgba(127,127,127,0.35); border-radius: 6px; padding: 4px 6px; }
+      .modelSelect.model { width: 160px; max-width: 160px; }
+      .modelSelect.effort { width: 110px; max-width: 110px; }
+      .footerStatus { margin-left: auto; font-size: 12px; opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .tabs { display: flex; gap: 6px; overflow: auto; padding-bottom: 2px; }
       .tab { padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(127,127,127,0.35); cursor: pointer; white-space: nowrap; user-select: none; }
       .tab.active { border-color: rgba(0, 120, 212, 0.9); }
@@ -456,11 +516,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <div class="top">
       <div class="topRow">
         <div id="title" class="title">Codex UI</div>
-        <div class="actions">
-          <button id="new">New</button>
-          <button id="diff" disabled>Open Latest Diff</button>
-        </div>
-      </div>
+	        <div class="actions">
+	          <button id="new">New</button>
+	          <button id="status">Status</button>
+	          <button id="diff" disabled>Open Latest Diff</button>
+	        </div>
+	      </div>
       <div id="tabs" class="tabs"></div>
     </div>
     <div id="approvals" class="approvals" style="display:none"></div>
@@ -470,10 +531,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <button id="send">Send</button>
       <div id="suggest" class="suggest"></div>
     </div>
-    <div id="statusText" class="statusText" style="padding: 0 12px 10px 12px;"></div>
-    <script src="${markdownItUri}"></script>
-    <script nonce="${nonce}" src="${clientScriptUri}"></script>
-  </body>
-</html>`;
+	    <div class="footerBar">
+	      <div id="modelBar" class="modelBar"></div>
+	      <div id="statusText" class="footerStatus" style="display:none"></div>
+	    </div>
+	    <script src="${markdownItUri}"></script>
+	    <script nonce="${nonce}" src="${clientScriptUri}"></script>
+	  </body>
+	</html>`;
   }
 }

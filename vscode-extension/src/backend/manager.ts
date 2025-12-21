@@ -10,7 +10,14 @@ import type { Session, SessionStore } from "../sessions";
 import type { ApprovalDecision } from "../generated/v2/ApprovalDecision";
 import type { ServerRequest } from "../generated/ServerRequest";
 import type { ThreadResumeResponse } from "../generated/v2/ThreadResumeResponse";
+import type { ModelListResponse } from "../generated/v2/ModelListResponse";
+import type { Model } from "../generated/v2/Model";
+import type { ReasoningEffort } from "../generated/ReasoningEffort";
+import type { GetAccountResponse } from "../generated/v2/GetAccountResponse";
+import type { GetAccountRateLimitsResponse } from "../generated/v2/GetAccountRateLimitsResponse";
 import type { AnyServerNotification } from "./types";
+
+type ModelSettings = { model: string | null; provider: string | null; reasoning: string | null };
 
 export class BackendManager implements vscode.Disposable {
   private readonly processes = new Map<string, BackendProcess>();
@@ -19,6 +26,7 @@ export class BackendManager implements vscode.Disposable {
     { activeTurnId: string | null }
   >();
   private readonly latestDiffByThreadId = new Map<string, string>();
+  private readonly modelsByBackendKey = new Map<string, Model[]>();
   private readonly itemsByThreadId = new Map<string, Map<string, ThreadItem>>();
 
   public onSessionAdded: ((session: Session) => void) | null = null;
@@ -94,19 +102,24 @@ export class BackendManager implements vscode.Disposable {
 
   }
 
-  public async newSession(folder: vscode.WorkspaceFolder): Promise<Session> {
+  public async newSession(
+    folder: vscode.WorkspaceFolder,
+    modelSettings?: ModelSettings,
+  ): Promise<Session> {
     await this.startForWorkspaceFolder(folder);
     const backendKey = folder.uri.toString();
     const proc = this.processes.get(backendKey);
     if (!proc) throw new Error("Backend process was not started");
 
     const params: ThreadStartParams = {
-      model: null,
-      modelProvider: null,
+      model: modelSettings?.model ?? null,
+      modelProvider: modelSettings?.provider ?? null,
       cwd: folder.uri.fsPath,
       approvalPolicy: null,
       sandbox: null,
-      config: null,
+      config: modelSettings?.reasoning
+        ? { reasoning_effort: modelSettings.reasoning }
+        : null,
       baseInstructions: null,
       developerInstructions: null,
       experimentalRawEvents: false,
@@ -117,7 +130,7 @@ export class BackendManager implements vscode.Disposable {
       id: randomUUID(),
       backendKey,
       workspaceFolderUri: folder.uri.toString(),
-      title: `${folder.name} (${res.thread.id.slice(0, 8)})`,
+      title: folder.name,
       threadId: res.thread.id,
     };
     this.sessions.add(backendKey, session);
@@ -128,6 +141,46 @@ export class BackendManager implements vscode.Disposable {
     return session;
   }
 
+  public getCachedModels(session: Session): Model[] | null {
+    return this.modelsByBackendKey.get(session.backendKey) ?? null;
+  }
+
+  public async listModelsForSession(session: Session): Promise<Model[]> {
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+
+    await this.startForWorkspaceFolder(folder);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+
+    const cached = this.modelsByBackendKey.get(session.backendKey);
+    if (cached) return cached;
+
+    const models = await this.fetchAllModels(proc);
+    this.modelsByBackendKey.set(session.backendKey, models);
+    return models;
+  }
+
+  private async fetchAllModels(proc: BackendProcess): Promise<Model[]> {
+    const out: Model[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < 10; i += 1) {
+      const res: ModelListResponse = await proc.listModels({
+        cursor,
+        limit: 200,
+      });
+      out.push(...(res.data ?? []));
+      cursor = res.nextCursor;
+      if (!cursor) break;
+    }
+    return out;
+  }
+
   public async pickSession(
     folder: vscode.WorkspaceFolder,
   ): Promise<Session | null> {
@@ -135,7 +188,10 @@ export class BackendManager implements vscode.Disposable {
     return this.sessions.pick(backendKey);
   }
 
-  public async resumeSession(session: Session): Promise<ThreadResumeResponse> {
+  public async resumeSession(
+    session: Session,
+    modelSettings?: ModelSettings,
+  ): Promise<ThreadResumeResponse> {
     const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
     if (!folder) {
       throw new Error(
@@ -152,12 +208,14 @@ export class BackendManager implements vscode.Disposable {
       threadId: session.threadId,
       history: null,
       path: null,
-      model: null,
-      modelProvider: null,
+      model: modelSettings?.model ?? null,
+      modelProvider: modelSettings?.provider ?? null,
       cwd: folder.uri.fsPath,
       approvalPolicy: null,
       sandbox: null,
-      config: null,
+      config: modelSettings?.reasoning
+        ? { reasoning_effort: modelSettings.reasoning }
+        : null,
       baseInstructions: null,
       developerInstructions: null,
     };
@@ -178,6 +236,34 @@ export class BackendManager implements vscode.Disposable {
       throw new Error("Backend is not running for this workspace folder");
 
     await proc.threadArchive({ threadId: session.threadId });
+  }
+
+  public async readAccount(session: Session): Promise<GetAccountResponse> {
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+    await this.startForWorkspaceFolder(folder);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+    return await proc.accountRead({ refreshToken: false });
+  }
+
+  public async readRateLimits(session: Session): Promise<GetAccountRateLimitsResponse> {
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+    await this.startForWorkspaceFolder(folder);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+    return await proc.accountRateLimitsRead();
   }
 
   public latestDiff(session: Session): string | null {
@@ -201,6 +287,7 @@ export class BackendManager implements vscode.Disposable {
       throw new Error("Backend is not running for this workspace folder");
 
     const input: UserInput[] = [{ type: "text", text }];
+    const effort = this.toReasoningEffort(null);
     const params: TurnStartParams = {
       threadId: session.threadId,
       input,
@@ -208,7 +295,7 @@ export class BackendManager implements vscode.Disposable {
       approvalPolicy: null,
       sandboxPolicy: null,
       model: null,
-      effort: null,
+      effort,
       summary: null,
     };
 
@@ -216,6 +303,62 @@ export class BackendManager implements vscode.Disposable {
     this.output.append(`<< (${session.title}) `);
     const turn = await proc.turnStart(params);
     this.streamState.set(session.threadId, { activeTurnId: turn.turn.id });
+  }
+
+  public async sendMessageWithModel(
+    session: Session,
+    text: string,
+    modelSettings: ModelSettings | undefined,
+  ): Promise<void> {
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+
+    const input: UserInput[] = [{ type: "text", text }];
+    const effort = this.toReasoningEffort(modelSettings?.reasoning ?? null);
+    const params: TurnStartParams = {
+      threadId: session.threadId,
+      input,
+      cwd: null,
+      approvalPolicy: null,
+      sandboxPolicy: null,
+      model: modelSettings?.model ?? null,
+      effort,
+      summary: null,
+    };
+
+    this.output.appendLine(`\n>> (${session.title}) ${text}`);
+    this.output.append(`<< (${session.title}) `);
+    const turn = await proc.turnStart(params);
+    this.streamState.set(session.threadId, { activeTurnId: turn.turn.id });
+  }
+
+  private toReasoningEffort(effort: string | null): ReasoningEffort | null {
+    if (!effort) return null;
+    const e = effort.trim();
+    if (!e) return null;
+    const allowed: ReadonlySet<string> = new Set([
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    if (!allowed.has(e)) {
+      this.output.appendLine(
+        `[model] Invalid reasoning effort '${e}', ignoring (expected one of: ${[...allowed].join(", ")})`,
+      );
+      return null;
+    }
+    return e as ReasoningEffort;
   }
 
   private onServerNotification(

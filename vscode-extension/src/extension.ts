@@ -1,12 +1,15 @@
-import * as path from "node:path";
+import { parse as parseToml } from "@iarna/toml";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
-import * as vscode from "vscode";
+import * as path from "node:path";
 import { parse as shellParse } from "shell-quote";
+import * as vscode from "vscode";
 import { BackendManager } from "./backend/manager";
 import type { AnyServerNotification } from "./backend/types";
-import type { RateLimitSnapshot } from "./generated/v2/RateLimitSnapshot";
 import type { CommandAction } from "./generated/v2/CommandAction";
+import type { Model } from "./generated/v2/Model";
+import type { RateLimitSnapshot } from "./generated/v2/RateLimitSnapshot";
+import type { RateLimitWindow } from "./generated/v2/RateLimitWindow";
 import type { Thread } from "./generated/v2/Thread";
 import type { ThreadItem } from "./generated/v2/ThreadItem";
 import type { ThreadTokenUsage } from "./generated/v2/ThreadTokenUsage";
@@ -15,6 +18,8 @@ import type { Session } from "./sessions";
 import { SessionStore } from "./sessions";
 import {
   ChatViewProvider,
+  getSessionModelState,
+  setSessionModelState,
   type ChatBlock,
   type ChatViewState,
 } from "./ui/chat_view";
@@ -28,9 +33,12 @@ let diffProvider: DiffDocumentProvider | null = null;
 let chatView: ChatViewProvider | null = null;
 let activeSessionId: string | null = null;
 let extensionContext: vscode.ExtensionContext | null = null;
+let outputChannel: vscode.OutputChannel | null = null;
 
 const HIDDEN_TAB_SESSIONS_KEY = "codexMine.hiddenTabSessions.v1";
 const hiddenTabSessionIds = new Set<string>();
+const mcpStatusByServer = new Map<string, string>();
+const defaultTitleRe = /^(.*)\s+\([0-9a-f]{8}\)$/i;
 
 type CustomPromptSummary = {
   name: string;
@@ -44,6 +52,7 @@ type SessionRuntime = {
   blocks: ChatBlock[];
   latestDiff: string | null;
   statusText: string | null;
+  tokenUsage: ThreadTokenUsage | null;
   sending: boolean;
   lastTurnStartedAtMs: number | null;
   lastTurnCompletedAtMs: number | null;
@@ -67,12 +76,21 @@ const globalRuntime: Pick<SessionRuntime, "blocks" | "blockIndexById"> = {
 };
 let globalStatusText: string | null = null;
 let customPrompts: CustomPromptSummary[] = [];
+let sessionModelState: {
+  model: string | null;
+  provider: string | null;
+  reasoning: string | null;
+} = { model: null, provider: null, reasoning: null };
+type ModelState = typeof sessionModelState;
+const pendingModelFetchByBackend = new Map<string, Promise<void>>();
 const PROMPTS_CMD_PREFIX = "prompts";
 
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
   const output = vscode.window.createOutputChannel("Codex UI");
+  outputChannel = output;
   output.appendLine(`[debug] extensionPath=${context.extensionPath}`);
+  void loadInitialModelState(output);
 
   sessions = new SessionStore();
   loadSessions(context, sessions);
@@ -91,6 +109,7 @@ export function activate(context: vscode.ExtensionContext): void {
     sessionTree?.refresh();
     setActiveSession(s.id);
     refreshCustomPromptsFromDisk();
+    void ensureModelsFetched(s);
     void showCodexMineViewContainer();
   };
   backendManager.onApprovalRequest = async (session, req) => {
@@ -202,10 +221,116 @@ export function activate(context: vscode.ExtensionContext): void {
       const folder = await pickWorkspaceFolder();
       if (!folder) return;
 
-      const session = await backendManager.newSession(folder);
+      const session = await backendManager.newSession(
+        folder,
+        getSessionModelState(),
+      );
       setActiveSession(session.id);
+      void ensureModelsFetched(session);
       await showCodexMineViewContainer();
       output.show(true);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexMine.showStatus", async () => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      if (!sessions) throw new Error("sessions is not initialized");
+
+      const session = activeSessionId ? sessions.getById(activeSessionId) : null;
+      if (!session) {
+        void vscode.window.showErrorMessage("No session selected.");
+        return;
+      }
+
+      const rt = ensureRuntime(session.id);
+      const settings = getSessionModelState();
+
+      let rateLimits: RateLimitSnapshot | null = null;
+      try {
+        const res = await backendManager.readRateLimits(session);
+        rateLimits = res.rateLimits;
+      } catch (err) {
+        output.appendLine(`[status] Failed to read rate limits: ${String(err)}`);
+      }
+
+      let accountLine: string | null = null;
+      let planLine: string | null = null;
+      try {
+        const res = await backendManager.readAccount(session);
+        const a = res.account;
+        if (!a) accountLine = "Account: (unknown)";
+        else if (a.type === "chatgpt") {
+          accountLine = `Account: ${a.email} (${a.planType})`;
+        } else {
+          accountLine = "Account: apiKey";
+          // For API key auth, planType may only be available from rate limits.
+          const planFromLimits = rateLimits?.planType ?? null;
+          planLine = planFromLimits ? `Plan: ${planFromLimits}` : null;
+        }
+      } catch (err) {
+        output.appendLine(`[status] Failed to read account: ${String(err)}`);
+      }
+
+      const directory = (() => {
+        try {
+          return vscode.Uri.parse(session.workspaceFolderUri).fsPath;
+        } catch {
+          return null;
+        }
+      })();
+
+      const modelLine = `Model: ${settings.model ?? "default"} (reasoning ${settings.reasoning ?? "default"})`;
+      const sessionLine = `Session: ${session.threadId}`;
+      const dirLine = directory ? `Directory: ${directory}` : null;
+      if (!planLine) {
+        // If we couldn't infer plan from account, fall back to rate limits.
+        const planFromLimits = rateLimits?.planType ?? null;
+        planLine = planFromLimits ? `Plan: ${planFromLimits}` : null;
+        // Avoid duplicating plan if account already includes it.
+        if (accountLine && accountLine.includes("(") && accountLine.includes(")")) {
+          planLine = null;
+        }
+      }
+
+      const contextLine = (() => {
+        const usage = rt.tokenUsage;
+        const ctx = usage?.modelContextWindow ?? null;
+        const used = usage?.total?.totalTokens ?? null;
+        if (!ctx || !used || ctx <= 0) return null;
+        const remaining = Math.max(0, ctx - used);
+        const remainingPct = Math.max(
+          0,
+          Math.min(100, Math.round((remaining / ctx) * 100)),
+        );
+        return `Context window: ${remainingPct}% left (${formatHumanCount(used)} used / ${formatHumanCount(ctx)})`;
+      })();
+
+      const limitLines = rateLimits
+        ? formatRateLimitLines(rateLimits)
+        : [];
+
+      const text = [
+        sessionLine,
+        dirLine,
+        accountLine,
+        planLine,
+        "",
+        modelLine,
+        contextLine,
+        ...limitLines,
+      ]
+        .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+        .join("\n");
+
+      upsertBlock(rt, {
+        id: newLocalId("status"),
+        type: "info",
+        title: "Status",
+        text: "```text\n" + (text || "(no details)") + "\n```",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
     }),
   );
 
@@ -327,7 +452,7 @@ export function activate(context: vscode.ExtensionContext): void {
           if (!folder) return;
           session =
             (await backendManager.pickSession(folder)) ??
-            (await backendManager.newSession(folder));
+            (await backendManager.newSession(folder, getSessionModelState()));
         }
 
         setActiveSession(session.id);
@@ -349,14 +474,18 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!session) {
           void vscode.window.showErrorMessage("Session not found.");
           return;
-        }
+      }
 
-        const res = await backendManager.resumeSession(session);
-        hydrateRuntimeFromThread(session.id, res.thread);
-        setActiveSession(session.id);
-        refreshCustomPromptsFromDisk();
-        await showCodexMineViewContainer();
-        output.show(true);
+      const res = await backendManager.resumeSession(
+        session,
+        getSessionModelState(),
+      );
+      void ensureModelsFetched(session);
+      hydrateRuntimeFromThread(session.id, res.thread);
+      setActiveSession(session.id);
+      refreshCustomPromptsFromDisk();
+      await showCodexMineViewContainer();
+      output.show(true);
       },
     ),
   );
@@ -399,17 +528,21 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!sessions) throw new Error("sessions is not initialized");
 
         const session = parseSessionArg(args, sessions);
-        if (!session) {
-          void vscode.window.showErrorMessage("Session not found.");
-          return;
-        }
+      if (!session) {
+        void vscode.window.showErrorMessage("Session not found.");
+        return;
+      }
 
-        const res = await backendManager.resumeSession(session);
-        hydrateRuntimeFromThread(session.id, res.thread);
-        setActiveSession(session.id);
-        await showCodexMineViewContainer();
-        output.show(true);
-      },
+      const res = await backendManager.resumeSession(
+        session,
+        getSessionModelState(),
+      );
+      void ensureModelsFetched(session);
+      hydrateRuntimeFromThread(session.id, res.thread);
+      setActiveSession(session.id);
+      await showCodexMineViewContainer();
+      output.show(true);
+    },
     ),
   );
 
@@ -489,6 +622,7 @@ export function deactivate(): void {
   sessionTree = null;
   diffProvider = null;
   chatView = null;
+  outputChannel = null;
   runtimeBySessionId.clear();
   activeSessionId = null;
 }
@@ -713,7 +847,7 @@ async function sendUserText(session: Session, text: string): Promise<void> {
   schedulePersistRuntime(session.id);
 
   try {
-    await backendManager.sendMessage(session, text);
+    await backendManager.sendMessageWithModel(session, text, getSessionModelState());
   } catch (err) {
     rt.sending = false;
     upsertBlock(session.id, {
@@ -1010,6 +1144,8 @@ function setActiveSession(sessionId: string): void {
   if (hiddenTabSessionIds.delete(sessionId)) {
     if (extensionContext) saveHiddenTabSessions(extensionContext);
   }
+  const s = sessions ? sessions.getById(sessionId) : null;
+  if (s) void ensureModelsFetched(s);
   chatView?.refresh();
 }
 
@@ -1027,10 +1163,127 @@ function saveHiddenTabSessions(context: vscode.ExtensionContext): void {
   ]);
 }
 
-
 function setCustomPrompts(next: CustomPromptSummary[]): void {
   customPrompts = next;
   chatView?.refresh();
+}
+
+async function loadInitialModelState(
+  output: vscode.OutputChannel,
+): Promise<void> {
+  const fromWorkspace = await readModelStateFromWorkspaceConfig(output);
+  const fromHome = await readModelStateFromCodexHomeConfig(output);
+  const picked = fromWorkspace ?? fromHome;
+  if (!picked) {
+    output.appendLine(
+      "[config] config.toml not found in workspace or CODEX_HOME; using defaults",
+    );
+    return;
+  }
+  setSessionModelState(picked.state);
+  output.appendLine(`[config] Loaded model settings from ${picked.path}`);
+  chatView?.refresh();
+}
+
+async function readModelStateFromWorkspaceConfig(
+  output: vscode.OutputChannel,
+): Promise<{ state: ModelState; path: string } | null> {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  for (const folder of folders) {
+    const candidate = path.join(folder.uri.fsPath, ".codex", "config.toml");
+    const loaded = await readModelStateFromConfig(candidate, output);
+    if (loaded) return { state: loaded, path: candidate };
+  }
+  return null;
+}
+
+async function readModelStateFromCodexHomeConfig(
+  output: vscode.OutputChannel,
+): Promise<{ state: ModelState; path: string } | null> {
+  const candidate = path.join(resolveCodexHome(), "config.toml");
+  const loaded = await readModelStateFromConfig(candidate, output);
+  return loaded ? { state: loaded, path: candidate } : null;
+}
+
+async function readModelStateFromConfig(
+  filePath: string,
+  output: vscode.OutputChannel,
+): Promise<ModelState | null> {
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const parsed = parseToml(raw) as Record<string, unknown>;
+    const model = pickString(parsed["model"]);
+    const provider = pickString(parsed["model_provider"]);
+    const reasoning = pickString(parsed["model_reasoning_effort"]);
+    if (!model && !provider && !reasoning) return null;
+    return { model, provider, reasoning };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    output.appendLine(
+      `[config] Failed to read ${filePath}: ${String((err as Error).message)}`,
+    );
+    return null;
+  }
+}
+
+function pickString(v: unknown): string | null {
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+function formatHumanCount(n: number): string {
+  if (!Number.isFinite(n)) return String(n);
+  if (n >= 1_000_000) return `${Math.round(n / 100_000) / 10}M`;
+  if (n >= 1_000) return `${Math.round(n / 100) / 10}K`;
+  return String(n);
+}
+
+function formatRateLimitLines(rateLimits: RateLimitSnapshot): string[] {
+  const lines: string[] = [];
+  if (rateLimits.primary) {
+    lines.push(formatRateLimitLine("Primary", rateLimits.primary));
+  }
+  if (rateLimits.secondary) {
+    lines.push(formatRateLimitLine("Secondary", rateLimits.secondary));
+  }
+  return lines.filter(Boolean);
+}
+
+function formatRateLimitLine(labelFallback: string, w: RateLimitWindow): string {
+  const mins = w.windowDurationMins ?? null;
+  const label = mins ? rateLimitLabelFromMinutes(mins) : labelFallback;
+  const used = Math.max(0, Math.min(100, w.usedPercent));
+  const remaining = Math.max(0, Math.min(100, 100 - used));
+  const bar = formatBar(remaining, 20);
+  const reset = w.resetsAt ? formatResetsAt(w.resetsAt) : null;
+  const resetText = reset ? ` (resets ${reset})` : "";
+  return `${label}: [${bar}] ${remaining}% left${resetText}`;
+}
+
+function rateLimitLabelFromMinutes(mins: number): string {
+  if (mins === 300) return "5h limit";
+  if (mins === 10080) return "Weekly limit";
+  if (mins === 1440) return "Daily limit";
+  if (mins % 60 === 0) return `${mins / 60}h limit`;
+  return `${mins}m limit`;
+}
+
+function formatBar(remainingPercent: number, width: number): string {
+  const pct = Math.max(0, Math.min(100, remainingPercent));
+  const filled = Math.max(0, Math.min(width, Math.round((pct / 100) * width)));
+  return "█".repeat(filled) + "░".repeat(Math.max(0, width - filled));
+}
+
+function formatResetsAt(unixSeconds: number): string {
+  const d = new Date(unixSeconds * 1000);
+  const now = new Date();
+  const isSameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  const pad2 = (n: number): string => String(n).padStart(2, "0");
+  const hhmm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  if (isSameDay) return hhmm;
+  return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${hhmm}`;
 }
 
 function resolveCodexHome(): string {
@@ -1129,6 +1382,7 @@ function ensureRuntime(sessionId: string): SessionRuntime {
     blocks: [],
     latestDiff: null,
     statusText: null,
+    tokenUsage: null,
     sending: false,
     lastTurnStartedAtMs: null,
     lastTurnCompletedAtMs: null,
@@ -1140,6 +1394,33 @@ function ensureRuntime(sessionId: string): SessionRuntime {
   };
   runtimeBySessionId.set(sessionId, rt);
   return rt;
+}
+
+function getModelOptionsForSession(session: Session | null): Model[] | null {
+  if (!session || !backendManager) return null;
+  return backendManager.getCachedModels(session);
+}
+
+async function ensureModelsFetched(session: Session): Promise<void> {
+  if (!backendManager) return;
+  const backendKey = session.backendKey;
+  if (backendManager.getCachedModels(session)) return;
+  const pending = pendingModelFetchByBackend.get(backendKey);
+  if (pending) {
+    await pending;
+    return;
+  }
+  const promise = backendManager
+    .listModelsForSession(session)
+    .then(() => chatView?.refresh())
+    .catch((err) => {
+      outputChannel?.appendLine(
+        `[models] Failed to list models: ${String((err as Error).message ?? err)}`,
+      );
+    })
+    .finally(() => pendingModelFetchByBackend.delete(backendKey));
+  pendingModelFetchByBackend.set(backendKey, promise);
+  await promise;
 }
 
 function buildChatState(): ChatViewState {
@@ -1158,28 +1439,31 @@ function buildChatState(): ChatViewState {
       latestDiff: null,
       sending: false,
       statusText: globalStatusText,
+      modelState: getSessionModelState(),
+      models: null,
       approvals: [],
       customPrompts: promptSummaries,
     };
 
-  const tabSessions = sessions
+  const tabSessionsRaw = sessions
     .listAll()
     .filter((s) => !hiddenTabSessionIds.has(s.id));
-  const active = activeSessionId ? sessions.getById(activeSessionId) : null;
-  if (!active)
+  const activeRaw = activeSessionId ? sessions.getById(activeSessionId) : null;
+  if (!activeRaw)
     return {
       globalBlocks: globalRuntime.blocks,
-      sessions: tabSessions,
+      sessions: tabSessionsRaw,
       activeSession: null,
       blocks: [],
       latestDiff: null,
       sending: false,
       statusText: globalStatusText,
+      modelState: getSessionModelState(),
       approvals: [],
       customPrompts: promptSummaries,
     };
 
-  const rt = ensureRuntime(active.id);
+  const rt = ensureRuntime(activeRaw.id);
   const baseStatusText = rt.statusText ?? null;
   const suffix: string[] = [];
   if (rt.sending) suffix.push("sending…");
@@ -1193,12 +1477,14 @@ function buildChatState(): ChatViewState {
       : baseStatusText || (suffix.length > 0 ? suffix.join(" • ") : null);
   return {
     globalBlocks: globalRuntime.blocks,
-    sessions: tabSessions,
-    activeSession: active,
+    sessions: tabSessionsRaw,
+    activeSession: activeRaw,
     blocks: rt.blocks,
     latestDiff: rt.latestDiff,
     sending: rt.sending,
     statusText: statusText ?? globalStatusText,
+    modelState: getSessionModelState(),
+    models: getModelOptionsForSession(activeRaw),
     approvals: [...rt.pendingApprovals.entries()].map(([requestKey, v]) => ({
       requestKey,
       title: v.title,
@@ -1207,6 +1493,16 @@ function buildChatState(): ChatViewState {
     })),
     customPrompts: promptSummaries,
   };
+}
+
+function normalizeSessionTitle(title: string): string {
+  const trimmed = title.trim();
+  if (!trimmed) return "(untitled)";
+  const withoutNumber = trimmed.replace(/\s+#\d+$/, "").trim();
+  const withoutShortId = withoutNumber
+    .replace(/\s+\([0-9a-f]{8}\)$/i, "")
+    .trim();
+  return withoutShortId || "(untitled)";
 }
 
 function applyServerNotification(
@@ -1244,7 +1540,8 @@ function applyServerNotification(
       chatView?.refresh();
       return;
     case "thread/tokenUsage/updated":
-      rt.statusText = formatTokenUsageStatus((n as any).params.tokenUsage);
+      rt.tokenUsage = (n as any).params.tokenUsage as ThreadTokenUsage;
+      rt.statusText = formatTokenUsageStatus(rt.tokenUsage);
       chatView?.refresh();
       return;
     case "item/agentMessage/delta": {
@@ -1665,6 +1962,12 @@ function requestKeyFromId(id: string | number): string {
   return typeof id === "number" ? `n:${id}` : `s:${id}`;
 }
 
+function formatK(n: number): string {
+  const v = Math.max(0, Math.round(n));
+  if (v < 1000) return String(v);
+  return `${Math.round(v / 1000)}k`;
+}
+
 function formatTokenUsageStatus(tokenUsage: ThreadTokenUsage): string {
   const { total, modelContextWindow } = tokenUsage;
   if (modelContextWindow !== null && modelContextWindow > 0) {
@@ -1674,9 +1977,9 @@ function formatTokenUsageStatus(tokenUsage: ThreadTokenUsage): string {
       0,
       Math.min(100, Math.round((remaining / modelContextWindow) * 100)),
     );
-    return `ctx remaining=${remainingPct}% (${remaining}/${modelContextWindow})`;
+    return `remaining=${remainingPct}% (${formatK(remaining)}/${formatK(modelContextWindow)})`;
   }
-  return `tokens used=${total.totalTokens}`;
+  return `tokens used=${formatK(total.totalTokens)}`;
 }
 
 function computeWorkedSeconds(rt: SessionRuntime): number | null {
@@ -1753,6 +2056,8 @@ function applyGlobalNotification(n: AnyServerNotification): void {
       if (cwd) lines.push(`Working directory: \`${cwd}\``);
       if (cliVersion) lines.push(`CLI version: \`${cliVersion}\``);
       if (originUrl) lines.push(`Git origin: ${originUrl}`);
+      const mcpLine = formatMcpStatusSummary();
+      if (mcpLine) lines.push(mcpLine);
 
       // De-dupe: `New` creates a new thread and emits `thread/started` again, but for the same cwd we only
       // want one "Thread started" notice.
@@ -1829,14 +2134,36 @@ function applyGlobalNotification(n: AnyServerNotification): void {
       return;
     }
     case "account/login/completed": {
-      appendUnhandledGlobalEvent(`Event: ${n.method}`, (n as any).params);
+      const p = (n as any).params as { success?: boolean; provider?: string };
+      upsertGlobal({
+        id: newLocalId("auth"),
+        type: p?.success ? "info" : "error",
+        title: p?.success ? "Login succeeded" : "Login failed",
+        text: `provider=${String(p?.provider ?? "unknown")}`,
+      });
       chatView?.refresh();
       return;
     }
     case "authStatusChange":
-    case "loginChatGptComplete":
+    case "loginChatGptComplete": {
+      const p = (n as any).params as { authMode?: string; user?: string };
+      upsertGlobal({
+        id: newLocalId("authStatus"),
+        type: "info",
+        title: "Auth status changed",
+        text: `mode=${String(p?.authMode ?? "unknown")}${p?.user ? `\nuser=${p.user}` : ""}`,
+      });
+      chatView?.refresh();
+      return;
+    }
     case "sessionConfigured": {
-      appendUnhandledGlobalEvent(`Event: ${n.method}`, (n as any).params);
+      const p = (n as any).params as Record<string, unknown>;
+      upsertGlobal({
+        id: newLocalId("sessionConfigured"),
+        type: "info",
+        title: "Session configured",
+        text: formatSessionConfigForDisplay(p),
+      });
       chatView?.refresh();
       return;
     }
@@ -1885,6 +2212,50 @@ function appendUnhandledGlobalEvent(title: string, params: unknown): void {
   });
 }
 
+function formatMcpStatusSummary(): string | null {
+  if (mcpStatusByServer.size === 0) return null;
+  const icon = (state: string): string =>
+    state === "ready" ? "✓" : state === "starting" ? "…" : "•";
+  const lines = [...mcpStatusByServer.entries()].map(
+    ([server, state]) => `${icon(state)} ${server}`,
+  );
+  return ["MCP servers:", ...lines].join("\n");
+}
+
+function formatSessionConfigForDisplay(params: Record<string, unknown>): string {
+  const model = typeof params.model === "string" ? params.model : "default";
+  const provider =
+    typeof params.modelProvider === "string" ? params.modelProvider : "default";
+  const sandbox =
+    typeof params.sandbox === "string" ? params.sandbox : "default";
+  const plan = typeof params.planType === "string" ? params.planType : "default";
+  return `model=${model}\nprovider=${provider}\nsandbox=${sandbox}\nplan=${plan}`;
+}
+
+function updateThreadStartedBlocks(): void {
+  const summary = formatMcpStatusSummary();
+  let changed = false;
+  for (let i = 0; i < globalRuntime.blocks.length; i++) {
+    const b = globalRuntime.blocks[i];
+    if (!b) continue;
+    if (b.type !== "info" || b.title !== "Thread started") continue;
+    const lines = b.text
+      .split("\n")
+      .filter(
+        (l) =>
+          !l.startsWith("MCP servers:") &&
+          !/^\s*-?\s*[✓…•]/.test(l),
+      );
+    if (summary) lines.push(summary);
+    const nextText = lines.join("\n");
+    if (nextText !== b.text) {
+      globalRuntime.blocks[i] = { ...b, text: nextText };
+      changed = true;
+    }
+  }
+  if (changed) chatView?.refresh();
+}
+
 function appendUnhandledEvent(
   rt: SessionRuntime,
   title: string,
@@ -1919,7 +2290,7 @@ function applyGlobalCodexEvent(method: string, params: unknown): void {
           0,
           Math.min(100, Math.round((remaining / ctx) * 100)),
         );
-        globalStatusText = `ctx remaining=${remainingPct}% (${remaining}/${ctx})`;
+        globalStatusText = `remaining=${remainingPct}% (${remaining}/${ctx})`;
       } else {
         globalStatusText = `tokens used=${info.total_tokens}`;
       }
@@ -1931,6 +2302,11 @@ function applyGlobalCodexEvent(method: string, params: unknown): void {
 
   if (type === "web_search_begin" || type === "web_search_end") {
     // Web search events are session-scoped when possible; avoid duplicating at global level.
+    return;
+  }
+
+  if (type === "stream_error") {
+    // Prefer the dedicated v2 error notification block; avoid showing a noisy legacy dump.
     return;
   }
 
@@ -1954,6 +2330,15 @@ function applyGlobalCodexEvent(method: string, params: unknown): void {
       title: "MCP startup issues",
       text: formatParamsForDisplay(msg),
     });
+    return;
+  }
+
+  if (type === "mcp_startup_update") {
+    const server = typeof msg.server === "string" ? msg.server : "(unknown)";
+    const status = typeof msg.status === "object" && msg.status !== null ? msg.status : {};
+    const state = typeof (status as any).state === "string" ? (status as any).state : "unknown";
+    if (server !== "(unknown)") mcpStatusByServer.set(server, state);
+    updateThreadStartedBlocks();
     return;
   }
 
@@ -1997,6 +2382,11 @@ function applyCodexEvent(
     return;
   }
 
+  if (type === "stream_error") {
+    // Prefer the dedicated v2 error notification block; avoid showing a noisy legacy dump.
+    return;
+  }
+
   if (type === "list_custom_prompts_response") {
     const raw = Array.isArray(msg.custom_prompts)
       ? (msg.custom_prompts as Array<{
@@ -2016,6 +2406,19 @@ function applyCodexEvent(
       .filter((p) => !!p.name)
       .map((p) => ({ ...p, source: "server" as const }));
     setCustomPrompts(next);
+    return;
+  }
+
+  if (type === "mcp_startup_update") {
+    // グローバル側で表示するのでセッションスコープでは重複表示しない。
+    const server = typeof msg.server === "string" ? msg.server : "(unknown)";
+    const status =
+      typeof msg.status === "object" && msg.status !== null ? msg.status : {};
+    const state = typeof (status as any).state === "string" ? (status as any).state : "unknown";
+    if (server !== "(unknown)") {
+      mcpStatusByServer.set(server, state);
+      updateThreadStartedBlocks();
+    }
     return;
   }
 
@@ -2150,7 +2553,7 @@ function applyCodexEvent(
           0,
           Math.min(100, Math.round((remaining / ctx) * 100)),
         );
-        rt.statusText = `ctx remaining=${remainingPct}% (${remaining}/${ctx})`;
+        rt.statusText = `remaining=${remainingPct}% (${remaining}/${ctx})`;
       } else {
         rt.statusText = `tokens used=${info.total_tokens}`;
       }

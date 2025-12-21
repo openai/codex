@@ -93,7 +93,6 @@ keep their local behavior even if a prompt shares the same name.
 
 ## 7. Mentions
 
-
 Mentions follow a CLI-like rule: `@...` must start on a whitespace boundary.
 
 ### 7.1 `@selection`
@@ -117,8 +116,8 @@ Mentions follow a CLI-like rule: `@...` must start on a whitespace boundary.
 The webview provides in-input suggestions for:
 
 - Slash commands, in this order:
-  1) Custom prompts from `$CODEX_HOME/prompts`
-  2) UI commands (`/new`, `/diff`, `/rename`, `/help`)
+  1. Custom prompts from `$CODEX_HOME/prompts`
+  2. UI commands (`/new`, `/diff`, `/rename`, `/help`)
 - Mentions (`@selection`, file paths)
 
 ### 8.1 File suggestions
@@ -176,7 +175,7 @@ The webview stores UI state with `vscode.setState()`:
 
 The status line (below the composer) shows:
 
-- `ctx remaining=<percent> (<used>/<max>)`
+- `remaining=<percent> (<used>/<max>)`
 - `worked=<seconds>s`
 
 Token breakdown is intentionally not shown.
@@ -195,6 +194,7 @@ Example: `thread/started`
   - Working directory
   - CLI version
   - Git origin
+  - MCP servers summary (`MCP servers: <name>=<state>, ...`) if any `mcp_startup_update` has been received. The summary is refreshed in-place when further MCP updates arrive.
 
 ### 12.2 Turn/Item events
 
@@ -225,6 +225,7 @@ Example: `thread/started`
 ### 12.7 Unknown/unhandled events
 
 - Unknown events are collected into a debug block ("Other events (debug)") so they remain inspectable.
+- MCP startup updates (`mcp_startup_update`) are shown only in the global notice (see 12.1) to avoid duplicate legacy blocks in sessions.
 
 ## 13. Colors
 

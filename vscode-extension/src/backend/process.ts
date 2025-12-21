@@ -12,8 +12,13 @@ import type { ThreadResumeParams } from "../generated/v2/ThreadResumeParams";
 import type { ThreadResumeResponse } from "../generated/v2/ThreadResumeResponse";
 import type { TurnStartParams } from "../generated/v2/TurnStartParams";
 import type { TurnStartResponse } from "../generated/v2/TurnStartResponse";
+import type { ModelListParams } from "../generated/v2/ModelListParams";
+import type { ModelListResponse } from "../generated/v2/ModelListResponse";
 import type { ThreadArchiveParams } from "../generated/v2/ThreadArchiveParams";
 import type { ThreadArchiveResponse } from "../generated/v2/ThreadArchiveResponse";
+import type { GetAccountParams } from "../generated/v2/GetAccountParams";
+import type { GetAccountRateLimitsResponse } from "../generated/v2/GetAccountRateLimitsResponse";
+import type { GetAccountResponse } from "../generated/v2/GetAccountResponse";
 import type { ApprovalDecision } from "../generated/v2/ApprovalDecision";
 import type { CommandExecutionRequestApprovalResponse } from "../generated/v2/CommandExecutionRequestApprovalResponse";
 import type { FileChangeRequestApprovalResponse } from "../generated/v2/FileChangeRequestApprovalResponse";
@@ -125,6 +130,33 @@ export class BackendProcess implements vscode.Disposable {
     return this.rpc.request<TurnStartResponse>({
       method: "turn/start",
       params,
+    });
+  }
+
+  public async listModels(
+    params: Partial<ModelListParams> | undefined = undefined,
+  ): Promise<ModelListResponse> {
+    const request: { method: "model/list"; params: ModelListParams } = {
+      method: "model/list",
+      params: {
+        cursor: params?.cursor ?? null,
+        limit: params?.limit ?? null,
+      },
+    };
+    return this.rpc.request<ModelListResponse>(request);
+  }
+
+  public async accountRead(params: GetAccountParams): Promise<GetAccountResponse> {
+    return this.rpc.request<GetAccountResponse>({
+      method: "account/read",
+      params,
+    });
+  }
+
+  public async accountRateLimitsRead(): Promise<GetAccountRateLimitsResponse> {
+    return this.rpc.request<GetAccountRateLimitsResponse>({
+      method: "account/rateLimits/read",
+      params: undefined,
     });
   }
 

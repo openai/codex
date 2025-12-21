@@ -31,10 +31,12 @@ export class SessionTreeDataProvider
       return item;
     }
 
+    const title = normalizeTitle(element.session.title);
     const item = new vscode.TreeItem(
-      element.session.title,
+      `${title} #${element.index}`,
       vscode.TreeItemCollapsibleState.None,
     );
+    // Show full thread id in description for copyability; omit short id in label.
     item.description = element.session.threadId;
     item.contextValue = "codexMine.session";
     item.command = {
@@ -65,7 +67,7 @@ export class SessionTreeDataProvider
       return Promise.resolve(
         this.sessions
           .list(element.backendKey)
-          .map((s) => ({ kind: "session", session: s })),
+          .map((s, idx) => ({ kind: "session", session: s, index: idx + 1 })),
       );
     }
 
@@ -74,8 +76,21 @@ export class SessionTreeDataProvider
 }
 
 type FolderNode = { kind: "folder"; backendKey: string; label: string };
-type SessionNode = { kind: "session"; session: Session };
+type SessionNode = { kind: "session"; session: Session; index: number };
 type TreeNode = FolderNode | SessionNode;
+
+function formatThreadId(threadId: string): string {
+  const trimmed = threadId.trim();
+  if (trimmed.length === 0) return "";
+  if (trimmed.length <= 8) return `#${trimmed}`;
+  return `#${trimmed.slice(0, 8)}`;
+}
+
+function normalizeTitle(title: string): string {
+  const t = title.trim();
+  const withoutShortId = t.replace(/\s*\([0-9a-f]{8}\)\s*$/i, "").trim();
+  return withoutShortId.length > 0 ? withoutShortId : "(untitled)";
+}
 
 function toFolderLabel(session: Session | null): string | null {
   if (!session) return null;

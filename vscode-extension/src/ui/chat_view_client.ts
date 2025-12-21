@@ -17,6 +17,11 @@ declare const markdownit:
     });
 
 type Session = { id: string; title: string };
+type ModelState = {
+  model: string | null;
+  provider: string | null;
+  reasoning: string | null;
+};
 
 type ChatBlock =
   | { id: string; type: "user"; text: string }
@@ -75,6 +80,16 @@ type ChatViewState = {
   latestDiff: string | null;
   sending: boolean;
   statusText?: string | null;
+  modelState?: ModelState | null;
+  models?: Array<{
+    id: string;
+    model: string;
+    displayName: string;
+    description: string;
+    supportedReasoningEfforts: Array<{ reasoningEffort: string; description: string }>;
+    defaultReasoningEffort: string;
+    isDefault: boolean;
+  }> | null;
   approvals: Array<{
     requestKey: string;
     title: string;
@@ -123,7 +138,44 @@ function main(): void {
   const sendBtn = mustGet<HTMLButtonElement>("send");
   const diffBtn = mustGet<HTMLButtonElement>("diff");
   const newBtn = mustGet<HTMLButtonElement>("new");
+  const statusBtn = mustGet<HTMLButtonElement>("status");
   const tabsEl = mustGet("tabs");
+  const modelBarEl = mustGet("modelBar");
+  const modelSelect = document.createElement("select");
+  modelSelect.className = "modelSelect model";
+  const reasoningSelect = document.createElement("select");
+  reasoningSelect.className = "modelSelect effort";
+  modelBarEl.appendChild(modelSelect);
+  modelBarEl.appendChild(reasoningSelect);
+
+  const populateSelect = (
+    el: HTMLSelectElement,
+    options: string[],
+    value: string | null | undefined,
+  ): void => {
+    const v = (value && value.trim()) || "default";
+    const opts = options.includes(v) ? options : [v, ...options];
+    el.innerHTML = "";
+    for (const opt of opts) {
+      const o = document.createElement("option");
+      o.value = opt;
+      o.textContent = opt === "default" ? "default (CLI config)" : opt;
+      if (opt === v) o.selected = true;
+      el.appendChild(o);
+    }
+  };
+
+  const sendModelState = (): void => {
+    vscode.postMessage({
+      type: "setModel",
+      model: modelSelect.value === "default" ? null : modelSelect.value,
+      reasoning:
+        reasoningSelect.value === "default" ? null : reasoningSelect.value,
+    });
+  };
+
+  modelSelect.addEventListener("change", sendModelState);
+  reasoningSelect.addEventListener("change", sendModelState);
   const suggestEl = mustGet("suggest");
 
   // Chat auto-scroll:
@@ -141,25 +193,12 @@ function main(): void {
   });
 
 
-  // Assign a short session number (runtime-only) to avoid showing long thread-id-like suffixes in tabs.
-  // This resets on extension host reload / webview reload (no storage).
-  const sessionSeqById = new Map<string, number>();
-  let nextSessionSeq = 1;
-  const defaultTitleRe = /^(.*)\s+\(([0-9a-f]{8})\)$/i;
-
-  const getSessionDisplayTitle = (sess: Session): { label: string; tooltip: string } => {
-    const title = String(sess.title || "").trim();
-    const m = title.match(defaultTitleRe);
-    if (!m) return { label: title || "Untitled", tooltip: title };
-
-    const base = (m[1] || "").trim();
-    const seq = sessionSeqById.get(sess.id) ?? (() => {
-      const v = nextSessionSeq++;
-      sessionSeqById.set(sess.id, v);
-      return v;
-    })();
-    const label = base ? `${base} #${seq}` : `#${seq}`;
-    return { label, tooltip: title };
+  const getSessionDisplayTitle = (
+    sess: Session,
+    idx: number,
+  ): { label: string; tooltip: string } => {
+    const title = String(sess.title || "").trim() || "Untitled";
+    return { label: `${title} #${idx + 1}`, tooltip: title };
   };
 
   if (typeof markdownit !== "function") {
@@ -215,7 +254,10 @@ function main(): void {
     blocks: [],
     latestDiff: null,
     sending: false,
+    statusText: null,
+    modelState: null,
     approvals: [],
+    customPrompts: [],
   };
 
   let domSessionId: string | null = null;
@@ -838,25 +880,61 @@ function main(): void {
     state = s;
     const shouldAutoScroll = stickLogToBottom && isLogNearBottom();
     titleEl.textContent = s.activeSession
-      ? getSessionDisplayTitle(s.activeSession).label
+      ? getSessionDisplayTitle(
+          s.activeSession,
+          (s.sessions || []).findIndex((x) => x.id === s.activeSession!.id),
+        ).label
       : "Codex UI (no session selected)";
-    const st = String(s.statusText || "").trim();
-    statusTextEl.textContent = st;
-    statusTextEl.style.display = st ? "" : "none";
+
+    const ms = s.modelState || {
+      model: null,
+      provider: null,
+      reasoning: null,
+    };
+    const models = s.models ?? [];
+    const modelOptions = ["default", ...models.map((m) => m.model || m.id)];
+    populateSelect(modelSelect, modelOptions, ms.model);
+
+    const effortOptions = (() => {
+      if (!ms.model || models.length === 0)
+        return ["default", "none", "minimal", "low", "medium", "high", "xhigh"];
+      const model = models.find((m) => m.model === ms.model || m.id === ms.model);
+      if (!model) return ["default", "none", "minimal", "low", "medium", "high", "xhigh"];
+      const supported =
+        model.supportedReasoningEfforts
+          ?.map((o) => o.reasoningEffort)
+          .filter((v): v is string => typeof v === "string" && v.length > 0) ?? [];
+      if (supported.length === 0)
+        return ["default", "none", "minimal", "low", "medium", "high", "xhigh"];
+      return ["default", ...supported];
+    })();
+    populateSelect(reasoningSelect, effortOptions, ms.reasoning);
+
+
+    const fullStatus = String(s.statusText || "").trim();
+    const shortStatus = (() => {
+      const m = fullStatus.match(/ctx\\s+remaining=([0-9]{1,3})%/i);
+      if (m) return `ctx ${m[1]}%`;
+      return fullStatus;
+    })();
+    statusTextEl.textContent = shortStatus;
+    statusTextEl.title = fullStatus;
+    statusTextEl.style.display = shortStatus ? "" : "none";
     diffBtn.disabled = !s.latestDiff;
     sendBtn.disabled = !s.activeSession || s.sending;
+    statusBtn.disabled = !s.activeSession || s.sending;
     // NOTE: Keep input enabled while sending so the user can compose the next message.
     // Sending again is still blocked via sendBtn.disabled and sendCurrentInput() guard.
     inputEl.disabled = !s.activeSession;
 
     tabsEl.innerHTML = "";
-    for (const sess of s.sessions || []) {
+    (s.sessions || []).forEach((sess, idx) => {
       const div = el(
         "div",
         "tab" +
           (s.activeSession && sess.id === s.activeSession.id ? " active" : ""),
       );
-      const dt = getSessionDisplayTitle(sess);
+      const dt = getSessionDisplayTitle(sess, idx);
       div.textContent = dt.label;
       div.title = dt.tooltip;
       div.addEventListener("click", () =>
@@ -867,7 +945,7 @@ function main(): void {
         vscode.postMessage({ type: "sessionMenu", sessionId: sess.id });
       });
       tabsEl.appendChild(div);
-    }
+    });
 
     if (domSessionId !== (s.activeSession ? s.activeSession.id : null)) {
       domSessionId = s.activeSession ? s.activeSession.id : null;
@@ -1323,6 +1401,9 @@ function sendCurrentInput(): void {
   sendBtn.addEventListener("click", () => sendCurrentInput());
   newBtn.addEventListener("click", () =>
     vscode.postMessage({ type: "newSession" }),
+  );
+  statusBtn.addEventListener("click", () =>
+    vscode.postMessage({ type: "showStatus" }),
   );
   diffBtn.addEventListener("click", () =>
     vscode.postMessage({ type: "openDiff" }),
