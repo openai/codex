@@ -158,13 +158,19 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
 async fn list_skills_includes_system_cache_entries() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    const SYSTEM_SKILL_NAME: &str = "skill-creator";
+
     let server = start_mock_server().await;
     let mut builder = test_codex()
         .with_config(|config| {
             config.features.enable(Feature::Skills);
         })
         .with_pre_build_hook(|home| {
-            let system_skill_path = home.join("skills/.system/plan/SKILL.md");
+            let system_skill_path = home
+                .join("skills")
+                .join(".system")
+                .join(SYSTEM_SKILL_NAME)
+                .join("SKILL.md");
             assert!(
                 !system_skill_path.exists(),
                 "expected embedded system skills not yet installed, but {system_skill_path:?} exists"
@@ -172,14 +178,20 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
         });
     let test = builder.build(&server).await?;
 
-    let system_skill_path = test.codex_home_path().join("skills/.system/plan/SKILL.md");
+    let system_skill_path = test
+        .codex_home_path()
+        .join("skills")
+        .join(".system")
+        .join(SYSTEM_SKILL_NAME)
+        .join("SKILL.md");
     assert!(
         system_skill_path.exists(),
         "expected embedded system skills installed to {system_skill_path:?}"
     );
     let system_skill_contents = fs::read_to_string(&system_skill_path)?;
+    let expected_name_line = format!("name: {SYSTEM_SKILL_NAME}");
     assert!(
-        system_skill_contents.contains("name: plan"),
+        system_skill_contents.contains(&expected_name_line),
         "expected embedded system skill file, got:\n{system_skill_contents}"
     );
 
@@ -206,12 +218,13 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
 
     let skill = skills
         .iter()
-        .find(|skill| skill.name == "plan")
+        .find(|skill| skill.name == SYSTEM_SKILL_NAME)
         .expect("expected system skill to be present");
     assert_eq!(skill.scope, codex_protocol::protocol::SkillScope::System);
     let path_str = skill.path.to_string_lossy().replace('\\', "/");
+    let expected_path_suffix = format!("/skills/.system/{SYSTEM_SKILL_NAME}/SKILL.md");
     assert!(
-        path_str.ends_with("/skills/.system/plan/SKILL.md"),
+        path_str.ends_with(&expected_path_suffix),
         "unexpected skill path: {path_str}"
     );
 
