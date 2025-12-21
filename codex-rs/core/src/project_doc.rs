@@ -234,6 +234,7 @@ mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
     use crate::skills::load_skills;
+    use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -544,8 +545,80 @@ mod tests {
         assert_eq!(res, expected);
     }
 
+    #[tokio::test]
+    async fn system_plan_skill_is_excluded_from_project_doc() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "base doc").unwrap();
+
+        let cfg = make_config(&tmp, 4096, None).await;
+        create_system_skill(cfg.codex_home.clone(), "plan", "Generate a plan");
+        create_skill(cfg.codex_home.clone(), "linting", "run clippy");
+
+        let skills = load_skills(&cfg);
+        assert!(
+            skills.skills.iter().any(|skill| {
+                skill.scope == codex_protocol::protocol::SkillScope::System && skill.name == "plan"
+            }),
+            "expected system plan skill to load, loaded: {:?}",
+            skills.skills
+        );
+        let res = get_user_instructions(
+            &cfg,
+            skills.errors.is_empty().then_some(skills.skills.as_slice()),
+        )
+        .await
+        .expect("instructions expected");
+
+        assert!(
+            res.contains("- linting: run clippy"),
+            "expected linting skill to render, got: {res}"
+        );
+        assert!(
+            !res.contains("- plan: Generate a plan"),
+            "expected system plan skill to be excluded, got: {res}"
+        );
+    }
+
+    #[tokio::test]
+    async fn user_plan_skill_is_included_in_project_doc() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "base doc").unwrap();
+
+        let cfg = make_config(&tmp, 4096, None).await;
+        create_skill(cfg.codex_home.clone(), "plan", "Generate a plan");
+
+        let skills = load_skills(&cfg);
+        assert!(
+            skills.skills.iter().any(|skill| {
+                skill.scope == codex_protocol::protocol::SkillScope::User && skill.name == "plan"
+            }),
+            "expected user plan skill to load, loaded: {:?}",
+            skills.skills
+        );
+
+        let res = get_user_instructions(
+            &cfg,
+            skills.errors.is_empty().then_some(skills.skills.as_slice()),
+        )
+        .await
+        .expect("instructions expected");
+
+        assert!(
+            res.contains("- plan: Generate a plan"),
+            "expected user plan skill to render, got: {res}"
+        );
+    }
+
     fn create_skill(codex_home: PathBuf, name: &str, description: &str) {
         let skill_dir = codex_home.join(format!("skills/{name}"));
+        fs::create_dir_all(&skill_dir).unwrap();
+        let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
+        fs::write(skill_dir.join("SKILL.md"), content).unwrap();
+    }
+
+    fn create_system_skill(codex_home: PathBuf, name: &str, description: &str) {
+        let system_root = crate::skills::system::system_cache_root_dir(&codex_home);
+        let skill_dir = system_root.join(name);
         fs::create_dir_all(&skill_dir).unwrap();
         let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
         fs::write(skill_dir.join("SKILL.md"), content).unwrap();

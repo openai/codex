@@ -1,7 +1,20 @@
 use crate::skills::model::SkillMetadata;
+use codex_protocol::protocol::SkillScope;
+
+fn excluded_from_prompt_context(skill: &SkillMetadata) -> bool {
+    matches!(
+        (skill.name.as_str(), skill.scope),
+        ("plan", SkillScope::System)
+    )
+}
 
 pub fn render_skills_section(skills: &[SkillMetadata]) -> Option<String> {
-    if skills.is_empty() {
+    let visible_skills: Vec<&SkillMetadata> = skills
+        .iter()
+        .filter(|skill| !excluded_from_prompt_context(skill))
+        .collect();
+
+    if visible_skills.is_empty() {
         return None;
     }
 
@@ -9,7 +22,7 @@ pub fn render_skills_section(skills: &[SkillMetadata]) -> Option<String> {
     lines.push("## Skills".to_string());
     lines.push("These skills are discovered at startup from multiple local sources. Each entry includes a name, description, and file path so you can open the source for full instructions.".to_string());
 
-    for skill in skills {
+    for skill in visible_skills {
         let path_str = skill.path.to_string_lossy().replace('\\', "/");
         let name = skill.name.as_str();
         let description = skill.description.as_str();
