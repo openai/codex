@@ -10,6 +10,10 @@
 - 右上ステータス（チェック/スピナー）の位置ずれを修正
 - Output を自動で開かないように変更
 
+## 0.1.1
+
+- upstream 準拠で `skills/list` を呼び出し、`/skills` でスキルを挿入できるようにした（repo-local `.codex/skills` も app-server 側で探索される）
+
 ## 0.0.7
 
 - モデル一覧の取得と表示、および Reasoning effort 選択 UI を追加
