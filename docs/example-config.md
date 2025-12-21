@@ -105,6 +105,7 @@ exclude_slash_tmp = false
 
 [network_proxy]
 # Enable proxy env injection + approval prompts for blocked domains. Default: false
+# NOTE: This is rollout-gated behind `[features].network_proxy = true`.
 enabled = false
 # HTTP/HTTPS proxy URL. Default: "http://127.0.0.1:3128"
 proxy_url = "http://127.0.0.1:3128"
@@ -259,6 +260,7 @@ rmcp_client = false
 apply_patch_freeform = false
 view_image_tool = true
 web_search_request = false
+network_proxy = false
 ghost_commit = false
 enable_experimental_windows_sandbox = false
 skills = false

@@ -1197,7 +1197,10 @@ impl Config {
             || config_profile.sandbox_mode.is_some()
             || cfg.sandbox_mode.is_some();
 
-        let network_proxy = resolve_network_proxy_config(&cfg, &codex_home);
+        let mut network_proxy = resolve_network_proxy_config(&cfg, &codex_home);
+        if !features.enabled(Feature::NetworkProxy) {
+            network_proxy.enabled = false;
+        }
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -1554,6 +1557,51 @@ persistence = "none"
             }),
             history_no_persistence_cfg.history
         );
+    }
+
+    #[test]
+    fn network_proxy_is_rollout_gated_by_feature_flag() -> std::io::Result<()> {
+        let cfg_without_feature_flag = r#"
+[network_proxy]
+enabled = true
+"#;
+        let parsed_without_feature_flag =
+            toml::from_str::<ConfigToml>(cfg_without_feature_flag).expect("TOML parse should work");
+        let cwd_temp_dir = TempDir::new().unwrap();
+        std::fs::write(cwd_temp_dir.path().join(".git"), "gitdir: nowhere")?;
+        let codex_home_temp_dir = TempDir::new().unwrap();
+        let config_without_feature_flag = Config::load_from_base_config_with_overrides(
+            parsed_without_feature_flag,
+            ConfigOverrides {
+                cwd: Some(cwd_temp_dir.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home_temp_dir.path().to_path_buf(),
+        )?;
+        assert!(!config_without_feature_flag.network_proxy.enabled);
+
+        let cfg_with_feature_flag = r#"
+[features]
+network_proxy = true
+
+[network_proxy]
+enabled = true
+"#;
+        let parsed_with_feature_flag =
+            toml::from_str::<ConfigToml>(cfg_with_feature_flag).expect("TOML parse should work");
+        let cwd_temp_dir = TempDir::new().unwrap();
+        std::fs::write(cwd_temp_dir.path().join(".git"), "gitdir: nowhere")?;
+        let codex_home_temp_dir = TempDir::new().unwrap();
+        let config_with_feature_flag = Config::load_from_base_config_with_overrides(
+            parsed_with_feature_flag,
+            ConfigOverrides {
+                cwd: Some(cwd_temp_dir.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home_temp_dir.path().to_path_buf(),
+        )?;
+        assert!(config_with_feature_flag.network_proxy.enabled);
+        Ok(())
     }
 
     #[test]

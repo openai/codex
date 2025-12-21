@@ -61,7 +61,7 @@ Codex can optionally route outbound network traffic through a proxy and prompt y
 Key behaviors:
 
 - The OS sandbox is still the first line of defense. If network access is disabled, outbound requests are blocked at the OS level.
-- When network is enabled and `network_proxy.enabled = true`, Codex polls the proxy admin API (`/blocked`) and immediately notifies you about blocked domains.
+- When network is enabled and both `[features].network_proxy = true` and `network_proxy.enabled = true`, Codex polls the proxy admin API (`/blocked`) and immediately notifies you about blocked domains.
 - For exec commands that include HTTP/HTTPS URLs, Codex preflights the host against the proxy config and prompts before running the command.
 - Approvals update `~/.codex/config.toml` under `[network_proxy.policy]` and trigger a proxy reload.
 - You can choose to:

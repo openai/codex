@@ -354,6 +354,9 @@ Though using this option may also be necessary if you try to use Codex in enviro
 Codex can route subprocess network traffic through an external proxy (for example, the `network_proxy` sandbox proxy) and surface approval prompts when requests are blocked by policy.
 
 ```toml
+[features]
+network_proxy = true
+
 [network_proxy]
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
@@ -376,6 +379,7 @@ poll_interval_ms = 1000
 Notes:
 
 - Proxy settings are injected only when sandbox network access is enabled (or full access mode). If the sandbox blocks network access, requests are blocked at the OS layer.
+- Network proxy integration is rollout-gated behind `[features].network_proxy = true`.
 - `proxy_url` is used for HTTP proxy envs (`HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy`, plus npm/yarn variants). Docker and Cloud SDK proxy envs are derived from the HTTP proxy when present.
 - When `proxy_url` points at localhost, Codex also assumes a SOCKS5 proxy on `localhost:8081` for `ALL_PROXY`, `GRPC_PROXY`, `FTP_PROXY`, `RSYNC_PROXY`, and (macOS only) `GIT_SSH_COMMAND`.
 - `no_proxy` entries bypass the proxy; defaults include localhost + private network ranges. Use sparingly because bypassed traffic is not filtered by the proxy policy.
