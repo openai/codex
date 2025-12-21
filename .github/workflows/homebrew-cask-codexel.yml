@@ -132,24 +132,24 @@ jobs:
 
           mkdir -p homebrew-tap/Casks
           cat > homebrew-tap/Casks/codexel.rb <<EOF
-cask "codexel" do
-  version "${version}"
-  sha256 arm: "${sha_arm}",
-         intel: "${sha_intel}"
+          cask "codexel" do
+            version "${version}"
+            sha256 arm: "${sha_arm}",
+                   intel: "${sha_intel}"
 
-  url "https://github.com/Ixe1/codexel/releases/download/codexel-v#{version}/codexel-#{arch}.tar.gz",
-      arch: {
-        arm: "aarch64-apple-darwin",
-        intel: "x86_64-apple-darwin",
-      }
-  name "Codexel"
-  desc "Codex CLI community fork"
-  homepage "https://github.com/Ixe1/codexel"
-  license "Apache-2.0"
+            url "https://github.com/Ixe1/codexel/releases/download/codexel-v#{version}/codexel-#{arch}.tar.gz",
+                arch: {
+                  arm: "aarch64-apple-darwin",
+                  intel: "x86_64-apple-darwin",
+                }
+            name "Codexel"
+            desc "Codex CLI community fork"
+            homepage "https://github.com/Ixe1/codexel"
+            license "Apache-2.0"
 
-  binary "codexel"
-end
-EOF
+            binary "codexel"
+          end
+          EOF
 
       - name: Commit and push
         if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
