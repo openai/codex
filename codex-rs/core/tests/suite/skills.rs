@@ -27,6 +27,14 @@ fn write_skill(home: &Path, name: &str, description: &str, body: &str) -> std::p
     path
 }
 
+fn system_skill_md_path(home: impl AsRef<Path>, name: &str) -> std::path::PathBuf {
+    home.as_ref()
+        .join("skills")
+        .join(".system")
+        .join(name)
+        .join("SKILL.md")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_includes_skill_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -166,11 +174,7 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
             config.features.enable(Feature::Skills);
         })
         .with_pre_build_hook(|home| {
-            let system_skill_path = home
-                .join("skills")
-                .join(".system")
-                .join(SYSTEM_SKILL_NAME)
-                .join("SKILL.md");
+            let system_skill_path = system_skill_md_path(home, SYSTEM_SKILL_NAME);
             assert!(
                 !system_skill_path.exists(),
                 "expected embedded system skills not yet installed, but {system_skill_path:?} exists"
@@ -178,12 +182,7 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
         });
     let test = builder.build(&server).await?;
 
-    let system_skill_path = test
-        .codex_home_path()
-        .join("skills")
-        .join(".system")
-        .join(SYSTEM_SKILL_NAME)
-        .join("SKILL.md");
+    let system_skill_path = system_skill_md_path(test.codex_home_path(), SYSTEM_SKILL_NAME);
     assert!(
         system_skill_path.exists(),
         "expected embedded system skills installed to {system_skill_path:?}"
