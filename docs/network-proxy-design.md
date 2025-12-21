@@ -47,6 +47,7 @@ The proxy reads `~/.codex/config.toml`:
 - `[network_proxy]` for endpoints, mode, and toggles.
 - `[network_proxy.policy]` for `allowed_domains` / `denied_domains` (and, on macOS, optional local IPC allowances).
 - `[network_proxy.mitm]` for MITM CA paths and inspection settings.
+- Codex integration is rollout-gated behind `[features].network_proxy = true`.
 
 Codex is the source of truth. Approval actions update the config and trigger a proxy reload.
 

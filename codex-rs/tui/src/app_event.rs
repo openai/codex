@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use codex_common::approval_presets::ApprovalPreset;
+use codex_core::network_proxy::NetworkProxyBlockedRequest;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
@@ -171,6 +172,25 @@ pub(crate) enum AppEvent {
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
 
+    /// Prompt for a blocked network request from the proxy.
+    NetworkProxyApprovalRequest(NetworkProxyBlockedRequest),
+
+    /// Prompt to allow a Unix socket path inside the sandbox (macOS only).
+    UnixSocketApprovalRequest(UnixSocketApprovalRequest),
+
+    /// User decision for a blocked network request.
+    NetworkProxyDecision {
+        host: String,
+        decision: NetworkProxyDecision,
+    },
+
+    /// User decision for a Unix socket approval request.
+    UnixSocketDecision {
+        socket_path: String,
+        allow_entry: String,
+        decision: UnixSocketDecision,
+    },
+
     /// Open the feedback note entry overlay after the user selects a category.
     OpenFeedbackNote {
         category: FeedbackCategory,
@@ -181,6 +201,27 @@ pub(crate) enum AppEvent {
     OpenFeedbackConsent {
         category: FeedbackCategory,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NetworkProxyDecision {
+    AllowSession,
+    AllowAlways,
+    Deny,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UnixSocketApprovalRequest {
+    pub label: String,
+    pub socket_path: String,
+    pub allow_entry: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnixSocketDecision {
+    AllowSession,
+    AllowAlways,
+    Deny,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

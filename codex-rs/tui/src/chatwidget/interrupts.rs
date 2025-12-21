@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use codex_core::network_proxy::NetworkProxyBlockedRequest;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
@@ -9,12 +10,16 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_protocol::approvals::ElicitationRequestEvent;
 
+use crate::app_event::UnixSocketApprovalRequest;
+
 use super::ChatWidget;
 
 #[derive(Debug)]
 pub(crate) enum QueuedInterrupt {
     ExecApproval(String, ExecApprovalRequestEvent),
     ApplyPatchApproval(String, ApplyPatchApprovalRequestEvent),
+    NetworkApproval(NetworkProxyBlockedRequest),
+    UnixSocketApproval(UnixSocketApprovalRequest),
     Elicitation(ElicitationRequestEvent),
     ExecBegin(ExecCommandBeginEvent),
     ExecEnd(ExecCommandEndEvent),
@@ -53,6 +58,16 @@ impl InterruptManager {
             .push_back(QueuedInterrupt::ApplyPatchApproval(id, ev));
     }
 
+    pub(crate) fn push_network_approval(&mut self, request: NetworkProxyBlockedRequest) {
+        self.queue
+            .push_back(QueuedInterrupt::NetworkApproval(request));
+    }
+
+    pub(crate) fn push_unix_socket_approval(&mut self, request: UnixSocketApprovalRequest) {
+        self.queue
+            .push_back(QueuedInterrupt::UnixSocketApproval(request));
+    }
+
     pub(crate) fn push_elicitation(&mut self, ev: ElicitationRequestEvent) {
         self.queue.push_back(QueuedInterrupt::Elicitation(ev));
     }
@@ -83,6 +98,12 @@ impl InterruptManager {
                 QueuedInterrupt::ExecApproval(id, ev) => chat.handle_exec_approval_now(id, ev),
                 QueuedInterrupt::ApplyPatchApproval(id, ev) => {
                     chat.handle_apply_patch_approval_now(id, ev)
+                }
+                QueuedInterrupt::NetworkApproval(request) => {
+                    chat.handle_network_approval_request(request)
+                }
+                QueuedInterrupt::UnixSocketApproval(request) => {
+                    chat.handle_unix_socket_approval_request(request)
                 }
                 QueuedInterrupt::Elicitation(ev) => chat.handle_elicitation_request_now(ev),
                 QueuedInterrupt::ExecBegin(ev) => chat.handle_exec_begin_now(ev),

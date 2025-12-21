@@ -1,3 +1,5 @@
+use crate::app_event::NetworkProxyDecision;
+use crate::app_event::UnixSocketDecision;
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -525,6 +527,94 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
+    };
+
+    Box::new(PrefixedWrappedHistoryCell::new(
+        Line::from(summary),
+        symbol,
+        "  ",
+    ))
+}
+
+pub fn new_network_approval_decision_cell(
+    host: String,
+    decision: NetworkProxyDecision,
+) -> Box<dyn HistoryCell> {
+    let host_span = Span::from(host).dim();
+    let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
+        NetworkProxyDecision::AllowSession => (
+            "✔ ".green(),
+            vec![
+                "You ".into(),
+                "approved".bold(),
+                " network access to ".into(),
+                host_span,
+                " for this session".bold(),
+            ],
+        ),
+        NetworkProxyDecision::AllowAlways => (
+            "✔ ".green(),
+            vec![
+                "You ".into(),
+                "approved".bold(),
+                " network access to ".into(),
+                host_span,
+                " permanently".bold(),
+            ],
+        ),
+        NetworkProxyDecision::Deny => (
+            "✗ ".red(),
+            vec![
+                "You ".into(),
+                "denied".bold(),
+                " network access to ".into(),
+                host_span,
+            ],
+        ),
+    };
+
+    Box::new(PrefixedWrappedHistoryCell::new(
+        Line::from(summary),
+        symbol,
+        "  ",
+    ))
+}
+
+pub fn new_unix_socket_approval_decision_cell(
+    socket_path: String,
+    decision: UnixSocketDecision,
+) -> Box<dyn HistoryCell> {
+    let socket_span = Span::from(socket_path).dim();
+    let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
+        UnixSocketDecision::AllowSession => (
+            "✔ ".green(),
+            vec![
+                "You ".into(),
+                "approved".bold(),
+                " Unix socket access to ".into(),
+                socket_span,
+                " for this session".bold(),
+            ],
+        ),
+        UnixSocketDecision::AllowAlways => (
+            "✔ ".green(),
+            vec![
+                "You ".into(),
+                "approved".bold(),
+                " Unix socket access to ".into(),
+                socket_span,
+                " permanently".bold(),
+            ],
+        ),
+        UnixSocketDecision::Deny => (
+            "✗ ".red(),
+            vec![
+                "You ".into(),
+                "denied".bold(),
+                " Unix socket access to ".into(),
+                socket_span,
+            ],
+        ),
     };
 
     Box::new(PrefixedWrappedHistoryCell::new(

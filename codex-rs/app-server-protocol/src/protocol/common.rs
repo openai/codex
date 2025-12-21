@@ -659,6 +659,7 @@ mod tests {
             parsed_cmd: vec![ParsedCommand::Unknown {
                 cmd: "echo hello".to_string(),
             }],
+            network_preflight_only: false,
         };
         let request = ServerRequest::ExecCommandApproval {
             request_id: RequestId::Integer(7),
@@ -680,7 +681,8 @@ mod tests {
                             "type": "unknown",
                             "cmd": "echo hello"
                         }
-                    ]
+                    ],
+                    "networkPreflightOnly": false
                 }
             }),
             serde_json::to_value(&request)?,

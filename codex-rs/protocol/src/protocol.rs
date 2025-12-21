@@ -167,6 +167,14 @@ pub enum Op {
         decision: ElicitationAction,
     },
 
+    /// Cache a network approval decision for this session.
+    NetworkApprovalCache {
+        /// The host that was approved.
+        host: String,
+        /// The user's decision in response to the request.
+        decision: ReviewDecision,
+    },
+
     /// Append an entry to the persistent cross-session message history.
     ///
     /// Note the entry is not guaranteed to be logged if the user has

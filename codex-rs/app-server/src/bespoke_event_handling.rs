@@ -182,6 +182,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             reason,
             proposed_execpolicy_amendment,
             parsed_cmd,
+            network_preflight_only,
+            ..
         }) => match api_version {
             ApiVersion::V1 => {
                 let params = ExecCommandApprovalParams {
@@ -191,6 +193,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     cwd,
                     reason,
                     parsed_cmd,
+                    network_preflight_only,
                 };
                 let rx = outgoing
                     .send_request(ServerRequestPayload::ExecCommandApproval(params))

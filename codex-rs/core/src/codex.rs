@@ -393,6 +393,7 @@ impl TurnContext {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
@@ -1101,6 +1102,7 @@ impl Session {
         cwd: PathBuf,
         reason: Option<String>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+        network_preflight_only: bool,
     ) -> ReviewDecision {
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
@@ -1129,6 +1131,7 @@ impl Session {
             reason,
             proposed_execpolicy_amendment,
             parsed_cmd,
+            network_preflight_only,
         });
         self.send_event(turn_context, event).await;
         rx_approve.await.unwrap_or_default()
@@ -1662,6 +1665,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::PatchApproval { id, decision } => {
                 handlers::patch_approval(&sess, id, decision).await;
             }
+            Op::NetworkApprovalCache { host, decision } => {
+                handlers::network_approval_cache(&sess, host, decision).await;
+            }
             Op::AddToHistory { text } => {
                 handlers::add_to_history(&sess, &config, text).await;
             }
@@ -1725,6 +1731,7 @@ mod handlers {
     use crate::features::Feature;
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
+    use crate::network_proxy;
     use crate::review_prompts::resolve_review_request;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
@@ -1906,6 +1913,21 @@ mod handlers {
             }
             other => sess.notify_approval(&id, other).await,
         }
+    }
+
+    pub async fn network_approval_cache(
+        sess: &Arc<Session>,
+        host: String,
+        decision: ReviewDecision,
+    ) {
+        if !matches!(
+            decision,
+            ReviewDecision::Approved | ReviewDecision::ApprovedForSession
+        ) {
+            return;
+        }
+        let mut store = sess.services.tool_approvals.lock().await;
+        network_proxy::cache_network_approval(&mut store, &host, decision);
     }
 
     pub async fn add_to_history(sess: &Arc<Session>, config: &Arc<Config>, text: String) {

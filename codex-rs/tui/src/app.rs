@@ -22,11 +22,15 @@ use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
+use codex_core::config;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::types::NetworkProxyConfig;
+use codex_core::default_client::create_client;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
+use codex_core::network_proxy;
 use codex_core::openai_models::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::openai_models::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::openai_models::models_manager::ModelsManager;
@@ -34,6 +38,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::Op;
+use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
@@ -52,6 +57,8 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -70,6 +77,10 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ConversationId>,
     pub update_action: Option<UpdateAction>,
+}
+
+fn codex_config_path() -> Result<PathBuf> {
+    config::default_config_path().wrap_err("failed to resolve Codex config path")
 }
 
 fn session_summary(
@@ -304,6 +315,11 @@ pub(crate) struct App {
 
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
+
+    network_proxy_pending: HashSet<String>,
+    network_proxy_session_restore: HashMap<String, network_proxy::DomainState>,
+    unix_socket_pending: HashSet<String>,
+    unix_socket_session_restore: HashSet<String>,
 }
 
 impl App {
@@ -434,7 +450,18 @@ impl App {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            network_proxy_pending: HashSet::new(),
+            network_proxy_session_restore: HashMap::new(),
+            unix_socket_pending: HashSet::new(),
+            unix_socket_session_restore: HashSet::new(),
         };
+
+        if app.config.network_proxy.enabled && app.config.sandbox_policy.has_full_network_access() {
+            Self::spawn_network_proxy_poller(
+                app.config.network_proxy.clone(),
+                app.app_event_tx.clone(),
+            );
+        }
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -485,6 +512,9 @@ impl App {
                 app.handle_tui_event(tui, event).await?
             }
         } {}
+        if let Err(err) = app.restore_network_proxy_approvals().await {
+            tracing::error!(error = %err, "failed to restore network proxy approvals");
+        }
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
@@ -544,6 +574,7 @@ impl App {
             .await;
         match event {
             AppEvent::NewSession => {
+                let session_allow = self.chat_widget.network_session_allow();
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
                     self.chat_widget.conversation_id(),
@@ -563,6 +594,7 @@ impl App {
                     model_family: model_family.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
+                self.chat_widget.set_network_session_allow(session_allow);
                 self.current_model = model_family.get_model_slug().to_string();
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
@@ -575,6 +607,7 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenResumePicker => {
+                let session_allow = self.chat_widget.network_session_allow();
                 match crate::resume_picker::run_resume_picker(
                     tui,
                     &self.config.codex_home,
@@ -617,6 +650,7 @@ impl App {
                                     resumed.conversation,
                                     resumed.session_configured,
                                 );
+                                self.chat_widget.set_network_session_allow(session_allow);
                                 self.current_model = model_family.get_model_slug().to_string();
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
@@ -1088,6 +1122,78 @@ impl App {
                         "E X E C".to_string(),
                     ));
                 }
+                ApprovalRequest::Network { request } => {
+                    let mut lines = Vec::new();
+                    if !request.host.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            "Host: ".into(),
+                            request.host.clone().bold(),
+                        ]));
+                    }
+                    if !request.reason.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            "Reason: ".into(),
+                            request.reason.clone().into(),
+                        ]));
+                    }
+                    if let Some(method) = request.method.as_ref().filter(|value| !value.is_empty())
+                    {
+                        lines.push(Line::from(vec![
+                            "Method: ".into(),
+                            method.to_string().into(),
+                        ]));
+                    }
+                    if cfg!(debug_assertions) {
+                        if !request.protocol.trim().is_empty() {
+                            lines.push(Line::from(vec![
+                                "Protocol: ".into(),
+                                request.protocol.clone().into(),
+                            ]));
+                        }
+                        if let Some(mode) = request.mode {
+                            let label = match mode {
+                                codex_core::config::types::NetworkProxyMode::Limited => "limited",
+                                codex_core::config::types::NetworkProxyMode::Full => "full",
+                            };
+                            lines.push(Line::from(vec!["Mode: ".into(), label.into()]));
+                        }
+                    }
+                    if let Some(client) = request.client.as_ref().filter(|value| !value.is_empty())
+                    {
+                        lines.push(Line::from(vec![
+                            "Client: ".into(),
+                            client.to_string().dim(),
+                        ]));
+                    }
+                    let _ = tui.enter_alt_screen();
+                    self.overlay = Some(Overlay::new_static_with_lines(lines, "N E T".to_string()));
+                }
+                ApprovalRequest::UnixSocket { request } => {
+                    let mut lines = Vec::new();
+                    if !request.label.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            "Resource: ".into(),
+                            request.label.clone().bold(),
+                        ]));
+                    }
+                    if !request.socket_path.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            "Socket: ".into(),
+                            request.socket_path.clone().dim(),
+                        ]));
+                    }
+                    if !request.allow_entry.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            "Allow entry: ".into(),
+                            request.allow_entry.clone().dim(),
+                        ]));
+                    }
+                    let _ = tui.enter_alt_screen();
+                    self.overlay = Some(Overlay::new_static_with_lines(
+                        lines,
+                        "S O C K E T".to_string(),
+                    ));
+                }
                 ApprovalRequest::McpElicitation {
                     server_name,
                     message,
@@ -1106,6 +1212,234 @@ impl App {
                     ));
                 }
             },
+            AppEvent::NetworkProxyApprovalRequest(request) => {
+                if !self.config.network_proxy.enabled {
+                    return Ok(true);
+                }
+                let host = request.host.trim().to_string();
+                if host.is_empty() || self.network_proxy_pending.contains(&host) {
+                    return Ok(true);
+                }
+                let reason = request.reason.trim();
+                if reason.eq_ignore_ascii_case("not_allowed")
+                    && let Ok(config_path) = codex_config_path()
+                {
+                    match network_proxy::preflight_host(&config_path, &host) {
+                        Ok(None) => {
+                            self.chat_widget.resume_pending_exec_approval();
+                            return Ok(true);
+                        }
+                        Ok(Some(_)) => {}
+                        Err(err) => {
+                            tracing::debug!(
+                                error = %err,
+                                "network proxy preflight host check failed"
+                            );
+                        }
+                    }
+                }
+                if reason.eq_ignore_ascii_case("denied") {
+                    self.chat_widget.add_error_message(format!(
+                        "Network access to {host} is denied by the denylist."
+                    ));
+                    return Ok(true);
+                }
+                if self.chat_widget.is_network_session_allowed(&host) {
+                    self.chat_widget.resume_pending_exec_approval();
+                    return Ok(true);
+                }
+                self.network_proxy_pending.insert(host);
+                self.chat_widget.on_network_approval_request(request);
+            }
+            AppEvent::UnixSocketApprovalRequest(request) => {
+                if !self.config.network_proxy.enabled {
+                    return Ok(true);
+                }
+                let socket_path = request.socket_path.trim().to_string();
+                if socket_path.is_empty() || self.unix_socket_pending.contains(&socket_path) {
+                    return Ok(true);
+                }
+                if let Ok(config_path) = codex_config_path() {
+                    let socket = std::path::Path::new(&socket_path);
+                    match network_proxy::unix_socket_allowed(&config_path, socket) {
+                        Ok(true) => {
+                            self.chat_widget.resume_pending_exec_approval();
+                            return Ok(true);
+                        }
+                        Ok(false) => {}
+                        Err(err) => {
+                            tracing::debug!(error = %err, "unix socket preflight check failed");
+                        }
+                    }
+                }
+                self.unix_socket_pending.insert(socket_path);
+                self.chat_widget.on_unix_socket_approval_request(request);
+            }
+            AppEvent::NetworkProxyDecision { host, decision } => {
+                let host = host.trim().to_string();
+                if host.is_empty() {
+                    return Ok(true);
+                }
+                self.network_proxy_pending.remove(&host);
+                let client = create_client();
+                let admin_url = self.config.network_proxy.admin_url.clone();
+                let config_path = codex_config_path()?;
+                let mut reload_needed = false;
+                let mut should_resume_exec = matches!(
+                    decision,
+                    crate::app_event::NetworkProxyDecision::AllowSession
+                        | crate::app_event::NetworkProxyDecision::AllowAlways
+                );
+                match decision {
+                    crate::app_event::NetworkProxyDecision::AllowSession => {
+                        let original = match network_proxy::domain_state(&config_path, &host) {
+                            Ok(state) => Some(state),
+                            Err(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to read network policy for {host}: {err}"
+                                ));
+                                should_resume_exec = false;
+                                None
+                            }
+                        };
+                        let allow_state = network_proxy::DomainState {
+                            allowed: true,
+                            denied: false,
+                        };
+                        if let Some(original) = original {
+                            match network_proxy::set_domain_state(&config_path, &host, allow_state)
+                            {
+                                Ok(changed) => {
+                                    reload_needed |= changed;
+                                    self.network_proxy_session_restore
+                                        .entry(host.clone())
+                                        .or_insert(original);
+                                    self.chat_widget.add_network_session_allow(host.clone());
+                                    self.chat_widget.submit_op(Op::NetworkApprovalCache {
+                                        host: host.clone(),
+                                        decision: ReviewDecision::ApprovedForSession,
+                                    });
+                                }
+                                Err(err) => {
+                                    self.chat_widget.add_error_message(format!(
+                                        "Failed to allow {host} for this session: {err}"
+                                    ));
+                                    should_resume_exec = false;
+                                }
+                            }
+                        }
+                    }
+                    crate::app_event::NetworkProxyDecision::AllowAlways => {
+                        let allow_state = network_proxy::DomainState {
+                            allowed: true,
+                            denied: false,
+                        };
+                        match network_proxy::set_domain_state(&config_path, &host, allow_state) {
+                            Ok(changed) => {
+                                reload_needed |= changed;
+                                self.chat_widget.add_network_session_allow(host.clone());
+                            }
+                            Err(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to add {host} to allowlist: {err}"
+                                ));
+                            }
+                        }
+                    }
+                    crate::app_event::NetworkProxyDecision::Deny => {
+                        let deny_state = network_proxy::DomainState {
+                            allowed: false,
+                            denied: true,
+                        };
+                        match network_proxy::set_domain_state(&config_path, &host, deny_state) {
+                            Ok(changed) => {
+                                reload_needed |= changed;
+                            }
+                            Err(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to add {host} to denylist: {err}"
+                                ));
+                            }
+                        }
+                    }
+                }
+                if reload_needed && let Err(err) = network_proxy::reload(&client, &admin_url).await
+                {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to reload network proxy after policy update: {err}"
+                    ));
+                }
+                if should_resume_exec {
+                    self.chat_widget.resume_pending_exec_approval();
+                } else {
+                    self.chat_widget.reject_pending_exec_approval();
+                }
+            }
+            AppEvent::UnixSocketDecision {
+                socket_path,
+                allow_entry,
+                decision,
+            } => {
+                let socket_path = socket_path.trim().to_string();
+                if socket_path.is_empty() {
+                    return Ok(true);
+                }
+                self.unix_socket_pending.remove(&socket_path);
+                let config_path = codex_config_path()?;
+                let mut should_resume_exec = matches!(
+                    decision,
+                    crate::app_event::UnixSocketDecision::AllowSession
+                        | crate::app_event::UnixSocketDecision::AllowAlways
+                );
+                match decision {
+                    crate::app_event::UnixSocketDecision::AllowSession => {
+                        match network_proxy::add_allowed_unix_socket(&config_path, &socket_path) {
+                            Ok(changed) => {
+                                if changed {
+                                    self.unix_socket_session_restore.insert(socket_path.clone());
+                                }
+                                self.chat_widget
+                                    .add_unix_socket_session_allow(socket_path.clone());
+                            }
+                            Err(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to allow Unix socket {socket_path} for this session: {err}"
+                                ));
+                                should_resume_exec = false;
+                            }
+                        }
+                    }
+                    crate::app_event::UnixSocketDecision::AllowAlways => {
+                        if allow_entry.trim().is_empty() {
+                            self.chat_widget.add_error_message(
+                                "Failed to allow Unix socket permanently: missing allow entry"
+                                    .to_string(),
+                            );
+                            should_resume_exec = false;
+                        } else {
+                            match network_proxy::add_allowed_unix_socket(&config_path, &allow_entry)
+                            {
+                                Ok(_) => {
+                                    self.chat_widget
+                                        .add_unix_socket_session_allow(socket_path.clone());
+                                }
+                                Err(err) => {
+                                    self.chat_widget.add_error_message(format!(
+                                        "Failed to add Unix socket allow entry {allow_entry}: {err}"
+                                    ));
+                                    should_resume_exec = false;
+                                }
+                            }
+                        }
+                    }
+                    crate::app_event::UnixSocketDecision::Deny => {}
+                }
+                if should_resume_exec {
+                    self.chat_widget.resume_pending_exec_approval();
+                } else {
+                    self.chat_widget.reject_pending_exec_approval();
+                }
+            }
         }
         Ok(true)
     }
@@ -1130,6 +1464,49 @@ impl App {
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
         self.chat_widget.token_usage()
+    }
+
+    async fn restore_network_proxy_approvals(&mut self) -> Result<()> {
+        if self.network_proxy_session_restore.is_empty()
+            && self.unix_socket_session_restore.is_empty()
+        {
+            return Ok(());
+        }
+        let config_path = codex_config_path()?;
+        let client = create_client();
+        let admin_url = self.config.network_proxy.admin_url.clone();
+        let mut reload_needed = false;
+
+        let mut restores: HashMap<String, network_proxy::DomainState> = HashMap::new();
+        for (host, state) in self.network_proxy_session_restore.drain() {
+            restores.insert(host, state);
+        }
+
+        for (host, state) in restores {
+            match network_proxy::set_domain_state(&config_path, &host, state) {
+                Ok(changed) => {
+                    reload_needed |= changed;
+                }
+                Err(err) => {
+                    tracing::error!(
+                        error = %err,
+                        host = host,
+                        "failed to restore network policy"
+                    );
+                }
+            }
+        }
+
+        if reload_needed {
+            network_proxy::reload(&client, &admin_url)
+                .await
+                .map_err(|err| color_eyre::eyre::eyre!(err))?;
+        }
+
+        for socket_path in self.unix_socket_session_restore.drain() {
+            let _ = network_proxy::remove_allowed_unix_socket(&config_path, &socket_path);
+        }
+        Ok(())
     }
 
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
@@ -1195,6 +1572,35 @@ impl App {
                 // Ignore Release key events.
             }
         };
+    }
+
+    fn spawn_network_proxy_poller(network_proxy: NetworkProxyConfig, tx: AppEventSender) {
+        if !network_proxy.enabled {
+            return;
+        }
+        let poll_interval_ms = if network_proxy.poll_interval_ms > 0 {
+            network_proxy.poll_interval_ms
+        } else {
+            1000
+        };
+        let poll_interval = Duration::from_secs_f64(poll_interval_ms as f64 / 1000.0);
+        let admin_url = network_proxy.admin_url;
+        tokio::spawn(async move {
+            let client = create_client();
+            loop {
+                match network_proxy::fetch_blocked(&client, &admin_url).await {
+                    Ok(blocked) => {
+                        for request in blocked {
+                            tx.send(AppEvent::NetworkProxyApprovalRequest(request));
+                        }
+                    }
+                    Err(err) => {
+                        tracing::debug!(error = %err, "network proxy poll failed");
+                    }
+                }
+                tokio::time::sleep(poll_interval).await;
+            }
+        });
     }
 
     #[cfg(target_os = "windows")]
@@ -1283,6 +1689,10 @@ mod tests {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            network_proxy_pending: HashSet::new(),
+            network_proxy_session_restore: HashMap::new(),
+            unix_socket_pending: HashSet::new(),
+            unix_socket_session_restore: HashSet::new(),
         }
     }
 
@@ -1323,6 +1733,10 @@ mod tests {
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 skip_world_writable_scan_once: false,
+                network_proxy_pending: HashSet::new(),
+                network_proxy_session_restore: HashMap::new(),
+                unix_socket_pending: HashSet::new(),
+                unix_socket_session_restore: HashSet::new(),
             },
             rx,
             op_rx,

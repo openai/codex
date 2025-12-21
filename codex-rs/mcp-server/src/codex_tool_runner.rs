@@ -181,6 +181,7 @@ async fn run_codex_tool_session_inner(
                         reason: _,
                         proposed_execpolicy_amendment: _,
                         parsed_cmd,
+                        ..
                     }) => {
                         handle_exec_approval_request(
                             command,

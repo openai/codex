@@ -54,16 +54,27 @@ approval_policy = "never"
 sandbox_mode    = "read-only"
 ```
 
-### Network proxy
+### Network proxy approvals
 
-Codex can optionally route outbound subprocess network traffic through a proxy running outside the sandbox. This lets you enforce an allow-only network policy for sandboxed commands.
+Codex can optionally route outbound network traffic through a proxy and prompt you when new domains are blocked by policy.
 
 Key behaviors:
 
 - The OS sandbox is still the first line of defense. If network access is disabled, outbound requests are blocked at the OS level.
-- When network is enabled and both `[features].network_proxy = true` and `network_proxy.enabled = true`, Codex injects proxy environment variables into subprocesses and configures the OS sandbox to allow only connections to local proxy ports.
-- The proxy enforces `allowed_domains` / `denied_domains` (denylist takes precedence). Requests that are not allowed are rejected at the proxy.
-- Update policy in `~/.codex/config.toml` under `[network_proxy.policy]`, then call the proxy admin `/reload` to apply changes.
+- When network is enabled and both `[features].network_proxy = true` and `network_proxy.enabled = true`, Codex polls the proxy admin API (`/blocked`) and immediately notifies you about blocked domains.
+- For exec commands that include HTTP/HTTPS URLs, Codex preflights the host against the proxy config and prompts before running the command.
+- Approvals update `~/.codex/config.toml` under `[network_proxy.policy]` and trigger a proxy reload.
+- You can choose to:
+  - **Deny** the request (adds the domain to the denylist).
+  - **Allow for session** (temporary allow that is reverted on exit).
+  - **Allow always** (adds the domain to the allowlist).
+
+Network access is controlled through a proxy server running outside the sandbox:
+
+- **Domain restrictions:** Only approved domains can be accessed (denylist takes precedence).
+- **User confirmation:** New domain requests trigger permission prompts.
+- **Custom proxy support:** Advanced users can implement custom rules on outgoing traffic.
+- **Comprehensive coverage:** Restrictions apply to all scripts, programs, and subprocesses spawned by Codex.
 
 `NO_PROXY` is supported via `[network_proxy].no_proxy` and is passed to subprocesses as `NO_PROXY/no_proxy`. Defaults include localhost and private network ranges; any entries in that list bypass the proxy and are not filtered by proxy policy.
 
@@ -75,6 +86,8 @@ Unix sockets are deny-by-default. If you run tools that rely on local IPC (most 
 [network_proxy.policy]
 allow_unix_sockets = ["$SSH_AUTH_SOCK"]
 ```
+
+When approvals are enabled, Codex may prompt to allow the SSH agent socket before running commands that appear to require it (for example `ssh`, `scp`, `sftp`, `ssh-add`, or `git` over SSH). “Allow always” records `$SSH_AUTH_SOCK`; “Allow for session” records the resolved socket path and is removed when Codex exits.
 
 When MITM is enabled in the proxy config, Codex injects common CA environment variables (for example `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `PIP_CERT`, and `NPM_CONFIG_CAFILE`) pointing at the proxy CA cert to reduce per‑tool configuration.
 

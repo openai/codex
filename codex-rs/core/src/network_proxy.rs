@@ -71,14 +71,12 @@ pub async fn fetch_blocked(
     Ok(payload.blocked)
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct NetworkApprovalKey {
     host: String,
 }
 
 impl NetworkApprovalKey {
-    #[allow(dead_code)]
     fn new(host: &str) -> Option<Self> {
         let host = host.trim();
         if host.is_empty() {
@@ -90,7 +88,6 @@ impl NetworkApprovalKey {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn cache_network_approval(
     store: &mut ApprovalStore,
     host: &str,

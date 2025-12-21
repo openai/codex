@@ -36,6 +36,7 @@ pub struct UnifiedExecRequest {
     pub env: HashMap<String, String>,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
+    pub network_preflight_only: bool,
     pub exec_approval_requirement: ExecApprovalRequirement,
 }
 
@@ -57,6 +58,7 @@ impl UnifiedExecRequest {
         env: HashMap<String, String>,
         sandbox_permissions: SandboxPermissions,
         justification: Option<String>,
+        network_preflight_only: bool,
         exec_approval_requirement: ExecApprovalRequirement,
     ) -> Self {
         Self {
@@ -65,6 +67,7 @@ impl UnifiedExecRequest {
             env,
             sandbox_permissions,
             justification,
+            network_preflight_only,
             exec_approval_requirement,
         }
     }
@@ -124,6 +127,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         req.exec_approval_requirement
                             .proposed_execpolicy_amendment()
                             .cloned(),
+                        req.network_preflight_only,
                     )
                     .await
             })

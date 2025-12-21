@@ -32,6 +32,7 @@ pub struct ShellRequest {
     pub env: std::collections::HashMap<String, String>,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
+    pub network_preflight_only: bool,
     pub exec_approval_requirement: ExecApprovalRequirement,
 }
 
@@ -106,6 +107,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                         req.exec_approval_requirement
                             .proposed_execpolicy_amendment()
                             .cloned(),
+                        req.network_preflight_only,
                     )
                     .await
             })

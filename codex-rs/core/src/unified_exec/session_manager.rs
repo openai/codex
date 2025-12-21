@@ -15,6 +15,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec_env::create_env;
 use crate::exec_policy::create_exec_approval_requirement_for_command;
+use crate::network_proxy;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::EventMsg;
 use crate::sandboxing::ExecEnv;
@@ -488,7 +489,19 @@ impl UnifiedExecSessionManager {
         let features = context.session.features();
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
-        let exec_approval_requirement = create_exec_approval_requirement_for_command(
+        let network_preflight_blocked = match network_proxy::preflight_blocked_host_if_enabled(
+            &context.turn.network_proxy,
+            &context.turn.sandbox_policy,
+            command,
+        ) {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(err) => {
+                tracing::debug!(error = %err, "network proxy preflight failed");
+                false
+            }
+        };
+        let mut exec_approval_requirement = create_exec_approval_requirement_for_command(
             &context.turn.exec_policy,
             &features,
             command,
@@ -497,12 +510,27 @@ impl UnifiedExecSessionManager {
             sandbox_permissions,
         )
         .await;
+        let mut network_preflight_only = false;
+        if network_preflight_blocked
+            && matches!(
+                exec_approval_requirement,
+                crate::tools::sandboxing::ExecApprovalRequirement::Skip { .. }
+            )
+        {
+            exec_approval_requirement =
+                crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
+                    reason: Some("Network access requires approval.".to_string()),
+                    proposed_execpolicy_amendment: None,
+                };
+            network_preflight_only = true;
+        }
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,
             env,
             sandbox_permissions,
             justification,
+            network_preflight_only,
             exec_approval_requirement,
         );
         let tool_ctx = ToolCtx {

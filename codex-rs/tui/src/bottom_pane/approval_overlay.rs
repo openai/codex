@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::app_event::AppEvent;
+use crate::app_event::NetworkProxyDecision;
+use crate::app_event::UnixSocketApprovalRequest;
+use crate::app_event::UnixSocketDecision;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
@@ -16,8 +19,10 @@ use crate::key_hint::KeyBinding;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
+use codex_core::config::types::NetworkProxyMode;
 use codex_core::features::Feature;
 use codex_core::features::Features;
+use codex_core::network_proxy::NetworkProxyBlockedRequest;
 use codex_core::protocol::ElicitationAction;
 use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::FileChange;
@@ -50,6 +55,12 @@ pub(crate) enum ApprovalRequest {
         reason: Option<String>,
         cwd: PathBuf,
         changes: HashMap<PathBuf, FileChange>,
+    },
+    Network {
+        request: NetworkProxyBlockedRequest,
+    },
+    UnixSocket {
+        request: UnixSocketApprovalRequest,
     },
     McpElicitation {
         server_name: String,
@@ -119,6 +130,13 @@ impl ApprovalOverlay {
                 patch_options(),
                 "Would you like to make the following edits?".to_string(),
             ),
+            ApprovalVariant::Network { preflight_only, .. } => (
+                network_options(*preflight_only),
+                "Allow network access to this domain?".to_string(),
+            ),
+            ApprovalVariant::UnixSocket { label, .. } => {
+                (unix_socket_options(), format!("Allow access to {label}?"))
+            }
             ApprovalVariant::McpElicitation { server_name, .. } => (
                 elicitation_options(),
                 format!("{server_name} needs your approval."),
@@ -174,6 +192,19 @@ impl ApprovalOverlay {
                 (ApprovalVariant::ApplyPatch { id, .. }, ApprovalDecision::Review(decision)) => {
                     self.handle_patch_decision(id, decision.clone());
                 }
+                (ApprovalVariant::Network { host, .. }, ApprovalDecision::Network(decision)) => {
+                    self.handle_network_decision(host, *decision);
+                }
+                (
+                    ApprovalVariant::UnixSocket {
+                        socket_path,
+                        allow_entry,
+                        ..
+                    },
+                    ApprovalDecision::UnixSocket(decision),
+                ) => {
+                    self.handle_unix_socket_decision(socket_path, allow_entry, *decision);
+                }
                 (
                     ApprovalVariant::McpElicitation {
                         server_name,
@@ -205,6 +236,31 @@ impl ApprovalOverlay {
             id: id.to_string(),
             decision,
         }));
+    }
+
+    fn handle_network_decision(&self, host: &str, decision: NetworkProxyDecision) {
+        let cell = history_cell::new_network_approval_decision_cell(host.to_string(), decision);
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        self.app_event_tx.send(AppEvent::NetworkProxyDecision {
+            host: host.to_string(),
+            decision,
+        });
+    }
+
+    fn handle_unix_socket_decision(
+        &self,
+        socket_path: &str,
+        allow_entry: &str,
+        decision: UnixSocketDecision,
+    ) {
+        let cell =
+            history_cell::new_unix_socket_approval_decision_cell(socket_path.to_string(), decision);
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        self.app_event_tx.send(AppEvent::UnixSocketDecision {
+            socket_path: socket_path.to_string(),
+            allow_entry: allow_entry.to_string(),
+            decision,
+        });
     }
 
     fn handle_elicitation_decision(
@@ -285,6 +341,20 @@ impl BottomPaneView for ApprovalOverlay {
                 }
                 ApprovalVariant::ApplyPatch { id, .. } => {
                     self.handle_patch_decision(id, ReviewDecision::Abort);
+                }
+                ApprovalVariant::Network { host, .. } => {
+                    self.handle_network_decision(host, NetworkProxyDecision::Deny);
+                }
+                ApprovalVariant::UnixSocket {
+                    socket_path,
+                    allow_entry,
+                    ..
+                } => {
+                    self.handle_unix_socket_decision(
+                        socket_path,
+                        allow_entry,
+                        UnixSocketDecision::Deny,
+                    );
                 }
                 ApprovalVariant::McpElicitation {
                     server_name,
@@ -386,6 +456,87 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     header: Box::new(ColumnRenderable::with(header)),
                 }
             }
+            ApprovalRequest::Network { request } => {
+                let mut header: Vec<Line<'static>> = Vec::new();
+                let host = request.host.trim().to_string();
+                if !host.is_empty() {
+                    header.push(Line::from(vec!["Host: ".into(), host.clone().bold()]));
+                }
+                let reason = request.reason.trim().to_string();
+                if !reason.is_empty() {
+                    let reason_label = network_reason_label(&reason);
+                    header.push(Line::from(vec!["Reason: ".into(), reason_label.into()]));
+                    if let Some(hint) = network_reason_hint(&reason) {
+                        header.push(Line::from(vec!["Hint: ".into(), hint.dim()]));
+                    }
+                }
+                if let Some(method) = request
+                    .method
+                    .as_ref()
+                    .filter(|value| !value.is_empty())
+                    .cloned()
+                {
+                    header.push(Line::from(vec!["Method: ".into(), method.into()]));
+                }
+                if cfg!(debug_assertions) {
+                    let protocol = request.protocol.trim().to_string();
+                    if !protocol.is_empty() {
+                        header.push(Line::from(vec!["Protocol: ".into(), protocol.into()]));
+                    }
+                    if let Some(mode) = request.mode {
+                        let label = match mode {
+                            NetworkProxyMode::Limited => "limited",
+                            NetworkProxyMode::Full => "full",
+                        };
+                        header.push(Line::from(vec!["Mode: ".into(), label.into()]));
+                    }
+                }
+                if let Some(client) = request
+                    .client
+                    .as_ref()
+                    .filter(|value| !value.is_empty())
+                    .cloned()
+                {
+                    header.push(Line::from(vec!["Client: ".into(), client.dim()]));
+                }
+                let preflight_only = request.protocol.trim().eq_ignore_ascii_case("preflight");
+                Self {
+                    variant: ApprovalVariant::Network {
+                        host,
+                        preflight_only,
+                    },
+                    header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
+                }
+            }
+            ApprovalRequest::UnixSocket { request } => {
+                let mut header: Vec<Line<'static>> = Vec::new();
+                if !request.label.trim().is_empty() {
+                    header.push(Line::from(vec![
+                        "Resource: ".into(),
+                        request.label.clone().bold(),
+                    ]));
+                }
+                if !request.socket_path.trim().is_empty() {
+                    header.push(Line::from(vec![
+                        "Socket: ".into(),
+                        request.socket_path.clone().dim(),
+                    ]));
+                }
+                if !request.allow_entry.trim().is_empty() {
+                    header.push(Line::from(vec![
+                        "Allow entry: ".into(),
+                        request.allow_entry.clone().dim(),
+                    ]));
+                }
+                Self {
+                    variant: ApprovalVariant::UnixSocket {
+                        socket_path: request.socket_path,
+                        allow_entry: request.allow_entry,
+                        label: request.label,
+                    },
+                    header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
+                }
+            }
             ApprovalRequest::McpElicitation {
                 server_name,
                 request_id,
@@ -409,6 +560,26 @@ impl From<ApprovalRequest> for ApprovalRequestState {
     }
 }
 
+fn network_reason_label(reason: &str) -> String {
+    match reason {
+        "not_allowed" => "Domain not in allowlist".to_string(),
+        "not_allowed_local" => "Loopback blocked by policy".to_string(),
+        "denied" => "Domain denied by denylist".to_string(),
+        "method_not_allowed" => "Method blocked by network mode".to_string(),
+        "mitm_required" => "MITM required for limited HTTPS".to_string(),
+        _ => reason.to_string(),
+    }
+}
+
+fn network_reason_hint(reason: &str) -> Option<&'static str> {
+    match reason {
+        "not_allowed_local" => Some("Allow loopback or add the host to the allowlist."),
+        "method_not_allowed" => Some("Switch to full mode or enable MITM to allow this method."),
+        "mitm_required" => Some("Enable MITM or switch to full mode for HTTPS tunneling."),
+        _ => None,
+    }
+}
+
 #[derive(Clone)]
 enum ApprovalVariant {
     Exec {
@@ -419,6 +590,15 @@ enum ApprovalVariant {
     ApplyPatch {
         id: String,
     },
+    Network {
+        host: String,
+        preflight_only: bool,
+    },
+    UnixSocket {
+        socket_path: String,
+        allow_entry: String,
+        label: String,
+    },
     McpElicitation {
         server_name: String,
         request_id: RequestId,
@@ -428,6 +608,8 @@ enum ApprovalVariant {
 #[derive(Clone)]
 enum ApprovalDecision {
     Review(ReviewDecision),
+    Network(NetworkProxyDecision),
+    UnixSocket(UnixSocketDecision),
     McpElicitation(ElicitationAction),
 }
 
@@ -497,6 +679,62 @@ fn patch_options() -> Vec<ApprovalOption> {
         ApprovalOption {
             label: "No, and tell Codex what to do differently".to_string(),
             decision: ApprovalDecision::Review(ReviewDecision::Abort),
+            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+        },
+    ]
+}
+
+fn network_options(preflight_only: bool) -> Vec<ApprovalOption> {
+    let mut options = Vec::new();
+    let mut allow_session = ApprovalOption {
+        label: if preflight_only {
+            "Allow for session".to_string()
+        } else {
+            "Allow".to_string()
+        },
+        decision: ApprovalDecision::Network(NetworkProxyDecision::AllowSession),
+        display_shortcut: None,
+        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('s'))],
+    };
+    if preflight_only {
+        allow_session
+            .additional_shortcuts
+            .push(key_hint::plain(KeyCode::Char('y')));
+    }
+    options.push(allow_session);
+    options.push(ApprovalOption {
+        label: "Allow always (add to allowlist)".to_string(),
+        decision: ApprovalDecision::Network(NetworkProxyDecision::AllowAlways),
+        display_shortcut: None,
+        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
+    });
+    options.push(ApprovalOption {
+        label: "Deny (add to denylist)".to_string(),
+        decision: ApprovalDecision::Network(NetworkProxyDecision::Deny),
+        display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
+        additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+    });
+    options
+}
+
+fn unix_socket_options() -> Vec<ApprovalOption> {
+    vec![
+        ApprovalOption {
+            label: "Allow for session".to_string(),
+            decision: ApprovalDecision::UnixSocket(UnixSocketDecision::AllowSession),
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('s'))],
+        },
+        ApprovalOption {
+            label: "Allow always (add to allowlist)".to_string(),
+            decision: ApprovalDecision::UnixSocket(UnixSocketDecision::AllowAlways),
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
+        },
+        ApprovalOption {
+            label: "Deny".to_string(),
+            decision: ApprovalDecision::UnixSocket(UnixSocketDecision::Deny),
             display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },

@@ -351,7 +351,7 @@ Though using this option may also be necessary if you try to use Codex in enviro
 
 ### network_proxy
 
-Codex can route subprocess network traffic through an external proxy (for example, `codex-network-proxy`) to enforce domain allow/deny policies for sandboxed subprocesses.
+Codex can route subprocess network traffic through an external proxy (for example, the `network_proxy` sandbox proxy) and surface approval prompts when requests are blocked by policy.
 
 ```toml
 [features]
@@ -384,11 +384,12 @@ Notes:
 - When `proxy_url` points at localhost, Codex also assumes a SOCKS5 proxy on `localhost:8081` for `ALL_PROXY`, `GRPC_PROXY`, `FTP_PROXY`, `RSYNC_PROXY`, and (macOS only) `GIT_SSH_COMMAND`.
 - `no_proxy` entries bypass the proxy; defaults include localhost + private network ranges. Use sparingly because bypassed traffic is not filtered by the proxy policy.
 - `[network_proxy.policy]` can optionally allow localhost binding or Unix socket access (macOS only) when proxy-restricted network access is active.
+- When enabled, Codex polls the proxy admin API (`/blocked`) and surfaces a prompt to allow for the session, allow always (add to allowlist), or deny (add to denylist). Allow/deny decisions update `~/.codex/config.toml` under `[network_proxy.policy]`, then Codex calls `/reload`.
 - On macOS, `network_proxy.policy.allow_unix_sockets` is useful for local IPC that relies on Unix domain sockets (most commonly the SSH agent). Entries can be:
   - absolute socket paths (or directories containing sockets),
   - `$SSH_AUTH_SOCK` / `${SSH_AUTH_SOCK}`,
   - the preset `ssh-agent` (alias: `ssh_auth_sock`, `ssh_auth_socket`).
-  If you use `git` over SSH, a common setting is `allow_unix_sockets = ["$SSH_AUTH_SOCK"]`.
+  When approvals are enabled, Codex may prompt to allow the SSH agent socket before running commands that appear to require it (e.g. `ssh`, `scp`, `sftp`, `ssh-add`, or `git` over SSH).
 
 ### tools.\*
 

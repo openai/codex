@@ -22,6 +22,9 @@ cargo build -p codex-network-proxy --features mitm
 Add this to `~/.codex/config.toml`:
 
 ```toml
+[features]
+network_proxy = true
+
 [network_proxy]
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
@@ -91,3 +94,10 @@ Switch modes:
 ```bash
 curl -fsS -X POST http://127.0.0.1:8080/mode -d '{"mode":"full"}'
 ```
+
+## Codex integration sanity check
+
+1) Start the proxy.  
+2) Launch Codex with `[features].network_proxy = true` and `network_proxy.enabled = true` set in config.  
+3) Run a network command (e.g., `curl https://example.com`).  
+4) Confirm you see the allow/deny prompt and that the proxy logs reflect the decision.

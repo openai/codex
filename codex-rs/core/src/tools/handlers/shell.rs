@@ -9,6 +9,7 @@ use crate::exec_env::create_env;
 use crate::exec_policy::create_exec_approval_requirement_for_command;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
+use crate::network_proxy;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
 use crate::tools::context::ToolInvocation;
@@ -22,6 +23,7 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ToolCtx;
 
 pub struct ShellHandler;
@@ -34,12 +36,12 @@ impl ShellHandler {
             command: params.command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
+            sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             env: create_env(
                 &turn_context.shell_environment_policy,
                 &turn_context.sandbox_policy,
                 &turn_context.network_proxy,
             ),
-            sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             justification: params.justification,
             arg0: None,
         }
@@ -64,12 +66,12 @@ impl ShellCommandHandler {
             command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
+            sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             env: create_env(
                 &turn_context.shell_environment_policy,
                 &turn_context.sandbox_policy,
                 &turn_context.network_proxy,
             ),
-            sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             justification: params.justification,
             arg0: None,
         }
@@ -260,7 +262,7 @@ impl ShellHandler {
         emitter.begin(event_ctx).await;
 
         let features = session.features();
-        let exec_approval_requirement = create_exec_approval_requirement_for_command(
+        let mut exec_approval_requirement = create_exec_approval_requirement_for_command(
             &turn.exec_policy,
             &features,
             &exec_params.command,
@@ -269,6 +271,31 @@ impl ShellHandler {
             exec_params.sandbox_permissions,
         )
         .await;
+        let network_preflight_blocked = match network_proxy::preflight_blocked_host_if_enabled(
+            &turn.network_proxy,
+            &turn.sandbox_policy,
+            &exec_params.command,
+        ) {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(err) => {
+                tracing::debug!(error = %err, "network proxy preflight failed");
+                false
+            }
+        };
+        let mut network_preflight_only = false;
+        if network_preflight_blocked
+            && matches!(
+                exec_approval_requirement,
+                ExecApprovalRequirement::Skip { .. }
+            )
+        {
+            exec_approval_requirement = ExecApprovalRequirement::NeedsApproval {
+                reason: Some("Network access requires approval.".to_string()),
+                proposed_execpolicy_amendment: None,
+            };
+            network_preflight_only = true;
+        }
 
         let req = ShellRequest {
             command: exec_params.command.clone(),
@@ -277,6 +304,7 @@ impl ShellHandler {
             env: exec_params.env.clone(),
             sandbox_permissions: exec_params.sandbox_permissions,
             justification: exec_params.justification.clone(),
+            network_preflight_only,
             exec_approval_requirement,
         };
         let mut orchestrator = ToolOrchestrator::new();

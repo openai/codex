@@ -9,6 +9,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Proposed execpolicy change to allow commands starting with this prefix.
 ///
 /// The `command` tokens form the prefix that would be added as an execpolicy
@@ -57,6 +61,8 @@ pub struct ExecApprovalRequestEvent {
     #[ts(optional)]
     pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     pub parsed_cmd: Vec<ParsedCommand>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub network_preflight_only: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
