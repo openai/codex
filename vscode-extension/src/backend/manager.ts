@@ -15,6 +15,7 @@ import type { Model } from "../generated/v2/Model";
 import type { ReasoningEffort } from "../generated/ReasoningEffort";
 import type { GetAccountResponse } from "../generated/v2/GetAccountResponse";
 import type { GetAccountRateLimitsResponse } from "../generated/v2/GetAccountRateLimitsResponse";
+import type { SkillsListEntry } from "../generated/v2/SkillsListEntry";
 import type { AnyServerNotification } from "./types";
 
 type ModelSettings = { model: string | null; provider: string | null; reasoning: string | null };
@@ -143,6 +144,26 @@ export class BackendManager implements vscode.Disposable {
 
   public getCachedModels(session: Session): Model[] | null {
     return this.modelsByBackendKey.get(session.backendKey) ?? null;
+  }
+
+  public async listSkillsForSession(session: Session): Promise<SkillsListEntry[]> {
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+
+    await this.startForWorkspaceFolder(folder);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+
+    const res = await proc.skillsList({
+      cwds: [folder.uri.fsPath],
+      forceReload: false,
+    });
+    return res.data ?? [];
   }
 
   public async listModelsForSession(session: Session): Promise<Model[]> {

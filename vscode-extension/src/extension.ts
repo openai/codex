@@ -363,6 +363,60 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("codexMine.showSkills", async (args?: unknown) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      if (!sessions) throw new Error("sessions is not initialized");
+
+      const session =
+        parseSessionArg(args, sessions) ??
+        (activeSessionId ? sessions.getById(activeSessionId) : null);
+      if (!session) {
+        void vscode.window.showErrorMessage("No session selected.");
+        return;
+      }
+
+      let entries;
+      try {
+        entries = await backendManager.listSkillsForSession(session);
+      } catch (err) {
+        output.appendLine(`[skills] Failed to list skills: ${String(err)}`);
+        void vscode.window.showErrorMessage("Failed to list skills.");
+        return;
+      }
+
+      const entry = entries[0] ?? null;
+      const skills = entry?.skills ?? [];
+      const errors = entry?.errors ?? [];
+
+      if (skills.length === 0) {
+        const msg =
+          errors.length > 0
+            ? "No skills found (some skills failed to load)."
+            : "No skills found. Enable [features].skills=true in $CODEX_HOME/config.toml.";
+        void vscode.window.showInformationMessage(msg);
+        return;
+      }
+
+      const picked = await vscode.window.showQuickPick(
+        skills.map((s) => ({
+          label: s.name,
+          description: s.description,
+          detail: `${s.scope} • ${s.path}`,
+          skill: s,
+        })),
+        {
+          title: "Codex UI: Skills",
+          matchOnDescription: true,
+          matchOnDetail: true,
+        },
+      );
+      if (!picked) return;
+
+      chatView?.insertIntoInput(`$${picked.skill.name} `);
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand(
       "codexMine.sessionMenu",
       async (args?: unknown) => {
@@ -941,6 +995,12 @@ async function handleSlashCommand(
     });
     return true;
   }
+  if (cmd === "skills") {
+    await vscode.commands.executeCommand("codexMine.showSkills", {
+      sessionId: session.id,
+    });
+    return true;
+  }
   if (cmd === "help") {
     const rt = ensureRuntime(session.id);
     const customList = customPrompts
@@ -958,6 +1018,7 @@ async function handleSlashCommand(
         "- /new: New session",
         "- /diff: Open Latest Diff",
         "- /rename <title>: Rename session",
+        "- /skills: Browse skills",
         "- /help: Show help",
         customList ? "\nCustom prompts:" : null,
         customList || null,
@@ -1196,30 +1257,17 @@ function setCustomPrompts(next: CustomPromptSummary[]): void {
 async function loadInitialModelState(
   output: vscode.OutputChannel,
 ): Promise<void> {
-  const fromWorkspace = await readModelStateFromWorkspaceConfig(output);
   const fromHome = await readModelStateFromCodexHomeConfig(output);
-  const picked = fromWorkspace ?? fromHome;
+  const picked = fromHome;
   if (!picked) {
     output.appendLine(
-      "[config] config.toml not found in workspace or CODEX_HOME; using defaults",
+      "[config] config.toml not found in CODEX_HOME; using defaults",
     );
     return;
   }
   setSessionModelState(picked.state);
   output.appendLine(`[config] Loaded model settings from ${picked.path}`);
   chatView?.refresh();
-}
-
-async function readModelStateFromWorkspaceConfig(
-  output: vscode.OutputChannel,
-): Promise<{ state: ModelState; path: string } | null> {
-  const folders = vscode.workspace.workspaceFolders ?? [];
-  for (const folder of folders) {
-    const candidate = path.join(folder.uri.fsPath, ".codex", "config.toml");
-    const loaded = await readModelStateFromConfig(candidate, output);
-    if (loaded) return { state: loaded, path: candidate };
-  }
-  return null;
 }
 
 async function readModelStateFromCodexHomeConfig(

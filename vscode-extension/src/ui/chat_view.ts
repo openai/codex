@@ -120,6 +120,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private view: vscode.WebviewView | null = null;
 
+  public insertIntoInput(text: string): void {
+    this.view?.webview.postMessage({ type: "insertText", text });
+  }
+
   public constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly getState: () => ChatViewState,

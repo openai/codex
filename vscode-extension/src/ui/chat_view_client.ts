@@ -308,6 +308,12 @@ function main(): void {
       detail: "Rename session",
       kind: "slash",
     },
+    {
+      insert: "/skills ",
+      label: "/skills",
+      detail: "Browse skills",
+      kind: "slash",
+    },
     { insert: "/help ", label: "/help", detail: "Show help", kind: "slash" },
   ];
 
@@ -1547,7 +1553,12 @@ function sendCurrentInput(): void {
   window.addEventListener("message", (event: MessageEvent) => {
     const msg = event.data;
     if (!msg || typeof msg !== "object") return;
-    const anyMsg = msg as { type?: unknown; state?: unknown; files?: unknown };
+    const anyMsg = msg as {
+      type?: unknown;
+      state?: unknown;
+      files?: unknown;
+      text?: unknown;
+    };
     if (anyMsg.type === "state") {
       receivedState = true;
       render(anyMsg.state as ChatViewState);
@@ -1566,6 +1577,22 @@ function sendCurrentInput(): void {
         fileIndexForSessionId = null;
       }
       renderSuggest();
+      return;
+    }
+    if (anyMsg.type === "insertText") {
+      const text = typeof anyMsg.text === "string" ? anyMsg.text : "";
+      if (text) {
+        const start = inputEl.selectionStart ?? inputEl.value.length;
+        const end = inputEl.selectionEnd ?? inputEl.value.length;
+        const before = inputEl.value.slice(0, start);
+        const after = inputEl.value.slice(end);
+        inputEl.value = before + text + after;
+        const nextPos = start + text.length;
+        inputEl.focus();
+        inputEl.setSelectionRange(nextPos, nextPos);
+        autosizeInput();
+        updateSuggestions();
+      }
       return;
     }
   });

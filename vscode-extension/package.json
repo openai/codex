@@ -30,6 +30,7 @@
     "onCommand:codexMine.respondApproval",
     "onCommand:codexMine.showStatus",
     "onCommand:codexMine.interruptTurn",
+    "onCommand:codexMine.showSkills",
     "onView:codexMine.chatView",
     "onView:codexMine.sessionsView"
   ],
@@ -86,6 +87,10 @@
       {
         "command": "codexMine.interruptTurn",
         "title": "Codex UI: Interrupt Turn"
+      },
+      {
+        "command": "codexMine.showSkills",
+        "title": "Codex UI: Skills"
       }
     ],
     "menus": {

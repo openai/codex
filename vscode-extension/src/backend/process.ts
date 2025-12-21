@@ -14,6 +14,8 @@ import type { TurnStartParams } from "../generated/v2/TurnStartParams";
 import type { TurnStartResponse } from "../generated/v2/TurnStartResponse";
 import type { TurnInterruptParams } from "../generated/v2/TurnInterruptParams";
 import type { TurnInterruptResponse } from "../generated/v2/TurnInterruptResponse";
+import type { SkillsListParams } from "../generated/v2/SkillsListParams";
+import type { SkillsListResponse } from "../generated/v2/SkillsListResponse";
 import type { ModelListParams } from "../generated/v2/ModelListParams";
 import type { ModelListResponse } from "../generated/v2/ModelListResponse";
 import type { ThreadArchiveParams } from "../generated/v2/ThreadArchiveParams";
@@ -155,6 +157,15 @@ export class BackendProcess implements vscode.Disposable {
       },
     };
     return this.rpc.request<ModelListResponse>(request);
+  }
+
+  public async skillsList(
+    params: SkillsListParams,
+  ): Promise<SkillsListResponse> {
+    return this.rpc.request<SkillsListResponse>({
+      method: "skills/list",
+      params,
+    });
   }
 
   public async accountRead(params: GetAccountParams): Promise<GetAccountResponse> {
