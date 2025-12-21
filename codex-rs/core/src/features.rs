@@ -85,6 +85,8 @@ pub enum Feature {
     ShellSnapshot,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
+    /// Route subprocess network access through the Codex network proxy and surface approvals.
+    NetworkProxy,
 }
 
 impl Feature {
@@ -402,6 +404,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Tui2,
         key: "tui2",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::NetworkProxy,
+        key: "network_proxy",
         stage: Stage::Experimental,
         default_enabled: false,
     },

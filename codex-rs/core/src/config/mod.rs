@@ -2,6 +2,9 @@ use crate::auth::AuthCredentialsStoreMode;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
+use crate::config::types::NetworkProxyConfig;
+use crate::config::types::NetworkProxyConfigToml;
+use crate::config::types::NetworkProxyMode;
 use crate::config::types::Notice;
 use crate::config::types::Notifications;
 use crate::config::types::OtelConfig;
@@ -87,6 +90,11 @@ pub(crate) fn test_config() -> Config {
     .expect("load default test config")
 }
 
+pub fn default_config_path() -> std::io::Result<PathBuf> {
+    let codex_home = find_codex_home()?;
+    Ok(codex_home.join(CONFIG_TOML_FILE))
+}
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -122,6 +130,8 @@ pub struct Config {
     pub forced_auto_mode_downgraded_on_windows: bool,
 
     pub shell_environment_policy: ShellEnvironmentPolicy,
+    /// Network proxy settings for routing sandboxed network access.
+    pub network_proxy: NetworkProxyConfig,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -563,6 +573,9 @@ pub struct ConfigToml {
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
+    /// Network proxy settings for sandboxed network access.
+    pub network_proxy: Option<NetworkProxyConfigToml>,
+
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
@@ -723,6 +736,143 @@ impl From<ConfigToml> for UserSavedConfig {
             profiles,
         }
     }
+}
+
+fn default_network_proxy_config() -> NetworkProxyConfig {
+    NetworkProxyConfig {
+        enabled: false,
+        proxy_url: "http://127.0.0.1:3128".to_string(),
+        admin_url: "http://127.0.0.1:8080".to_string(),
+        mode: NetworkProxyMode::Full,
+        no_proxy: default_no_proxy_entries()
+            .iter()
+            .map(|entry| (*entry).to_string())
+            .collect(),
+        poll_interval_ms: 1000,
+        mitm_ca_cert_path: None,
+    }
+}
+
+fn resolve_network_proxy_config(cfg: &ConfigToml, codex_home: &Path) -> NetworkProxyConfig {
+    let mut resolved = default_network_proxy_config();
+    let Some(network_proxy) = cfg.network_proxy.clone() else {
+        return resolved;
+    };
+    let mitm_ca_cert_path = resolve_network_proxy_mitm_ca_path(&network_proxy, codex_home);
+
+    if let Some(enabled) = network_proxy.enabled {
+        resolved.enabled = enabled;
+    }
+    if let Some(proxy_url) = network_proxy.proxy_url {
+        let trimmed = proxy_url.trim();
+        if !trimmed.is_empty() {
+            resolved.proxy_url = trimmed.to_string();
+        }
+    }
+    if let Some(admin_url) = network_proxy.admin_url {
+        let trimmed = admin_url.trim();
+        if !trimmed.is_empty() {
+            resolved.admin_url = trimmed.to_string();
+        }
+    }
+    if let Some(mode) = network_proxy.mode {
+        resolved.mode = mode;
+    }
+    if let Some(no_proxy) = network_proxy.no_proxy {
+        resolved.no_proxy = normalize_no_proxy_entries(no_proxy);
+    }
+    ensure_default_no_proxy_entries(&mut resolved.no_proxy);
+    if let Some(poll_interval_ms) = network_proxy.poll_interval_ms
+        && poll_interval_ms > 0
+    {
+        resolved.poll_interval_ms = poll_interval_ms;
+    }
+    resolved.mitm_ca_cert_path = mitm_ca_cert_path;
+    resolved
+}
+
+fn resolve_network_proxy_mitm_ca_path(
+    network_proxy: &NetworkProxyConfigToml,
+    codex_home: &Path,
+) -> Option<PathBuf> {
+    let mitm = network_proxy.mitm.as_ref()?;
+    if !mitm.enabled.unwrap_or(false) {
+        return None;
+    }
+    let ca_cert_path = mitm
+        .ca_cert_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("network_proxy/mitm/ca.pem"));
+    if ca_cert_path.as_os_str().is_empty() {
+        return None;
+    }
+    Some(resolve_network_proxy_path(&ca_cert_path, codex_home))
+}
+
+fn resolve_network_proxy_path(path: &Path, codex_home: &Path) -> PathBuf {
+    let expanded = expand_tilde_path(path);
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        codex_home.join(expanded)
+    }
+}
+
+fn expand_tilde_path(path: &Path) -> PathBuf {
+    let path_str = path.to_string_lossy();
+    if path_str == "~" {
+        return home_dir().unwrap_or_else(|| path.to_path_buf());
+    }
+    if let Some(rest) = path_str.strip_prefix("~/")
+        && let Some(home) = home_dir()
+    {
+        return home.join(rest);
+    }
+    path.to_path_buf()
+}
+
+fn normalize_no_proxy_entries(entries: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for entry in entries {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if out
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(trimmed))
+        {
+            continue;
+        }
+        out.push(trimmed.to_string());
+    }
+    out
+}
+
+fn ensure_default_no_proxy_entries(entries: &mut Vec<String>) {
+    for entry in default_no_proxy_entries() {
+        if entries
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(entry))
+        {
+            continue;
+        }
+        entries.push(entry.to_string());
+    }
+}
+
+fn default_no_proxy_entries() -> [&'static str; 9] {
+    [
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "*.local",
+        ".local",
+        "169.254.0.0/16",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+    ]
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -1047,6 +1197,11 @@ impl Config {
             || config_profile.sandbox_mode.is_some()
             || cfg.sandbox_mode.is_some();
 
+        let mut network_proxy = resolve_network_proxy_config(&cfg, &codex_home);
+        if !features.enabled(Feature::NetworkProxy) {
+            network_proxy.enabled = false;
+        }
+
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
@@ -1168,6 +1323,7 @@ impl Config {
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
+            network_proxy,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -1346,12 +1502,6 @@ pub fn find_codex_home() -> std::io::Result<PathBuf> {
     Ok(p)
 }
 
-/// Returns the default path to the Codex config file (`config.toml`).
-pub fn default_config_path() -> std::io::Result<PathBuf> {
-    let codex_home = find_codex_home()?;
-    Ok(codex_home.join(CONFIG_TOML_FILE))
-}
-
 /// Returns the path to the folder where Codex logs are stored. Does not verify
 /// that the directory exists.
 pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
@@ -1407,6 +1557,51 @@ persistence = "none"
             }),
             history_no_persistence_cfg.history
         );
+    }
+
+    #[test]
+    fn network_proxy_is_rollout_gated_by_feature_flag() -> std::io::Result<()> {
+        let cfg_without_feature_flag = r#"
+[network_proxy]
+enabled = true
+"#;
+        let parsed_without_feature_flag =
+            toml::from_str::<ConfigToml>(cfg_without_feature_flag).expect("TOML parse should work");
+        let cwd_temp_dir = TempDir::new().unwrap();
+        std::fs::write(cwd_temp_dir.path().join(".git"), "gitdir: nowhere")?;
+        let codex_home_temp_dir = TempDir::new().unwrap();
+        let config_without_feature_flag = Config::load_from_base_config_with_overrides(
+            parsed_without_feature_flag,
+            ConfigOverrides {
+                cwd: Some(cwd_temp_dir.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home_temp_dir.path().to_path_buf(),
+        )?;
+        assert!(!config_without_feature_flag.network_proxy.enabled);
+
+        let cfg_with_feature_flag = r#"
+[features]
+network_proxy = true
+
+[network_proxy]
+enabled = true
+"#;
+        let parsed_with_feature_flag =
+            toml::from_str::<ConfigToml>(cfg_with_feature_flag).expect("TOML parse should work");
+        let cwd_temp_dir = TempDir::new().unwrap();
+        std::fs::write(cwd_temp_dir.path().join(".git"), "gitdir: nowhere")?;
+        let codex_home_temp_dir = TempDir::new().unwrap();
+        let config_with_feature_flag = Config::load_from_base_config_with_overrides(
+            parsed_with_feature_flag,
+            ConfigOverrides {
+                cwd: Some(cwd_temp_dir.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home_temp_dir.path().to_path_buf(),
+        )?;
+        assert!(config_with_feature_flag.network_proxy.enabled);
+        Ok(())
     }
 
     #[test]
@@ -2965,6 +3160,7 @@ model_verbosity = "high"
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
+                network_proxy: default_network_proxy_config(),
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -3040,6 +3236,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            network_proxy: default_network_proxy_config(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -3130,6 +3327,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            network_proxy: default_network_proxy_config(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -3206,6 +3404,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            network_proxy: default_network_proxy_config(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),

@@ -480,7 +480,11 @@ impl UnifiedExecSessionManager {
         justification: Option<String>,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
-        let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
+        let env = apply_unified_exec_env(create_env(
+            &context.turn.shell_environment_policy,
+            &context.turn.sandbox_policy,
+            &context.turn.network_proxy,
+        ));
         let features = context.session.features();
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);

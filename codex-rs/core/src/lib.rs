@@ -33,6 +33,7 @@ pub mod git_info;
 pub mod landlock;
 pub mod mcp;
 mod mcp_connection_manager;
+pub mod network_proxy;
 pub mod openai_models;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_CAPABILITY;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_NOTIFICATION;

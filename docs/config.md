@@ -349,6 +349,47 @@ This is reasonable to use if Codex is running in an environment that provides it
 
 Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
 
+### network_proxy
+
+Codex can route subprocess network traffic through an external proxy (for example, `codex-network-proxy`) to enforce domain allow/deny policies for sandboxed subprocesses.
+
+```toml
+[features]
+network_proxy = true
+
+[network_proxy]
+enabled = true
+proxy_url = "http://127.0.0.1:3128"
+admin_url = "http://127.0.0.1:8080"
+mode = "limited" # limited | full (default)
+no_proxy = [
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "*.local",
+  ".local",
+  "169.254.0.0/16",
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+]
+poll_interval_ms = 1000
+```
+
+Notes:
+
+- Proxy settings are injected only when sandbox network access is enabled (or full access mode). If the sandbox blocks network access, requests are blocked at the OS layer.
+- Network proxy integration is rollout-gated behind `[features].network_proxy = true`.
+- `proxy_url` is used for HTTP proxy envs (`HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy`, plus npm/yarn variants). Docker and Cloud SDK proxy envs are derived from the HTTP proxy when present.
+- When `proxy_url` points at localhost, Codex also assumes a SOCKS5 proxy on `localhost:8081` for `ALL_PROXY`, `GRPC_PROXY`, `FTP_PROXY`, `RSYNC_PROXY`, and (macOS only) `GIT_SSH_COMMAND`.
+- `no_proxy` entries bypass the proxy; defaults include localhost + private network ranges. Use sparingly because bypassed traffic is not filtered by the proxy policy.
+- `[network_proxy.policy]` can optionally allow localhost binding or Unix socket access (macOS only) when proxy-restricted network access is active.
+- On macOS, `network_proxy.policy.allow_unix_sockets` is useful for local IPC that relies on Unix domain sockets (most commonly the SSH agent). Entries can be:
+  - absolute socket paths (or directories containing sockets),
+  - `$SSH_AUTH_SOCK` / `${SSH_AUTH_SOCK}`,
+  - the preset `ssh-agent` (alias: `ssh_auth_sock`, `ssh_auth_socket`).
+  If you use `git` over SSH, a common setting is `allow_unix_sockets = ["$SSH_AUTH_SOCK"]`.
+
 ### tools.\*
 
 These `[tools]` configuration options are deprecated. Use `[features]` instead (see [Feature flags](#feature-flags)).
@@ -928,67 +969,82 @@ Valid values:
 
 ## Config reference
 
-| Key                                              | Type / Values                                                     | Notes                                                                                                                           |
-| ------------------------------------------------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `model`                                          | string                                                            | Model to use (e.g., `gpt-5.1-codex-max`).                                                                                       |
-| `model_provider`                                 | string                                                            | Provider id from `model_providers` (default: `openai`).                                                                         |
-| `model_context_window`                           | number                                                            | Context window tokens.                                                                                                          |
-| `tool_output_token_limit`                        | number                                                            | Token budget for stored function/tool outputs in history (default: 2,560 tokens).                                               |
-| `approval_policy`                                | `untrusted` \| `on-failure` \| `on-request` \| `never`            | When to prompt for approval.                                                                                                    |
-| `sandbox_mode`                                   | `read-only` \| `workspace-write` \| `danger-full-access`          | OS sandbox policy.                                                                                                              |
-| `sandbox_workspace_write.writable_roots`         | array<string>                                                     | Extra writable roots in workspace‑write.                                                                                        |
-| `sandbox_workspace_write.network_access`         | boolean                                                           | Allow network in workspace‑write (default: false).                                                                              |
-| `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean                                                           | Exclude `$TMPDIR` from writable roots (default: false).                                                                         |
-| `sandbox_workspace_write.exclude_slash_tmp`      | boolean                                                           | Exclude `/tmp` from writable roots (default: false).                                                                            |
-| `notify`                                         | array<string>                                                     | External program for notifications.                                                                                             |
-| `tui.animations`                                 | boolean                                                           | Enable terminal animations (welcome screen, shimmer, spinner). Defaults to true; set to `false` to disable visual motion.       |
-| `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                         |
-| `features.<feature-flag>`                        | boolean                                                           | See [feature flags](#feature-flags) for details                                                                                 |
-| `ghost_snapshot.disable_warnings`                | boolean                                                           | Disable every warnings around ghost snapshot (large files, directory, ...)                                                      |
-| `ghost_snapshot.ignore_large_untracked_files`    | number                                                            | Exclude untracked files larger than this many bytes from ghost snapshots (default: 10 MiB). Set to `0` to disable.              |
-| `ghost_snapshot.ignore_large_untracked_dirs`     | number                                                            | Ignore untracked directories with at least this many files (default: 200). Set to `0` to disable.                               |
-| `mcp_servers.<id>.command`                       | string                                                            | MCP server launcher command (stdio servers only).                                                                               |
-| `mcp_servers.<id>.args`                          | array<string>                                                     | MCP server args (stdio servers only).                                                                                           |
-| `mcp_servers.<id>.env`                           | map<string,string>                                                | MCP server env vars (stdio servers only).                                                                                       |
-| `mcp_servers.<id>.url`                           | string                                                            | MCP server url (streamable http servers only).                                                                                  |
-| `mcp_servers.<id>.bearer_token_env_var`          | string                                                            | environment variable containing a bearer token to use for auth (streamable http servers only).                                  |
-| `mcp_servers.<id>.enabled`                       | boolean                                                           | When false, Codex skips starting the server (default: true).                                                                    |
-| `mcp_servers.<id>.startup_timeout_sec`           | number                                                            | Startup timeout in seconds (default: 10). Timeout is applied both for initializing MCP server and initially listing tools.      |
-| `mcp_servers.<id>.tool_timeout_sec`              | number                                                            | Per-tool timeout in seconds (default: 60). Accepts fractional values; omit to use the default.                                  |
-| `mcp_servers.<id>.enabled_tools`                 | array<string>                                                     | Restrict the server to the listed tool names.                                                                                   |
-| `mcp_servers.<id>.disabled_tools`                | array<string>                                                     | Remove the listed tool names after applying `enabled_tools`, if any.                                                            |
-| `model_providers.<id>.name`                      | string                                                            | Display name.                                                                                                                   |
-| `model_providers.<id>.base_url`                  | string                                                            | API base URL.                                                                                                                   |
-| `model_providers.<id>.env_key`                   | string                                                            | Env var for API key.                                                                                                            |
-| `model_providers.<id>.wire_api`                  | `chat` \| `responses`                                             | Protocol used (default: `chat`).                                                                                                |
-| `model_providers.<id>.query_params`              | map<string,string>                                                | Extra query params (e.g., Azure `api-version`).                                                                                 |
-| `model_providers.<id>.http_headers`              | map<string,string>                                                | Additional static headers.                                                                                                      |
-| `model_providers.<id>.env_http_headers`          | map<string,string>                                                | Headers sourced from env vars.                                                                                                  |
-| `model_providers.<id>.request_max_retries`       | number                                                            | Per‑provider HTTP retry count (default: 4).                                                                                     |
-| `model_providers.<id>.stream_max_retries`        | number                                                            | SSE stream retry count (default: 5).                                                                                            |
-| `model_providers.<id>.stream_idle_timeout_ms`    | number                                                            | SSE idle timeout (ms) (default: 300000).                                                                                        |
-| `project_doc_max_bytes`                          | number                                                            | Max bytes to read from `AGENTS.md`.                                                                                             |
-| `profile`                                        | string                                                            | Active profile name.                                                                                                            |
-| `profiles.<name>.*`                              | various                                                           | Profile‑scoped overrides of the same keys.                                                                                      |
-| `history.persistence`                            | `save-all` \| `none`                                              | History file persistence (default: `save-all`).                                                                                 |
-| `history.max_bytes`                              | number                                                            | Maximum size of `history.jsonl` in bytes; when exceeded, history is compacted to ~80% of this limit by dropping oldest entries. |
-| `file_opener`                                    | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`).                                                                         |
-| `tui`                                            | table                                                             | TUI‑specific options.                                                                                                           |
-| `tui.notifications`                              | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: true).                                                                        |
-| `hide_agent_reasoning`                           | boolean                                                           | Hide model reasoning events.                                                                                                    |
-| `check_for_update_on_startup`                    | boolean                                                           | Check for Codex updates on startup (default: true). Set to `false` only if updates are centrally managed.                       |
-| `show_raw_agent_reasoning`                       | boolean                                                           | Show raw reasoning (when available).                                                                                            |
-| `model_reasoning_effort`                         | `minimal` \| `low` \| `medium` \| `high`\|`xhigh`                 | Responses API reasoning effort.                                                                                                 |
-| `model_reasoning_summary`                        | `auto` \| `concise` \| `detailed` \| `none`                       | Reasoning summaries.                                                                                                            |
-| `model_verbosity`                                | `low` \| `medium` \| `high`                                       | GPT‑5 text verbosity (Responses API).                                                                                           |
-| `model_supports_reasoning_summaries`             | boolean                                                           | Force‑enable reasoning summaries.                                                                                               |
-| `model_reasoning_summary_format`                 | `none` \| `experimental`                                          | Force reasoning summary format.                                                                                                 |
-| `chatgpt_base_url`                               | string                                                            | Base URL for ChatGPT auth flow.                                                                                                 |
-| `experimental_instructions_file`                 | string (path)                                                     | Replace built‑in instructions (experimental).                                                                                   |
-| `experimental_use_exec_command_tool`             | boolean                                                           | Use experimental exec command tool.                                                                                             |
-| `projects.<path>.trust_level`                    | string                                                            | Mark project/worktree as trusted (only `"trusted"` is recognized).                                                              |
-| `tools.web_search`                               | boolean                                                           | Enable web search tool (deprecated) (default: false).                                                                           |
-| `tools.view_image`                               | boolean                                                           | Enable or disable the `view_image` tool so Codex can attach local image files from the workspace (default: true).               |
-| `forced_login_method`                            | `chatgpt` \| `api`                                                | Only allow Codex to be used with ChatGPT or API keys.                                                                           |
-| `forced_chatgpt_workspace_id`                    | string (uuid)                                                     | Only allow Codex to be used with the specified ChatGPT workspace.                                                               |
-| `cli_auth_credentials_store`                     | `file` \| `keyring` \| `auto`                                     | Where to store CLI login credentials (default: `file`).                                                                         |
+| Key                                                | Type / Values                                                     | Notes                                                                                                                           |
+| -------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `model`                                            | string                                                            | Model to use (e.g., `gpt-5.1-codex-max`).                                                                                       |
+| `model_provider`                                   | string                                                            | Provider id from `model_providers` (default: `openai`).                                                                         |
+| `model_context_window`                             | number                                                            | Context window tokens.                                                                                                          |
+| `tool_output_token_limit`                          | number                                                            | Token budget for stored function/tool outputs in history (default: 2,560 tokens).                                               |
+| `approval_policy`                                  | `untrusted` \| `on-failure` \| `on-request` \| `never`            | When to prompt for approval.                                                                                                    |
+| `sandbox_mode`                                     | `read-only` \| `workspace-write` \| `danger-full-access`          | OS sandbox policy.                                                                                                              |
+| `sandbox_workspace_write.writable_roots`           | array<string>                                                     | Extra writable roots in workspace‑write.                                                                                        |
+| `sandbox_workspace_write.network_access`           | boolean                                                           | Allow network in workspace‑write (default: false).                                                                              |
+| `sandbox_workspace_write.exclude_tmpdir_env_var`   | boolean                                                           | Exclude `$TMPDIR` from writable roots (default: false).                                                                         |
+| `sandbox_workspace_write.exclude_slash_tmp`        | boolean                                                           | Exclude `/tmp` from writable roots (default: false).                                                                            |
+| `network_proxy.enabled`                            | boolean                                                           | Enable proxy environment injection + admin polling (default: false).                                                            |
+| `network_proxy.proxy_url`                          | string                                                            | Proxy URL used for HTTP proxy envs (`HTTP_PROXY`/`HTTPS_PROXY`); when it points at localhost, Codex also assumes SOCKS5 on `localhost:8081` for `ALL_PROXY` (default: `http://127.0.0.1:3128`). |
+| `network_proxy.admin_url`                          | string                                                            | Proxy admin API base URL (default: `http://127.0.0.1:8080`).                                                                    |
+| `network_proxy.mode`                               | `limited` \| `full`                                                | Default proxy mode for policy hints (default: `full`).                                                                          |
+| `network_proxy.no_proxy`                           | array<string>                                                     | Hosts/IPs that bypass the proxy (default includes localhost + private network ranges).                                           |
+| `network_proxy.poll_interval_ms`                   | number                                                            | Admin poll interval in ms (default: 1000).                                                                                     |
+| `network_proxy.policy.allowed_domains`             | array<string>                                                     | Allowlist of domain patterns (denylist takes precedence).                                                                        |
+| `network_proxy.policy.denied_domains`              | array<string>                                                     | Denylist of domain patterns (takes precedence over allowlist).                                                                   |
+| `network_proxy.policy.allow_local_binding`         | boolean                                                           | Allow localhost binding when proxy-restricted (macOS only, default: false).                                                      |
+| `network_proxy.policy.allow_unix_sockets`          | array<string>                                                     | Allow Unix socket paths when proxy-restricted (macOS only, default: []). Supports `$SSH_AUTH_SOCK` and the `ssh-agent` preset.   |
+| `network_proxy.mitm.enabled`                       | boolean                                                           | Enable HTTPS MITM for read-only enforcement in limited mode (default: false).                                                    |
+| `network_proxy.mitm.inspect`                       | boolean                                                           | Enable body inspection in MITM mode (default: false).                                                                            |
+| `network_proxy.mitm.max_body_bytes`                | number                                                            | Max body bytes to buffer when inspection is enabled (default: 4096).                                                             |
+| `network_proxy.mitm.ca_cert_path`                  | string (path)                                                     | CA cert path (default: `network_proxy/mitm/ca.pem` under `$CODEX_HOME`).                                                         |
+| `network_proxy.mitm.ca_key_path`                   | string (path)                                                     | CA key path (default: `network_proxy/mitm/ca.key` under `$CODEX_HOME`).                                                          |
+| `notify`                                           | array<string>                                                     | External program for notifications.                                                                                             |
+| `tui.animations`                                   | boolean                                                           | Enable terminal animations (welcome screen, shimmer, spinner). Defaults to true; set to `false` to disable visual motion.       |
+| `instructions`                                     | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                         |
+| `features.<feature-flag>`                          | boolean                                                           | See [feature flags](#feature-flags) for details                                                                                 |
+| `ghost_snapshot.disable_warnings`                  | boolean                                                           | Disable every warnings around ghost snapshot (large files, directory, ...)                                                      |
+| `ghost_snapshot.ignore_large_untracked_files`      | number                                                            | Exclude untracked files larger than this many bytes from ghost snapshots (default: 10 MiB). Set to `0` to disable.              |
+| `ghost_snapshot.ignore_large_untracked_dirs`       | number                                                            | Ignore untracked directories with at least this many files (default: 200). Set to `0` to disable.                               |
+| `mcp_servers.<id>.command`                         | string                                                            | MCP server launcher command (stdio servers only).                                                                               |
+| `mcp_servers.<id>.args`                            | array<string>                                                     | MCP server args (stdio servers only).                                                                                           |
+| `mcp_servers.<id>.env`                             | map<string,string>                                                | MCP server env vars (stdio servers only).                                                                                       |
+| `mcp_servers.<id>.url`                             | string                                                            | MCP server url (streamable http servers only).                                                                                  |
+| `mcp_servers.<id>.bearer_token_env_var`            | string                                                            | environment variable containing a bearer token to use for auth (streamable http servers only).                                  |
+| `mcp_servers.<id>.enabled`                         | boolean                                                           | When false, Codex skips starting the server (default: true).                                                                    |
+| `mcp_servers.<id>.startup_timeout_sec`             | number                                                            | Startup timeout in seconds (default: 10). Timeout is applied both for initializing MCP server and initially listing tools.      |
+| `mcp_servers.<id>.tool_timeout_sec`                | number                                                            | Per-tool timeout in seconds (default: 60). Accepts fractional values; omit to use the default.                                  |
+| `mcp_servers.<id>.enabled_tools`                   | array<string>                                                     | Restrict the server to the listed tool names.                                                                                   |
+| `mcp_servers.<id>.disabled_tools`                  | array<string>                                                     | Remove the listed tool names after applying `enabled_tools`, if any.                                                            |
+| `model_providers.<id>.name`                        | string                                                            | Display name.                                                                                                                   |
+| `model_providers.<id>.base_url`                    | string                                                            | API base URL.                                                                                                                   |
+| `model_providers.<id>.env_key`                     | string                                                            | Env var for API key.                                                                                                            |
+| `model_providers.<id>.wire_api`                    | `chat` \| `responses`                                             | Protocol used (default: `chat`).                                                                                                |
+| `model_providers.<id>.query_params`                | map<string,string>                                                | Extra query params (e.g., Azure `api-version`).                                                                                 |
+| `model_providers.<id>.http_headers`                | map<string,string>                                                | Additional static headers.                                                                                                      |
+| `model_providers.<id>.env_http_headers`            | map<string,string>                                                | Headers sourced from env vars.                                                                                                  |
+| `model_providers.<id>.request_max_retries`         | number                                                            | Per‑provider HTTP retry count (default: 4).                                                                                     |
+| `model_providers.<id>.stream_max_retries`          | number                                                            | SSE stream retry count (default: 5).                                                                                            |
+| `model_providers.<id>.stream_idle_timeout_ms`      | number                                                            | SSE idle timeout (ms) (default: 300000).                                                                                        |
+| `project_doc_max_bytes`                            | number                                                            | Max bytes to read from `AGENTS.md`.                                                                                             |
+| `profile`                                          | string                                                            | Active profile name.                                                                                                            |
+| `profiles.<name>.*`                                | various                                                           | Profile‑scoped overrides of the same keys.                                                                                      |
+| `history.persistence`                              | `save-all` \| `none`                                              | History file persistence (default: `save-all`).                                                                                 |
+| `history.max_bytes`                                | number                                                            | Maximum size of `history.jsonl` in bytes; when exceeded, history is compacted to ~80% of this limit by dropping oldest entries. |
+| `file_opener`                                      | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`).                                                                         |
+| `tui`                                              | table                                                             | TUI‑specific options.                                                                                                           |
+| `tui.notifications`                                | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: true).                                                                        |
+| `hide_agent_reasoning`                             | boolean                                                           | Hide model reasoning events.                                                                                                    |
+| `check_for_update_on_startup`                      | boolean                                                           | Check for Codex updates on startup (default: true). Set to `false` only if updates are centrally managed.                       |
+| `show_raw_agent_reasoning`                         | boolean                                                           | Show raw reasoning (when available).                                                                                            |
+| `model_reasoning_effort`                           | `minimal` \| `low` \| `medium` \| `high`\|`xhigh`                 | Responses API reasoning effort.                                                                                                 |
+| `model_reasoning_summary`                          | `auto` \| `concise` \| `detailed` \| `none`                       | Reasoning summaries.                                                                                                            |
+| `model_verbosity`                                  | `low` \| `medium` \| `high`                                       | GPT‑5 text verbosity (Responses API).                                                                                           |
+| `model_supports_reasoning_summaries`               | boolean                                                           | Force‑enable reasoning summaries.                                                                                               |
+| `model_reasoning_summary_format`                   | `none` \| `experimental`                                          | Force reasoning summary format.                                                                                                 |
+| `chatgpt_base_url`                                 | string                                                            | Base URL for ChatGPT auth flow.                                                                                                 |
+| `experimental_instructions_file`                   | string (path)                                                     | Replace built‑in instructions (experimental).                                                                                   |
+| `experimental_use_exec_command_tool`               | boolean                                                           | Use experimental exec command tool.                                                                                             |
+| `projects.<path>.trust_level`                      | string                                                            | Mark project/worktree as trusted (only `"trusted"` is recognized).                                                              |
+| `tools.web_search`                                 | boolean                                                           | Enable web search tool (deprecated) (default: false).                                                                           |
+| `tools.view_image`                                 | boolean                                                           | Enable or disable the `view_image` tool so Codex can attach local image files from the workspace (default: true).               |
+| `forced_login_method`                              | `chatgpt` \| `api`                                                | Only allow Codex to be used with ChatGPT or API keys.                                                                           |
+| `forced_chatgpt_workspace_id`                      | string (uuid)                                                     | Only allow Codex to be used with the specified ChatGPT workspace.                                                               |
+| `cli_auth_credentials_store`                       | `file` \| `keyring` \| `auto`                                     | Where to store CLI login credentials (default: `file`).                                                                         |

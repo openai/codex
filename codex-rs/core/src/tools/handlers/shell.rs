@@ -34,7 +34,11 @@ impl ShellHandler {
             command: params.command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
-            env: create_env(&turn_context.shell_environment_policy),
+            env: create_env(
+                &turn_context.shell_environment_policy,
+                &turn_context.sandbox_policy,
+                &turn_context.network_proxy,
+            ),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             justification: params.justification,
             arg0: None,
@@ -60,7 +64,11 @@ impl ShellCommandHandler {
             command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
-            env: create_env(&turn_context.shell_environment_policy),
+            env: create_env(
+                &turn_context.shell_environment_policy,
+                &turn_context.sandbox_policy,
+                &turn_context.network_proxy,
+            ),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             justification: params.justification,
             arg0: None,
@@ -371,7 +379,11 @@ mod tests {
 
         let expected_command = session.user_shell().derive_exec_args(&command, true);
         let expected_cwd = turn_context.resolve_path(workdir.clone());
-        let expected_env = create_env(&turn_context.shell_environment_policy);
+        let expected_env = create_env(
+            &turn_context.shell_environment_policy,
+            &turn_context.sandbox_policy,
+            &turn_context.network_proxy,
+        );
 
         let params = ShellCommandToolCallParams {
             command,

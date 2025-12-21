@@ -1,18 +1,29 @@
 #![cfg(target_os = "macos")]
 
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Child;
 
+use crate::config;
+use crate::network_proxy;
 use crate::protocol::SandboxPolicy;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
-const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
+const MACOS_SEATBELT_NETWORK_POLICY_BASE: &str = include_str!("seatbelt_network_policy.sbpl");
+const PROXY_ENV_KEYS: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+];
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
 /// to defend against an attacker trying to inject a malicious version on the
@@ -28,7 +39,7 @@ pub async fn spawn_command_under_seatbelt(
     stdio_policy: StdioPolicy,
     mut env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    let args = create_seatbelt_command_args(command, sandbox_policy, sandbox_policy_cwd);
+    let args = create_seatbelt_command_args(command, sandbox_policy, sandbox_policy_cwd, &env);
     let arg0 = None;
     env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
     spawn_child_async(
@@ -43,10 +54,133 @@ pub async fn spawn_command_under_seatbelt(
     .await
 }
 
+fn is_loopback_host(host: &str) -> bool {
+    let host_lower = host.to_ascii_lowercase();
+    host_lower == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+#[derive(Default)]
+struct ProxyPorts {
+    http: Vec<u16>,
+    socks: Vec<u16>,
+    has_proxy_env: bool,
+    has_non_loopback_proxy_env: bool,
+}
+
+fn proxy_ports_from_env(env: &HashMap<String, String>) -> ProxyPorts {
+    let mut http_ports = BTreeSet::new();
+    let mut socks_ports = BTreeSet::new();
+    let mut has_proxy_env = false;
+    let mut has_non_loopback_proxy_env = false;
+
+    for key in PROXY_ENV_KEYS {
+        let Some(proxy_url) = env.get(*key) else {
+            continue;
+        };
+        has_proxy_env = true;
+        let Some((host, port)) = network_proxy::proxy_host_port(proxy_url) else {
+            continue;
+        };
+        let Some(port) = normalize_proxy_port(port) else {
+            continue;
+        };
+        if !is_loopback_host(&host) {
+            has_non_loopback_proxy_env = true;
+            continue;
+        }
+        let scheme = proxy_url_scheme(proxy_url).unwrap_or("http");
+        if scheme.to_ascii_lowercase().starts_with("socks") {
+            socks_ports.insert(port);
+        } else {
+            http_ports.insert(port);
+        }
+    }
+
+    ProxyPorts {
+        http: http_ports.into_iter().collect(),
+        socks: socks_ports.into_iter().collect(),
+        has_proxy_env,
+        has_non_loopback_proxy_env,
+    }
+}
+
+fn proxy_url_scheme(proxy_url: &str) -> Option<&str> {
+    proxy_url.split_once("://").map(|(scheme, _)| scheme)
+}
+
+fn normalize_proxy_port(port: i64) -> Option<u16> {
+    if (1..=u16::MAX as i64).contains(&port) {
+        Some(port as u16)
+    } else {
+        None
+    }
+}
+
+fn escape_sbpl_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn build_network_policy(policy: &network_proxy::NetworkPolicy, proxy_ports: &ProxyPorts) -> String {
+    let mut network_rules = String::from("; Network\n");
+    // On macOS, `sandbox-exec` only accepts `localhost` or `*` in network
+    // addresses. We use loopback proxy ports + the network proxy itself to
+    // enforce per-domain policy and prompting.
+    if !proxy_ports.has_proxy_env {
+        network_rules.push_str("(allow network*)\n");
+        return format!("{network_rules}{MACOS_SEATBELT_NETWORK_POLICY_BASE}");
+    }
+
+    if policy.allow_local_binding {
+        network_rules.push_str("(allow network-bind (local ip \"localhost:*\"))\n");
+        network_rules.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
+        network_rules.push_str("(allow network-outbound (local ip \"localhost:*\"))\n");
+    }
+
+    if !policy.allow_unix_sockets.is_empty() {
+        for socket_path in network_proxy::resolve_unix_socket_allowlist(&policy.allow_unix_sockets)
+        {
+            let escaped = escape_sbpl_string(&socket_path.to_string_lossy());
+            network_rules.push_str(&format!("(allow network* (subpath \"{escaped}\"))\n"));
+        }
+    }
+
+    for port in &proxy_ports.http {
+        network_rules.push_str(&format!(
+            "(allow network-bind (local ip \"localhost:{port}\"))\n"
+        ));
+        network_rules.push_str(&format!(
+            "(allow network-inbound (local ip \"localhost:{port}\"))\n"
+        ));
+        network_rules.push_str(&format!(
+            "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
+        ));
+    }
+
+    for port in &proxy_ports.socks {
+        network_rules.push_str(&format!(
+            "(allow network-bind (local ip \"localhost:{port}\"))\n"
+        ));
+        network_rules.push_str(&format!(
+            "(allow network-inbound (local ip \"localhost:{port}\"))\n"
+        ));
+        network_rules.push_str(&format!(
+            "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
+        ));
+    }
+
+    if proxy_ports.has_non_loopback_proxy_env {
+        network_rules
+            .push_str("; NOTE: Non-loopback proxies are not supported under `sandbox-exec`.\n");
+    }
+
+    format!("{network_rules}{MACOS_SEATBELT_NETWORK_POLICY_BASE}")
+}
+
 pub(crate) fn create_seatbelt_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
+    env: &HashMap<String, String>,
 ) -> Vec<String> {
     let (file_write_policy, file_write_dir_params) = {
         if sandbox_policy.has_full_disk_write_access() {
@@ -113,9 +247,14 @@ pub(crate) fn create_seatbelt_command_args(
 
     // TODO(mbolin): apply_patch calls must also honor the SandboxPolicy.
     let network_policy = if sandbox_policy.has_full_network_access() {
-        MACOS_SEATBELT_NETWORK_POLICY
+        let proxy_ports = proxy_ports_from_env(env);
+        let policy = config::default_config_path()
+            .ok()
+            .and_then(|path| network_proxy::load_network_policy(&path).ok())
+            .unwrap_or_default();
+        build_network_policy(&policy, &proxy_ports)
     } else {
-        ""
+        String::new()
     };
 
     let full_policy = format!(
@@ -168,17 +307,49 @@ mod tests {
     use crate::protocol::SandboxPolicy;
     use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
     use pretty_assertions::assert_eq;
+    use serial_test::serial;
     use std::fs;
     use std::path::Path;
     use std::path::PathBuf;
     use std::process::Command;
     use tempfile::TempDir;
 
+    struct CodexHomeGuard {
+        previous: Option<String>,
+    }
+
+    impl CodexHomeGuard {
+        fn new(path: &Path) -> Self {
+            let previous = std::env::var("CODEX_HOME").ok();
+            // SAFETY: these tests execute serially, and we restore the original value in Drop.
+            unsafe {
+                std::env::set_var("CODEX_HOME", path);
+            }
+            Self { previous }
+        }
+    }
+
+    impl Drop for CodexHomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: these tests execute serially, and we restore the original value before other
+            // tests run.
+            unsafe {
+                if let Some(previous) = self.previous.take() {
+                    std::env::set_var("CODEX_HOME", previous);
+                } else {
+                    std::env::remove_var("CODEX_HOME");
+                }
+            }
+        }
+    }
+
     #[test]
+    #[serial]
     fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         // Create a temporary workspace with two writable roots: one containing
         // top-level .git and .codex directories and one without them.
         let tmp = TempDir::new().expect("tempdir");
+        let _codex_home_guard = CodexHomeGuard::new(tmp.path());
         let PopulatedTmp {
             vulnerable_root,
             vulnerable_root_canonical,
@@ -189,6 +360,7 @@ mod tests {
         } = populate_tmpdir(tmp.path());
         let cwd = tmp.path().join("cwd");
         fs::create_dir_all(&cwd).expect("create cwd");
+        let env = std::collections::HashMap::new();
 
         // Build a policy that only includes the two test roots as writable and
         // does not automatically include defaults TMPDIR or /tmp.
@@ -217,7 +389,7 @@ mod tests {
         .iter()
         .map(std::string::ToString::to_string)
         .collect();
-        let args = create_seatbelt_command_args(shell_command.clone(), &policy, &cwd);
+        let args = create_seatbelt_command_args(shell_command.clone(), &policy, &cwd, &env);
 
         // Build the expected policy text using a raw string for readability.
         // Note that the policy includes:
@@ -280,6 +452,7 @@ mod tests {
             .current_dir(&cwd)
             .output()
             .expect("execute seatbelt command");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         assert_eq!(
             "sandbox_mode = \"read-only\"\n",
             String::from_utf8_lossy(&fs::read(&config_toml).expect("read config.toml")),
@@ -290,8 +463,14 @@ mod tests {
             "command to write {} should fail under seatbelt",
             &config_toml.display()
         );
+        if stderr.starts_with("sandbox-exec: sandbox_apply:") {
+            // Some environments (including Codex's own test harness) run the process under a
+            // Seatbelt sandbox already, which prevents nested `sandbox-exec` usage. In that case,
+            // we can still validate policy generation but cannot validate enforcement.
+            return;
+        }
         assert_eq!(
-            String::from_utf8_lossy(&output.stderr),
+            stderr,
             format!("bash: {}: Operation not permitted\n", config_toml.display()),
         );
 
@@ -308,7 +487,8 @@ mod tests {
         .iter()
         .map(std::string::ToString::to_string)
         .collect();
-        let write_hooks_file_args = create_seatbelt_command_args(shell_command_git, &policy, &cwd);
+        let write_hooks_file_args =
+            create_seatbelt_command_args(shell_command_git, &policy, &cwd, &env);
         let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
             .args(&write_hooks_file_args)
             .current_dir(&cwd)
@@ -345,7 +525,7 @@ mod tests {
         .map(std::string::ToString::to_string)
         .collect();
         let write_allowed_file_args =
-            create_seatbelt_command_args(shell_command_allowed, &policy, &cwd);
+            create_seatbelt_command_args(shell_command_allowed, &policy, &cwd, &env);
         let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
             .args(&write_allowed_file_args)
             .current_dir(&cwd)
@@ -365,10 +545,12 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn create_seatbelt_args_for_cwd_as_git_repo() {
         // Create a temporary workspace with two writable roots: one containing
         // top-level .git and .codex directories and one without them.
         let tmp = TempDir::new().expect("tempdir");
+        let _codex_home_guard = CodexHomeGuard::new(tmp.path());
         let PopulatedTmp {
             vulnerable_root,
             vulnerable_root_canonical,
@@ -376,6 +558,7 @@ mod tests {
             dot_codex_canonical,
             ..
         } = populate_tmpdir(tmp.path());
+        let env = std::collections::HashMap::new();
 
         // Build a policy that does not specify any writable_roots, but does
         // use the default ones (cwd and TMPDIR) and verifies the `.git` and
@@ -400,8 +583,12 @@ mod tests {
         .iter()
         .map(std::string::ToString::to_string)
         .collect();
-        let args =
-            create_seatbelt_command_args(shell_command.clone(), &policy, vulnerable_root.as_path());
+        let args = create_seatbelt_command_args(
+            shell_command.clone(),
+            &policy,
+            vulnerable_root.as_path(),
+            &env,
+        );
 
         let tmpdir_env_var = std::env::var("TMPDIR")
             .ok()
@@ -468,6 +655,45 @@ mod tests {
         expected_args.extend(shell_command);
 
         assert_eq!(expected_args, args);
+    }
+
+    #[test]
+    #[serial]
+    fn create_seatbelt_args_with_proxy_allowlist() {
+        let tmp = TempDir::new().expect("tempdir");
+        let _codex_home_guard = CodexHomeGuard::new(tmp.path());
+        let policy = SandboxPolicy::DangerFullAccess;
+        let cwd = std::env::current_dir().expect("getcwd");
+        let env = std::collections::HashMap::from([(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:3128".to_string(),
+        )]);
+        let args = create_seatbelt_command_args(vec!["true".to_string()], &policy, &cwd, &env);
+        let policy_text = &args[1];
+        assert!(
+            policy_text.contains("(allow network-bind (local ip \"localhost:3128\"))"),
+            "expected seatbelt policy to allow local proxy binding"
+        );
+        assert!(
+            policy_text.contains("(allow network-inbound (local ip \"localhost:3128\"))"),
+            "expected seatbelt policy to allow local proxy inbound"
+        );
+        assert!(
+            policy_text.contains("(allow network-outbound (remote ip \"localhost:3128\"))"),
+            "expected seatbelt policy to allow local proxy outbound"
+        );
+        assert!(
+            !policy_text.contains("(remote tcp"),
+            "`sandbox-exec` network addresses only support `localhost` or `*`, so we must not emit host allowlists"
+        );
+        assert!(
+            !policy_text.contains("127.0.0.1:3128"),
+            "seatbelt policy must not include numeric loopback hosts (it will fail to parse)"
+        );
+        assert!(
+            !policy_text.contains("localhost:*"),
+            "proxy-restricted policy should not allow all localhost ports"
+        );
     }
 
     struct PopulatedTmp {

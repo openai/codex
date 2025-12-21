@@ -54,6 +54,30 @@ approval_policy = "never"
 sandbox_mode    = "read-only"
 ```
 
+### Network proxy
+
+Codex can optionally route outbound subprocess network traffic through a proxy running outside the sandbox. This lets you enforce an allow-only network policy for sandboxed commands.
+
+Key behaviors:
+
+- The OS sandbox is still the first line of defense. If network access is disabled, outbound requests are blocked at the OS level.
+- When network is enabled and both `[features].network_proxy = true` and `network_proxy.enabled = true`, Codex injects proxy environment variables into subprocesses and configures the OS sandbox to allow only connections to local proxy ports.
+- The proxy enforces `allowed_domains` / `denied_domains` (denylist takes precedence). Requests that are not allowed are rejected at the proxy.
+- Update policy in `~/.codex/config.toml` under `[network_proxy.policy]`, then call the proxy admin `/reload` to apply changes.
+
+`NO_PROXY` is supported via `[network_proxy].no_proxy` and is passed to subprocesses as `NO_PROXY/no_proxy`. Defaults include localhost and private network ranges; any entries in that list bypass the proxy and are not filtered by proxy policy.
+
+On macOS, `[network_proxy.policy]` can also allow localhost binding or Unix socket paths when proxy-restricted network access is active. These settings influence the Seatbelt profile.
+
+Unix sockets are deny-by-default. If you run tools that rely on local IPC (most commonly the SSH agent via `SSH_AUTH_SOCK`), you can allow them via:
+
+```toml
+[network_proxy.policy]
+allow_unix_sockets = ["$SSH_AUTH_SOCK"]
+```
+
+When MITM is enabled in the proxy config, Codex injects common CA environment variables (for example `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `PIP_CERT`, and `NPM_CONFIG_CAFILE`) pointing at the proxy CA cert to reduce per‑tool configuration.
+
 ### Sandbox mechanics by platform
 
 The mechanism Codex uses to enforce the sandbox policy depends on your OS:

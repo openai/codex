@@ -1172,7 +1172,15 @@ impl CodexMessageProcessor {
         }
 
         let cwd = params.cwd.unwrap_or_else(|| self.config.cwd.clone());
-        let env = create_env(&self.config.shell_environment_policy);
+        let effective_policy = params
+            .sandbox_policy
+            .map(|policy| policy.to_core())
+            .unwrap_or_else(|| self.config.sandbox_policy.clone());
+        let env = create_env(
+            &self.config.shell_environment_policy,
+            &effective_policy,
+            &self.config.network_proxy,
+        );
         let timeout_ms = params
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
@@ -1185,11 +1193,6 @@ impl CodexMessageProcessor {
             justification: None,
             arg0: None,
         };
-
-        let effective_policy = params
-            .sandbox_policy
-            .map(|policy| policy.to_core())
-            .unwrap_or_else(|| self.config.sandbox_policy.clone());
 
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();

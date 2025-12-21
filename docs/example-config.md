@@ -100,6 +100,48 @@ exclude_tmpdir_env_var = false
 exclude_slash_tmp = false
 
 ################################################################################
+# Network Proxy (optional)
+################################################################################
+
+[network_proxy]
+# Enable proxy env injection + approval prompts for blocked domains. Default: false
+# NOTE: This is rollout-gated behind `[features].network_proxy = true`.
+enabled = false
+# HTTP/HTTPS proxy URL. Default: "http://127.0.0.1:3128"
+proxy_url = "http://127.0.0.1:3128"
+# Admin API for the proxy (for /blocked, /reload, /mode). Default: "http://127.0.0.1:8080"
+admin_url = "http://127.0.0.1:8080"
+# limited | full (default: full)
+mode = "full"
+# Hosts/IPs that bypass the proxy. Default includes localhost + private networks.
+no_proxy = [
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "*.local",
+  ".local",
+  "169.254.0.0/16",
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+]
+# Poll interval (ms) for checking proxy /blocked. Default: 1000
+poll_interval_ms = 1000
+
+[network_proxy.policy]
+# Allow localhost binds inside the sandbox (macOS only). Default: false
+allow_local_binding = false
+# Allow Unix socket paths inside the sandbox (macOS only). Default: []
+# Common values:
+# - "$SSH_AUTH_SOCK" (recommended) or "${SSH_AUTH_SOCK}"
+# - "ssh-agent" (alias: "ssh_auth_sock", "ssh_auth_socket")
+# - an absolute socket path like "/private/tmp/..." (or a directory containing sockets)
+allow_unix_sockets = []
+# Optional domain allow/deny lists (denylist wins)
+allowed_domains = []
+denied_domains = []
+
+################################################################################
 # Shell Environment Policy for spawned processes
 ################################################################################
 
@@ -218,6 +260,7 @@ rmcp_client = false
 apply_patch_freeform = false
 view_image_tool = true
 web_search_request = false
+network_proxy = false
 ghost_commit = false
 enable_experimental_windows_sandbox = false
 skills = false

@@ -21,7 +21,6 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::ExecCommandSource;
-use crate::protocol::SandboxPolicy;
 use crate::protocol::TaskStartedEvent;
 use crate::sandboxing::ExecEnv;
 use crate::sandboxing::SandboxPermissions;
@@ -96,9 +95,11 @@ impl SessionTask for UserShellCommandTask {
         let exec_env = ExecEnv {
             command: command.clone(),
             cwd: cwd.clone(),
-            env: create_env(&turn_context.shell_environment_policy),
-            // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
-            // should use that instead of an "arbitrarily large" timeout here.
+            env: create_env(
+                &turn_context.shell_environment_policy,
+                &turn_context.sandbox_policy,
+                &turn_context.network_proxy,
+            ),
             expiration: USER_SHELL_TIMEOUT_MS.into(),
             sandbox: SandboxType::None,
             sandbox_permissions: SandboxPermissions::UseDefault,
@@ -112,8 +113,7 @@ impl SessionTask for UserShellCommandTask {
             tx_event: session.get_tx_event(),
         });
 
-        let sandbox_policy = SandboxPolicy::DangerFullAccess;
-        let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream)
+        let exec_result = execute_exec_env(exec_env, &turn_context.sandbox_policy, stdout_stream)
             .or_cancel(&cancellation_token)
             .await;
 
