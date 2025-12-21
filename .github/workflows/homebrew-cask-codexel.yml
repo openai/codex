@@ -69,6 +69,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
     steps:
       - name: Validate tag
         shell: bash
@@ -112,16 +114,25 @@ jobs:
           echo "arm=$sha_arm" >> "$GITHUB_OUTPUT"
           echo "intel=$sha_intel" >> "$GITHUB_OUTPUT"
 
+      - name: Verify Homebrew tap token configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${TAP_TOKEN}" ]]; then
+            echo "Missing HOMEBREW_TAP_GITHUB_TOKEN secret; cannot update Ixe1/homebrew-tap." >&2
+            exit 1
+          fi
+
       - name: Checkout Homebrew tap
-        if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        if: ${{ env.TAP_TOKEN != '' }}
         uses: actions/checkout@v6
         with:
           repository: Ixe1/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          token: ${{ env.TAP_TOKEN }}
           path: homebrew-tap
 
       - name: Update cask
-        if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        if: ${{ env.TAP_TOKEN != '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -152,7 +163,7 @@ jobs:
           EOF
 
       - name: Commit and push
-        if: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        if: ${{ env.TAP_TOKEN != '' }}
         working-directory: homebrew-tap
         shell: bash
         run: |

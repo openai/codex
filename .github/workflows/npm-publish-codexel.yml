@@ -294,6 +294,7 @@ jobs:
       contents: write
     env:
       HOMEBREW_TAP_REPO: Ixe1/homebrew-tap
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v7
@@ -349,15 +350,15 @@ jobs:
           generate_release_notes: true
 
       - name: Checkout Homebrew tap
-        if: ${{ inputs.update_homebrew && secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        if: ${{ inputs.update_homebrew && env.TAP_TOKEN != '' }}
         uses: actions/checkout@v6
         with:
           repository: ${{ env.HOMEBREW_TAP_REPO }}
-          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          token: ${{ env.TAP_TOKEN }}
           path: homebrew-tap
 
       - name: Update Homebrew cask
-        if: ${{ inputs.update_homebrew && secrets.HOMEBREW_TAP_GITHUB_TOKEN != '' }}
+        if: ${{ inputs.update_homebrew && env.TAP_TOKEN != '' }}
         shell: bash
         run: |
           set -euo pipefail
