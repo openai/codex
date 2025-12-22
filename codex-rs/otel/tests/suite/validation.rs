@@ -1,16 +1,16 @@
-use codex_metrics::HistogramBuckets;
-use codex_metrics::MetricsBatch;
-use codex_metrics::MetricsClient;
-use codex_metrics::MetricsConfig;
-use codex_metrics::MetricsError;
-use codex_metrics::Result;
+use codex_otel::metrics::HistogramBuckets;
+use codex_otel::metrics::MetricsBatch;
+use codex_otel::metrics::MetricsClient;
+use codex_otel::metrics::MetricsConfig;
+use codex_otel::metrics::MetricsError;
+use codex_otel::metrics::Result;
 
 // Validates invalid DSNs are rejected early.
 #[test]
 fn invalid_dsn_reports_error() -> Result<()> {
     assert!(matches!(
-        MetricsClient::new(MetricsConfig::new("not a dsn")),
-        Err(MetricsError::InvalidDsn { .. })
+        MetricsClient::new(MetricsConfig::new("")),
+        Err(MetricsError::EmptyApiKey)
     ));
     Ok(())
 }

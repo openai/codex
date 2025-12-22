@@ -12,7 +12,6 @@ use std::time::Duration;
 #[derive(Clone, Debug)]
 pub(crate) enum MetricsExporter {
     OtlpHttp,
-    #[cfg(test)]
     InMemory(opentelemetry_sdk::metrics::InMemoryMetricExporter),
 }
 
@@ -83,8 +82,7 @@ impl MetricsConfig {
         self
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_in_memory_exporter(
+    pub fn with_in_memory_exporter(
         mut self,
         exporter: opentelemetry_sdk::metrics::InMemoryMetricExporter,
     ) -> Self {

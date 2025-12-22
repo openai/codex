@@ -1,19 +1,17 @@
-use crate::harness::parse_envelope;
-use crate::harness::parse_statsd_line;
-use crate::harness::spawn_server;
-use codex_metrics::HistogramBuckets;
-use codex_metrics::MetricsClient;
-use codex_metrics::MetricsConfig;
-use codex_metrics::MetricsError;
-use codex_metrics::Result;
+use crate::harness::attributes_to_map;
+use crate::harness::build_metrics_with_defaults;
+use crate::harness::histogram_data;
+use crate::harness::latest_metrics;
+use codex_otel::metrics::HistogramBuckets;
+use codex_otel::metrics::MetricsError;
+use codex_otel::metrics::Result;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 
 // Ensures duration recording maps to the expected bucket tag.
 #[test]
 fn record_duration_uses_matching_bucket() -> Result<()> {
-    let (dsn, handle) = spawn_server(200);
-    let metrics = MetricsClient::new(MetricsConfig::new(dsn))?;
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
     let buckets = HistogramBuckets::from_values(&[10, 20])?;
 
     metrics.record_duration(
@@ -24,18 +22,12 @@ fn record_duration_uses_matching_bucket() -> Result<()> {
     )?;
     metrics.shutdown()?;
 
-    let captured = handle.join().expect("server thread");
-    let envelope = parse_envelope(&captured.body);
-    let lines: Vec<&str> = envelope.payload.split('\n').collect();
-    assert_eq!(lines.len(), 2);
-
-    let line = parse_statsd_line(lines[0]);
-    assert_eq!(line.name, "codex.request_latency");
-    assert_eq!(line.tags.get("route").map(String::as_str), Some("chat"));
-    assert_eq!(line.tags.get("le").map(String::as_str), Some("20"));
-
-    let line = parse_statsd_line(lines[1]);
-    assert_eq!(line.tags.get("le").map(String::as_str), Some("inf"));
+    let (bounds, bucket_counts, sum, count) =
+        histogram_data(&latest_metrics(&exporter), "codex.request_latency");
+    assert!(!bounds.is_empty());
+    assert_eq!(bucket_counts.iter().sum::<u64>(), 1);
+    assert_eq!(sum, 15.0);
+    assert_eq!(count, 1);
 
     Ok(())
 }
@@ -43,8 +35,7 @@ fn record_duration_uses_matching_bucket() -> Result<()> {
 // Ensures time_result returns the closure output and records timing.
 #[test]
 fn time_result_records_success() -> Result<()> {
-    let (dsn, handle) = spawn_server(200);
-    let metrics = MetricsClient::new(MetricsConfig::new(dsn))?;
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
     let buckets = HistogramBuckets::from_values(&[10, 20])?;
 
     let value = metrics.time_result(
@@ -56,21 +47,29 @@ fn time_result_records_success() -> Result<()> {
     assert_eq!(value, "ok");
     metrics.shutdown()?;
 
-    let captured = handle.join().expect("server thread");
-    let envelope = parse_envelope(&captured.body);
-    let lines: Vec<&str> = envelope.payload.split('\n').collect();
-    assert!(!lines.is_empty());
-    let parsed: Vec<_> = lines.iter().copied().map(parse_statsd_line).collect();
-    assert!(
-        parsed
-            .iter()
-            .any(|line| { line.tags.get("le").map(String::as_str) == Some("inf") })
+    let resource_metrics = latest_metrics(&exporter);
+    let (bounds, bucket_counts, _sum, count) =
+        histogram_data(&resource_metrics, "codex.request_latency");
+    assert!(!bounds.is_empty());
+    assert_eq!(count, 1);
+    assert_eq!(bucket_counts.iter().sum::<u64>(), 1);
+    let attrs = attributes_to_map(
+        match crate::harness::find_metric(&resource_metrics, "codex.request_latency").and_then(
+            |metric| match metric.data() {
+                opentelemetry_sdk::metrics::data::AggregatedMetrics::F64(data) => match data {
+                    opentelemetry_sdk::metrics::data::MetricData::Histogram(histogram) => {
+                        histogram.data_points().next().map(|p| p.attributes())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            },
+        ) {
+            Some(attrs) => attrs,
+            None => panic!("attributes missing"),
+        },
     );
-    for line in parsed {
-        assert_eq!(line.name, "codex.request_latency");
-        assert_eq!(line.tags.get("route").map(String::as_str), Some("chat"));
-        assert!(line.tags.contains_key("le"));
-    }
+    assert_eq!(attrs.get("route").map(String::as_str), Some("chat"));
 
     Ok(())
 }
@@ -78,8 +77,7 @@ fn time_result_records_success() -> Result<()> {
 // Ensures time_result propagates errors but still records timing.
 #[test]
 fn time_result_records_on_error() -> Result<()> {
-    let (dsn, handle) = spawn_server(200);
-    let metrics = MetricsClient::new(MetricsConfig::new(dsn))?;
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
     let buckets = HistogramBuckets::from_values(&[10, 20])?;
 
     let err = metrics
@@ -93,21 +91,29 @@ fn time_result_records_on_error() -> Result<()> {
     assert!(matches!(err, MetricsError::EmptyMetricName));
     metrics.shutdown()?;
 
-    let captured = handle.join().expect("server thread");
-    let envelope = parse_envelope(&captured.body);
-    let lines: Vec<&str> = envelope.payload.split('\n').collect();
-    assert!(!lines.is_empty());
-    let parsed: Vec<_> = lines.iter().copied().map(parse_statsd_line).collect();
-    assert!(
-        parsed
-            .iter()
-            .any(|line| { line.tags.get("le").map(String::as_str) == Some("inf") })
+    let resource_metrics = latest_metrics(&exporter);
+    let (bounds, bucket_counts, _sum, count) =
+        histogram_data(&resource_metrics, "codex.request_latency");
+    assert!(!bounds.is_empty());
+    assert_eq!(bucket_counts.iter().sum::<u64>(), 1);
+    assert_eq!(count, 1);
+    let attrs = attributes_to_map(
+        match crate::harness::find_metric(&resource_metrics, "codex.request_latency").and_then(
+            |metric| match metric.data() {
+                opentelemetry_sdk::metrics::data::AggregatedMetrics::F64(data) => match data {
+                    opentelemetry_sdk::metrics::data::MetricData::Histogram(histogram) => {
+                        histogram.data_points().next().map(|p| p.attributes())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            },
+        ) {
+            Some(attrs) => attrs,
+            None => panic!("attributes missing"),
+        },
     );
-    for line in parsed {
-        assert_eq!(line.name, "codex.request_latency");
-        assert_eq!(line.tags.get("route").map(String::as_str), Some("chat"));
-        assert!(line.tags.contains_key("le"));
-    }
+    assert_eq!(attrs.get("route").map(String::as_str), Some("chat"));
 
     Ok(())
 }

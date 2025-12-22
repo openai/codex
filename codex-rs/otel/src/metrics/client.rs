@@ -326,7 +326,6 @@ impl Drop for MetricsClient {
 fn build_meter_provider(config: &MetricsConfig) -> Result<SdkMeterProvider> {
     match &config.exporter {
         MetricsExporter::OtlpHttp => build_otlp_http_provider(config),
-        #[cfg(test)]
         MetricsExporter::InMemory(exporter) => {
             let reader = PeriodicReader::builder(exporter.clone()).build();
             Ok(SdkMeterProvider::builder().with_reader(reader).build())

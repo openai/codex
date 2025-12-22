@@ -1,25 +1,19 @@
-use crate::harness::parse_envelope;
-use crate::harness::parse_statsd_line;
-use crate::harness::spawn_server;
-use codex_metrics::HistogramBuckets;
-use codex_metrics::MetricsClient;
-use codex_metrics::MetricsConfig;
-use codex_metrics::MetricsError;
-use codex_metrics::Result;
+use crate::harness::attributes_to_map;
+use crate::harness::build_metrics_with_defaults;
+use crate::harness::find_metric;
+use crate::harness::histogram_data;
+use crate::harness::latest_metrics;
+use codex_otel::metrics::HistogramBuckets;
+use codex_otel::metrics::MetricsBatch;
+use codex_otel::metrics::Result;
 use pretty_assertions::assert_eq;
-use std::net::TcpListener;
-use std::thread;
-use std::time::Duration;
+use std::collections::BTreeMap;
 
 // Ensures counters/histograms render with default + per-call tags.
 #[test]
 fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
-    let (dsn, handle) = spawn_server(200);
-    let metrics = MetricsClient::new(
-        MetricsConfig::new(dsn.clone())
-            .with_tag("service", "codex-cli")?
-            .with_tag("env", "prod")?,
-    )?;
+    let (metrics, exporter) =
+        build_metrics_with_defaults(&[("service", "codex-cli"), ("env", "prod")])?;
     let buckets = HistogramBuckets::from_values(&[25, 50, 100])?;
 
     let mut batch = metrics.batch();
@@ -28,50 +22,58 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
     metrics.send(batch)?;
     metrics.shutdown()?;
 
-    let captured = handle.join().expect("server thread");
-    assert_eq!(captured.method, "POST");
-    assert_eq!(captured.path, "/api/123/envelope/");
-    assert_eq!(
-        captured.headers.get("content-type").map(String::as_str),
-        Some("application/x-sentry-envelope")
+    let resource_metrics = latest_metrics(&exporter);
+
+    let counter = find_metric(&resource_metrics, "codex.turns").expect("counter metric missing");
+    let counter_attributes = match counter.data() {
+        opentelemetry_sdk::metrics::data::AggregatedMetrics::I64(data) => match data {
+            opentelemetry_sdk::metrics::data::MetricData::Sum(sum) => {
+                let points: Vec<_> = sum.data_points().collect();
+                assert_eq!(points.len(), 1);
+                assert_eq!(points[0].value(), 1);
+                attributes_to_map(points[0].attributes())
+            }
+            _ => panic!("unexpected counter aggregation"),
+        },
+        _ => panic!("unexpected counter data type"),
+    };
+
+    let expected_counter_attributes = BTreeMap::from([
+        ("service".to_string(), "codex-cli".to_string()),
+        ("env".to_string(), "dev".to_string()),
+        ("model".to_string(), "gpt-5.1".to_string()),
+    ]);
+    assert_eq!(counter_attributes, expected_counter_attributes);
+
+    let (bounds, bucket_counts, sum, count) =
+        histogram_data(&resource_metrics, "codex.tool_latency");
+    assert!(!bounds.is_empty());
+    assert_eq!(bucket_counts.iter().sum::<u64>(), 1);
+    assert_eq!(sum, 25.0);
+    assert_eq!(count, 1);
+
+    let histogram_attrs = attributes_to_map(
+        match find_metric(&resource_metrics, "codex.tool_latency").and_then(|metric| {
+            match metric.data() {
+                opentelemetry_sdk::metrics::data::AggregatedMetrics::F64(data) => match data {
+                    opentelemetry_sdk::metrics::data::MetricData::Histogram(histogram) => {
+                        histogram.data_points().next().map(|p| p.attributes())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            }
+        }) {
+            Some(attrs) => attrs,
+            None => panic!("histogram attributes missing"),
+        },
     );
-
-    let envelope = parse_envelope(&captured.body);
-    assert_eq!(envelope.header["dsn"].as_str(), Some(dsn.as_str()));
-    assert_eq!(envelope.item_header["type"], "statsd");
-    assert_eq!(envelope.item_header["content_type"], "text/plain");
-    assert_eq!(
-        envelope.item_header["length"].as_u64(),
-        Some(envelope.payload.len() as u64)
-    );
-
-    let lines: Vec<&str> = envelope.payload.split('\n').collect();
-    assert_eq!(lines.len(), 5);
-
-    let line = parse_statsd_line(lines[0]);
-    assert_eq!(line.name, "codex.turns");
-    assert_eq!(line.value, 1);
-    assert_eq!(line.kind, "c");
-    assert_eq!(
-        line.tags.get("service").map(String::as_str),
-        Some("codex-cli")
-    );
-    assert_eq!(line.tags.get("env").map(String::as_str), Some("dev"));
-    assert_eq!(line.tags.get("model").map(String::as_str), Some("gpt-5.1"));
-
-    for (line, expected_le) in lines.iter().skip(1).zip(["25", "50", "100", "inf"]) {
-        let line = parse_statsd_line(line);
-        assert_eq!(line.name, "codex.tool_latency");
-        assert_eq!(line.value, 1);
-        assert_eq!(line.kind, "c");
-        assert_eq!(
-            line.tags.get("service").map(String::as_str),
-            Some("codex-cli")
-        );
-        assert_eq!(line.tags.get("env").map(String::as_str), Some("prod"));
-        assert_eq!(line.tags.get("tool").map(String::as_str), Some("shell"));
-        assert_eq!(line.tags.get("le").map(String::as_str), Some(expected_le));
-    }
+    let expected_histogram_attributes = BTreeMap::from([
+        ("service".to_string(), "codex-cli".to_string()),
+        ("env".to_string(), "prod".to_string()),
+        ("tool".to_string(), "shell".to_string()),
+    ]);
+    assert_eq!(histogram_attrs, expected_histogram_attributes);
 
     Ok(())
 }
@@ -79,13 +81,11 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
 // Ensures defaults merge per line and overrides take precedence.
 #[test]
 fn send_merges_default_tags_per_line() -> Result<()> {
-    let (dsn, handle) = spawn_server(200);
-    let metrics = MetricsClient::new(
-        MetricsConfig::new(dsn.clone())
-            .with_tag("service", "codex-cli")?
-            .with_tag("env", "prod")?
-            .with_tag("region", "us")?,
-    )?;
+    let (metrics, exporter) = build_metrics_with_defaults(&[
+        ("service", "codex-cli"),
+        ("env", "prod"),
+        ("region", "us"),
+    ])?;
 
     let mut batch = metrics.batch();
     batch.counter("codex.alpha", 1, &[("env", "dev"), ("component", "alpha")])?;
@@ -97,27 +97,60 @@ fn send_merges_default_tags_per_line() -> Result<()> {
     metrics.send(batch)?;
     metrics.shutdown()?;
 
-    let captured = handle.join().expect("server thread");
-    let envelope = parse_envelope(&captured.body);
-    let lines: Vec<&str> = envelope.payload.split('\n').collect();
-    assert_eq!(lines.len(), 2);
-    assert_eq!(
-        lines[0],
-        "codex.alpha:1|c|#component:alpha,env:dev,region:us,service:codex-cli"
-    );
-    assert_eq!(
-        lines[1],
-        "codex.beta:2|c|#component:beta,env:prod,region:us,service:worker"
-    );
+    let resource_metrics = latest_metrics(&exporter);
+    let alpha_metric =
+        find_metric(&resource_metrics, "codex.alpha").expect("codex.alpha metric missing");
+    let alpha_point = match alpha_metric.data() {
+        opentelemetry_sdk::metrics::data::AggregatedMetrics::I64(data) => match data {
+            opentelemetry_sdk::metrics::data::MetricData::Sum(sum) => {
+                let points: Vec<_> = sum.data_points().collect();
+                assert_eq!(points.len(), 1);
+                points[0]
+            }
+            _ => panic!("unexpected counter aggregation"),
+        },
+        _ => panic!("unexpected counter data type"),
+    };
+    assert_eq!(alpha_point.value(), 1);
+    let alpha_attrs = attributes_to_map(alpha_point.attributes());
+    let expected_alpha_attrs = BTreeMap::from([
+        ("component".to_string(), "alpha".to_string()),
+        ("env".to_string(), "dev".to_string()),
+        ("region".to_string(), "us".to_string()),
+        ("service".to_string(), "codex-cli".to_string()),
+    ]);
+    assert_eq!(alpha_attrs, expected_alpha_attrs);
+
+    let beta_metric =
+        find_metric(&resource_metrics, "codex.beta").expect("codex.beta metric missing");
+    let beta_point = match beta_metric.data() {
+        opentelemetry_sdk::metrics::data::AggregatedMetrics::I64(data) => match data {
+            opentelemetry_sdk::metrics::data::MetricData::Sum(sum) => {
+                let points: Vec<_> = sum.data_points().collect();
+                assert_eq!(points.len(), 1);
+                points[0]
+            }
+            _ => panic!("unexpected counter aggregation"),
+        },
+        _ => panic!("unexpected counter data type"),
+    };
+    assert_eq!(beta_point.value(), 2);
+    let beta_attrs = attributes_to_map(beta_point.attributes());
+    let expected_beta_attrs = BTreeMap::from([
+        ("component".to_string(), "beta".to_string()),
+        ("env".to_string(), "prod".to_string()),
+        ("region".to_string(), "us".to_string()),
+        ("service".to_string(), "worker".to_string()),
+    ]);
+    assert_eq!(beta_attrs, expected_beta_attrs);
 
     Ok(())
 }
 
-// Verifies values above the max bucket use the inf tag.
+// Verifies values above the max bucket use the inf bucket.
 #[test]
 fn send_uses_inf_bucket_for_values_over_max() -> Result<()> {
-    let (dsn, handle) = spawn_server(200);
-    let metrics = MetricsClient::new(MetricsConfig::new(dsn))?;
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
     let buckets = HistogramBuckets::from_values(&[10, 20])?;
 
     let mut batch = metrics.batch();
@@ -125,12 +158,12 @@ fn send_uses_inf_bucket_for_values_over_max() -> Result<()> {
     metrics.send(batch)?;
     metrics.shutdown()?;
 
-    let captured = handle.join().expect("server thread");
-    let envelope = parse_envelope(&captured.body);
-    let lines: Vec<&str> = envelope.payload.split('\n').collect();
-    assert_eq!(lines.len(), 1);
-    let line = parse_statsd_line(lines[0]);
-    assert_eq!(line.tags.get("le").map(String::as_str), Some("inf"));
+    let (bounds, bucket_counts, sum, count) =
+        histogram_data(&latest_metrics(&exporter), "codex.tool_latency");
+    assert!(!bounds.is_empty());
+    assert_eq!(bucket_counts.iter().sum::<u64>(), 1);
+    assert_eq!(sum, 99.0);
+    assert_eq!(count, 1);
 
     Ok(())
 }
@@ -138,70 +171,68 @@ fn send_uses_inf_bucket_for_values_over_max() -> Result<()> {
 // Verifies enqueued batches are delivered by the background worker.
 #[test]
 fn client_sends_enqueued_batch() -> Result<()> {
-    let (dsn, handle) = spawn_server(200);
-    let metrics = MetricsClient::new(MetricsConfig::new(dsn))?;
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
 
     let mut batch = metrics.batch();
     batch.counter("codex.turns", 1, &[("model", "gpt-5.1")])?;
     metrics.send(batch)?;
     metrics.shutdown()?;
 
-    let captured = handle.join().expect("server thread");
-    let envelope = parse_envelope(&captured.body);
-    let lines: Vec<&str> = envelope.payload.split('\n').collect();
-    assert_eq!(lines.len(), 1);
-
-    let line = parse_statsd_line(lines[0]);
-    assert_eq!(line.name, "codex.turns");
-    assert_eq!(line.value, 1);
-    assert_eq!(line.kind, "c");
-    assert_eq!(line.tags.get("model").map(String::as_str), Some("gpt-5.1"));
+    let resource_metrics = latest_metrics(&exporter);
+    let counter = find_metric(&resource_metrics, "codex.turns").expect("counter metric missing");
+    let points = match counter.data() {
+        opentelemetry_sdk::metrics::data::AggregatedMetrics::I64(data) => match data {
+            opentelemetry_sdk::metrics::data::MetricData::Sum(sum) => {
+                sum.data_points().collect::<Vec<_>>()
+            }
+            _ => panic!("unexpected counter aggregation"),
+        },
+        _ => panic!("unexpected counter data type"),
+    };
+    assert_eq!(points.len(), 1);
+    let point = points[0];
+    assert_eq!(point.value(), 1);
+    let attrs = attributes_to_map(point.attributes());
+    assert_eq!(attrs.get("model").map(String::as_str), Some("gpt-5.1"));
 
     Ok(())
 }
 
-// Ensures a non-success response panics in debug builds via error_or_panic.
+// Ensures shutdown flushes successfully with in-memory exporters.
 #[test]
 fn send_panics_on_non_success_status_in_debug() -> Result<()> {
-    let (dsn, handle) = spawn_server(500);
-    let metrics = MetricsClient::new(MetricsConfig::new(dsn))?;
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
 
     let mut batch = metrics.batch();
     batch.counter("codex.turns", 1, &[])?;
     metrics.send(batch)?;
-    let err = metrics.shutdown().unwrap_err();
-    assert!(matches!(err, MetricsError::WorkerPanicked));
+    metrics.shutdown()?;
 
-    let captured = handle.join().expect("server thread");
-    assert_eq!(captured.method, "POST");
+    let resource_metrics = latest_metrics(&exporter);
+    let counter = find_metric(&resource_metrics, "codex.turns").expect("counter metric missing");
+    let points = match counter.data() {
+        opentelemetry_sdk::metrics::data::AggregatedMetrics::I64(data) => match data {
+            opentelemetry_sdk::metrics::data::MetricData::Sum(sum) => {
+                sum.data_points().collect::<Vec<_>>()
+            }
+            _ => panic!("unexpected counter aggregation"),
+        },
+        _ => panic!("unexpected counter data type"),
+    };
+    assert_eq!(points.len(), 1);
+
     Ok(())
 }
 
-// Ensures empty batches do not trigger any HTTP request.
+// Ensures empty batches do not trigger any export.
 #[test]
 fn client_core_skips_empty_batch() -> Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
-    listener.set_nonblocking(true).expect("set nonblocking");
-    let addr = listener.local_addr().expect("local addr");
-    let dsn = format!("http://public:@{addr}/123");
-    let metrics = MetricsClient::new(MetricsConfig::new(dsn))?;
+    let (metrics, exporter) = build_metrics_with_defaults(&[])?;
 
-    metrics.send(metrics.batch())?;
+    metrics.send(MetricsBatch::new())?;
     metrics.shutdown()?;
 
-    let mut saw_connection = false;
-    for _ in 0..10 {
-        match listener.accept() {
-            Ok(_) => {
-                saw_connection = true;
-                break;
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(err) => panic!("unexpected accept error: {err}"),
-        }
-    }
-    assert!(!saw_connection, "expected no request for empty batch");
+    let finished = exporter.get_finished_metrics().unwrap();
+    assert!(finished.is_empty(), "expected no metrics exported");
     Ok(())
 }
