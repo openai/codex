@@ -1027,14 +1027,14 @@ impl Session {
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
         let features = self.features.clone();
-        let codex_home = {
-            let state = self.state.lock().await;
-            state
-                .session_configuration
-                .original_config_do_not_use
-                .codex_home
-                .clone()
-        };
+        let codex_home = self
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .original_config_do_not_use
+            .codex_home
+            .clone();
 
         if !features.enabled(Feature::ExecPolicy) {
             error!("attempted to append execpolicy rule while execpolicy feature is disabled");
