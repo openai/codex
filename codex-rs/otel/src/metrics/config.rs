@@ -116,7 +116,10 @@ impl MetricsConfig {
 
 impl Default for MetricsConfig {
     fn default() -> Self {
-        if cfg!(test) {
+        // `cfg(test)` only applies to *unit tests* within this crate. Integration tests compile
+        // `codex-otel` as a normal dependency, so they must opt into the in-memory default via a
+        // feature (see `test-in-memory-metrics`).
+        if cfg!(any(test, feature = "test-in-memory-metrics")) {
             Self::in_memory(InMemoryMetricExporter::default())
         } else {
             Self::statsig(DEFAULT_API_KEY)

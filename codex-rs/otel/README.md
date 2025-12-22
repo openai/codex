@@ -95,6 +95,11 @@ metrics.counter("codex.turns", 1, &[("model", "gpt-5.1")])?;
 metrics.shutdown()?; // flushes in-memory exporter
 ```
 
+Note: `MetricsConfig::default()` only switches to in-memory automatically for unit tests inside
+`codex-otel` itself (`cfg(test)`). For integration tests in other crates, either construct an
+in-memory config explicitly (as above) or enable the `test-in-memory-metrics` feature on the
+`codex-otel` dependency in that crate’s `dev-dependencies`.
+
 ## Shutdown
 
 - `OtelProvider::shutdown()` stops the OTEL exporter.
