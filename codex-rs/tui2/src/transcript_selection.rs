@@ -1,15 +1,49 @@
 //! Transcript selection helpers.
 //!
-//! This module defines a content-relative selection model for the inline chat
-//! transcript and utilities for extracting the selected region as plain text.
-//! Selection endpoints are expressed in terms of flattened, wrapped transcript
-//! line indices and columns so they remain stable across scrolling and
-//! reflowing when the terminal is resized.
+//! This module owns the inline transcript's selection model and helper
+//! utilities:
 //!
-//! Copy uses offscreen rendering into a 1-row `ratatui::Buffer` per visual line
-//! to match on-screen glyph layout (including indentation/prefixes) while
-//! skipping the transcript gutter.
+//! - A **content-relative** selection representation ([`TranscriptSelection`])
+//!   expressed in terms of flattened, wrapped transcript line indices and
+//!   columns.
+//! - A small mouse-driven **selection state machine** (`on_mouse_*` helpers)
+//!   that implements "start selection on drag" semantics.
+//! - Copy extraction ([`selection_text`]) that matches on-screen glyph layout by
+//!   rendering selected lines into an offscreen [`ratatui::Buffer`].
+//!
+//! ## Coordinate model
+//!
+//! Selection endpoints are expressed in *wrapped* coordinates so they remain
+//! stable across scrolling and reflowing when the terminal is resized:
+//!
+//! - `line_index` is an index into flattened wrapped transcript lines
+//!   (i.e. "visual lines").
+//! - `column` is a 0-based column offset within that visual line, measured from
+//!   the first content column to the right of the transcript gutter.
+//!
+//! The transcript gutter is reserved for UI affordances (bullets, prefixes,
+//! etc.). The gutter itself is not copyable; both selection highlighting and
+//! copy extraction treat selection columns as starting at `base_x =
+//! TRANSCRIPT_GUTTER_COLS`.
+//!
+//! ## Mouse selection semantics
+//!
+//! The transcript supports click-and-drag selection for copying text. To avoid
+//! distracting "1-cell selections" on a simple click, the selection highlight
+//! only becomes active once the user drags:
+//!
+//! - `on_mouse_down`: stores an **anchor** point and clears any existing head.
+//! - `on_mouse_drag`: sets the **head** point, creating an active selection
+//!   (`anchor` + `head`).
+//! - `on_mouse_up`: clears the selection if it never became active (no head) or
+//!   if the drag ended at the anchor.
+//!
+//! The helper APIs return whether the selection state changed so callers can
+//! schedule a redraw. `on_mouse_drag` also returns whether the caller should
+//! lock the transcript scroll position when dragging while following the bottom
+//! during streaming output.
 
+use crate::tui::scrolling::TranscriptScroll;
 use itertools::Itertools as _;
 use ratatui::prelude::*;
 use ratatui::widgets::WidgetRef;
@@ -24,7 +58,7 @@ pub(crate) const TRANSCRIPT_GUTTER_COLS: u16 = 2;
 /// Selection endpoints are expressed in terms of flattened, wrapped transcript
 /// line indices and columns, so the highlight tracks logical conversation
 /// content even when the viewport scrolls or the terminal is resized.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct TranscriptSelection {
     /// The selection anchor (fixed start) in transcript coordinates.
     pub(crate) anchor: Option<TranscriptSelectionPoint>,
@@ -34,6 +68,7 @@ pub(crate) struct TranscriptSelection {
 
 impl TranscriptSelection {
     /// Create an active selection with both endpoints set.
+    #[cfg(test)]
     pub(crate) fn new(
         anchor: impl Into<TranscriptSelectionPoint>,
         head: impl Into<TranscriptSelectionPoint>,
@@ -70,6 +105,133 @@ impl From<(usize, u16)> for TranscriptSelectionPoint {
     /// Convert from `(line_index, column)`.
     fn from((line_index, column): (usize, u16)) -> Self {
         Self::new(line_index, column)
+    }
+}
+
+/// Begin a potential transcript selection (left button down).
+///
+/// This records an anchor point and clears any existing head. The selection is
+/// not considered "active" until a drag sets a head, which avoids highlighting
+/// a 1-cell region on simple click.
+///
+/// Returns whether the selection changed (useful to decide whether to request a
+/// redraw).
+pub(crate) fn on_mouse_down(
+    selection: &mut TranscriptSelection,
+    point: Option<TranscriptSelectionPoint>,
+) -> bool {
+    let before = *selection;
+    let Some(point) = point else {
+        return false;
+    };
+    begin(selection, point);
+    *selection != before
+}
+
+/// The outcome of a mouse drag update.
+///
+/// This is returned by [`on_mouse_drag`]. It separates selection state updates
+/// from `App`-level actions, so callers can decide when to schedule redraws or
+/// lock the transcript scroll position.
+///
+/// `lock_scroll` indicates the caller should lock the transcript viewport (if
+/// currently following the bottom) so ongoing streaming output does not move
+/// the selection under the cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MouseDragOutcome {
+    /// Whether the selection changed (useful to decide whether to request a
+    /// redraw).
+    pub(crate) changed: bool,
+    /// Whether the caller should lock the transcript scroll position.
+    pub(crate) lock_scroll: bool,
+}
+
+/// Update the selection state for a left-button drag.
+///
+/// This sets the selection head (creating an active selection) and returns:
+///
+/// - `changed`: whether the selection state changed (useful to decide whether to
+///   request a redraw).
+/// - `lock_scroll`: whether the caller should lock transcript scrolling to
+///   freeze the viewport under the selection while streaming output arrives.
+///
+/// `point` is expected to already be clamped to the transcript's content area
+/// (e.g. not in the gutter). If `point` is `None`, this is a no-op.
+pub(crate) fn on_mouse_drag(
+    selection: &mut TranscriptSelection,
+    scroll: &TranscriptScroll,
+    point: Option<TranscriptSelectionPoint>,
+    streaming: bool,
+) -> MouseDragOutcome {
+    let before = *selection;
+    let Some(point) = point else {
+        return MouseDragOutcome {
+            changed: false,
+            lock_scroll: false,
+        };
+    };
+    let lock_scroll = drag(selection, scroll, point, streaming);
+    MouseDragOutcome {
+        changed: *selection != before,
+        lock_scroll,
+    }
+}
+
+/// Finalize the selection state when the left button is released.
+///
+/// If the selection never became active (no head) or the head ended up equal to
+/// the anchor, the selection is cleared so a click does not leave a persistent
+/// highlight.
+///
+/// Returns whether the selection changed (useful to decide whether to request a
+/// redraw).
+pub(crate) fn on_mouse_up(selection: &mut TranscriptSelection) -> bool {
+    let before = *selection;
+    end(selection);
+    *selection != before
+}
+
+/// Begin a potential selection by recording an anchor and clearing any head.
+///
+/// This ensures a plain click does not create an active selection/highlight.
+/// The selection becomes active on the first drag that sets `head`.
+fn begin(selection: &mut TranscriptSelection, point: TranscriptSelectionPoint) {
+    *selection = TranscriptSelection {
+        anchor: Some(point),
+        head: None,
+    };
+}
+
+/// Update selection state during a drag by setting `head` when anchored.
+///
+/// Returns whether the caller should lock the transcript scroll position while
+/// streaming and following the bottom, so new output doesn't move the selection
+/// under the cursor.
+fn drag(
+    selection: &mut TranscriptSelection,
+    scroll: &TranscriptScroll,
+    point: TranscriptSelectionPoint,
+    streaming: bool,
+) -> bool {
+    let Some(anchor) = selection.anchor else {
+        return false;
+    };
+
+    let should_lock_scroll =
+        streaming && matches!(*scroll, TranscriptScroll::ToBottom) && point != anchor;
+
+    selection.head = Some(point);
+
+    should_lock_scroll
+}
+
+/// Finalize selection on mouse up.
+///
+/// Clears the selection if it never became active (no head) or if the head
+/// ended up equal to the anchor, so a click doesn't leave a 1-cell highlight.
+fn end(selection: &mut TranscriptSelection) {
+    if selection.head.is_none() || selection.anchor == selection.head {
+        *selection = TranscriptSelection::default();
     }
 }
 
@@ -459,5 +621,153 @@ mod tests {
         let selection = TranscriptSelection::new((100, 0), (101, 0));
 
         assert_eq!(selection_text(&lines, selection, 40), None);
+    }
+
+    #[test]
+    fn selection_only_highlights_on_drag() {
+        let anchor = TranscriptSelectionPoint::new(0, 1);
+        let head = TranscriptSelectionPoint::new(0, 3);
+
+        let mut selection = TranscriptSelection::default();
+        assert!(on_mouse_down(&mut selection, Some(anchor)));
+        assert_eq!(
+            selection,
+            TranscriptSelection {
+                anchor: Some(anchor),
+                head: None,
+            }
+        );
+
+        assert!(on_mouse_up(&mut selection));
+        assert_eq!(selection, TranscriptSelection::default());
+
+        assert!(on_mouse_down(&mut selection, Some(anchor)));
+        let outcome = on_mouse_drag(
+            &mut selection,
+            &TranscriptScroll::ToBottom,
+            Some(head),
+            false,
+        );
+        assert!(outcome.changed);
+        assert!(!outcome.lock_scroll);
+        assert_eq!(
+            selection,
+            TranscriptSelection {
+                anchor: Some(anchor),
+                head: Some(head),
+            }
+        );
+    }
+
+    #[test]
+    fn selection_clears_when_drag_ends_at_anchor() {
+        let point = TranscriptSelectionPoint::new(0, 1);
+
+        let mut selection = TranscriptSelection::default();
+        assert!(on_mouse_down(&mut selection, Some(point)));
+        let outcome = on_mouse_drag(
+            &mut selection,
+            &TranscriptScroll::ToBottom,
+            Some(point),
+            false,
+        );
+        assert!(outcome.changed);
+        assert!(!outcome.lock_scroll);
+        assert!(on_mouse_up(&mut selection));
+
+        assert_eq!(selection, TranscriptSelection::default());
+    }
+
+    #[test]
+    fn drag_requests_scroll_lock_when_streaming_at_bottom_and_point_moves() {
+        let anchor = TranscriptSelectionPoint::new(0, 1);
+        let head = TranscriptSelectionPoint::new(0, 2);
+
+        let mut selection = TranscriptSelection::default();
+        assert!(on_mouse_down(&mut selection, Some(anchor)));
+        let outcome = on_mouse_drag(
+            &mut selection,
+            &TranscriptScroll::ToBottom,
+            Some(head),
+            true,
+        );
+        assert!(outcome.changed);
+        assert!(outcome.lock_scroll);
+    }
+
+    #[test]
+    fn selection_helpers_noop_without_points_or_anchor() {
+        let mut selection = TranscriptSelection::default();
+        assert!(!on_mouse_down(&mut selection, None));
+        assert_eq!(selection, TranscriptSelection::default());
+
+        let outcome = on_mouse_drag(&mut selection, &TranscriptScroll::ToBottom, None, false);
+        assert_eq!(
+            outcome,
+            MouseDragOutcome {
+                changed: false,
+                lock_scroll: false,
+            }
+        );
+        assert_eq!(selection, TranscriptSelection::default());
+
+        let outcome = on_mouse_drag(
+            &mut selection,
+            &TranscriptScroll::ToBottom,
+            Some(TranscriptSelectionPoint::new(0, 1)),
+            false,
+        );
+        assert_eq!(
+            outcome,
+            MouseDragOutcome {
+                changed: false,
+                lock_scroll: false,
+            }
+        );
+        assert_eq!(selection, TranscriptSelection::default());
+
+        assert!(!on_mouse_up(&mut selection));
+        assert_eq!(selection, TranscriptSelection::default());
+    }
+
+    #[test]
+    fn mouse_down_resets_head() {
+        let anchor = TranscriptSelectionPoint::new(0, 1);
+        let head = TranscriptSelectionPoint::new(0, 2);
+        let next_anchor = TranscriptSelectionPoint::new(1, 0);
+
+        let mut selection = TranscriptSelection {
+            anchor: Some(anchor),
+            head: Some(head),
+        };
+
+        assert!(on_mouse_down(&mut selection, Some(next_anchor)));
+        assert_eq!(
+            selection,
+            TranscriptSelection {
+                anchor: Some(next_anchor),
+                head: None,
+            }
+        );
+    }
+
+    #[test]
+    fn dragging_does_not_request_scroll_lock_when_not_at_bottom() {
+        let anchor = TranscriptSelectionPoint::new(0, 1);
+        let head = TranscriptSelectionPoint::new(0, 2);
+
+        let mut selection = TranscriptSelection::default();
+        assert!(on_mouse_down(&mut selection, Some(anchor)));
+        let outcome = on_mouse_drag(
+            &mut selection,
+            &TranscriptScroll::Scrolled {
+                cell_index: 0,
+                line_in_cell: 0,
+            },
+            Some(head),
+            true,
+        );
+        assert!(outcome.changed);
+        assert!(!outcome.lock_scroll);
     }
 }

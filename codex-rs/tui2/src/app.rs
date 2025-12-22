@@ -846,7 +846,7 @@ impl App {
     /// - Mouse wheel movement scrolls the conversation history using stream-based
     ///   normalization (events-per-line factor, discrete vs. continuous streams),
     ///   independent of the terminal's own scrollback.
-    /// - Mouse clicks and drags adjust a text selection defined in terms of
+    /// - Mouse drags adjust a text selection defined in terms of
     ///   flattened transcript lines and columns, so the selection is anchored
     ///   to the underlying content rather than absolute screen rows.
     /// - When the user drags to extend a selection while the view is following the bottom
@@ -959,42 +959,47 @@ impl App {
             MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {}
             MouseEventKind::Down(MouseButton::Left) => {
                 self.transcript_copy_ui.set_dragging(true);
-                if let Some(point) = self.transcript_point_from_coordinates(
+                let point = self.transcript_point_from_coordinates(
                     transcript_area,
                     base_x,
                     clamped_x,
                     clamped_y,
-                ) {
-                    self.transcript_selection = TranscriptSelection::new(point, point);
+                );
+                if crate::transcript_selection::on_mouse_down(&mut self.transcript_selection, point)
+                {
                     tui.frame_requester().schedule_frame();
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                if let Some(anchor) = self.transcript_selection.anchor
-                    && let Some(point) = self.transcript_point_from_coordinates(
-                        transcript_area,
-                        base_x,
-                        clamped_x,
-                        clamped_y,
-                    )
-                {
-                    if streaming
-                        && matches!(self.transcript_scroll, TranscriptScroll::ToBottom)
-                        && point != anchor
-                    {
-                        self.lock_transcript_scroll_to_current_view(
-                            transcript_area.height as usize,
-                            transcript_area.width,
-                        );
-                    }
-                    self.transcript_selection.head = Some(point);
+                let point = self.transcript_point_from_coordinates(
+                    transcript_area,
+                    base_x,
+                    clamped_x,
+                    clamped_y,
+                );
+                let outcome = crate::transcript_selection::on_mouse_drag(
+                    &mut self.transcript_selection,
+                    &self.transcript_scroll,
+                    point,
+                    streaming,
+                );
+                if outcome.lock_scroll {
+                    self.lock_transcript_scroll_to_current_view(
+                        transcript_area.height as usize,
+                        transcript_area.width,
+                    );
+                }
+                if outcome.changed {
                     tui.frame_requester().schedule_frame();
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.transcript_copy_ui.set_dragging(false);
-                if self.transcript_selection.anchor == self.transcript_selection.head {
-                    self.transcript_selection = TranscriptSelection::default();
+                let selection_changed =
+                    crate::transcript_selection::on_mouse_up(&mut self.transcript_selection);
+                let has_active_selection = self.transcript_selection.anchor.is_some()
+                    && self.transcript_selection.head.is_some();
+                if selection_changed || has_active_selection {
                     tui.frame_requester().schedule_frame();
                 }
             }
