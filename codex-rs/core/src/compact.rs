@@ -114,13 +114,23 @@ async fn run_compact_task_inner(
                 return;
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
-                if turn_input.len() > 1 {
-                    // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
+                let current_len = turn_input.len();
+                if current_len > 1 {
+                    // Prune ~10% of the history at a time (min 1) to converge faster and avoid
+                    // 1-by-1 removal loops which break caching and can be very slow.
+                    // This also helps if the head of history contains items not in the prompt
+                    // (like GhostSnapshots), ensuring we eventually hit relevant items.
+                    let batch_size = std::cmp::max(1, current_len / 10);
+
                     error!(
-                        "Context window exceeded while compacting; removing oldest history item. Error: {e}"
+                        "Context window exceeded while compacting; removing {batch_size} oldest history item(s). Error: {e}"
                     );
-                    history.remove_first_item();
-                    truncated_count += 1;
+
+                    for _ in 0..batch_size {
+                        history.remove_first_item();
+                        truncated_count += 1;
+                    }
+
                     retries = 0;
                     continue;
                 }
