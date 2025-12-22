@@ -631,36 +631,6 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_pending_model_migration_notice(mut self, from_model: &str, to_model: &str) -> Self {
-        self.edits.push(ConfigEdit::SetPath {
-            segments: vec![
-                Notice::TABLE_KEY.to_string(),
-                "pending_model_migration".to_string(),
-                "from_model".to_string(),
-            ],
-            value: value(from_model.to_string()),
-        });
-        self.edits.push(ConfigEdit::SetPath {
-            segments: vec![
-                Notice::TABLE_KEY.to_string(),
-                "pending_model_migration".to_string(),
-                "to_model".to_string(),
-            ],
-            value: value(to_model.to_string()),
-        });
-        self
-    }
-
-    pub fn clear_pending_model_migration_notice(mut self) -> Self {
-        self.edits.push(ConfigEdit::ClearPath {
-            segments: vec![
-                Notice::TABLE_KEY.to_string(),
-                "pending_model_migration".to_string(),
-            ],
-        });
-        self
-    }
-
     pub fn set_windows_wsl_setup_acknowledged(mut self, acknowledged: bool) -> Self {
         self.edits
             .push(ConfigEdit::SetWindowsWslSetupAcknowledged(acknowledged));
