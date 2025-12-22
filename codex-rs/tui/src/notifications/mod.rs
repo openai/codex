@@ -1,4 +1,5 @@
 mod osc9;
+mod sound;
 mod windows_toast;
 
 use std::env;
@@ -6,6 +7,7 @@ use std::io;
 
 use codex_core::env::is_wsl;
 use osc9::Osc9Backend;
+use sound::play_notification_sound;
 use windows_toast::WindowsToastBackend;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +44,14 @@ impl DesktopNotificationBackend {
             DesktopNotificationBackend::WindowsToast(backend) => backend.notify(message),
         }
     }
+}
+
+pub fn notify_with_sound(
+    backend: &mut DesktopNotificationBackend,
+    message: &str,
+) -> io::Result<()> {
+    play_notification_sound();
+    backend.notify(message)
 }
 
 pub fn detect_backend() -> DesktopNotificationBackend {

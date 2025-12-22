@@ -867,6 +867,8 @@ Options that are specific to the TUI.
 ```toml
 [tui]
 # Send desktop notifications when approvals are required or a turn completes.
+# Notifications are emitted even when the terminal is focused.
+# Codex also plays a best-effort notification sound.
 # Defaults to true.
 notifications = true
 

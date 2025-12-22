@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -2158,6 +2159,9 @@ impl ChatWidget {
 
     pub(crate) fn maybe_post_pending_notification(&mut self, tui: &mut crate::tui::Tui) {
         if let Some(notif) = self.pending_notification.take() {
+            if notif.type_name() == "approval-requested" {
+                notify_needs_input();
+            }
             tui.notify(notif.display());
         }
     }
@@ -3593,6 +3597,15 @@ impl Notification {
         } else {
             Some(truncate_text(trimmed, AGENT_NOTIFICATION_PREVIEW_GRAPHEMES))
         }
+    }
+}
+
+fn notify_needs_input() {
+    let mut command = Command::new("codex-notify");
+    command.arg("needs_input");
+    // External notifier used to mark approval prompts for downstream listeners.
+    if let Err(err) = command.spawn() {
+        debug!("failed to spawn codex-notify: {err}");
     }
 }
 

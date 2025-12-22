@@ -40,6 +40,7 @@ use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::NotificationBackendKind;
 use crate::notifications::detect_backend;
+use crate::notifications::notify_with_sound;
 use crate::tui::event_stream::EventBroker;
 use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
@@ -227,19 +228,15 @@ impl Tui {
         self.event_broker.resume_events();
     }
 
-    /// Emit a desktop notification now if the terminal is unfocused.
+    /// Emit a desktop notification now.
     /// Returns true if a notification was posted.
     pub fn notify(&mut self, message: impl AsRef<str>) -> bool {
-        if self.terminal_focused.load(Ordering::Relaxed) {
-            return false;
-        }
-
         let Some(backend) = self.notification_backend.as_mut() else {
             return false;
         };
 
         let message = message.as_ref().to_string();
-        match backend.notify(&message) {
+        match notify_with_sound(backend, &message) {
             Ok(()) => true,
             Err(err) => match backend.kind() {
                 NotificationBackendKind::WindowsToast => {

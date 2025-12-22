@@ -388,7 +388,7 @@ impl Default for ScrollInputMode {
 /// Collection of settings that are specific to the TUI.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {
-    /// Enable desktop notifications from the TUI when the terminal is unfocused.
+    /// Enable desktop notifications from the TUI (with a best-effort sound).
     /// Defaults to `true`.
     #[serde(default)]
     pub notifications: Notifications,
