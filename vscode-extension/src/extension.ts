@@ -323,10 +323,9 @@ export function activate(context: vscode.ExtensionContext): void {
         ensureRuntime(session.id);
         sessionTree?.refresh();
 
-        const resumed = await backendManager.resumeSession(
-          session,
-          getSessionModelState(),
-        );
+        // Don't override the recorded thread model on resume. Users can still
+        // change the model via the UI for subsequent turns.
+        const resumed = await backendManager.resumeSession(session);
         void ensureModelsFetched(session);
         hydrateRuntimeFromThread(session.id, resumed.thread);
         setActiveSession(session.id);
@@ -806,7 +805,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const res = await backendManager.resumeSession(
         session,
-        getSessionModelState(),
       );
       void ensureModelsFetched(session);
       hydrateRuntimeFromThread(session.id, res.thread);
@@ -862,7 +860,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
       const res = await backendManager.resumeSession(
         session,
-        getSessionModelState(),
       );
       void ensureModelsFetched(session);
       hydrateRuntimeFromThread(session.id, res.thread);
