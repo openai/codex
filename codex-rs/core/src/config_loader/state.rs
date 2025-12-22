@@ -52,7 +52,7 @@ impl ConfigLayerEntry {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConfigLayerStack {
     /// Layers are listed from lowest precedence (base) to highest (top), so
     /// later entries in the Vec override earlier ones.
@@ -64,6 +64,16 @@ pub struct ConfigLayerStack {
     /// Constraints that must be enforced when deriving a [Config] from the
     /// layers.
     requirements: ConfigRequirements,
+}
+
+impl Default for ConfigLayerStack {
+    fn default() -> Self {
+        Self {
+            layers: Vec::new(),
+            user_layer_index: None,
+            requirements: ConfigRequirements::default(),
+        }
+    }
 }
 
 impl ConfigLayerStack {
