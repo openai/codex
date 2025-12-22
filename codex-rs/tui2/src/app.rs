@@ -851,6 +851,9 @@ impl App {
     ///   first converted into an anchored position so that ongoing updates no longer move
     ///   the viewport under the selection. A simple click without a drag does not change
     ///   scroll behavior.
+    /// - Mouse events outside the transcript area (e.g. over the composer/footer) must not
+    ///   start or mutate transcript selection state. A left-click outside the transcript
+    ///   clears any existing transcript selection so the user can dismiss the highlight.
     fn handle_mouse_event(
         &mut self,
         tui: &mut tui::Tui,
@@ -889,12 +892,28 @@ impl App {
         let base_x = transcript_area.x.saturating_add(2);
         let max_x = transcript_area.right().saturating_sub(1);
 
-        let mut clamped_x = mouse_event.column;
-        let mut clamped_y = mouse_event.row;
-
-        if clamped_y < transcript_area.y || clamped_y >= transcript_area.bottom() {
-            clamped_y = transcript_area.y;
+        // Treat the transcript as the only interactive region for transcript selection.
+        //
+        // This prevents clicks in the composer/footer from starting or extending a transcript
+        // selection, while still allowing a left-click outside the transcript to clear an
+        // existing highlight.
+        if mouse_event.row < transcript_area.y || mouse_event.row >= transcript_area.bottom() {
+            if matches!(
+                mouse_event.kind,
+                MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+            ) && (self.transcript_selection.anchor.is_some()
+                || self.transcript_selection.head.is_some())
+            {
+                self.transcript_selection = TranscriptSelection::default();
+                // Mouse events do not inherently trigger a redraw; schedule one so the cleared
+                // highlight is reflected immediately.
+                tui.frame_requester().schedule_frame();
+            }
+            return;
         }
+
+        let mut clamped_x = mouse_event.column;
+        let clamped_y = mouse_event.row;
         if clamped_x < base_x {
             clamped_x = base_x;
         }
@@ -935,6 +954,7 @@ impl App {
                 ) {
                     self.transcript_selection.anchor = Some(point);
                     self.transcript_selection.head = Some(point);
+                    tui.frame_requester().schedule_frame();
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
@@ -956,11 +976,13 @@ impl App {
                         );
                     }
                     self.transcript_selection.head = Some(point);
+                    tui.frame_requester().schedule_frame();
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 if self.transcript_selection.anchor == self.transcript_selection.head {
                     self.transcript_selection = TranscriptSelection::default();
+                    tui.frame_requester().schedule_frame();
                 }
             }
             _ => {}
