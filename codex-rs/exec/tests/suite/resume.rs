@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use anyhow::Context;
 use core_test_support::test_codex_exec::test_codex_exec;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::Path;
 use std::string::ToString;
@@ -67,6 +68,39 @@ fn extract_conversation_id(path: &std::path::Path) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string()
+}
+
+fn last_user_image_count(path: &std::path::Path) -> usize {
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let mut last_count = 0;
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(item): Result<Value, _> = serde_json::from_str(line) else {
+            continue;
+        };
+        if item.get("type").and_then(|t| t.as_str()) != Some("response_item") {
+            continue;
+        }
+        let Some(payload) = item.get("payload") else {
+            continue;
+        };
+        if payload.get("type").and_then(|t| t.as_str()) != Some("message") {
+            continue;
+        }
+        if payload.get("role").and_then(|r| r.as_str()) != Some("user") {
+            continue;
+        }
+        let Some(content_items) = payload.get("content").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        last_count = content_items
+            .iter()
+            .filter(|entry| entry.get("type").and_then(|t| t.as_str()) == Some("input_image"))
+            .count();
+    }
+    last_count
 }
 
 #[test]
@@ -341,7 +375,8 @@ fn exec_resume_accepts_images_after_subcommand() -> anyhow::Result<()> {
     std::fs::write(&image_path, image_bytes)?;
     std::fs::write(&image_path_2, image_bytes)?;
 
-    let prompt2 = format!("echo resume-image-2-{}", Uuid::new_v4());
+    let marker2 = format!("resume-image-2-{}", Uuid::new_v4());
+    let prompt2 = format!("echo {marker2}");
     test.cmd()
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local")
@@ -357,6 +392,15 @@ fn exec_resume_accepts_images_after_subcommand() -> anyhow::Result<()> {
         .arg(&prompt2)
         .assert()
         .success();
+
+    let sessions_dir = test.home_path().join("sessions");
+    let resumed_path = find_session_file_containing_marker(&sessions_dir, &marker2)
+        .expect("no session file found after resume with images");
+    let image_count = last_user_image_count(&resumed_path);
+    assert_eq!(
+        image_count, 2,
+        "resume prompt should include both attached images"
+    );
 
     Ok(())
 }
