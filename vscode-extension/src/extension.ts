@@ -323,15 +323,6 @@ export function activate(context: vscode.ExtensionContext): void {
         ensureRuntime(session.id);
         sessionTree?.refresh();
 
-        const rt = ensureRuntime(session.id);
-        upsertBlock(rt, {
-          id: newLocalId("system"),
-          type: "system",
-          title: "Resuming",
-          text: `threadId=${thread.id}\ncwd=${thread.cwd}\ncreatedAt=${thread.createdAt}`,
-        });
-        chatView?.refresh();
-
         const resumed = await backendManager.resumeSession(
           session,
           getSessionModelState(),
