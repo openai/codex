@@ -18,6 +18,7 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::ResumeSelection;
 use crate::transcript_copy_ui::TranscriptCopyUi;
+use crate::transcript_multi_click::TranscriptMultiClick;
 use crate::transcript_selection::TRANSCRIPT_GUTTER_COLS;
 use crate::transcript_selection::TranscriptSelection;
 use crate::transcript_selection::TranscriptSelectionPoint;
@@ -329,6 +330,7 @@ pub(crate) struct App {
     #[allow(dead_code)]
     transcript_scroll: TranscriptScroll,
     transcript_selection: TranscriptSelection,
+    transcript_multi_click: TranscriptMultiClick,
     transcript_view_top: usize,
     transcript_total_lines: usize,
     transcript_copy_ui: TranscriptCopyUi,
@@ -359,7 +361,6 @@ pub(crate) struct App {
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
 }
-
 impl App {
     async fn shutdown_current_conversation(&mut self) {
         if let Some(conversation_id) = self.chat_widget.conversation_id() {
@@ -497,6 +498,7 @@ impl App {
             transcript_cells: Vec::new(),
             transcript_scroll: TranscriptScroll::default(),
             transcript_selection: TranscriptSelection::default(),
+            transcript_multi_click: TranscriptMultiClick::default(),
             transcript_view_top: 0,
             transcript_total_lines: 0,
             transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(copy_selection_shortcut),
@@ -938,8 +940,12 @@ impl App {
                     clamped_x,
                     clamped_y,
                 );
-                if crate::transcript_selection::on_mouse_down(&mut self.transcript_selection, point)
-                {
+                if self.transcript_multi_click.on_mouse_down(
+                    &mut self.transcript_selection,
+                    &self.transcript_cells,
+                    transcript_area.width,
+                    point,
+                ) {
                     tui.frame_requester().schedule_frame();
                 }
             }
@@ -956,6 +962,8 @@ impl App {
                     point,
                     streaming,
                 );
+                self.transcript_multi_click
+                    .on_mouse_drag(&self.transcript_selection, point);
                 if outcome.lock_scroll {
                     self.lock_transcript_scroll_to_current_view(
                         transcript_area.height as usize,
@@ -2101,6 +2109,7 @@ mod tests {
             transcript_cells: Vec::new(),
             transcript_scroll: TranscriptScroll::default(),
             transcript_selection: TranscriptSelection::default(),
+            transcript_multi_click: TranscriptMultiClick::default(),
             transcript_view_top: 0,
             transcript_total_lines: 0,
             transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(
@@ -2150,6 +2159,7 @@ mod tests {
                 transcript_cells: Vec::new(),
                 transcript_scroll: TranscriptScroll::default(),
                 transcript_selection: TranscriptSelection::default(),
+                transcript_multi_click: TranscriptMultiClick::default(),
                 transcript_view_top: 0,
                 transcript_total_lines: 0,
                 transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(
