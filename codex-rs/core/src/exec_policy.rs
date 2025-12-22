@@ -104,23 +104,58 @@ impl ExecPolicyManager {
         self.policy.load_full()
     }
 
+    pub(crate) async fn create_exec_approval_requirement_for_command(
+        &self,
+        features: &Features,
+        command: &[String],
+        approval_policy: AskForApproval,
+        sandbox_policy: &SandboxPolicy,
+        sandbox_permissions: SandboxPermissions,
+    ) -> ExecApprovalRequirement {
+        create_exec_approval_requirement_for_command_with_policy(
+            self.current().as_ref(),
+            features,
+            command,
+            approval_policy,
+            sandbox_policy,
+            sandbox_permissions,
+        )
+        .await
+    }
+
     pub(crate) async fn append_amendment_and_update(
         &self,
         codex_home: &Path,
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
-        let updated_policy = append_execpolicy_amendment_and_update(
-            codex_home,
-            self.current().as_ref(),
-            &amendment.command,
-        )
-        .await?;
+        let policy_path = default_policy_path(codex_home);
+        let prefix = amendment.command.clone();
+        spawn_blocking({
+            let policy_path = policy_path.clone();
+            let prefix = prefix.clone();
+            move || blocking_append_allow_prefix_rule(&policy_path, &prefix)
+        })
+        .await
+        .map_err(|source| ExecPolicyUpdateError::JoinBlockingTask { source })?
+        .map_err(|source| ExecPolicyUpdateError::AppendRule {
+            path: policy_path,
+            source,
+        })?;
+
+        let mut updated_policy = self.current().as_ref().clone();
+        updated_policy.add_prefix_rule(&prefix, Decision::Allow)?;
         self.policy.store(Arc::new(updated_policy));
         Ok(())
     }
 }
 
-pub(crate) async fn load_exec_policy_for_features(
+impl Default for ExecPolicyManager {
+    fn default() -> Self {
+        Self::new(Arc::new(Policy::empty()))
+    }
+}
+
+async fn load_exec_policy_for_features(
     features: &Features,
     codex_home: &Path,
 ) -> Result<Policy, ExecPolicyError> {
@@ -163,33 +198,8 @@ pub async fn load_exec_policy(codex_home: &Path) -> Result<Policy, ExecPolicyErr
     Ok(policy)
 }
 
-pub(crate) fn default_policy_path(codex_home: &Path) -> PathBuf {
+fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
-}
-
-pub(crate) async fn append_execpolicy_amendment_and_update(
-    codex_home: &Path,
-    current_policy: &Policy,
-    prefix: &[String],
-) -> Result<Policy, ExecPolicyUpdateError> {
-    let policy_path = default_policy_path(codex_home);
-    let prefix = prefix.to_vec();
-    spawn_blocking({
-        let policy_path = policy_path.clone();
-        let prefix = prefix.clone();
-        move || blocking_append_allow_prefix_rule(&policy_path, &prefix)
-    })
-    .await
-    .map_err(|source| ExecPolicyUpdateError::JoinBlockingTask { source })?
-    .map_err(|source| ExecPolicyUpdateError::AppendRule {
-        path: policy_path,
-        source,
-    })?;
-
-    let mut updated_policy = current_policy.clone();
-    updated_policy.add_prefix_rule(&prefix, Decision::Allow)?;
-
-    Ok(updated_policy)
 }
 
 /// Derive a proposed execpolicy amendment when a command requires user approval
@@ -255,7 +265,7 @@ fn derive_prompt_reason(evaluation: &Evaluation) -> Option<String> {
     })
 }
 
-pub(crate) async fn create_exec_approval_requirement_for_command(
+async fn create_exec_approval_requirement_for_command_with_policy(
     exec_policy: &Policy,
     features: &Features,
     command: &[String],
@@ -371,9 +381,10 @@ mod tests {
         features.disable(Feature::ExecPolicy);
         let temp_dir = tempdir().expect("create temp dir");
 
-        let policy = load_exec_policy_for_features(&features, temp_dir.path())
+        let manager = ExecPolicyManager::load(&features, temp_dir.path())
             .await
-            .expect("policy result");
+            .expect("manager result");
+        let policy = manager.current();
 
         let commands = [vec!["rm".to_string()]];
         assert_eq!(
@@ -470,15 +481,16 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             "rm -rf /tmp".to_string(),
         ];
 
-        let requirement = create_exec_approval_requirement_for_command(
-            &policy,
-            &Features::with_defaults(),
-            &forbidden_script,
-            AskForApproval::OnRequest,
-            &SandboxPolicy::DangerFullAccess,
-            SandboxPermissions::UseDefault,
-        )
-        .await;
+        let manager = ExecPolicyManager::new(policy);
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(
+                &Features::with_defaults(),
+                &forbidden_script,
+                AskForApproval::OnRequest,
+                &SandboxPolicy::DangerFullAccess,
+                SandboxPermissions::UseDefault,
+            )
+            .await;
 
         assert_eq!(
             requirement,
@@ -498,15 +510,16 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let policy = Arc::new(parser.build());
         let command = vec!["rm".to_string()];
 
-        let requirement = create_exec_approval_requirement_for_command(
-            &policy,
-            &Features::with_defaults(),
-            &command,
-            AskForApproval::OnRequest,
-            &SandboxPolicy::DangerFullAccess,
-            SandboxPermissions::UseDefault,
-        )
-        .await;
+        let manager = ExecPolicyManager::new(policy);
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(
+                &Features::with_defaults(),
+                &command,
+                AskForApproval::OnRequest,
+                &SandboxPolicy::DangerFullAccess,
+                SandboxPermissions::UseDefault,
+            )
+            .await;
 
         assert_eq!(
             requirement,
@@ -527,15 +540,16 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let policy = Arc::new(parser.build());
         let command = vec!["rm".to_string()];
 
-        let requirement = create_exec_approval_requirement_for_command(
-            &policy,
-            &Features::with_defaults(),
-            &command,
-            AskForApproval::Never,
-            &SandboxPolicy::DangerFullAccess,
-            SandboxPermissions::UseDefault,
-        )
-        .await;
+        let manager = ExecPolicyManager::new(policy);
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(
+                &Features::with_defaults(),
+                &command,
+                AskForApproval::Never,
+                &SandboxPolicy::DangerFullAccess,
+                SandboxPermissions::UseDefault,
+            )
+            .await;
 
         assert_eq!(
             requirement,
@@ -549,16 +563,16 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     async fn exec_approval_requirement_falls_back_to_heuristics() {
         let command = vec!["cargo".to_string(), "build".to_string()];
 
-        let empty_policy = Arc::new(Policy::empty());
-        let requirement = create_exec_approval_requirement_for_command(
-            &empty_policy,
-            &Features::with_defaults(),
-            &command,
-            AskForApproval::UnlessTrusted,
-            &SandboxPolicy::ReadOnly,
-            SandboxPermissions::UseDefault,
-        )
-        .await;
+        let manager = ExecPolicyManager::default();
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(
+                &Features::with_defaults(),
+                &command,
+                AskForApproval::UnlessTrusted,
+                &SandboxPolicy::ReadOnly,
+                SandboxPermissions::UseDefault,
+            )
+            .await;
 
         assert_eq!(
             requirement,
@@ -584,15 +598,15 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         ];
 
         assert_eq!(
-            create_exec_approval_requirement_for_command(
-                &policy,
-                &Features::with_defaults(),
-                &command,
-                AskForApproval::UnlessTrusted,
-                &SandboxPolicy::DangerFullAccess,
-                SandboxPermissions::UseDefault,
-            )
-            .await,
+            ExecPolicyManager::new(policy)
+                .create_exec_approval_requirement_for_command(
+                    &Features::with_defaults(),
+                    &command,
+                    AskForApproval::UnlessTrusted,
+                    &SandboxPolicy::DangerFullAccess,
+                    SandboxPermissions::UseDefault,
+                )
+                .await,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
@@ -605,13 +619,14 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     #[tokio::test]
     async fn append_execpolicy_amendment_updates_policy_and_file() {
         let codex_home = tempdir().expect("create temp dir");
-        let current_policy = Policy::empty();
         let prefix = vec!["echo".to_string(), "hello".to_string()];
+        let manager = ExecPolicyManager::default();
 
-        let updated_policy =
-            append_execpolicy_amendment_and_update(codex_home.path(), &current_policy, &prefix)
-                .await
-                .expect("update policy");
+        manager
+            .append_amendment_and_update(codex_home.path(), &ExecPolicyAmendment::from(prefix))
+            .await
+            .expect("update policy");
+        let updated_policy = manager.current();
 
         let evaluation = updated_policy.check(
             &["echo".to_string(), "hello".to_string(), "world".to_string()],
@@ -637,10 +652,11 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     #[tokio::test]
     async fn append_execpolicy_amendment_rejects_empty_prefix() {
         let codex_home = tempdir().expect("create temp dir");
-        let current_policy = Policy::empty();
+        let manager = ExecPolicyManager::default();
 
-        let result =
-            append_execpolicy_amendment_and_update(codex_home.path(), &current_policy, &[]).await;
+        let result = manager
+            .append_amendment_and_update(codex_home.path(), &ExecPolicyAmendment::from(vec![]))
+            .await;
 
         assert!(matches!(
             result,
@@ -655,16 +671,16 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     async fn proposed_execpolicy_amendment_is_present_for_single_command_without_policy_match() {
         let command = vec!["cargo".to_string(), "build".to_string()];
 
-        let empty_policy = Arc::new(Policy::empty());
-        let requirement = create_exec_approval_requirement_for_command(
-            &empty_policy,
-            &Features::with_defaults(),
-            &command,
-            AskForApproval::UnlessTrusted,
-            &SandboxPolicy::ReadOnly,
-            SandboxPermissions::UseDefault,
-        )
-        .await;
+        let manager = ExecPolicyManager::default();
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(
+                &Features::with_defaults(),
+                &command,
+                AskForApproval::UnlessTrusted,
+                &SandboxPolicy::ReadOnly,
+                SandboxPermissions::UseDefault,
+            )
+            .await;
 
         assert_eq!(
             requirement,
@@ -682,15 +698,16 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let mut features = Features::with_defaults();
         features.disable(Feature::ExecPolicy);
 
-        let requirement = create_exec_approval_requirement_for_command(
-            &Arc::new(Policy::empty()),
-            &features,
-            &command,
-            AskForApproval::UnlessTrusted,
-            &SandboxPolicy::ReadOnly,
-            SandboxPermissions::UseDefault,
-        )
-        .await;
+        let manager = ExecPolicyManager::default();
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(
+                &features,
+                &command,
+                AskForApproval::UnlessTrusted,
+                &SandboxPolicy::ReadOnly,
+                SandboxPermissions::UseDefault,
+            )
+            .await;
 
         assert_eq!(
             requirement,
@@ -711,15 +728,16 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let policy = Arc::new(parser.build());
         let command = vec!["rm".to_string()];
 
-        let requirement = create_exec_approval_requirement_for_command(
-            &policy,
-            &Features::with_defaults(),
-            &command,
-            AskForApproval::OnRequest,
-            &SandboxPolicy::DangerFullAccess,
-            SandboxPermissions::UseDefault,
-        )
-        .await;
+        let manager = ExecPolicyManager::new(policy);
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(
+                &Features::with_defaults(),
+                &command,
+                AskForApproval::OnRequest,
+                &SandboxPolicy::DangerFullAccess,
+                SandboxPermissions::UseDefault,
+            )
+            .await;
 
         assert_eq!(
             requirement,
@@ -737,15 +755,16 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             "-lc".to_string(),
             "cargo build && echo ok".to_string(),
         ];
-        let requirement = create_exec_approval_requirement_for_command(
-            &Arc::new(Policy::empty()),
-            &Features::with_defaults(),
-            &command,
-            AskForApproval::UnlessTrusted,
-            &SandboxPolicy::ReadOnly,
-            SandboxPermissions::UseDefault,
-        )
-        .await;
+        let manager = ExecPolicyManager::default();
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(
+                &Features::with_defaults(),
+                &command,
+                AskForApproval::UnlessTrusted,
+                &SandboxPolicy::ReadOnly,
+                SandboxPermissions::UseDefault,
+            )
+            .await;
 
         assert_eq!(
             requirement,
@@ -775,15 +794,15 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         ];
 
         assert_eq!(
-            create_exec_approval_requirement_for_command(
-                &policy,
-                &Features::with_defaults(),
-                &command,
-                AskForApproval::UnlessTrusted,
-                &SandboxPolicy::ReadOnly,
-                SandboxPermissions::UseDefault,
-            )
-            .await,
+            ExecPolicyManager::new(policy)
+                .create_exec_approval_requirement_for_command(
+                    &Features::with_defaults(),
+                    &command,
+                    AskForApproval::UnlessTrusted,
+                    &SandboxPolicy::ReadOnly,
+                    SandboxPermissions::UseDefault,
+                )
+                .await,
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
@@ -797,15 +816,16 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     async fn proposed_execpolicy_amendment_is_present_when_heuristics_allow() {
         let command = vec!["echo".to_string(), "safe".to_string()];
 
-        let requirement = create_exec_approval_requirement_for_command(
-            &Arc::new(Policy::empty()),
-            &Features::with_defaults(),
-            &command,
-            AskForApproval::OnRequest,
-            &SandboxPolicy::ReadOnly,
-            SandboxPermissions::UseDefault,
-        )
-        .await;
+        let manager = ExecPolicyManager::default();
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(
+                &Features::with_defaults(),
+                &command,
+                AskForApproval::OnRequest,
+                &SandboxPolicy::ReadOnly,
+                SandboxPermissions::UseDefault,
+            )
+            .await;
 
         assert_eq!(
             requirement,
@@ -826,15 +846,16 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         let policy = Arc::new(parser.build());
         let command = vec!["echo".to_string(), "safe".to_string()];
 
-        let requirement = create_exec_approval_requirement_for_command(
-            &policy,
-            &Features::with_defaults(),
-            &command,
-            AskForApproval::OnRequest,
-            &SandboxPolicy::ReadOnly,
-            SandboxPermissions::UseDefault,
-        )
-        .await;
+        let manager = ExecPolicyManager::new(policy);
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(
+                &Features::with_defaults(),
+                &command,
+                AskForApproval::OnRequest,
+                &SandboxPolicy::ReadOnly,
+                SandboxPermissions::UseDefault,
+            )
+            .await;
 
         assert_eq!(
             requirement,

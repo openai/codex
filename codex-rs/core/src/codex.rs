@@ -2744,7 +2744,7 @@ mod tests {
     use crate::function_tool::FunctionCallError;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
-    use codex_execpolicy::Policy as ExecPolicy;
+    
     use codex_protocol::models::FunctionCallOutputPayload;
 
     use crate::protocol::CompactedItem;
@@ -3097,7 +3097,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
-        let exec_policy = ExecPolicyManager::new(Arc::new(ExecPolicy::empty()));
+        let exec_policy = ExecPolicyManager::default();
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -3184,7 +3184,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
-        let exec_policy = ExecPolicyManager::new(Arc::new(ExecPolicy::empty()));
+        let exec_policy = ExecPolicyManager::default();
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
