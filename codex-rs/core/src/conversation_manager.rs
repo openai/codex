@@ -10,7 +10,7 @@ use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::openai_models::models_manager::ModelsManager;
+use crate::models_manager::manager::ModelsManager;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
@@ -379,9 +379,9 @@ mod tests {
         assert_matches!(truncated2, InitialHistory::New);
     }
 
-    #[test]
-    fn ignores_session_prefix_messages_when_truncating() {
-        let (session, turn_context) = make_session_and_context();
+    #[tokio::test]
+    async fn ignores_session_prefix_messages_when_truncating() {
+        let (session, turn_context) = make_session_and_context().await;
         let mut items = session.build_initial_context(&turn_context);
         items.push(user_msg("feature request"));
         items.push(assistant_msg("ack"));

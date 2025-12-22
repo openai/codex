@@ -12,7 +12,7 @@ use tempfile::tempdir;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_models_returns_api_key_models() -> Result<()> {
     let codex_home = tempdir()?;
-    let config = load_default_config_for_test(&codex_home);
+    let config = load_default_config_for_test(&codex_home).await;
     let manager = ConversationManager::with_models_provider(
         CodexAuth::from_api_key("sk-test"),
         built_in_model_providers()["openai"].clone(),
@@ -28,7 +28,7 @@ async fn list_models_returns_api_key_models() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_models_returns_chatgpt_models() -> Result<()> {
     let codex_home = tempdir()?;
-    let config = load_default_config_for_test(&codex_home);
+    let config = load_default_config_for_test(&codex_home).await;
     let manager = ConversationManager::with_models_provider(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
         built_in_model_providers()["openai"].clone(),
@@ -184,6 +184,10 @@ fn gpt52_codex_upgrade() -> codex_protocol::openai_models::ModelUpgrade {
         reasoning_effort_mapping: None,
         migration_config_key: "gpt-5.2-codex".to_string(),
         model_link: Some("https://openai.com/index/introducing-gpt-5-2-codex".to_string()),
+        upgrade_copy: Some(
+            "Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work."
+                .to_string(),
+        ),
     }
 }
 

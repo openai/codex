@@ -1,26 +1,14 @@
 ---
 source: tui/src/bottom_pane/unified_exec_footer.rs
-assertion_line: 123
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
-    area: Rect { x: 0, y: 0, width: 50, height: 3 },
+    area: Rect { x: 0, y: 0, width: 50, height: 1 },
     content: [
-        "  Background terminal running: echo hello · rg    ",
-        "                               "foo" src · 1 more ",
-        "                               running            ",
+        "  1 background terminal running · /ps to view     ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 30, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 31, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 41, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 44, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 46, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 31, y: 1, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
-        x: 40, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 49, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 31, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 38, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 45, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

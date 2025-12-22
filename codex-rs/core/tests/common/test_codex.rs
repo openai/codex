@@ -178,7 +178,7 @@ impl TestCodexBuilder {
             ..built_in_model_providers()["openai"].clone()
         };
         let cwd = Arc::new(TempDir::new()?);
-        let mut config = load_default_config_for_test(home);
+        let mut config = load_default_config_for_test(home).await;
         config.cwd = cwd.path().to_path_buf();
         config.model_provider = model_provider;
         for hook in self.pre_build_hooks.drain(..) {

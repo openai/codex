@@ -65,12 +65,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "gpt-5.2-codex".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: "gpt-5.2-codex".to_string(),
-                model_link: Some("https://openai.com/index/introducing-gpt-5-2-codex".to_string()),
-            }),
+            upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: true,
             supported_in_api: true,
         },
@@ -92,12 +87,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "gpt-5.2-codex".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: "gpt-5.2-codex".to_string(),
-                model_link: Some("https://openai.com/index/introducing-gpt-5-2-codex".to_string()),
-            }),
+            upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: true,
             supported_in_api: true,
         },
@@ -126,13 +116,66 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "gpt-5.2-codex".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: "gpt-5.2-codex".to_string(),
-                model_link: Some("https://openai.com/index/introducing-gpt-5-2-codex".to_string()),
-            }),
+            upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: true,
+            supported_in_api: true,
+        },
+        ModelPreset {
+            id: "bengalfox".to_string(),
+            model: "bengalfox".to_string(),
+            display_name: "bengalfox".to_string(),
+            description: "bengalfox".to_string(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "Fast responses with lighter reasoning".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Medium,
+                    description: "Balances speed and reasoning depth for everyday tasks".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "Greater reasoning depth for complex problems".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::XHigh,
+                    description: "Extra high reasoning depth for complex problems".to_string(),
+                },
+            ],
+            is_default: false,
+            upgrade: None,
+            show_in_picker: false,
+            supported_in_api: true,
+        },
+        ModelPreset {
+            id: "boomslang".to_string(),
+            model: "boomslang".to_string(),
+            display_name: "boomslang".to_string(),
+            description: "boomslang".to_string(),
+            default_reasoning_effort: ReasoningEffort::Medium,
+            supported_reasoning_efforts: vec![
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "Balances speed with some reasoning; useful for straightforward queries and short explanations".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Medium,
+                    description: "Provides a solid balance of reasoning depth and latency for general-purpose tasks".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "Maximizes reasoning depth for complex or ambiguous problems".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::XHigh,
+                    description: "Extra high reasoning for complex problems".to_string(),
+                },
+            ],
+            is_default: false,
+            upgrade: None,
+            show_in_picker: false,
             supported_in_api: true,
         },
         // Deprecated models.
@@ -157,12 +200,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "gpt-5.2-codex".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: "gpt-5.2-codex".to_string(),
-                model_link: Some("https://openai.com/index/introducing-gpt-5-2-codex".to_string()),
-            }),
+            upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: false,
             supported_in_api: true,
         },
@@ -183,12 +221,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "gpt-5.1-codex-mini".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG.to_string(),
-                model_link: Some("https://www.codex.com/models/caribou".to_string()),
-            }),
+            upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: false,
             supported_in_api: true,
         },
@@ -214,12 +247,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "caribou".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: "gpt-5.2-codex".to_string(),
-                model_link: Some("https://openai.com/index/introducing-gpt-5-2-codex".to_string()),
-            }),
+            upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: false,
             supported_in_api: true,
         },
@@ -248,12 +276,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "gpt-5.2-codex".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: "gpt-5.2-codex".to_string(),
-                model_link: Some("https://openai.com/index/introducing-gpt-5-2-codex".to_string()),
-            }),
+            upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: false,
             supported_in_api: true,
         },
@@ -278,17 +301,25 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                 },
             ],
             is_default: false,
-            upgrade: Some(ModelUpgrade {
-                id: "caribou".to_string(),
-                reasoning_effort_mapping: None,
-                migration_config_key: "caribou".to_string(),
-                model_link: Some("https://www.codex.com/models/caribou".to_string()),
-            }),
+            upgrade: Some(gpt_52_codex_upgrade()),
             show_in_picker: false,
             supported_in_api: true,
         },
     ]
 });
+
+fn gpt_52_codex_upgrade() -> ModelUpgrade {
+    ModelUpgrade {
+        id: "gpt-5.2-codex".to_string(),
+        reasoning_effort_mapping: None,
+        migration_config_key: "gpt-5.2-codex".to_string(),
+        model_link: Some("https://openai.com/index/introducing-gpt-5-2-codex".to_string()),
+        upgrade_copy: Some(
+            "Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work."
+                .to_string(),
+        ),
+    }
+}
 
 pub(super) fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
     PRESETS

@@ -34,6 +34,11 @@ impl AbsolutePathBuf {
         Ok(Self(absolute_path.into_owned()))
     }
 
+    pub fn current_dir() -> std::io::Result<Self> {
+        let current_dir = std::env::current_dir()?;
+        Self::from_absolute_path(current_dir)
+    }
+
     pub fn join<P: AsRef<Path>>(&self, path: P) -> std::io::Result<Self> {
         Self::resolve_path_against_base(path, &self.0)
     }

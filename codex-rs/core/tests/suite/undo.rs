@@ -486,3 +486,65 @@ async fn undo_overwrites_manual_edits_after_turn() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn undo_preserves_unrelated_staged_changes() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = undo_harness().await?;
+    init_git_repo(harness.cwd())?;
+
+    // create a file for user to mess with
+    let user_file = harness.path("user_file.txt");
+    fs::write(&user_file, "user content v1\n")?;
+    git(harness.cwd(), &["add", "user_file.txt"])?;
+    git(harness.cwd(), &["commit", "-m", "add user file"])?;
+
+    // AI turn: modifies a DIFFERENT file (creating ghost commit of baseline)
+    let ai_file = harness.path("ai_file.txt");
+    fs::write(&ai_file, "ai content v1\n")?;
+    git(harness.cwd(), &["add", "ai_file.txt"])?;
+    git(harness.cwd(), &["commit", "-m", "add ai file"])?; // baseline
+
+    let patch = "*** Begin Patch\n*** Update File: ai_file.txt\n@@\n-ai content v1\n+ai content v2\n*** End Patch";
+    run_apply_patch_turn(&harness, "modify ai file", "undo-staging-test", patch, "ok").await?;
+    assert_eq!(fs::read_to_string(&ai_file)?, "ai content v2\n");
+
+    // NOW: User modifies user_file AND stages it
+    fs::write(&user_file, "user content v2 (staged)\n")?;
+    git(harness.cwd(), &["add", "user_file.txt"])?;
+
+    // Verify status before undo
+    let status_before = git_output(harness.cwd(), &["status", "--porcelain"])?;
+    assert!(status_before.contains("M  user_file.txt")); // M in index
+
+    // UNDO
+    let codex = Arc::clone(&harness.test().codex);
+    // checks that undo succeeded
+    expect_successful_undo(&codex).await?;
+
+    // AI file should be reverted
+    assert_eq!(fs::read_to_string(&ai_file)?, "ai content v1\n");
+
+    // User file should STILL be staged with v2
+    let status_after = git_output(harness.cwd(), &["status", "--porcelain"])?;
+
+    // We expect 'M' in the first column (index modified).
+    // The second column will likely be 'M' because the worktree was reverted to v1 while index has v2.
+    // So "MM user_file.txt" is expected.
+    if !status_after.contains("MM user_file.txt") && !status_after.contains("M  user_file.txt") {
+        bail!("Status should contain staged change (M in first col), but was: '{status_after}'");
+    }
+
+    // Disk content is reverted to v1 (snapshot state)
+    assert_eq!(fs::read_to_string(&user_file)?, "user content v1\n");
+
+    // But we can get v2 back from index
+    git(harness.cwd(), &["checkout", "user_file.txt"])?;
+    assert_eq!(
+        fs::read_to_string(&user_file)?,
+        "user content v2 (staged)\n"
+    );
+
+    Ok(())
+}
