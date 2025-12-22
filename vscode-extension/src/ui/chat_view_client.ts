@@ -113,7 +113,7 @@ type SuggestItem = {
   insert: string;
   label: string;
   detail?: string;
-  kind: "slash" | "at" | "file" | "agent";
+  kind: "slash" | "at" | "file" | "dir" | "agent";
 };
 
 function main(): void {
@@ -374,9 +374,9 @@ function main(): void {
 
   let suggestItems: SuggestItem[] = [];
   let suggestIndex = 0;
-  let fileIndex: string[] | null = null;
-  let fileIndexForSessionId: string | null = null;
-  let fileIndexRequestedForSessionId: string | null = null;
+  let fileSearch: null | { sessionId: string; query: string; paths: string[] } = null;
+  let fileSearchInFlight: null | { sessionId: string; query: string } = null;
+  let fileSearchTimer: number | null = null;
   let agentIndex: string[] | null = null;
   let agentIndexForSessionId: string | null = null;
   let agentIndexRequestedForSessionId: string | null = null;
@@ -810,59 +810,41 @@ function main(): void {
           }
         }
 
-        if (fileIndex && fileIndexForSessionId === state.activeSession.id) {
-          const q = query.toLowerCase();
-          const rankedPaths = fileIndex
-            .filter((p) => p.toLowerCase().includes(q))
-            .map((p) => {
-              const pl = p.toLowerCase();
-              const base = pl.split("/").at(-1) || pl;
-              const depth = (p.match(/\//g) || []).length;
-              const score =
-                base === q || pl === q
-                  ? 0
-                  : base.startsWith(q)
-                    ? 1
-                    : pl.startsWith(q)
-                      ? 2
-                      : pl.includes("/" + q)
-                        ? 3
-                        : 4;
-              return { p, score, depth, len: p.length };
-            })
-            .sort(
-              (a, b) =>
-                a.score - b.score ||
-                a.depth - b.depth ||
-                a.len - b.len ||
-                a.p.localeCompare(b.p),
-            )
-            .slice(0, 50)
-            .map((x) => x.p);
+        // File search (TUI-like): run a query-based search rather than indexing all files.
+        if (query.length > 0) {
+          const existing =
+            fileSearch &&
+            fileSearch.sessionId === state.activeSession.id &&
+            fileSearch.query === query
+              ? fileSearch
+              : null;
 
-          const fileItems = rankedPaths.map((p) => ({
-            insert: "@" + p + " ",
-            label: "@" + p,
-            detail: "",
-            kind: "file" as const,
-          }));
-          items = items.concat(fileItems);
-        } else {
-          if (fileIndexRequestedForSessionId !== state.activeSession.id) {
-            fileIndexRequestedForSessionId = state.activeSession.id;
-            vscode.postMessage({
-              type: "requestFileIndex",
-              sessionId: state.activeSession.id,
-            });
-          }
-          items = items.concat([
-            {
-              insert: "",
-              label: "(indexing…)",
+          if (existing) {
+            const ranked = rankFilePaths(existing.paths, query);
+            const dirItems = rankDirPrefixes(ranked, query).map((p) => ({
+              insert: "@" + p,
+              label: "@" + p,
+              detail: "dir",
+              kind: "dir" as const,
+            }));
+            const fileItems = ranked.map((p) => ({
+              insert: "@" + p + " ",
+              label: "@" + p,
               detail: "",
-              kind: "file",
-            },
-          ]);
+              kind: "file" as const,
+            }));
+            items = items.concat(dirItems, fileItems);
+          } else {
+            scheduleFileSearch(state.activeSession.id, query);
+            items = items.concat([
+              {
+                insert: "",
+                label: "(searching…)",
+                detail: "",
+                kind: "file",
+              },
+            ]);
+          }
         }
       }
 
@@ -1641,7 +1623,9 @@ function sendCurrentInput(): void {
     const anyMsg = msg as {
       type?: unknown;
       state?: unknown;
-      files?: unknown;
+      paths?: unknown;
+      sessionId?: unknown;
+      query?: unknown;
       agents?: unknown;
       text?: unknown;
     };
@@ -1651,17 +1635,25 @@ function sendCurrentInput(): void {
       autosizeInput();
       return;
     }
-    if (anyMsg.type === "fileIndex") {
-      const files = Array.isArray(anyMsg.files)
-        ? (anyMsg.files.filter((f) => typeof f === "string") as string[])
+    if (anyMsg.type === "fileSearchResult") {
+      const sessionId =
+        typeof anyMsg.sessionId === "string" ? anyMsg.sessionId : null;
+      const query = typeof anyMsg.query === "string" ? anyMsg.query : null;
+      const paths = Array.isArray(anyMsg.paths)
+        ? anyMsg.paths.filter((p): p is string => typeof p === "string")
         : [];
-      if (state.activeSession) {
-        fileIndex = files;
-        fileIndexForSessionId = state.activeSession.id;
-      } else {
-        fileIndex = null;
-        fileIndexForSessionId = null;
-      }
+
+      if (!sessionId || !query) return;
+      if (!state.activeSession) return;
+      if (state.activeSession.id !== sessionId) return;
+
+      // Ignore stale results.
+      const inFlight = fileSearchInFlight;
+      if (!inFlight || inFlight.sessionId !== sessionId || inFlight.query !== query)
+        return;
+
+      fileSearch = { sessionId, query, paths };
+      fileSearchInFlight = null;
       renderSuggest();
       return;
     }
@@ -1696,6 +1688,92 @@ function sendCurrentInput(): void {
       return;
     }
   });
+
+  function scheduleFileSearch(sessionId: string, query: string): void {
+    // Debounce and allow only one in-flight search, similar to TUI behavior.
+    if (fileSearchTimer != null) {
+      window.clearTimeout(fileSearchTimer);
+      fileSearchTimer = null;
+    }
+
+    const existing =
+      fileSearch &&
+      fileSearch.sessionId === sessionId &&
+      fileSearch.query === query
+        ? fileSearch
+        : null;
+    if (existing) return;
+
+    // If there is an in-flight query that's no longer a prefix of what the user typed,
+    // mark it stale; the response will be ignored.
+    if (fileSearchInFlight && !query.startsWith(fileSearchInFlight.query)) {
+      fileSearchInFlight = null;
+    }
+
+    fileSearchTimer = window.setTimeout(() => {
+      if (!state.activeSession || state.activeSession.id !== sessionId) return;
+      fileSearchInFlight = { sessionId, query };
+      vscode.postMessage({ type: "requestFileSearch", sessionId, query });
+      fileSearchTimer = null;
+    }, 100);
+  }
+
+  function rankFilePaths(paths: string[], query: string): string[] {
+    const q = query.toLowerCase();
+    return paths
+      .map((p) => {
+        const pl = p.toLowerCase();
+        const base = pl.split("/").at(-1) || pl;
+        const depth = (p.match(/\//g) || []).length;
+        const score =
+          base === q || pl === q
+            ? 0
+            : base.startsWith(q)
+              ? 1
+              : pl.startsWith(q)
+                ? 2
+                : pl.includes("/" + q)
+                  ? 3
+                  : 4;
+        return { p, score, depth, len: p.length };
+      })
+      .sort(
+        (a, b) =>
+          a.score - b.score ||
+          a.depth - b.depth ||
+          a.len - b.len ||
+          a.p.localeCompare(b.p),
+      )
+      .slice(0, 50)
+      .map((x) => x.p);
+  }
+
+  function rankDirPrefixes(paths: string[], query: string): string[] {
+    const q = query.toLowerCase();
+    const dirs = new Set<string>();
+    for (const p of paths) {
+      const idx = p.lastIndexOf("/");
+      if (idx < 0) continue;
+      const dir = p.slice(0, idx + 1);
+      if (dir) dirs.add(dir);
+    }
+    return [...dirs]
+      .map((p) => {
+        const pl = p.toLowerCase();
+        const depth = (p.match(/\//g) || []).length;
+        const score = pl.startsWith(q) ? 0 : pl.includes("/" + q) ? 1 : 2;
+        return { p, score, depth, len: p.length };
+      })
+      .sort(
+        (a, b) =>
+          a.score - b.score ||
+          a.depth - b.depth ||
+          a.len - b.len ||
+          a.p.localeCompare(b.p),
+      )
+      .slice(0, 20)
+      .map((x) => x.p);
+  }
 
   // Open links via the extension host.
   document.addEventListener("click", (e) => {

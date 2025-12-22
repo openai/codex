@@ -348,9 +348,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    if (type === "requestFileIndex") {
+    if (type === "requestFileSearch") {
       const sessionId = anyMsg["sessionId"];
       if (typeof sessionId !== "string") return;
+      const query = anyMsg["query"];
+      if (typeof query !== "string") return;
       const st = this.getState();
       const active = st.activeSession;
       if (!active || active.id !== sessionId) {
@@ -361,25 +363,47 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const folderUri = vscode.Uri.parse(active.workspaceFolderUri);
       const folder = vscode.workspace.getWorkspaceFolder(folderUri);
       if (!folder) {
-        this.view?.webview.postMessage({ type: "fileIndex", files: [] });
+        this.view?.webview.postMessage({
+          type: "fileSearchResult",
+          sessionId,
+          query,
+          paths: [],
+        });
         return;
       }
 
-      const pattern = new vscode.RelativePattern(folder, "**/*");
+      const norm = normalizeFileSearchQuery(query);
+      if (!norm) {
+        this.view?.webview.postMessage({
+          type: "fileSearchResult",
+          sessionId,
+          query,
+          paths: [],
+        });
+        return;
+      }
+
+      const include = buildFileSearchIncludeGlob(norm);
+      const pattern = new vscode.RelativePattern(folder, include);
       const uris = await vscode.workspace.findFiles(
         pattern,
         "**/{.git,node_modules}/**",
-        20000,
+        500,
       );
       const folderFsPath = folder.uri.fsPath;
-      const rels = uris
+      const paths = uris
         .map((u) =>
           path.relative(folderFsPath, u.fsPath).split(path.sep).join("/"),
         )
         .filter(
           (p) => typeof p === "string" && p.length > 0 && !p.startsWith("../"),
         );
-      this.view?.webview.postMessage({ type: "fileIndex", files: rels });
+      this.view?.webview.postMessage({
+        type: "fileSearchResult",
+        sessionId,
+        query,
+        paths,
+      });
       return;
     }
 
@@ -605,4 +629,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	  </body>
 	</html>`;
   }
+}
+
+function normalizeFileSearchQuery(query: string): string | null {
+  const q = query.trim().replace(/\\/g, "/");
+  if (!q) return null;
+  // Disallow path traversal / absolute-ish queries; this is purely a search hint.
+  if (q.includes("..")) return null;
+  if (q.startsWith("/")) return q.slice(1);
+  return q;
+}
+
+function buildFileSearchIncludeGlob(query: string): string {
+  // VS Code uses glob patterns (minimatch-like). We treat the user query as a
+  // literal substring hint by escaping special characters.
+  const q = escapeGlobLiteral(query);
+
+  // If the user typed "docs/" we should match files under any ".../docs/..." subtree.
+  if (query.endsWith("/")) {
+    const trimmed = q.replace(/\/+$/, "");
+    if (!trimmed) return "**/*";
+    return `**/*${trimmed}/**`;
+  }
+
+  return `**/*${q}*`;
+}
+
+function escapeGlobLiteral(input: string): string {
+  // Escape glob metacharacters for VS Code's glob.
+  // minimatch treats backslash as escape; VS Code globs also accept it.
+  return input.replace(/[\\{}()[\]*?]/g, "\\$&");
 }
