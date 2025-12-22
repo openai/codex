@@ -2778,8 +2778,6 @@ mod tests {
     use std::time::Duration;
     use tokio::time::sleep;
 
-    
-    
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;

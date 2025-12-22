@@ -1,10 +1,12 @@
 mod client;
 mod config;
 mod error;
+mod exporter;
 mod tags;
 mod time;
 mod util;
 pub(crate) mod validation;
+mod worker;
 
 use std::time::Duration;
 

@@ -54,4 +54,3 @@ tracing-subscriber = { workspace = true }
 [dev-dependencies]
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 pretty_assertions = { workspace = true }
-wiremock = { workspace = true }

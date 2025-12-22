@@ -96,6 +96,10 @@ impl MetricsConfig {
 
 impl Default for MetricsConfig {
     fn default() -> Self {
-        Self::new(DEFAULT_API_KEY)
+        if cfg!(test) {
+            Self::new("MOCK_API_KEY");
+        } else {
+            Self::new(DEFAULT_API_KEY)
+        }
     }
 }

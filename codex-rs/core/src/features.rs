@@ -204,9 +204,10 @@ impl Features {
                         ("feature", feature.key),
                         ("value", &self.enabled(feature.id).to_string()),
                     ],
-                ) {
-                    tracing::warn!("Error while emitting feature metrics {e:?}");
-                }
+                )
+            {
+                tracing::warn!("Error while emitting feature metrics {e:?}");
+            }
         }
     }
 
