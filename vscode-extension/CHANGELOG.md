@@ -32,6 +32,10 @@
 
 - app-server の `thread/list` を使って履歴一覧から `thread/resume` できる Resume 機能を追加（CHAT右上の Resume / `/resume`）
 
+## 0.1.6
+
+- Resume の履歴一覧を「CODEX_HOME の全履歴」に固定（workspace/cwd で絞る選択UIを削除）
+
 ## 0.0.7
 
 - モデル一覧の取得と表示、および Reasoning effort 選択 UI を追加

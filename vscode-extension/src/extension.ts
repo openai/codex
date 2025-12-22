@@ -245,29 +245,26 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!sessions) throw new Error("sessions is not initialized");
       if (!extensionContext) throw new Error("extensionContext is not set");
 
-      const folder = await pickWorkspaceFolder();
-      if (!folder) return;
+      const folder = (() => {
+        if (activeSessionId) {
+          const s = sessions.getById(activeSessionId);
+          if (s) {
+            const f = resolveWorkspaceFolderForSession(s);
+            if (f) return f;
+          }
+        }
+        const fs = vscode.workspace.workspaceFolders ?? [];
+        return fs[0] ?? null;
+      })();
+      if (!folder) {
+        void vscode.window.showErrorMessage(
+          "No workspace folder found. Open a folder/workspace to resume from history.",
+        );
+        return;
+      }
 
       await ensureBackendMatchesConfiguredCli(folder, "newSession");
 
-      const scopePick = await vscode.window.showQuickPick(
-        [
-          {
-            label: "This workspace only",
-            detail: "Show only threads whose cwd matches this workspace folder",
-            scope: "workspace" as const,
-          },
-          {
-            label: "All history",
-            detail: "Show all threads stored under CODEX_HOME (may have different cwd)",
-            scope: "all" as const,
-          },
-        ],
-        { title: "Codex UI: Resume from History" },
-      );
-      if (!scopePick) return;
-
-      const folderCwd = folder.uri.fsPath;
       let cursor: string | null = null;
       const collected: Thread[] = [];
 
@@ -285,11 +282,7 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
 
-        const filtered =
-          scopePick.scope === "workspace"
-            ? res.data.filter((t) => t.cwd === folderCwd)
-            : res.data;
-        collected.push(...filtered);
+        collected.push(...res.data);
 
         const items = collected.map((t) => ({
           label: formatThreadLabel(t.preview),
