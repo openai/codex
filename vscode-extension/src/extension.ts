@@ -1,5 +1,6 @@
 import { parse as parseToml } from "@iarna/toml";
 import * as crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -39,6 +40,10 @@ let outputChannel: vscode.OutputChannel | null = null;
 const HIDDEN_TAB_SESSIONS_KEY = "codexMine.hiddenTabSessions.v1";
 const hiddenTabSessionIds = new Set<string>();
 const mcpStatusByServer = new Map<string, string>();
+const cliVariantByBackendKey = new Map<
+  string,
+  "unknown" | "codex" | "codex-mine"
+>();
 const defaultTitleRe = /^(.*)\s+\([0-9a-f]{8}\)$/i;
 
 type CustomPromptSummary = {
@@ -223,6 +228,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const folder = await pickWorkspaceFolder();
       if (!folder) return;
 
+      await ensureBackendMatchesConfiguredCli(folder, "newSession");
       const session = await backendManager.newSession(
         folder,
         getSessionModelState(),
@@ -413,6 +419,149 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!picked) return;
 
       chatView?.insertIntoInput(`$${picked.skill.name} `);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexMine.showAgents", async (args?: unknown) => {
+      if (!sessions) throw new Error("sessions is not initialized");
+
+      const session =
+        parseSessionArg(args, sessions) ??
+        (activeSessionId ? sessions.getById(activeSessionId) : null);
+      if (!session) {
+        void vscode.window.showErrorMessage("No session selected.");
+        return;
+      }
+
+      const folder = resolveWorkspaceFolderForSession(session);
+      if (!folder) {
+        void vscode.window.showErrorMessage("WorkspaceFolder not found for session.");
+        return;
+      }
+
+      await ensureBackendMatchesConfiguredCli(folder, "agents");
+
+      const v = cliVariantByBackendKey.get(session.backendKey) ?? "unknown";
+      if (v !== "codex-mine") {
+        void vscode.window.showInformationMessage(
+          "Agents are available only when running codex-mine. Click Settings (⚙) and select codex-mine, then restart the backend.",
+        );
+        return;
+      }
+
+      const { agents, errors } = await listAgentsFromDisk(folder.uri.fsPath, output);
+      if (errors.length > 0) {
+        for (const e of errors) output.appendLine(`[agents] ${e}`);
+      }
+
+      if (agents.length === 0) {
+        const msg =
+          errors.length > 0
+            ? "No agents found (some agent files failed to load)."
+            : "No agents found. Add <git root>/.codex/agents/<name>.md or $CODEX_HOME/agents/<name>.md.";
+        void vscode.window.showInformationMessage(msg);
+        return;
+      }
+
+      const picked = await vscode.window.showQuickPick(
+        agents.map((a) => ({
+          label: a.name,
+          description: a.description,
+          detail: `${a.source} • ${a.path}`,
+          agent: a,
+        })),
+        {
+          title: "Codex UI: Agents",
+          matchOnDescription: true,
+          matchOnDetail: true,
+        },
+      );
+      if (!picked) return;
+      chatView?.insertIntoInput(`@${picked.agent.name} `);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexMine.selectCliVariant", async () => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+
+      // Global default: do not prompt for a directory. The selected CLI becomes the default
+      // for subsequent sessions/backends, and `New` will use it (auto-restarting if needed).
+      const cfg = vscode.workspace.getConfiguration("codexMine");
+      const mineCmd =
+        cfg.get<string>("cli.commands.codexMine") ??
+        cfg.get<string>("cli.commands.mine") ??
+        "codex-mine";
+      const codexCmd =
+        cfg.get<string>("cli.commands.codex") ??
+        cfg.get<string>("cli.commands.upstream") ??
+        "codex";
+      const current = normalizeCliVariant(cfg.get<string>("cli.variant") ?? "auto");
+
+      const mineProbe = await probeCliVersion(mineCmd);
+      const mineDetected = mineProbe.ok && mineProbe.version.includes("-mine.");
+
+      const items: Array<{
+        label: string;
+        detail: string;
+        variant: "auto" | "codex" | "codex-mine";
+        disabledReason?: string;
+      }> = [
+        {
+          label: "Auto",
+          detail: "Use codexMine.backend.command (existing behavior)",
+          variant: "auto",
+        },
+        {
+          label: "codex",
+          detail: `Command: ${codexCmd}`,
+          variant: "codex",
+        },
+        {
+          label: "codex-mine",
+          detail: mineDetected
+            ? `Command: ${mineCmd} (${mineProbe.version})`
+            : mineProbe.ok
+              ? `Command: ${mineCmd} (detected: ${mineProbe.version}, not a mine build)`
+              : `Command: ${mineCmd} (not detected)`,
+          variant: "codex-mine",
+          disabledReason: mineDetected ? undefined : "codex-mine not detected",
+        },
+      ];
+
+      const picked = await vscode.window.showQuickPick(
+        items.map((it) => ({
+          label: it.label + (it.variant === current ? " (current)" : ""),
+          detail: it.detail,
+          it,
+        })),
+        { title: "Codex UI: Select CLI" },
+      );
+      if (!picked) return;
+
+      if (picked.it.variant === "codex-mine" && picked.it.disabledReason) {
+        void vscode.window.showErrorMessage(picked.it.disabledReason);
+        return;
+      }
+
+      await cfg.update("cli.variant", picked.it.variant, vscode.ConfigurationTarget.Global);
+
+      const restart = await vscode.window.showInformationMessage(
+        "CLI setting updated. Restart running backends now to apply?",
+        "Restart all",
+        "Later",
+      );
+      if (restart === "Restart all") {
+        const folders = vscode.workspace.workspaceFolders ?? [];
+        for (const f of folders) {
+          await ensureBackendMatchesConfiguredCli(f, "newSession");
+        }
+      } else {
+        void vscode.window.showInformationMessage(
+          "Change will take effect the next time the backend starts.",
+        );
+      }
     }),
   );
 
@@ -1001,6 +1150,12 @@ async function handleSlashCommand(
     });
     return true;
   }
+  if (cmd === "agents") {
+    await vscode.commands.executeCommand("codexMine.showAgents", {
+      sessionId: session.id,
+    });
+    return true;
+  }
   if (cmd === "help") {
     const rt = ensureRuntime(session.id);
     const customList = customPrompts
@@ -1019,6 +1174,7 @@ async function handleSlashCommand(
         "- /diff: Open Latest Diff",
         "- /rename <title>: Rename session",
         "- /skills: Browse skills",
+        "- /agents: Browse agents (codex-mine)",
         "- /help: Show help",
         customList ? "\nCustom prompts:" : null,
         customList || null,
@@ -1365,6 +1521,280 @@ function resolveCodexHome(): string {
   return path.join(os.homedir(), ".codex");
 }
 
+function inferCliVariantFromCliVersion(
+  cliVersion: string | null,
+): "unknown" | "codex" | "codex-mine" {
+  if (!cliVersion) return "unknown";
+  return cliVersion.includes("-mine.") ? "codex-mine" : "codex";
+}
+
+function backendKeyForCwd(cwd: string | null): string | null {
+  if (!cwd) return null;
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  const target = path.resolve(cwd);
+  for (const f of folders) {
+    const fsPath = f.uri.fsPath;
+    if (!fsPath) continue;
+    if (path.resolve(fsPath) === target) return f.uri.toString();
+  }
+  return null;
+}
+
+function normalizeCliVariant(raw: string | null): "auto" | "codex" | "codex-mine" {
+  const v = (raw ?? "auto").trim();
+  if (v === "mine") return "codex-mine";
+  if (v === "upstream") return "codex";
+  if (v === "codex" || v === "codex-mine" || v === "auto") return v;
+  return "auto";
+}
+
+function desiredCliCommandFromConfig(cfg: vscode.WorkspaceConfiguration): {
+  variant: "auto" | "codex" | "codex-mine";
+  command: string | null;
+} {
+  const variant = normalizeCliVariant(cfg.get<string>("cli.variant") ?? "auto");
+  const codexCmd =
+    cfg.get<string>("cli.commands.codex") ??
+    cfg.get<string>("cli.commands.upstream") ??
+    "codex";
+  const mineCmd =
+    cfg.get<string>("cli.commands.codexMine") ??
+    cfg.get<string>("cli.commands.mine") ??
+    "codex-mine";
+  const backendCmd = cfg.get<string>("backend.command") ?? null;
+
+  if (variant === "codex") return { variant, command: codexCmd };
+  if (variant === "codex-mine") return { variant, command: mineCmd };
+  return { variant, command: backendCmd };
+}
+
+async function ensureBackendMatchesConfiguredCli(
+  folder: vscode.WorkspaceFolder,
+  reason: "newSession" | "agents",
+): Promise<void> {
+  if (!backendManager) throw new Error("backendManager is not initialized");
+  if (!outputChannel) throw new Error("outputChannel is not initialized");
+
+  const cfg = vscode.workspace.getConfiguration("codexMine", folder.uri);
+  const desired = desiredCliCommandFromConfig(cfg);
+  if (desired.variant === "auto" || !desired.command) return;
+
+  const running = backendManager.getRunningCommand(folder);
+  if (!running) {
+    cliVariantByBackendKey.set(
+      folder.uri.toString(),
+      desired.variant === "codex-mine" ? "codex-mine" : "codex",
+    );
+    return;
+  }
+  if (running === desired.command) return;
+
+  outputChannel.appendLine(
+    `[cli] Restarting backend to match cli.variant=${desired.variant} (reason=${reason}) running=${running} desired=${desired.command}`,
+  );
+  await backendManager.restartForWorkspaceFolder(folder);
+  cliVariantByBackendKey.set(
+    folder.uri.toString(),
+    desired.variant === "codex-mine" ? "codex-mine" : "codex",
+  );
+  void vscode.window.showInformationMessage(
+    `Backend restarted to use ${desired.variant}.`,
+  );
+}
+
+async function probeCliVersion(command: string): Promise<
+  | { ok: true; version: string }
+  | { ok: false; error: string }
+> {
+  return await new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    const child = spawn(command, ["--version"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env,
+    });
+    child.stdout?.on("data", (buf) => {
+      stdout += String(buf);
+    });
+    child.stderr?.on("data", (buf) => {
+      stderr += String(buf);
+    });
+    child.on("error", (err) => {
+      resolve({ ok: false, error: String((err as Error).message ?? err) });
+    });
+    child.on("close", (code) => {
+      const out = (stdout || stderr || "").trim();
+      if (code !== 0) {
+        resolve({
+          ok: false,
+          error: out || `exit code ${String(code)}`,
+        });
+        return;
+      }
+      if (!out) {
+        resolve({ ok: false, error: "empty version output" });
+        return;
+      }
+      resolve({ ok: true, version: out.split(/\r?\n/)[0] ?? out });
+    });
+  });
+}
+
+type AgentSummary = {
+  name: string;
+  description: string;
+  color: string | null;
+  path: string;
+  source: "repo" | "home";
+};
+
+async function listAgentsFromDisk(
+  cwdFsPath: string,
+  output: vscode.OutputChannel,
+): Promise<{ agents: AgentSummary[]; errors: string[] }> {
+  const errors: string[] = [];
+  const agents: AgentSummary[] = [];
+  const seen = new Set<string>();
+
+  const gitRoot = await findGitRoot(cwdFsPath, errors);
+  const roots: Array<{ dir: string; source: "repo" | "home" }> = [];
+  if (gitRoot) roots.push({ dir: path.join(gitRoot, ".codex", "agents"), source: "repo" });
+  roots.push({ dir: path.join(resolveCodexHome(), "agents"), source: "home" });
+
+  for (const root of roots) {
+    const names = await listMarkdownStems(root.dir, errors);
+    for (const name of names) {
+      if (!seen.add(name)) continue;
+      if (!isValidAgentName(name)) {
+        errors.push(`${root.source}: invalid agent name: ${name}`);
+        continue;
+      }
+      const filePath = path.join(root.dir, `${name}.md`);
+      let content: string;
+      try {
+        content = await fs.readFile(filePath, "utf8");
+      } catch (err) {
+        errors.push(`${root.source}: failed to read ${filePath}: ${String((err as Error).message ?? err)}`);
+        continue;
+      }
+      const parsed = parseAgentFrontmatter(content);
+      if (!parsed.ok) {
+        errors.push(`${root.source}: failed to parse ${filePath}: ${parsed.error}`);
+        continue;
+      }
+      agents.push({
+        name,
+        description: parsed.description,
+        color: parsed.color,
+        path: filePath,
+        source: root.source,
+      });
+    }
+  }
+
+  agents.sort((a, b) => a.name.localeCompare(b.name));
+  if (errors.length > 0) {
+    output.appendLine(`[agents] scanned cwd=${cwdFsPath} gitRoot=${gitRoot ?? "(none)"}`);
+  }
+  return { agents, errors };
+}
+
+async function findGitRoot(start: string, errors: string[]): Promise<string | null> {
+  let cur = path.resolve(start);
+  for (let i = 0; i < 50; i += 1) {
+    const gitPath = path.join(cur, ".git");
+    try {
+      const st = await fs.stat(gitPath);
+      if (st.isDirectory() || st.isFile()) return cur;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code && code !== "ENOENT" && code !== "ENOTDIR") {
+        errors.push(`failed to stat ${gitPath}: ${String((err as Error).message ?? err)}`);
+      }
+    }
+
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return null;
+}
+
+async function listMarkdownStems(dir: string, errors: string[]): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    const out: string[] = [];
+    for (const e of entries) {
+      if (!e.isFile()) continue;
+      if (path.extname(e.name).toLowerCase() !== ".md") continue;
+      const stem = path.parse(e.name).name.trim();
+      if (!stem) continue;
+      out.push(stem);
+    }
+    out.sort();
+    return out;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      errors.push(`failed to read dir ${dir}: ${String((err as Error).message ?? err)}`);
+    }
+    return [];
+  }
+}
+
+function isValidAgentName(name: string): boolean {
+  if (!name) return false;
+  if (name === "." || name === "..") return false;
+  if (name.includes("/") || name.includes("\\")) return false;
+  return /^[A-Za-z0-9_-]+$/.test(name);
+}
+
+function parseAgentFrontmatter(
+  content: string,
+): { ok: true; description: string; color: string | null } | { ok: false; error: string } {
+  const lines = content.split(/\r?\n/);
+  if ((lines[0] ?? "").trim() !== "---") {
+    return { ok: false, error: "missing YAML frontmatter (expected starting ---)" };
+  }
+  let desc: string | null = null;
+  let color: string | null = null;
+  let foundClose = false;
+
+  let i = 1;
+  for (; i < lines.length; i += 1) {
+    const raw = lines[i] ?? "";
+    const trimmed = raw.trim();
+    if (trimmed === "---") {
+      foundClose = true;
+      i += 1;
+      break;
+    }
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const idx = trimmed.indexOf(":");
+    if (idx <= 0) continue;
+    const key = trimmed.slice(0, idx).trim().toLowerCase();
+    let val = trimmed.slice(idx + 1).trim();
+    if (val.length >= 2) {
+      const first = val[0];
+      const last = val[val.length - 1];
+      if ((first === "\"" && last === "\"") || (first === "'" && last === "'")) {
+        val = val.slice(1, -1);
+      }
+    }
+    if (key === "description") desc = val;
+    if (key === "color") color = val || null;
+  }
+
+  if (!foundClose) {
+    return { ok: false, error: "unterminated YAML frontmatter (missing closing ---)" };
+  }
+  if (!desc || !desc.trim()) {
+    return { ok: false, error: "missing required frontmatter field: description" };
+  }
+
+  return { ok: true, description: desc.trim(), color: color ? color.trim() : null };
+}
+
 function parsePromptFrontmatter(content: string): {
   description: string | null;
   argumentHint: string | null;
@@ -1504,9 +1934,36 @@ function buildChatState(): ChatViewState {
     argumentHint: p.argumentHint,
     source: p.source,
   }));
+  const capsForBackendKey = (backendKey: string | null): {
+    agents: boolean;
+    cliVariant: "unknown" | "codex" | "codex-mine";
+  } => {
+    const detected =
+      backendKey ? cliVariantByBackendKey.get(backendKey) ?? "unknown" : "unknown";
+    if (detected !== "unknown") {
+      return { agents: detected === "codex-mine", cliVariant: detected };
+    }
+    if (!backendKey) return { agents: false, cliVariant: "unknown" };
+
+    // No detected runtime variant yet (e.g. backend not started). Use config as a hint.
+    const folderUri = vscode.Uri.parse(backendKey);
+    const cfg = vscode.workspace.getConfiguration("codexMine", folderUri);
+    const raw = cfg.get<string>("cli.variant") ?? "auto";
+    const normalized =
+      raw === "mine"
+        ? "codex-mine"
+        : raw === "upstream"
+          ? "codex"
+          : raw;
+    if (normalized === "codex-mine")
+      return { agents: true, cliVariant: "codex-mine" };
+    if (normalized === "codex") return { agents: false, cliVariant: "codex" };
+    return { agents: false, cliVariant: "unknown" };
+  };
   if (!sessions)
     return {
       globalBlocks: globalRuntime.blocks,
+      capabilities: capsForBackendKey(null),
       sessions: [],
       activeSession: null,
       blocks: [],
@@ -1526,6 +1983,7 @@ function buildChatState(): ChatViewState {
   if (!activeRaw)
     return {
       globalBlocks: globalRuntime.blocks,
+      capabilities: capsForBackendKey(null),
       sessions: tabSessionsRaw,
       activeSession: null,
       blocks: [],
@@ -1551,6 +2009,7 @@ function buildChatState(): ChatViewState {
       : baseStatusText || (suffix.length > 0 ? suffix.join(" • ") : null);
   return {
     globalBlocks: globalRuntime.blocks,
+    capabilities: capsForBackendKey(activeRaw.backendKey),
     sessions: tabSessionsRaw,
     activeSession: activeRaw,
     blocks: rt.blocks,
@@ -2176,6 +2635,12 @@ function applyGlobalNotification(n: AnyServerNotification): void {
       if (originUrl) lines.push(`Git origin: ${originUrl}`);
       const mcpLine = formatMcpStatusSummary();
       if (mcpLine) lines.push(mcpLine);
+
+      const backendKey = backendKeyForCwd(cwd);
+      if (backendKey) {
+        const next = inferCliVariantFromCliVersion(cliVersion);
+        cliVariantByBackendKey.set(backendKey, next);
+      }
 
       // De-dupe: `New` creates a new thread and emits `thread/started` again, but for the same cwd we only
       // want one "Thread started" notice.

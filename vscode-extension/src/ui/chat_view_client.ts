@@ -75,6 +75,10 @@ type ChatBlock =
 
 type ChatViewState = {
   globalBlocks?: ChatBlock[];
+  capabilities?: {
+    agents: boolean;
+    cliVariant: "unknown" | "codex" | "codex-mine";
+  };
   sessions: Session[];
   activeSession: Session | null;
   blocks: ChatBlock[];
@@ -140,6 +144,7 @@ function main(): void {
   const diffBtn = mustGet<HTMLButtonElement>("diff");
   const newBtn = mustGet<HTMLButtonElement>("new");
   const statusBtn = mustGet<HTMLButtonElement>("status");
+  const settingsBtn = mustGet<HTMLButtonElement>("settings");
   const tabsEl = mustGet("tabs");
   const modelBarEl = mustGet("modelBar");
   const modelSelect = document.createElement("select");
@@ -314,12 +319,22 @@ function main(): void {
       detail: "Browse skills",
       kind: "slash",
     },
+    {
+      insert: "/agents ",
+      label: "/agents",
+      detail: "Browse agents (codex-mine)",
+      kind: "slash",
+    },
     { insert: "/help ", label: "/help", detail: "Show help", kind: "slash" },
   ];
 
   function buildSlashSuggestions(): SuggestItem[] {
+    const caps = state.capabilities ?? { agents: false, cliVariant: "unknown" as const };
+    const ui = caps.agents
+      ? uiSlashSuggestions
+      : uiSlashSuggestions.filter((s) => s.label !== "/agents");
     const reserved = new Set(
-      [...baseSlashSuggestions, ...uiSlashSuggestions].map((s) =>
+      [...baseSlashSuggestions, ...ui].map((s) =>
         s.label.replace(/^\//, ""),
       ),
     );
@@ -337,7 +352,7 @@ function main(): void {
         } as SuggestItem;
       })
       .filter(Boolean) as SuggestItem[];
-    return [...baseSlashSuggestions, ...custom, ...uiSlashSuggestions];
+    return [...baseSlashSuggestions, ...custom, ...ui];
   }
 
   const atSuggestions: SuggestItem[] = [
@@ -943,6 +958,14 @@ function main(): void {
     sendBtn.setAttribute("aria-label", s.sending ? "Stop" : "Send");
     sendBtn.title = s.sending ? "Stop (Esc)" : "Send (Enter)";
     statusBtn.disabled = !s.activeSession || s.sending;
+    const variant = s.capabilities?.cliVariant ?? "unknown";
+    settingsBtn.disabled = false;
+    settingsBtn.title =
+      variant === "codex-mine"
+        ? "CLI: codex-mine (Settings)"
+        : variant === "codex"
+          ? "CLI: codex (Settings)"
+          : "Settings";
     // Keep input enabled so the user can draft messages even before selecting a session.
     // Sending is still guarded by sendBtn.disabled and sendCurrentInput().
     inputEl.disabled = false;
@@ -1438,6 +1461,9 @@ function sendCurrentInput(): void {
   );
   diffBtn.addEventListener("click", () =>
     vscode.postMessage({ type: "openDiff" }),
+  );
+  settingsBtn.addEventListener("click", () =>
+    vscode.postMessage({ type: "selectCliVariant" }),
   );
 
   inputEl.addEventListener("input", () => updateSuggestions());

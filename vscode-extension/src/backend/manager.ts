@@ -63,6 +63,35 @@ export class BackendManager implements vscode.Disposable {
     private readonly sessions: SessionStore,
   ) {}
 
+  public getRunningCommand(folder: vscode.WorkspaceFolder): string | null {
+    const key = folder.uri.toString();
+    const proc = this.processes.get(key);
+    return proc ? proc.getCommand() : null;
+  }
+
+  public stopForWorkspaceFolder(folder: vscode.WorkspaceFolder): void {
+    const key = folder.uri.toString();
+    const proc = this.processes.get(key);
+    if (!proc) return;
+    this.output.appendLine(`Stopping backend for ${folder.uri.fsPath}`);
+    try {
+      proc.dispose();
+    } finally {
+      this.processes.delete(key);
+      this.modelsByBackendKey.delete(key);
+      this.itemsByThreadId.clear();
+      this.latestDiffByThreadId.clear();
+      this.streamState.delete(key);
+    }
+  }
+
+  public async restartForWorkspaceFolder(
+    folder: vscode.WorkspaceFolder,
+  ): Promise<void> {
+    this.stopForWorkspaceFolder(folder);
+    await this.startForWorkspaceFolder(folder);
+  }
+
   public async startForWorkspaceFolder(
     folder: vscode.WorkspaceFolder,
   ): Promise<void> {
@@ -75,12 +104,42 @@ export class BackendManager implements vscode.Disposable {
     }
 
     const cfg = vscode.workspace.getConfiguration("codexMine", folder.uri);
-    const command = cfg.get<string>("backend.command");
+    const cliVariantRaw = cfg.get<string>("cli.variant") ?? "auto";
+    const cliVariant =
+      cliVariantRaw === "upstream"
+        ? "codex"
+        : cliVariantRaw === "mine"
+          ? "codex-mine"
+          : cliVariantRaw;
+
+    const codexCommand =
+      cfg.get<string>("cli.commands.codex") ??
+      cfg.get<string>("cli.commands.upstream") ??
+      "codex";
+    const codexMineCommand =
+      cfg.get<string>("cli.commands.codexMine") ??
+      cfg.get<string>("cli.commands.mine") ??
+      "codex-mine";
+    const commandFromBackend = cfg.get<string>("backend.command");
     const args = cfg.get<string[]>("backend.args");
     const logRpcPayloads = cfg.get<boolean>("debug.logRpcPayloads") ?? false;
 
-    if (!command)
-      throw new Error("Missing configuration: codexMine.backend.command");
+    const command =
+      cliVariant === "codex-mine"
+        ? codexMineCommand
+        : cliVariant === "codex"
+          ? codexCommand
+          : commandFromBackend;
+
+    if (!command) {
+      const keyName =
+        cliVariant === "codex-mine"
+          ? "codexMine.cli.commands.codexMine"
+          : cliVariant === "codex"
+            ? "codexMine.cli.commands.codex"
+            : "codexMine.backend.command";
+      throw new Error(`Missing configuration: ${keyName}`);
+    }
     if (!args) throw new Error("Missing configuration: codexMine.backend.args");
 
     this.output.appendLine(

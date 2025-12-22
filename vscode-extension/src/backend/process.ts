@@ -54,6 +54,8 @@ export class BackendProcess implements vscode.Disposable {
     private readonly output: vscode.OutputChannel,
     private readonly logRpcPayloads: boolean,
     private readonly approvalsDefaultDecision: "prompt" | "decline" | "cancel",
+    private readonly spawnCommand: string,
+    private readonly spawnArgs: string[],
   ) {
     this.rpc = new RpcClient(child, output, logRpcPayloads);
     this.rpc.on("serverNotification", (n: AnyServerNotification) =>
@@ -83,9 +85,19 @@ export class BackendProcess implements vscode.Disposable {
       opts.output,
       opts.logRpcPayloads,
       approvalsDefaultDecision,
+      opts.command,
+      opts.args,
     );
     await proc.initializeHandshake();
     return proc;
+  }
+
+  public getCommand(): string {
+    return this.spawnCommand;
+  }
+
+  public getArgs(): string[] {
+    return [...this.spawnArgs];
   }
 
   public onDidExit(handler: () => void): void {

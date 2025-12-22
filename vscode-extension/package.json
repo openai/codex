@@ -1,6 +1,6 @@
 {
   "name": "codex-ui-vscode-extension",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "displayName": "Codex UI",
   "publisher": "harukary7518",
   "description": "Use Codex CLI (app-server) inside VS Code: sessions, chat, tools, diffs.",
@@ -31,6 +31,8 @@
     "onCommand:codexMine.showStatus",
     "onCommand:codexMine.interruptTurn",
     "onCommand:codexMine.showSkills",
+    "onCommand:codexMine.showAgents",
+    "onCommand:codexMine.selectCliVariant",
     "onView:codexMine.chatView",
     "onView:codexMine.sessionsView"
   ],
@@ -91,6 +93,14 @@
       {
         "command": "codexMine.showSkills",
         "title": "Codex UI: Skills"
+      },
+      {
+        "command": "codexMine.showAgents",
+        "title": "Codex UI: Agents (codex-mine)"
+      },
+      {
+        "command": "codexMine.selectCliVariant",
+        "title": "Codex UI: Select CLI (codex / codex-mine)"
       }
     ],
     "menus": {
@@ -127,6 +137,36 @@
     "configuration": {
       "title": "Codex UI",
       "properties": {
+        "codexMine.cli.variant": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "codex",
+            "codex-mine"
+          ],
+          "default": "auto",
+          "description": "Which Codex CLI to run. auto=use codexMine.backend.command; codex=use codexMine.cli.commands.codex; codex-mine=use codexMine.cli.commands.codexMine."
+        },
+        "codexMine.cli.commands.codex": {
+          "type": "string",
+          "default": "codex",
+          "description": "CLI command for Codex."
+        },
+        "codexMine.cli.commands.codexMine": {
+          "type": "string",
+          "default": "codex-mine",
+          "description": "CLI command for codex-mine."
+        },
+        "codexMine.cli.commands.upstream": {
+          "type": "string",
+          "default": "codex",
+          "description": "DEPRECATED: use codexMine.cli.commands.codex"
+        },
+        "codexMine.cli.commands.mine": {
+          "type": "string",
+          "default": "codex-mine",
+          "description": "DEPRECATED: use codexMine.cli.commands.codexMine"
+        },
         "codexMine.backend.command": {
           "type": "string",
           "default": "codex",

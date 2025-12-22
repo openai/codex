@@ -54,6 +54,10 @@ export type ChatBlock =
   | { id: string; type: "system"; title: string; text: string };
 
 export type ChatViewState = {
+  capabilities?: {
+    agents: boolean;
+    cliVariant: "unknown" | "codex" | "codex-mine";
+  };
   customPrompts?: Array<{
     name: string;
     description: string | null;
@@ -211,6 +215,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     if (type === "showStatus") {
       await vscode.commands.executeCommand("codexMine.showStatus");
+      return;
+    }
+
+    if (type === "selectCliVariant") {
+      await vscode.commands.executeCommand("codexMine.selectCliVariant");
       return;
     }
 
@@ -439,6 +448,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       button.iconBtn { width: 30px; min-width: 30px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
       button.iconBtn::before { content: "➤"; font-size: 14px; opacity: 0.95; }
       button.iconBtn[data-mode="stop"]::before { content: "■"; font-size: 12px; }
+      button.iconBtn.settingsBtn::before { content: "⚙"; font-size: 14px; }
       .footerBar { border-top: 1px solid rgba(127,127,127,0.25); padding: 8px 12px 10px; display: flex; flex-wrap: nowrap; gap: 10px; align-items: center; }
       .modelBar { display: flex; flex-wrap: nowrap; gap: 8px; align-items: center; margin: 0; min-width: 0; flex: 1 1 auto; overflow: hidden; }
       .modelSelect { background: var(--vscode-input-background); color: inherit; border: 1px solid rgba(127,127,127,0.35); border-radius: 6px; padding: 4px 6px; }
@@ -536,6 +546,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	          <button id="new">New</button>
 	          <button id="status">Status</button>
 	          <button id="diff" disabled>Open Latest Diff</button>
+            <button id="settings" class="iconBtn settingsBtn" aria-label="Settings" title="Settings"></button>
 	        </div>
 	      </div>
       <div id="tabs" class="tabs"></div>
