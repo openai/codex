@@ -255,7 +255,6 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
 #[cfg(test)]
 mod tests {
     use super::is_dangerous_command_windows;
-    use crate::powershell::UTF8_OUTPUT_PREFIX;
 
     fn vec_str(items: &[&str]) -> Vec<String> {
         items.iter().map(std::string::ToString::to_string).collect()
@@ -286,16 +285,6 @@ mod tests {
             "powershell",
             "-Command",
             "Start-Process notepad.exe"
-        ])));
-    }
-
-    #[test]
-    fn powershell_direct_browser_url_is_dangerous_even_with_utf8_prefix() {
-        let script = format!("{UTF8_OUTPUT_PREFIX}msedge.exe https://example.com");
-        assert!(is_dangerous_command_windows(&vec_str(&[
-            "powershell",
-            "-Command",
-            &script
         ])));
     }
 

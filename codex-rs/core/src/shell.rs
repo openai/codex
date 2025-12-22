@@ -340,7 +340,6 @@ mod detect_shell_type_tests {
 #[cfg(unix)]
 mod tests {
     use super::*;
-
     use std::path::PathBuf;
     use std::process::Command;
 
@@ -458,20 +457,11 @@ mod tests {
         };
         assert_eq!(
             test_powershell_shell.derive_exec_args("echo hello", false),
-            vec![
-                "pwsh.exe".to_string(),
-                "-NoProfile".to_string(),
-                "-Command".to_string(),
-                "echo hello".to_string(),
-            ]
+            vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"]
         );
         assert_eq!(
             test_powershell_shell.derive_exec_args("echo hello", true),
-            vec![
-                "pwsh.exe".to_string(),
-                "-Command".to_string(),
-                "echo hello".to_string(),
-            ]
+            vec!["pwsh.exe", "-Command", "echo hello"]
         );
     }
 

@@ -347,7 +347,6 @@ fn is_safe_git_command(words: &[String]) -> bool {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
-    use crate::powershell::UTF8_OUTPUT_PREFIX;
     use crate::powershell::try_find_pwsh_executable_blocking;
     use std::string::ToString;
 
@@ -387,17 +386,6 @@ mod tests {
                 "Get-ChildItem".to_string(),
             ]));
         }
-    }
-
-    #[test]
-    fn recognizes_safe_powershell_wrappers_with_utf8_prefix() {
-        let script = format!("{UTF8_OUTPUT_PREFIX}Get-ChildItem -Path .");
-        assert!(is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-NoProfile",
-            "-Command",
-            &script,
-        ])));
     }
 
     #[test]

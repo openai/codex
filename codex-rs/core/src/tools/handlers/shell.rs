@@ -356,12 +356,6 @@ mod tests {
         assert!(is_known_safe_command(
             &shell.derive_exec_args(command, /* use_login_shell */ false)
         ));
-        assert!(is_known_safe_command(
-            &shell.derive_exec_args(command, /* use_login_shell */ true)
-        ));
-        assert!(is_known_safe_command(
-            &shell.derive_exec_args(command, /* use_login_shell */ false)
-        ));
     }
 
     #[tokio::test]

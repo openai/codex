@@ -59,11 +59,8 @@ impl Drop for ShellSnapshot {
 }
 
 pub async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> Result<PathBuf> {
-    match shell_type {
-        ShellType::PowerShell | ShellType::Cmd => {
-            bail!("Shell snapshot not supported yet for {shell_type:?}");
-        }
-        _ => {}
+    if shell_type == ShellType::PowerShell || shell_type == ShellType::Cmd {
+        bail!("Shell snapshot not supported yet for {shell_type:?}");
     }
     let shell = get_shell(shell_type.clone(), None)
         .with_context(|| format!("No available shell for {shell_type:?}"))?;
