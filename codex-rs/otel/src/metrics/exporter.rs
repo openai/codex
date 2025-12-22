@@ -18,6 +18,7 @@ use reqwest::header::USER_AGENT;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::time::Duration;
 
 pub(crate) const METER_NAME: &str = "codex-otel-metrics";
 const STATSIG_USER_ID: &str = "codex-metrics";
@@ -39,7 +40,19 @@ pub(crate) enum MetricEvent {
 
 pub(crate) fn build_worker_exporter(config: &MetricsConfig) -> Result<WorkerExporter> {
     match &config.exporter {
-        MetricsExporter::StatsigHttp => Ok(WorkerExporter::Statsig(StatsigExporter::from(config)?)),
+        MetricsExporter::StatsigHttp {
+            endpoint,
+            api_key_header,
+            timeout,
+            user_agent,
+        } => Ok(WorkerExporter::Statsig(StatsigExporter::from(
+            endpoint,
+            api_key_header,
+            timeout,
+            user_agent,
+            &config.api_key,
+            &config.default_tags,
+        )?)),
         MetricsExporter::InMemory(exporter) => Ok(WorkerExporter::InMemory(
             InMemoryExporter::from(config.default_tags.clone(), exporter.clone()),
         )),
@@ -164,24 +177,30 @@ pub(crate) struct StatsigExporter {
 }
 
 impl StatsigExporter {
-    fn from(config: &MetricsConfig) -> Result<Self> {
+    fn from(
+        endpoint: &str,
+        api_key_header: &str,
+        timeout: &Duration,
+        user_agent: &str,
+        api_key: &str,
+        default_tags: &BTreeMap<String, String>,
+    ) -> Result<Self> {
         let api_key_header =
-            HeaderName::from_bytes(config.api_key_header.as_bytes()).map_err(|source| {
+            HeaderName::from_bytes(api_key_header.as_bytes()).map_err(|source| {
                 MetricsError::InvalidApiKeyHeader {
-                    header: config.api_key_header.clone(),
+                    header: api_key_header.to_string(),
                     source,
                 }
             })?;
-        let api_key = HeaderValue::from_str(&config.api_key).map_err(|source| {
-            MetricsError::InvalidHeaderValue {
-                header: config.api_key_header.clone(),
+        let api_key =
+            HeaderValue::from_str(api_key).map_err(|source| MetricsError::InvalidHeaderValue {
+                header: api_key_header.to_string(),
                 source,
-            }
-        })?;
-        let user_agent = if config.user_agent.is_empty() {
+            })?;
+        let user_agent = if user_agent.is_empty() {
             None
         } else {
-            Some(HeaderValue::from_str(&config.user_agent).map_err(|source| {
+            Some(HeaderValue::from_str(user_agent).map_err(|source| {
                 MetricsError::InvalidHeaderValue {
                     header: "User-Agent".to_string(),
                     source,
@@ -189,17 +208,17 @@ impl StatsigExporter {
             })?)
         };
         let client = reqwest::Client::builder()
-            .timeout(config.timeout)
+            .timeout(*timeout)
             .build()
             .map_err(|source| MetricsError::HttpClientBuild { source })?;
 
         Ok(Self {
             client,
-            endpoint: config.endpoint.clone(),
+            endpoint: endpoint.to_string(),
             api_key_header,
             api_key,
             user_agent,
-            default_tags: config.default_tags.clone(),
+            default_tags: default_tags.clone(),
         })
     }
 

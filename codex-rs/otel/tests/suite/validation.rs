@@ -6,7 +6,7 @@ use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 
 fn build_in_memory_client() -> Result<MetricsClient> {
     let exporter = InMemoryMetricExporter::default();
-    let config = MetricsConfig::new("test-key").with_in_memory_exporter(exporter);
+    let config = MetricsConfig::in_memory(exporter);
     MetricsClient::new(config)
 }
 

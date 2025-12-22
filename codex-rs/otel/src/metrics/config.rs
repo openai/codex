@@ -10,44 +10,70 @@ use std::time::Duration;
 
 #[derive(Clone, Debug)]
 pub(crate) enum MetricsExporter {
-    StatsigHttp,
+    StatsigHttp {
+        endpoint: String,
+        api_key_header: String,
+        timeout: Duration,
+        user_agent: String,
+    },
     InMemory(opentelemetry_sdk::metrics::InMemoryMetricExporter),
+}
+
+impl MetricsExporter {
+    pub(crate) fn statsig_defaults() -> Self {
+        Self::StatsigHttp {
+            endpoint: DEFAULT_STATSIG_ENDPOINT.to_string(),
+            api_key_header: DEFAULT_API_KEY_HEADER.to_string(),
+            timeout: DEFAULT_TIMEOUT,
+            user_agent: format!("codex-otel-metrics/{}", env!("CARGO_PKG_VERSION")),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct MetricsConfig {
-    pub(crate) endpoint: String,
     pub(crate) api_key: String,
-    pub(crate) api_key_header: String,
     pub(crate) default_tags: BTreeMap<String, String>,
-    pub(crate) timeout: Duration,
-    pub(crate) user_agent: String,
     pub(crate) exporter: MetricsExporter,
 }
 
 impl MetricsConfig {
-    /// Create a config with the provided API key and default settings.
+    /// Create a Statsig config with the provided API key and default settings.
     pub fn new(api_key: impl Into<String>) -> Self {
+        Self::statsig(api_key)
+    }
+
+    /// Create a Statsig config with the provided API key and default settings.
+    pub fn statsig(api_key: impl Into<String>) -> Self {
         Self {
-            endpoint: DEFAULT_STATSIG_ENDPOINT.to_string(),
             api_key: api_key.into(),
-            api_key_header: DEFAULT_API_KEY_HEADER.to_string(),
             default_tags: BTreeMap::new(),
-            timeout: DEFAULT_TIMEOUT,
-            user_agent: format!("codex-otel-metrics/{}", env!("CARGO_PKG_VERSION")),
-            exporter: MetricsExporter::StatsigHttp,
+            exporter: MetricsExporter::statsig_defaults(),
+        }
+    }
+
+    /// Create an in-memory config (used in tests).
+    pub fn in_memory(exporter: opentelemetry_sdk::metrics::InMemoryMetricExporter) -> Self {
+        Self {
+            api_key: String::new(),
+            default_tags: BTreeMap::new(),
+            exporter: MetricsExporter::InMemory(exporter),
         }
     }
 
     /// Override the Statsig endpoint.
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
-        self.endpoint = endpoint.into();
+        if let MetricsExporter::StatsigHttp { endpoint: e, .. } = &mut self.exporter {
+            *e = endpoint.into();
+        }
         self
     }
 
     /// Override the API key header name.
     pub fn with_api_key_header(mut self, header: impl Into<String>) -> Self {
-        self.api_key_header = header.into();
+        if let MetricsExporter::StatsigHttp { api_key_header, .. } = &mut self.exporter {
+            *api_key_header = header.into();
+        }
         self
     }
 
@@ -63,32 +89,25 @@ impl MetricsConfig {
 
     /// Override the HTTP client timeout.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        if let MetricsExporter::StatsigHttp { timeout: t, .. } = &mut self.exporter {
+            *t = timeout;
+        }
         self
     }
 
     /// Override the HTTP user agent header.
     pub fn with_user_agent(mut self, user_agent: impl Into<String>) -> Self {
-        self.user_agent = user_agent.into();
-        self
-    }
-
-    pub fn with_in_memory_exporter(
-        mut self,
-        exporter: opentelemetry_sdk::metrics::InMemoryMetricExporter,
-    ) -> Self {
-        self.exporter = MetricsExporter::InMemory(exporter);
+        if let MetricsExporter::StatsigHttp { user_agent: ua, .. } = &mut self.exporter {
+            *ua = user_agent.into();
+        }
         self
     }
 
     pub(crate) fn exporter_label(&self) -> String {
         match &self.exporter {
-            MetricsExporter::StatsigHttp => {
-                format!(
-                    "statsig_http endpoint={} timeout={:?}",
-                    self.endpoint, self.timeout
-                )
-            }
+            MetricsExporter::StatsigHttp {
+                endpoint, timeout, ..
+            } => format!("statsig_http endpoint={} timeout={:?}", endpoint, timeout),
             MetricsExporter::InMemory(_) => "in_memory".to_string(),
         }
     }
@@ -97,9 +116,9 @@ impl MetricsConfig {
 impl Default for MetricsConfig {
     fn default() -> Self {
         if cfg!(test) {
-            Self::new("MOCK_API_KEY");
+            Self::statsig("MOCK_API_KEY")
         } else {
-            Self::new(DEFAULT_API_KEY)
+            Self::statsig(DEFAULT_API_KEY)
         }
     }
 }

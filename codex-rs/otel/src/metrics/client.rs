@@ -1,6 +1,7 @@
 use crate::metrics::DEFAULT_QUEUE_CAPACITY;
 use crate::metrics::DEFAULT_SHUTDOWN_TIMEOUT;
 use crate::metrics::config::MetricsConfig;
+use crate::metrics::config::MetricsExporter;
 use crate::metrics::error::MetricsError;
 use crate::metrics::error::Result;
 use crate::metrics::exporter::MetricEvent;
@@ -42,15 +43,16 @@ impl MetricsClient {
             return Err(MetricsError::QueueCapacityZero);
         }
 
-        if config.endpoint.is_empty() {
-            return Err(MetricsError::EmptyEndpoint);
-        }
-
-        if config.api_key.is_empty() {
-            return Err(MetricsError::EmptyApiKey);
-        }
-
         validate_tags(&config.default_tags)?;
+
+        if let MetricsExporter::StatsigHttp { endpoint, .. } = &config.exporter {
+            if endpoint.is_empty() {
+                return Err(MetricsError::EmptyEndpoint);
+            }
+            if config.api_key.is_empty() {
+                return Err(MetricsError::EmptyApiKey);
+            }
+        }
 
         let exporter_label = config.exporter_label();
         let exporter = build_worker_exporter(&config)?;

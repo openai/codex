@@ -13,7 +13,7 @@ pub(crate) fn build_metrics_with_defaults(
     default_tags: &[(&str, &str)],
 ) -> Result<(MetricsClient, InMemoryMetricExporter)> {
     let exporter = InMemoryMetricExporter::default();
-    let mut config = MetricsConfig::new("test-key").with_in_memory_exporter(exporter.clone());
+    let mut config = MetricsConfig::in_memory(exporter.clone());
     for (key, value) in default_tags {
         config = config.with_tag(*key, *value)?;
     }
