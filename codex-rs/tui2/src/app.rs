@@ -298,20 +298,19 @@ impl App {
                 .insert(pending.from_model.clone(), pending.to_model.clone());
         }
 
-        if should_show {
-            if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+        if should_show
+            && let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
                 .record_model_migration_seen(pending.from_model.as_str(), pending.to_model.as_str())
                 .apply()
                 .await
-            {
-                tracing::error!(
-                    error = %err,
-                    "failed to persist model migration notice acknowledgement"
-                );
-                self.chat_widget.add_error_message(format!(
-                    "Failed to persist model migration notice acknowledgement: {err}"
-                ));
-            }
+        {
+            tracing::error!(
+                error = %err,
+                "failed to persist model migration notice acknowledgement"
+            );
+            self.chat_widget.add_error_message(format!(
+                "Failed to persist model migration notice acknowledgement: {err}"
+            ));
         }
 
         if let Err(err) =
