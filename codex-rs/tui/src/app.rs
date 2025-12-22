@@ -222,9 +222,20 @@ impl App {
     }
 
     async fn maybe_emit_pending_model_migration_notice(&mut self, used_model: &str) {
-        let Some(pending) = self.config.notices.pending_model_migration.take() else {
-            return;
-        };
+        let pending =
+            match crate::model_migration_notice::read_pending_model_migration_notice(&self.config)
+                .await
+            {
+                Ok(Some(pending)) => pending,
+                Ok(None) => return,
+                Err(err) => {
+                    tracing::error!(
+                        error = %err,
+                        "failed to read pending model migration notice"
+                    );
+                    return;
+                }
+            };
 
         let should_show = pending.from_model == used_model;
         if should_show {
@@ -242,20 +253,31 @@ impl App {
                 .insert(pending.from_model.clone(), pending.to_model.clone());
         }
 
-        let mut edits = ConfigEditsBuilder::new(&self.config.codex_home);
         if should_show {
-            edits = edits.record_model_migration_seen(
-                pending.from_model.as_str(),
-                pending.to_model.as_str(),
-            );
+            if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                .record_model_migration_seen(pending.from_model.as_str(), pending.to_model.as_str())
+                .apply()
+                .await
+            {
+                tracing::error!(
+                    error = %err,
+                    "failed to persist model migration notice acknowledgement"
+                );
+                self.chat_widget.add_error_message(format!(
+                    "Failed to persist model migration notice acknowledgement: {err}"
+                ));
+            }
         }
-        if let Err(err) = edits.clear_pending_model_migration_notice().apply().await {
+
+        if let Err(err) =
+            crate::model_migration_notice::clear_pending_model_migration_notice(&self.config).await
+        {
             tracing::error!(
                 error = %err,
-                "failed to clear pending model migration notice"
+                "failed to clear pending model migration notice file"
             );
             self.chat_widget.add_error_message(format!(
-                "Failed to persist model migration notice state: {err}"
+                "Failed to clear pending model migration notice: {err}"
             ));
         }
     }
@@ -290,10 +312,12 @@ impl App {
                 return;
             }
 
-            if let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
-                .set_pending_model_migration_notice(used_model.as_str(), target_model.as_str())
-                .apply()
-                .await
+            if let Err(err) = crate::model_migration_notice::write_pending_model_migration_notice(
+                &config,
+                used_model.as_str(),
+                target_model.as_str(),
+            )
+            .await
             {
                 tracing::error!(
                     error = %err,
