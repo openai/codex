@@ -2,17 +2,24 @@
 
 この拡張はまだ初期段階です。互換性が壊れる変更が入る可能性があります。
 
-## 0.1.0
+## 0.1.6
 
-- Send ボタンをアイコン化し、実行中は Stop（クリック / Esc）で `turn/interrupt` を送る
-- キャンセル（legacy `turn_aborted`）をノイズ扱いせず簡易表示（`Interrupted`）
-- 入力欄を 1 行ベースにして自動伸長（上に伸びる）＋高さ調整
-- 右上ステータス（チェック/スピナー）の位置ずれを修正
-- Output を自動で開かないように変更
+- 入力欄の `@` 補完に `@agents:{name}` を追加（codex-mine実行時のみ）。ファイル候補より先に表示する
 
-## 0.1.1
+## 0.1.5
 
-- upstream 準拠で `skills/list` を呼び出し、`/skills` でスキルを挿入できるようにした（repo-local `.codex/skills` も app-server 側で探索される）
+- Resume: `thread/resume` でモデルを上書きしないように修正（モデル不一致の警告を抑制）
+
+## 0.1.4
+
+- Resume: 履歴復元が警告/デバッグ出力に邪魔されないよう修正
+- Resume: 一覧で時刻を先に表示
+- デバッグ/Legacyイベントの表示を折りたたみに変更（デフォルト閉じる）
+
+## 0.1.3
+
+- Resume開始時に、Newと同様にディレクトリ（workspace folder）を選べるようにした（選択したディレクトリの履歴のみ表示）
+- Resume の一覧から `modelProvider` / `cliVersion` の表示を削除
 
 ## 0.1.2
 
@@ -23,24 +30,17 @@
   - 履歴一覧は `CODEX_HOME` の全履歴を対象にする
 - セッションをリネームした場合は、タブ/SESSIONS表示から `#N` を外す（`#N` はデフォルト名の識別用途のみ）
 
-## 0.1.3
+## 0.1.1
 
-- Resume開始時に、Newと同様にディレクトリ（workspace folder）を選べるようにした（選択したディレクトリの履歴のみ表示）
-- Resume の一覧から `modelProvider` / `cliVersion` の表示を削除
+- upstream 準拠で `skills/list` を呼び出し、`/skills` でスキルを挿入できるようにした（repo-local `.codex/skills` も app-server 側で探索される）
 
-## 0.1.4
+## 0.1.0
 
-- Resume: 履歴復元が警告/デバッグ出力に邪魔されないよう修正
-- Resume: 一覧で時刻を先に表示
-- デバッグ/Legacyイベントの表示を折りたたみに変更（デフォルト閉じる）
-
-## 0.1.5
-
-- Resume: `thread/resume` でモデルを上書きしないように修正（モデル不一致の警告を抑制）
-
-## 0.1.6
-
-- 入力欄の `@` 補完に `@agents:{name}` を追加（codex-mine実行時のみ）。ファイル候補より先に表示する
+- Send ボタンをアイコン化し、実行中は Stop（クリック / Esc）で `turn/interrupt` を送る
+- キャンセル（legacy `turn_aborted`）をノイズ扱いせず簡易表示（`Interrupted`）
+- 入力欄を 1 行ベースにして自動伸長（上に伸びる）＋高さ調整
+- 右上ステータス（チェック/スピナー）の位置ずれを修正
+- Output を自動で開かないように変更
 
 ## 0.0.7
 
