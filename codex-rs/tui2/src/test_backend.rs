@@ -25,6 +25,7 @@ pub struct VT100Backend {
 impl VT100Backend {
     /// Creates a new `TestBackend` with the specified width and height.
     pub fn new(width: u16, height: u16) -> Self {
+        crossterm::style::Colored::set_ansi_color_disabled(false);
         Self {
             crossterm_backend: CrosstermBackend::new(vt100::Parser::new(height, width, 0)),
         }
