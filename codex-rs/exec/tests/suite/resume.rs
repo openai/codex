@@ -330,6 +330,7 @@ fn exec_resume_accepts_images_after_subcommand() -> anyhow::Result<()> {
         .success();
 
     let image_path = test.cwd_path().join("resume_image.png");
+    let image_path_2 = test.cwd_path().join("resume_image_2.png");
     let image_bytes: &[u8] = &[
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
         0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
@@ -338,6 +339,7 @@ fn exec_resume_accepts_images_after_subcommand() -> anyhow::Result<()> {
         0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
     ];
     std::fs::write(&image_path, image_bytes)?;
+    std::fs::write(&image_path_2, image_bytes)?;
 
     let prompt2 = format!("echo resume-image-2-{}", Uuid::new_v4());
     test.cmd()
@@ -350,6 +352,8 @@ fn exec_resume_accepts_images_after_subcommand() -> anyhow::Result<()> {
         .arg("--last")
         .arg("--image")
         .arg(&image_path)
+        .arg("--image")
+        .arg(&image_path_2)
         .arg(&prompt2)
         .assert()
         .success();
