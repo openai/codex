@@ -328,4 +328,18 @@ mod tests {
             ]]
         );
     }
+
+    #[test]
+    fn rejects_concatenation_with_variable_substitution() {
+        // Environment variables in concatenated strings should be rejected
+        assert!(parse_seq("rg -g\"$VAR\" pattern").is_none());
+        assert!(parse_seq("rg -g\"${VAR}\" pattern").is_none());
+    }
+
+    #[test]
+    fn rejects_concatenation_with_command_substitution() {
+        // Command substitution in concatenated strings should be rejected
+        assert!(parse_seq("rg -g\"$(pwd)\" pattern").is_none());
+        assert!(parse_seq("rg -g\"$(echo '*.py')\" pattern").is_none());
+    }
 }
