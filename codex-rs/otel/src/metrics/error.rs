@@ -1,3 +1,4 @@
+use std::time::Duration;
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, MetricsError>;
@@ -51,6 +52,8 @@ pub enum MetricsError {
     WorkerUnavailable,
     #[error("metrics worker thread panicked")]
     WorkerPanicked,
+    #[error("metrics shutdown timed out after {timeout:?}")]
+    ShutdownTimeout { timeout: Duration },
     #[error("failed to send statsig metrics request")]
     StatsigRequestFailed {
         #[source]

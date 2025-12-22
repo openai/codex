@@ -198,7 +198,7 @@ impl MetricsClient {
             return Ok(());
         }
 
-        Ok(())
+        Err(MetricsError::ShutdownTimeout { timeout })
     }
 }
 

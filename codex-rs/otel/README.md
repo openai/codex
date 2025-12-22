@@ -96,4 +96,5 @@ metrics.shutdown()?; // flushes in-memory exporter
 - `OtelManager::shutdown_metrics()` flushes and stops the metrics worker.
 
 Both are optional because drop performs best-effort shutdown, but calling them
-explicitly gives deterministic flushing.
+explicitly gives deterministic flushing (or a shutdown error if flushing does
+not complete in time).
