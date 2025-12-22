@@ -19,6 +19,11 @@ use crate::render::renderable::Renderable;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
+use crate::tui::scrolling::MouseScrollState;
+use crate::tui::scrolling::ScrollConfig;
+use crate::tui::scrolling::ScrollConfigOverrides;
+use crate::tui::scrolling::ScrollDirection;
+use crate::tui::scrolling::ScrollUpdate;
 use crate::tui::scrolling::TranscriptLineMeta;
 use crate::tui::scrolling::TranscriptScroll;
 use crate::update_action::UpdateAction;
@@ -32,9 +37,9 @@ use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
-use codex_core::openai_models::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
-use codex_core::openai_models::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::models_manager::manager::ModelsManager;
+use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
+use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::ListSkillsResponseEvent;
@@ -42,6 +47,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
+use codex_core::terminal::terminal_info;
 use codex_protocol::ConversationId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -336,6 +342,9 @@ pub(crate) struct App {
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
 
+    scroll_config: ScrollConfig,
+    scroll_state: MouseScrollState,
+
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
     pub(crate) feedback: codex_feedback::CodexFeedback,
@@ -371,6 +380,7 @@ struct TranscriptSelectionPoint {
     line_index: usize,
     column: u16,
 }
+
 impl App {
     async fn shutdown_current_conversation(&mut self) {
         if let Some(conversation_id) = self.chat_widget.conversation_id() {
@@ -478,6 +488,20 @@ impl App {
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
+        let scroll_config = ScrollConfig::from_terminal(
+            &terminal_info(),
+            ScrollConfigOverrides {
+                events_per_tick: config.tui_scroll_events_per_tick,
+                wheel_lines_per_tick: config.tui_scroll_wheel_lines,
+                trackpad_lines_per_tick: config.tui_scroll_trackpad_lines,
+                trackpad_accel_events: config.tui_scroll_trackpad_accel_events,
+                trackpad_accel_max: config.tui_scroll_trackpad_accel_max,
+                mode: Some(config.tui_scroll_mode),
+                wheel_tick_detect_max_ms: config.tui_scroll_wheel_tick_detect_max_ms,
+                wheel_like_max_duration_ms: config.tui_scroll_wheel_like_max_duration_ms,
+                invert_direction: config.tui_scroll_invert,
+            },
+        );
 
         let mut app = Self {
             server: conversation_manager.clone(),
@@ -498,6 +522,8 @@ impl App {
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            scroll_config,
+            scroll_state: MouseScrollState::default(),
             backtrack: BacktrackState::default(),
             feedback: feedback.clone(),
             pending_update_action: None,
@@ -581,6 +607,10 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
+        if matches!(&event, TuiEvent::Draw) {
+            self.handle_scroll_tick(tui);
+        }
+
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -810,7 +840,8 @@ impl App {
 
     /// Handle mouse interaction in the main transcript view.
     ///
-    /// - Mouse wheel movement scrolls the conversation history by small, fixed increments,
+    /// - Mouse wheel movement scrolls the conversation history using stream-based
+    ///   normalization (events-per-line factor, discrete vs. continuous streams),
     ///   independent of the terminal's own scrollback.
     /// - Mouse clicks and drags adjust a text selection defined in terms of
     ///   flattened transcript lines and columns, so the selection is anchored
@@ -875,21 +906,26 @@ impl App {
 
         match mouse_event.kind {
             MouseEventKind::ScrollUp => {
-                self.scroll_transcript(
+                let scroll_update = self.mouse_scroll_update(ScrollDirection::Up);
+                self.apply_scroll_update(
                     tui,
-                    -3,
+                    scroll_update,
                     transcript_area.height as usize,
                     transcript_area.width,
+                    true,
                 );
             }
             MouseEventKind::ScrollDown => {
-                self.scroll_transcript(
+                let scroll_update = self.mouse_scroll_update(ScrollDirection::Down);
+                self.apply_scroll_update(
                     tui,
-                    3,
+                    scroll_update,
                     transcript_area.height as usize,
                     transcript_area.width,
+                    true,
                 );
             }
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {}
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(point) = self.transcript_point_from_coordinates(
                     transcript_area,
@@ -931,18 +967,119 @@ impl App {
         }
     }
 
-    /// Scroll the transcript by a fixed number of visual lines.
+    /// Convert a single mouse scroll event (direction-only) into a normalized scroll update.
+    ///
+    /// This delegates to [`MouseScrollState::on_scroll_event`] using the current [`ScrollConfig`].
+    /// The returned [`ScrollUpdate`] is intentionally split into:
+    ///
+    /// - `lines`: a *delta* in visual lines to apply immediately to the transcript viewport.
+    ///   - Sign convention matches [`ScrollDirection`] (`Up` is negative; `Down` is positive).
+    ///   - May be 0 in trackpad-like mode while sub-line fractions are still accumulating.
+    /// - `next_tick_in`: an optional delay after which we should trigger a follow-up tick.
+    ///   This is required because stream closure is defined by a *time gap* rather than an
+    ///   explicit "gesture end" event. See [`App::apply_scroll_update`] and
+    ///   [`App::handle_scroll_tick`].
+    ///
+    /// In TUI2, that follow-up tick is driven via `TuiEvent::Draw`: we schedule a frame, and on
+    /// the next draw we call [`MouseScrollState::on_tick`] to close idle streams and flush any
+    /// newly-reached whole lines. This prevents perceived "stop lag" where accumulated scroll only
+    /// applies once the next user input arrives.
+    fn mouse_scroll_update(&mut self, direction: ScrollDirection) -> ScrollUpdate {
+        self.scroll_state
+            .on_scroll_event(direction, self.scroll_config)
+    }
+
+    /// Apply a [`ScrollUpdate`] to the transcript viewport and schedule any needed follow-up tick.
+    ///
+    /// `update.lines` is applied immediately via [`App::scroll_transcript`].
+    ///
+    /// If `update.next_tick_in` is `Some`, we schedule a future frame so `TuiEvent::Draw` can call
+    /// [`App::handle_scroll_tick`] and close the stream after it goes idle and/or cadence-flush
+    /// pending whole lines.
+    ///
+    /// `schedule_frame` is forwarded to [`App::scroll_transcript`] and controls whether scrolling
+    /// should request an additional draw. Pass `false` when applying scroll during a
+    /// `TuiEvent::Draw` tick to avoid redundant frames.
+    fn apply_scroll_update(
+        &mut self,
+        tui: &mut tui::Tui,
+        update: ScrollUpdate,
+        visible_lines: usize,
+        width: u16,
+        schedule_frame: bool,
+    ) {
+        if update.lines != 0 {
+            self.scroll_transcript(tui, update.lines, visible_lines, width, schedule_frame);
+        }
+        if let Some(delay) = update.next_tick_in {
+            tui.frame_requester().schedule_frame_in(delay);
+        }
+    }
+
+    /// Drive stream closure and cadence-based flushing for mouse scrolling.
+    ///
+    /// This is called on every `TuiEvent::Draw` before rendering. If a scroll stream is active, it
+    /// may:
+    ///
+    /// - Close the stream once it has been idle for longer than the stream-gap threshold.
+    /// - Flush whole-line deltas on the redraw cadence for trackpad-like streams, even if no new
+    ///   events arrive.
+    ///
+    /// The resulting update is applied with `schedule_frame = false` because we are already in a
+    /// draw tick.
+    fn handle_scroll_tick(&mut self, tui: &mut tui::Tui) {
+        let Some((visible_lines, width)) = self.transcript_scroll_dimensions(tui) else {
+            return;
+        };
+        let update = self.scroll_state.on_tick();
+        self.apply_scroll_update(tui, update, visible_lines, width, false);
+    }
+
+    /// Compute the transcript viewport dimensions used for scrolling.
+    ///
+    /// Mouse scrolling is applied in terms of "visible transcript lines": the terminal height
+    /// minus the chat composer height. We compute this from the last known terminal size to avoid
+    /// querying the terminal during non-draw events.
+    ///
+    /// Returns `(visible_lines, width)` or `None` when the terminal is not yet sized or the chat
+    /// area consumes the full height.
+    fn transcript_scroll_dimensions(&self, tui: &tui::Tui) -> Option<(usize, u16)> {
+        let size = tui.terminal.last_known_screen_size;
+        let width = size.width;
+        let height = size.height;
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let chat_height = self.chat_widget.desired_height(width);
+        if chat_height >= height {
+            return None;
+        }
+
+        let transcript_height = height.saturating_sub(chat_height);
+        if transcript_height == 0 {
+            return None;
+        }
+
+        Some((transcript_height as usize, width))
+    }
+
+    /// Scroll the transcript by a number of visual lines.
     ///
     /// This is the shared implementation behind mouse wheel movement and PgUp/PgDn keys in
     /// the main view. Scroll state is expressed in terms of transcript cells and their
     /// internal line indices, so scrolling refers to logical conversation content and
     /// remains stable even as wrapping or streaming causes visual reflows.
+    ///
+    /// `schedule_frame` controls whether to request an extra draw; pass `false` when applying
+    /// scroll during a `TuiEvent::Draw` tick to avoid redundant frames.
     fn scroll_transcript(
         &mut self,
         tui: &mut tui::Tui,
         delta_lines: i32,
         visible_lines: usize,
         width: u16,
+        schedule_frame: bool,
     ) {
         if visible_lines == 0 {
             return;
@@ -953,9 +1090,11 @@ impl App {
             self.transcript_scroll
                 .scrolled_by(delta_lines, &line_meta, visible_lines);
 
-        // Delay redraws slightly so scroll bursts coalesce into a single frame.
-        tui.frame_requester()
-            .schedule_frame_in(Duration::from_millis(16));
+        if schedule_frame {
+            // Delay redraws slightly so scroll bursts coalesce into a single frame.
+            tui.frame_requester()
+                .schedule_frame_in(Duration::from_millis(16));
+        }
     }
 
     /// Convert a `ToBottom` (auto-follow) scroll state into a fixed anchor at the current view.
@@ -2011,6 +2150,7 @@ impl App {
                                 delta,
                                 usize::from(transcript_height),
                                 width,
+                                true,
                             );
                         }
                     }
@@ -2035,6 +2175,7 @@ impl App {
                                 delta,
                                 usize::from(transcript_height),
                                 width,
+                                true,
                             );
                         }
                     }
@@ -2177,6 +2318,8 @@ mod tests {
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            scroll_config: ScrollConfig::default(),
+            scroll_state: MouseScrollState::default(),
             backtrack: BacktrackState::default(),
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
@@ -2221,6 +2364,8 @@ mod tests {
                 has_emitted_history_lines: false,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
+                scroll_config: ScrollConfig::default(),
+                scroll_state: MouseScrollState::default(),
                 backtrack: BacktrackState::default(),
                 feedback: codex_feedback::CodexFeedback::new(),
                 pending_update_action: None,
@@ -2233,7 +2378,7 @@ mod tests {
     }
 
     fn all_model_presets() -> Vec<ModelPreset> {
-        codex_core::openai_models::model_presets::all_model_presets().clone()
+        codex_core::models_manager::model_presets::all_model_presets().clone()
     }
 
     #[tokio::test]

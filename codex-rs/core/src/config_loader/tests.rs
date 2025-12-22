@@ -5,6 +5,7 @@ use crate::config_loader::ConfigRequirements;
 use crate::config_loader::config_requirements::ConfigRequirementsToml;
 use crate::config_loader::load_requirements_toml;
 use codex_protocol::protocol::AskForApproval;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 use toml::Value as TomlValue;
@@ -40,9 +41,15 @@ extra = true
         managed_preferences_base64: None,
     };
 
-    let state = load_config_layers_state(tmp.path(), &[] as &[(String, TomlValue)], overrides)
-        .await
-        .expect("load config");
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let state = load_config_layers_state(
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        overrides,
+    )
+    .await
+    .expect("load config");
     let loaded = state.effective_config();
     let table = loaded.as_table().expect("top-level table expected");
 
@@ -68,9 +75,15 @@ async fn returns_empty_when_all_layers_missing() {
         managed_preferences_base64: None,
     };
 
-    let layers = load_config_layers_state(tmp.path(), &[] as &[(String, TomlValue)], overrides)
-        .await
-        .expect("load layers");
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let layers = load_config_layers_state(
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        overrides,
+    )
+    .await
+    .expect("load layers");
     assert!(
         layers.get_user_layer().is_none(),
         "no user layer when CODEX_HOME/config.toml does not exist"
@@ -138,9 +151,15 @@ flag = true
         managed_preferences_base64: Some(encoded),
     };
 
-    let state = load_config_layers_state(tmp.path(), &[] as &[(String, TomlValue)], overrides)
-        .await
-        .expect("load config");
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let state = load_config_layers_state(
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        overrides,
+    )
+    .await
+    .expect("load config");
     let loaded = state.effective_config();
     let nested = loaded
         .get("nested")

@@ -1992,16 +1992,6 @@ impl CodexMessageProcessor {
             }
         };
 
-        if !config.features.enabled(Feature::RmcpClient) {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "OAuth login is only supported when [features].rmcp_client is true in config.toml".to_string(),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
-        }
-
         let McpServerOauthLoginParams {
             name,
             scopes,

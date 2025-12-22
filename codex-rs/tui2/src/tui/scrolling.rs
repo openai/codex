@@ -19,6 +19,13 @@
 //! Spacer rows between non-continuation cells are represented as `TranscriptLineMeta::Spacer`.
 //! They are not valid anchors; `anchor_for` will pick the nearest non-spacer line when needed.
 
+pub(crate) mod mouse;
+pub(crate) use mouse::MouseScrollState;
+pub(crate) use mouse::ScrollConfig;
+pub(crate) use mouse::ScrollConfigOverrides;
+pub(crate) use mouse::ScrollDirection;
+pub(crate) use mouse::ScrollUpdate;
+
 /// Per-flattened-line metadata for the transcript view.
 ///
 /// Each rendered line in the flattened transcript has a corresponding `TranscriptLineMeta` entry

@@ -195,6 +195,9 @@ own scrolling also means we must own mouse interactions end‑to‑end: if we le
 to the terminal, we could not reliably line up selections with transcript content or avoid
 accidentally copying gutter/margin characters instead of just the conversation text.
 
+Scroll normalization details and the data behind it live in
+`codex-rs/tui2/docs/scroll_input_model.md`.
+
 ---
 
 ## 5. Printing History to Scrollback
@@ -428,7 +431,8 @@ feedback are already implemented:
 
 - Bottom pane positioning is pegged high with an empty transcript and moves down as the transcript
   fills (including on resume).
-- Wheel-based transcript scrolling is enabled on top of the new scroll model.
+- Wheel-based transcript scrolling uses the stream-based normalization model derived from scroll
+  probe data (see `codex-rs/tui2/docs/scroll_input_model.md`).
 - While a selection is active, streaming stops “follow latest output” so the selection remains
   stable, and follow mode resumes after the selection is cleared.
 
@@ -440,7 +444,7 @@ Vim) behavior as we can while still owning the viewport.
 
 **P0 — must-have (usability/correctness):**
 
-- **Scrolling behavior.** Default to small scroll increments (ideally 1 line per wheel tick) with
+- **Scrolling behavior.** Default to a classic multi-line wheel tick (3 lines, configurable) with
   acceleration/velocity for faster navigation, and ensure we stop scrolling when the user stops
   input (avoid redraw/event-loop backlog that makes scrolling feel “janky”).
 - **Mouse event bounds.** Ignore mouse events outside the transcript region so clicks in the

@@ -24,8 +24,8 @@ use crate::default_client::build_reqwest_client;
 use crate::error::Result as CoreResult;
 use crate::features::Feature;
 use crate::model_provider_info::ModelProviderInfo;
-use crate::openai_models::model_family::ModelFamily;
-use crate::openai_models::model_presets::builtin_model_presets;
+use crate::models_manager::model_family::ModelFamily;
+use crate::models_manager::model_presets::builtin_model_presets;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
