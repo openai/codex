@@ -332,6 +332,94 @@ impl App {
         }
     }
 
+    async fn on_session_configured_model(&mut self, model: String) {
+        self.maybe_emit_pending_model_migration_notice(model.as_str())
+            .await;
+        self.spawn_schedule_model_migration_notice(model);
+    }
+
+    async fn maybe_emit_pending_model_migration_notice(&mut self, used_model: &str) {
+        let Some(pending) = self.config.notices.pending_model_migration.take() else {
+            return;
+        };
+
+        let should_show = pending.from_model == used_model;
+        if should_show {
+            let message = format!(
+                "Recommended model upgrade: switch from {} to {}. Run /model to change.",
+                pending.from_model, pending.to_model
+            );
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                crate::history_cell::new_warning_event(message),
+            )));
+
+            self.config
+                .notices
+                .model_migrations
+                .insert(pending.from_model.clone(), pending.to_model.clone());
+        }
+
+        let mut edits = ConfigEditsBuilder::new(&self.config.codex_home);
+        if should_show {
+            edits = edits.record_model_migration_seen(
+                pending.from_model.as_str(),
+                pending.to_model.as_str(),
+            );
+        }
+        if let Err(err) = edits.clear_pending_model_migration_notice().apply().await {
+            tracing::error!(
+                error = %err,
+                "failed to clear pending model migration notice"
+            );
+            self.chat_widget.add_error_message(format!(
+                "Failed to persist model migration notice state: {err}"
+            ));
+        }
+    }
+
+    fn spawn_schedule_model_migration_notice(&self, used_model: String) {
+        let config = self.config.clone();
+        let models_manager = self.server.get_models_manager();
+
+        tokio::spawn(async move {
+            // Build the candidate migration notice using the current models list (remote if
+            // refreshed, otherwise the startup fallback seeded in `ModelsManager`).
+            let available_models = models_manager.list_models(&config).await;
+            let upgrade = available_models
+                .iter()
+                .find(|preset| preset.model == used_model)
+                .and_then(|preset| preset.upgrade.as_ref());
+            let Some(upgrade) = upgrade else {
+                return;
+            };
+
+            if migration_prompt_hidden(&config, upgrade.migration_config_key.as_str()) {
+                return;
+            }
+
+            let target_model = upgrade.id.clone();
+            if !should_show_model_migration_prompt(
+                used_model.as_str(),
+                target_model.as_str(),
+                &config.notices.model_migrations,
+                &available_models,
+            ) {
+                return;
+            }
+
+            if let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
+                .set_pending_model_migration_notice(used_model.as_str(), target_model.as_str())
+                .apply()
+                .await
+            {
+                tracing::error!(
+                    error = %err,
+                    "failed to persist pending model migration notice"
+                );
+            }
+        });
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
@@ -352,30 +440,10 @@ impl App {
             auth_manager.clone(),
             SessionSource::Cli,
         ));
-        let mut model = conversation_manager
-            .get_models_manager()
-            .get_model(&config.model, &config)
-            .await;
-        let exit_info = handle_model_migration_prompt_if_needed(
-            tui,
-            &mut config,
-            model.as_str(),
-            &app_event_tx,
-            conversation_manager.get_models_manager(),
-        )
-        .await;
-        if let Some(exit_info) = exit_info {
-            return Ok(exit_info);
-        }
-        if let Some(updated_model) = config.model.clone() {
-            model = updated_model;
-        }
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
-        let model_family = conversation_manager
-            .get_models_manager()
-            .construct_model_family(model.as_str(), &config)
-            .await;
+        let model_family =
+            codex_core::models_manager::model_family::ModelFamily::placeholder(&config);
         let mut chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -437,7 +505,7 @@ impl App {
             chat_widget,
             auth_manager: auth_manager.clone(),
             config,
-            current_model: model.clone(),
+            current_model: String::new(),
             active_profile,
             file_search,
             enhanced_keys_supported,
@@ -722,12 +790,21 @@ impl App {
                     self.suppress_shutdown_complete = false;
                     return Ok(true);
                 }
+
+                let configured_model = match &event.msg {
+                    EventMsg::SessionConfigured(ev) => Some(ev.model.clone()),
+                    _ => None,
+                };
                 if let EventMsg::ListSkillsResponse(response) = &event.msg {
                     let cwd = self.chat_widget.config_ref().cwd.clone();
                     let errors = errors_for_cwd(&cwd, response);
                     emit_skill_load_warnings(&self.app_event_tx, &errors);
                 }
                 self.chat_widget.handle_codex_event(event);
+
+                if let Some(model) = configured_model {
+                    self.on_session_configured_model(model).await;
+                }
             }
             AppEvent::ConversationHistory(ev) => {
                 self.on_conversation_history_for_backtrack(tui, ev).await?;

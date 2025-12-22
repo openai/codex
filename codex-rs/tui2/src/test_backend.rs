@@ -25,7 +25,8 @@ pub struct VT100Backend {
 impl VT100Backend {
     /// Creates a new `TestBackend` with the specified width and height.
     pub fn new(width: u16, height: u16) -> Self {
-        crossterm::style::Colored::set_ansi_color_disabled(false);
+        // Force ANSI color output even when the writer isn't a real TTY (e.g., vt100::Parser in tests).
+        crossterm::style::force_color_output(true);
         Self {
             crossterm_backend: CrosstermBackend::new(vt100::Parser::new(height, width, 0)),
         }

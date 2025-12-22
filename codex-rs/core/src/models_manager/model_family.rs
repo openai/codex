@@ -84,6 +84,33 @@ pub struct ModelFamily {
 }
 
 impl ModelFamily {
+    /// Placeholder model family for UI startup before Codex has selected the real model.
+    ///
+    /// This must not be treated as an actual model slug; it only exists to allow
+    /// consumers (e.g. the TUI) to render while the session is still starting.
+    pub fn placeholder(config: &Config) -> Self {
+        let mf = Self {
+            slug: String::new(),
+            family: "unknown".to_string(),
+            needs_special_apply_patch_instructions: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            supports_reasoning_summaries: false,
+            default_reasoning_effort: None,
+            reasoning_summary_format: ReasoningSummaryFormat::None,
+            supports_parallel_tool_calls: false,
+            apply_patch_tool_type: None,
+            base_instructions: BASE_INSTRUCTIONS.to_string(),
+            experimental_supported_tools: Vec::new(),
+            effective_context_window_percent: 95,
+            support_verbosity: false,
+            default_verbosity: None,
+            shell_type: ConfigShellToolType::Default,
+            truncation_policy: TruncationPolicy::Bytes(10_000),
+        };
+        mf.with_config_overrides(config)
+    }
+
     pub(super) fn with_config_overrides(mut self, config: &Config) -> Self {
         if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries {
             self.supports_reasoning_summaries = supports_reasoning_summaries;

@@ -1023,6 +1023,27 @@ async fn alt_up_edits_most_recent_queued_message() {
 async fn enqueueing_history_prompt_multiple_times_is_stable() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
+    // Ensure the session is configured so the first submission is sent (not queued),
+    // which seeds the prompt history for the subsequent Up-arrow recalls.
+    let conversation_id = ConversationId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    chat.handle_codex_event(Event {
+        id: "configured".into(),
+        msg: EventMsg::SessionConfigured(codex_core::protocol::SessionConfiguredEvent {
+            session_id: conversation_id,
+            model: "test-model".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            rollout_path: rollout_file.path().to_path_buf(),
+        }),
+    });
+
     // Submit an initial prompt to seed history.
     chat.bottom_pane.set_composer_text("repeat me".to_string());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
