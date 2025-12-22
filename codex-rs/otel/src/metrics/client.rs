@@ -6,7 +6,9 @@ use crate::metrics::config::MetricsExporter;
 use crate::metrics::error::MetricsError;
 use crate::metrics::error::Result;
 use crate::metrics::sink::build_metric_sink;
-use crate::metrics::validation::{validate_metric_name, validate_tag_key, validate_tag_value};
+use crate::metrics::validation::validate_metric_name;
+use crate::metrics::validation::validate_tag_key;
+use crate::metrics::validation::validate_tag_value;
 use crate::metrics::validation::validate_tags;
 use crate::metrics::worker::spawn_worker;
 use std::collections::BTreeMap;
@@ -99,7 +101,11 @@ impl MetricsClient {
         duration: Duration,
         tags: &[(&str, &str)],
     ) -> Result<()> {
-        self.histogram(name, duration.as_millis().min(i64::MAX as u128) as i64, tags)
+        self.histogram(
+            name,
+            duration.as_millis().min(i64::MAX as u128) as i64,
+            tags,
+        )
     }
 
     /// Measure a closure and emit a histogram sample for the elapsed time.

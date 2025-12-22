@@ -3,8 +3,6 @@ mod config;
 mod error;
 mod event;
 mod sink;
-mod tags;
-mod time;
 mod util;
 pub(crate) mod validation;
 mod worker;
