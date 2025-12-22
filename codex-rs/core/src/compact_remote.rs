@@ -64,6 +64,8 @@ async fn run_remote_compact_task_inner_impl(
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);
     }
+    tracing::error!("Before compaction: {:?}", history);
+    tracing::error!("After compaction: {:?}", new_history);
     sess.replace_history(new_history.clone()).await;
     sess.recompute_token_usage(turn_context).await;
 
