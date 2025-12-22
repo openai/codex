@@ -1388,6 +1388,22 @@ function main(): void {
 
       if (block.type === "system") {
         const key = "b:" + block.id;
+        if (block.title === "Other events (debug)") {
+          const id = "sys:" + block.id;
+          const det = ensureDetails(
+            id,
+            "notice debug",
+            false,
+            "Debug: " + block.title,
+            id,
+          );
+          const pre = det.querySelector(`pre[data-k="body"]`);
+          if (pre) pre.remove();
+          const mdEl = ensureMd(det, "body");
+          renderMarkdownInto(mdEl, block.text);
+          continue;
+        }
+
         const div = ensureDiv(key, "msg system");
         const pre = div.querySelector(`pre[data-k="body"]`);
         if (pre) pre.remove();
