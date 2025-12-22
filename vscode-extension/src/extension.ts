@@ -274,8 +274,7 @@ export function activate(context: vscode.ExtensionContext): void {
         collected.push(...filtered);
 
         const items = collected.map((t) => ({
-          label: formatThreadLabel(t.preview),
-          description: formatThreadWhen(t.createdAt),
+          label: `${formatThreadWhen(t.createdAt)}  ${formatThreadLabel(t.preview)}`,
           thread: t,
           kind: "thread" as const,
         }));
