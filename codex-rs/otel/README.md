@@ -70,11 +70,11 @@ let manager = OtelManager::new(
 manager.user_prompt(&prompt_items);
 ```
 
-## Metrics (Statsig + OTLP)
+## Metrics (Statsig HTTP)
 
-The metrics client sends counters and histograms to Statsig via OTLP/HTTP. Use
-placeholders for the Statsig endpoint and API key header until you have real
-values:
+The metrics client sends counters and histograms to Statsig via the `log_event`
+endpoint. Use placeholders for the Statsig endpoint and API key header until
+you have real values:
 
 ```rust
 use codex_otel::metrics::HistogramBuckets;
@@ -83,7 +83,7 @@ use codex_otel::metrics::MetricsConfig;
 
 let metrics = MetricsClient::new(
     MetricsConfig::new("<statsig-api-key>")
-        .with_endpoint("<statsig-otlp-metrics-endpoint>")
+        .with_endpoint("<statsig-log-event-endpoint>")
         .with_api_key_header("<statsig-api-key-header>"),
 )?;
 
@@ -122,7 +122,7 @@ let settings = OtelSettings {
     },
     metrics: Some(
         MetricsConfig::new("<statsig-api-key>")
-            .with_endpoint("<statsig-otlp-metrics-endpoint>")
+            .with_endpoint("<statsig-log-event-endpoint>")
             .with_api_key_header("<statsig-api-key-header>"),
     ),
 };

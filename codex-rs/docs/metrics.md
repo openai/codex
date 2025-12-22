@@ -1,12 +1,12 @@
-# Metrics (Statsig + OTEL)
+# Metrics (Statsig HTTP)
 
 The `codex_otel::metrics` module sends counters and histograms to a Statsig
-backend using OTLP/HTTP. It uses a background worker to keep callers
-non-blocking and exports metrics via OpenTelemetry.
+backend by POSTing JSON to the Statsig `log_event` endpoint. A tokio-backed
+worker keeps callers non-blocking while metrics are serialized and sent.
 
-You must supply a Statsig OTLP endpoint and API key. This module ships with
-placeholders (`<statsig-otlp-metrics-endpoint>`, `<statsig-api-key-header>`,
-`<statsig-api-key>`) so they are obvious to replace.
+Defaults are provided for the Statsig API key, header name, and endpoint so
+you can send metrics immediately. Override them if you need to target a
+different Statsig project.
 
 ## Quick start
 
@@ -17,7 +17,7 @@ use codex_otel::metrics::MetricsConfig;
 
 let metrics = MetricsClient::new(
     MetricsConfig::new("<statsig-api-key>")
-        .with_endpoint("<statsig-otlp-metrics-endpoint>")
+        .with_endpoint("<statsig-log-event-endpoint>")
         .with_api_key_header("<statsig-api-key-header>")
         .with_tag("service", "codex-cli")?,
 )?;
@@ -54,7 +54,7 @@ let manager = OtelManager::new(
 )
 .with_metrics_config(
     MetricsConfig::new("<statsig-api-key>")
-        .with_endpoint("<statsig-otlp-metrics-endpoint>")
+        .with_endpoint("<statsig-log-event-endpoint>")
         .with_api_key_header("<statsig-api-key-header>"),
 )?;
 
@@ -72,19 +72,18 @@ If you set `metrics: Some(MetricsConfig)` on `OtelSettings` and build an
 `MetricsConfig` lets you specify:
 
 - `MetricsConfig::new(api_key)` to set the Statsig API key.
-- `with_endpoint(endpoint)` to set the OTLP endpoint.
+- `with_endpoint(endpoint)` to set the Statsig `log_event` endpoint.
 - `with_api_key_header(header)` to set the API key header name.
 - `with_tag(key, value)` to add default tags for every metric.
-- `with_timeout(duration)` to set the OTLP export timeout.
-- `with_export_interval(duration)` to set the periodic export interval.
+- `with_timeout(duration)` to set the HTTP request timeout.
+- `with_export_interval(duration)` to tweak the in-memory exporter interval in tests.
 - `with_user_agent(agent)` to override the HTTP `User-Agent` header.
 
 The queue capacity is fixed at 1024 entries.
 
 ## Histograms
 
-Histograms are recorded as OpenTelemetry histograms. Bucket boundaries are
-controlled by the OTEL pipeline (collector/exporter configuration). The
+Histogram samples are sent as individual Statsig events. The
 `HistogramBuckets` type is retained for API compatibility and validation but
 is not used to pre-bucket samples.
 
@@ -161,4 +160,4 @@ Tag keys and values:
 
 All APIs return `codex_otel::metrics::Result<T>` with a `MetricsError` variant
 on failure. Errors cover invalid configuration, validation failures, queue
-backpressure, and OTLP exporter setup issues.
+backpressure, and HTTP client setup or request failures.

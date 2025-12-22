@@ -31,6 +31,28 @@ pub enum MetricsError {
     ReservedTagKey { key: String },
 
     // Config.
+    #[error("failed to build tokio runtime")]
+    RuntimeBuild {
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("invalid api key header: {header}")]
+    InvalidApiKeyHeader {
+        header: String,
+        #[source]
+        source: reqwest::header::InvalidHeaderName,
+    },
+    #[error("invalid header value: {header}")]
+    InvalidHeaderValue {
+        header: String,
+        #[source]
+        source: reqwest::header::InvalidHeaderValue,
+    },
+    #[error("failed to build metrics http client")]
+    HttpClientBuild {
+        #[source]
+        source: reqwest::Error,
+    },
     #[error("metrics endpoint cannot be empty")]
     EmptyEndpoint,
     #[error("metrics api key cannot be empty")]
@@ -60,4 +82,14 @@ pub enum MetricsError {
     WorkerUnavailable,
     #[error("metrics worker thread panicked")]
     WorkerPanicked,
+    #[error("failed to send statsig metrics request")]
+    StatsigRequestFailed {
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("statsig metrics request failed: {status} {body}")]
+    StatsigResponseError {
+        status: reqwest::StatusCode,
+        body: String,
+    },
 }

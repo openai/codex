@@ -13,28 +13,32 @@ use crate::metrics::tags::tags_to_attributes;
 use crate::metrics::time::duration_to_millis;
 use crate::metrics::util::error_or_panic;
 use crate::metrics::validation::validate_tags;
+use chrono::Utc;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::Histogram;
 use opentelemetry::metrics::Meter;
 use opentelemetry::metrics::MeterProvider;
 use opentelemetry::metrics::UpDownCounter;
-use opentelemetry_otlp::MetricExporter;
-use opentelemetry_otlp::Protocol;
-use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_otlp::WithHttpConfig;
 use opentelemetry_sdk::metrics::PeriodicReader;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
+use reqwest::header::HeaderName;
+use reqwest::header::HeaderValue;
+use reqwest::header::USER_AGENT;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::mpsc;
-use std::sync::mpsc::TrySendError;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::runtime::Runtime;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 
 const METER_NAME: &str = "codex-otel-metrics";
+const STATSIG_USER_ID: &str = "codex-metrics";
+const STATSIG_SDK_TYPE: &str = "codex-otel-rust";
 
 enum WorkerMessage {
     Batch(MetricsBatch),
@@ -42,10 +46,9 @@ enum WorkerMessage {
 }
 
 struct WorkerState {
-    sender: Mutex<Option<mpsc::SyncSender<WorkerMessage>>>,
+    sender: Mutex<Option<mpsc::Sender<WorkerMessage>>>,
     handle: Mutex<Option<thread::JoinHandle<()>>>,
     capacity: usize,
-    meter_provider: Mutex<Option<SdkMeterProvider>>,
 }
 
 #[derive(Debug)]
@@ -105,7 +108,7 @@ impl MetricRecorder {
     }
 }
 
-/// Background metrics client that enqueues metrics to a dedicated worker thread.
+/// Background metrics client that enqueues metrics to a tokio-backed worker.
 #[derive(Clone)]
 pub struct MetricsClient {
     state: Arc<WorkerState>,
@@ -138,21 +141,19 @@ impl MetricsClient {
 
         validate_tags(&config.default_tags)?;
 
-        let meter_provider = build_meter_provider(&config)?;
-        let meter = meter_provider.meter(METER_NAME);
+        let exporter_label = config.exporter_label();
+        let worker_exporter_label = exporter_label.clone();
+        let exporter = build_worker_exporter(&config)?;
+        let runtime = build_runtime()?;
 
-        let recorder = MetricRecorder::new(meter, config.default_tags);
-
-        let (sender, receiver) = mpsc::sync_channel(capacity);
-        let worker_provider = meter_provider.clone();
-        let handle = thread::spawn(move || run_worker(recorder, receiver, worker_provider));
+        let (sender, receiver) = mpsc::channel(capacity);
+        let handle = spawn_worker(runtime, exporter, worker_exporter_label, receiver);
 
         Ok(Self {
             state: Arc::new(WorkerState {
                 sender: Mutex::new(Some(sender)),
                 handle: Mutex::new(Some(handle)),
                 capacity,
-                meter_provider: Mutex::new(Some(meter_provider)),
             }),
         })
     }
@@ -250,7 +251,7 @@ impl MetricsClient {
             Err(TrySendError::Full(_)) => Err(MetricsError::QueueFull {
                 capacity: self.state.capacity,
             }),
-            Err(TrySendError::Disconnected(_)) => Err(MetricsError::WorkerUnavailable),
+            Err(TrySendError::Closed(_)) => Err(MetricsError::WorkerUnavailable),
         }
     }
 
@@ -271,18 +272,25 @@ impl MetricsClient {
             .handle
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut meter_provider = self
-            .state
-            .meter_provider
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(handle) = handle.take() else {
             return Ok(());
         };
         let mut joined = false;
 
         if let Some(sender) = sender {
-            let _ = sender.try_send(WorkerMessage::Shutdown);
+            match sender.try_send(WorkerMessage::Shutdown) {
+                Ok(()) | Err(TrySendError::Closed(_)) => {}
+                Err(TrySendError::Full(_)) => {
+                    if tokio::runtime::Handle::try_current().is_ok() {
+                        let sender = sender.clone();
+                        let _ =
+                            thread::spawn(move || sender.blocking_send(WorkerMessage::Shutdown))
+                                .join();
+                    } else {
+                        let _ = sender.blocking_send(WorkerMessage::Shutdown);
+                    }
+                }
+            }
         }
 
         if timeout.is_zero() {
@@ -302,13 +310,8 @@ impl MetricsClient {
             }
         }
 
-        if joined && let Some(meter_provider) = meter_provider.take() {
-            meter_provider
-                .force_flush()
-                .map_err(|source| MetricsError::FlushFailed { source })?;
-            meter_provider
-                .shutdown()
-                .map_err(|source| MetricsError::ShutdownFailed { source })?;
+        if joined {
+            return Ok(());
         }
 
         Ok(())
@@ -323,53 +326,299 @@ impl Drop for MetricsClient {
     }
 }
 
-fn build_meter_provider(config: &MetricsConfig) -> Result<SdkMeterProvider> {
+fn build_runtime() -> Result<Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|source| MetricsError::RuntimeBuild { source })
+}
+
+fn build_worker_exporter(config: &MetricsConfig) -> Result<WorkerExporter> {
     match &config.exporter {
-        MetricsExporter::OtlpHttp => build_otlp_http_provider(config),
-        MetricsExporter::InMemory(exporter) => {
-            let reader = PeriodicReader::builder(exporter.clone()).build();
-            Ok(SdkMeterProvider::builder().with_reader(reader).build())
+        MetricsExporter::StatsigHttp => Ok(WorkerExporter::Statsig(StatsigExporter::from(config)?)),
+        MetricsExporter::InMemory(exporter) => Ok(WorkerExporter::InMemory(
+            InMemoryExporter::from(config, exporter.clone()),
+        )),
+    }
+}
+
+fn spawn_worker(
+    runtime: Runtime,
+    exporter: WorkerExporter,
+    exporter_label: String,
+    receiver: mpsc::Receiver<WorkerMessage>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let worker = MetricsWorker::new(exporter, exporter_label);
+        runtime.block_on(worker.run(receiver));
+    })
+}
+
+struct MetricsWorker {
+    exporter: WorkerExporter,
+    exporter_label: String,
+}
+
+impl MetricsWorker {
+    fn new(exporter: WorkerExporter, exporter_label: String) -> Self {
+        Self {
+            exporter,
+            exporter_label,
         }
     }
-}
 
-fn build_otlp_http_provider(config: &MetricsConfig) -> Result<SdkMeterProvider> {
-    let mut headers = HashMap::new();
-    headers.insert(config.api_key_header.clone(), config.api_key.clone());
-    if !config.user_agent.is_empty() {
-        headers.insert("User-Agent".to_string(), config.user_agent.clone());
-    }
-
-    let exporter = MetricExporter::builder()
-        .with_http()
-        .with_protocol(Protocol::HttpBinary)
-        .with_endpoint(config.endpoint.clone())
-        .with_timeout(config.timeout)
-        .with_headers(headers)
-        .build()
-        .map_err(|source| MetricsError::ExporterBuild { source })?;
-
-    let reader = PeriodicReader::builder(exporter)
-        .with_interval(config.export_interval)
-        .build();
-
-    Ok(SdkMeterProvider::builder().with_reader(reader).build())
-}
-
-fn run_worker(
-    mut recorder: MetricRecorder,
-    receiver: mpsc::Receiver<WorkerMessage>,
-    meter_provider: SdkMeterProvider,
-) {
-    for message in receiver {
-        match message {
-            WorkerMessage::Batch(batch) => {
-                recorder.record_batch(batch);
-                if let Err(err) = meter_provider.force_flush() {
-                    error_or_panic(format!("metrics flush failed: {err}"));
+    async fn run(mut self, mut receiver: mpsc::Receiver<WorkerMessage>) {
+        let mut received_shutdown = false;
+        while let Some(message) = receiver.recv().await {
+            match message {
+                WorkerMessage::Batch(batch) => self.export_batch(batch).await,
+                WorkerMessage::Shutdown => {
+                    received_shutdown = true;
+                    break;
                 }
             }
-            WorkerMessage::Shutdown => break,
+        }
+        if received_shutdown || matches!(&self.exporter, WorkerExporter::InMemory(_)) {
+            self.shutdown().await;
         }
     }
+
+    async fn export_batch(&mut self, batch: MetricsBatch) {
+        match &mut self.exporter {
+            WorkerExporter::Statsig(exporter) => {
+                if let Err(err) = exporter.export_batch(batch).await {
+                    error_or_panic(format!(
+                        "statsig metrics export failed: {err} (exporter={})",
+                        self.exporter_label
+                    ));
+                }
+            }
+            WorkerExporter::InMemory(exporter) => {
+                exporter.export(batch, &self.exporter_label).await;
+            }
+        }
+    }
+
+    async fn shutdown(&mut self) {
+        if let WorkerExporter::InMemory(exporter) = &mut self.exporter {
+            exporter.shutdown(&self.exporter_label).await;
+        }
+    }
+}
+
+enum WorkerExporter {
+    Statsig(StatsigExporter),
+    InMemory(InMemoryExporter),
+}
+
+struct InMemoryExporter {
+    recorder: MetricRecorder,
+    meter_provider: SdkMeterProvider,
+}
+
+impl InMemoryExporter {
+    fn from(
+        config: &MetricsConfig,
+        exporter: opentelemetry_sdk::metrics::InMemoryMetricExporter,
+    ) -> Self {
+        let reader = PeriodicReader::builder(exporter)
+            .with_interval(config.export_interval)
+            .build();
+        let meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
+        let meter = meter_provider.meter(METER_NAME);
+        let recorder = MetricRecorder::new(meter, config.default_tags.clone());
+        Self {
+            recorder,
+            meter_provider,
+        }
+    }
+
+    async fn export(&mut self, batch: MetricsBatch, exporter_label: &str) {
+        let event_count = batch.len();
+        self.recorder.record_batch(batch);
+        if let Err(err) = self.meter_provider.force_flush() {
+            error_or_panic(format!(
+                "metrics flush failed: {err} (events={event_count}, exporter={exporter_label})"
+            ));
+        }
+    }
+
+    async fn shutdown(&mut self, exporter_label: &str) {
+        if let Err(err) = self.meter_provider.force_flush() {
+            error_or_panic(format!(
+                "metrics flush failed during shutdown: {err} (exporter={exporter_label})"
+            ));
+        }
+        if let Err(err) = self.meter_provider.shutdown() {
+            error_or_panic(format!(
+                "metrics shutdown failed: {err} (exporter={exporter_label})"
+            ));
+        }
+    }
+}
+
+struct StatsigExporter {
+    client: reqwest::Client,
+    endpoint: String,
+    api_key_header: HeaderName,
+    api_key: HeaderValue,
+    user_agent: Option<HeaderValue>,
+    default_tags: BTreeMap<String, String>,
+}
+
+impl StatsigExporter {
+    fn from(config: &MetricsConfig) -> Result<Self> {
+        let api_key_header =
+            HeaderName::from_bytes(config.api_key_header.as_bytes()).map_err(|source| {
+                MetricsError::InvalidApiKeyHeader {
+                    header: config.api_key_header.clone(),
+                    source,
+                }
+            })?;
+        let api_key = HeaderValue::from_str(&config.api_key).map_err(|source| {
+            MetricsError::InvalidHeaderValue {
+                header: config.api_key_header.clone(),
+                source,
+            }
+        })?;
+        let user_agent = if config.user_agent.is_empty() {
+            None
+        } else {
+            Some(HeaderValue::from_str(&config.user_agent).map_err(|source| {
+                MetricsError::InvalidHeaderValue {
+                    header: "User-Agent".to_string(),
+                    source,
+                }
+            })?)
+        };
+        let client = reqwest::Client::builder()
+            .timeout(config.timeout)
+            .build()
+            .map_err(|source| MetricsError::HttpClientBuild { source })?;
+
+        Ok(Self {
+            client,
+            endpoint: config.endpoint.clone(),
+            api_key_header,
+            api_key,
+            user_agent,
+            default_tags: config.default_tags.clone(),
+        })
+    }
+
+    async fn export_batch(&self, batch: MetricsBatch) -> Result<()> {
+        let payload = self.build_payload(batch);
+        if payload.events.is_empty() {
+            return Ok(());
+        }
+
+        let mut request = self
+            .client
+            .post(&self.endpoint)
+            .header(self.api_key_header.clone(), self.api_key.clone());
+
+        if let Some(user_agent) = &self.user_agent {
+            request = request.header(USER_AGENT, user_agent.clone());
+        }
+
+        let response = request
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|source| MetricsError::StatsigRequestFailed { source })?;
+
+        if let Err(status_err) = response.error_for_status_ref() {
+            let status = status_err
+                .status()
+                .unwrap_or(reqwest::StatusCode::INTERNAL_SERVER_ERROR);
+            let body = response.text().await.unwrap_or_default();
+            return Err(MetricsError::StatsigResponseError { status, body });
+        }
+
+        Ok(())
+    }
+
+    fn build_payload(&self, batch: MetricsBatch) -> StatsigPayload {
+        let timestamp = Utc::now().timestamp_millis();
+        let events = batch
+            .into_events()
+            .into_iter()
+            .map(|event| self.event_from_metric(event, timestamp))
+            .collect();
+
+        StatsigPayload {
+            events,
+            statsig_metadata: StatsigMetadata {
+                sdk_type: STATSIG_SDK_TYPE.to_string(),
+                sdk_version: env!("CARGO_PKG_VERSION").to_string(),
+            },
+        }
+    }
+
+    fn event_from_metric(&self, event: MetricEvent, timestamp: i64) -> StatsigEvent {
+        match event {
+            MetricEvent::Counter { name, value, tags } => StatsigEvent {
+                event_name: name,
+                value: value as f64,
+                metadata: StatsigEventMetadata {
+                    metric_type: "counter".to_string(),
+                    tags: merge_tags(&self.default_tags, &tags),
+                },
+                user: StatsigUser {
+                    user_id: STATSIG_USER_ID.to_string(),
+                },
+                time: timestamp,
+            },
+            MetricEvent::Histogram { name, value, tags } => StatsigEvent {
+                event_name: name,
+                value: value as f64,
+                metadata: StatsigEventMetadata {
+                    metric_type: "histogram".to_string(),
+                    tags: merge_tags(&self.default_tags, &tags),
+                },
+                user: StatsigUser {
+                    user_id: STATSIG_USER_ID.to_string(),
+                },
+                time: timestamp,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct StatsigPayload {
+    events: Vec<StatsigEvent>,
+    #[serde(rename = "statsigMetadata")]
+    statsig_metadata: StatsigMetadata,
+}
+
+#[derive(Debug, Serialize)]
+struct StatsigEvent {
+    #[serde(rename = "eventName")]
+    event_name: String,
+    value: f64,
+    metadata: StatsigEventMetadata,
+    user: StatsigUser,
+    time: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct StatsigEventMetadata {
+    #[serde(rename = "metric_type")]
+    metric_type: String,
+    tags: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StatsigUser {
+    #[serde(rename = "userID")]
+    user_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct StatsigMetadata {
+    #[serde(rename = "sdkType")]
+    sdk_type: String,
+    #[serde(rename = "sdkVersion")]
+    sdk_version: String,
 }

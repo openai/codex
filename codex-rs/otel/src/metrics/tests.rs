@@ -11,8 +11,15 @@ use opentelemetry_sdk::metrics::data::Metric;
 use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::time::Duration;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 fn build_test_client() -> Result<(MetricsClient, InMemoryMetricExporter)> {
     let exporter = InMemoryMetricExporter::default();
@@ -51,6 +58,108 @@ fn attributes_to_map<'a>(
     attributes
         .map(|kv| (kv.key.as_str().to_string(), kv.value.as_str().to_string()))
         .collect()
+}
+
+fn json_tags(value: &Value) -> BTreeMap<String, String> {
+    value
+        .as_object()
+        .expect("tags should be an object")
+        .iter()
+        .map(|(key, value)| {
+            let value = value
+                .as_str()
+                .unwrap_or_else(|| panic!("tag {key} should be a string"));
+            (key.clone(), value.to_string())
+        })
+        .collect()
+}
+
+#[tokio::test]
+// Sends metrics to a Statsig endpoint with merged tags and metadata.
+async fn statsig_http_exporter_sends_events() -> Result<()> {
+    let server = MockServer::start().await;
+    let _mock = Mock::given(method("POST"))
+        .and(path("/v1/log_event"))
+        .and(header("statsig-api-key", "test-key"))
+        .and(header("user-agent", "codex-test-agent"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let config = MetricsConfig::new("test-key")
+        .with_endpoint(format!("{}/v1/log_event", server.uri()))
+        .with_user_agent("codex-test-agent")
+        .with_tag("service", "codex-cli")?
+        .with_tag("env", "prod")?;
+    let metrics = MetricsClient::new(config)?;
+    let buckets = HistogramBuckets::from_values(&[25, 50])?;
+
+    let mut batch = metrics.batch();
+    batch.counter("codex.turns", 1, &[("model", "gpt-5.1")])?;
+    batch.histogram("codex.tool_latency", 25, &buckets, &[("tool", "shell")])?;
+    metrics.send(batch)?;
+    metrics.shutdown()?;
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let events = body
+        .get("events")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(events.len(), 2);
+
+    let counter = &events[0];
+    assert_eq!(
+        counter.get("eventName").and_then(Value::as_str),
+        Some("codex.turns")
+    );
+    assert_eq!(counter.get("value").and_then(Value::as_f64), Some(1.0));
+    let counter_tags = counter
+        .get("metadata")
+        .and_then(|value| value.get("tags"))
+        .expect("counter tags missing");
+    let expected_counter_tags = BTreeMap::from([
+        ("service".to_string(), "codex-cli".to_string()),
+        ("env".to_string(), "prod".to_string()),
+        ("model".to_string(), "gpt-5.1".to_string()),
+    ]);
+    assert_eq!(json_tags(counter_tags), expected_counter_tags);
+
+    let histogram = &events[1];
+    assert_eq!(
+        histogram.get("eventName").and_then(Value::as_str),
+        Some("codex.tool_latency")
+    );
+    assert_eq!(histogram.get("value").and_then(Value::as_f64), Some(25.0));
+    let histogram_tags = histogram
+        .get("metadata")
+        .and_then(|value| value.get("tags"))
+        .expect("histogram tags missing");
+    let expected_histogram_tags = BTreeMap::from([
+        ("service".to_string(), "codex-cli".to_string()),
+        ("env".to_string(), "prod".to_string()),
+        ("tool".to_string(), "shell".to_string()),
+    ]);
+    assert_eq!(json_tags(histogram_tags), expected_histogram_tags);
+
+    let statsig_metadata = body
+        .get("statsigMetadata")
+        .and_then(Value::as_object)
+        .expect("statsig metadata missing");
+    assert_eq!(
+        statsig_metadata.get("sdkType").and_then(Value::as_str),
+        Some("codex-otel-rust")
+    );
+    assert_eq!(
+        statsig_metadata.get("sdkVersion").and_then(Value::as_str),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+
+    Ok(())
 }
 
 #[test]

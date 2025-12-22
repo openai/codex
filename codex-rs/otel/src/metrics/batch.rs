@@ -138,6 +138,10 @@ impl MetricsBatch {
         }
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.events.len()
+    }
+
     pub fn with_default_tags(default_tags: Vec<(String, String)>) -> Result<Self> {
         for (key, value) in &default_tags {
             validate_tag_key(key)?;

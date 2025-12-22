@@ -34,7 +34,7 @@ opentelemetry-otlp = { workspace = true, features = [
     "tls-roots",
 ]}
 opentelemetry-semantic-conventions = { workspace = true }
-opentelemetry_sdk = { workspace = true, features = ["logs", "metrics", "rt-tokio", "trace"] }
+opentelemetry_sdk = { workspace = true, features = ["logs", "metrics", "rt-tokio", "testing", "trace"] }
 http = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
@@ -54,3 +54,4 @@ tracing-subscriber = { workspace = true }
 [dev-dependencies]
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 pretty_assertions = { workspace = true }
+wiremock = { workspace = true }

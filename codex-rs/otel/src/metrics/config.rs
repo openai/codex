@@ -11,7 +11,7 @@ use std::time::Duration;
 
 #[derive(Clone, Debug)]
 pub(crate) enum MetricsExporter {
-    OtlpHttp,
+    StatsigHttp,
     InMemory(opentelemetry_sdk::metrics::InMemoryMetricExporter),
 }
 
@@ -38,7 +38,7 @@ impl MetricsConfig {
             timeout: DEFAULT_TIMEOUT,
             export_interval: DEFAULT_EXPORT_INTERVAL,
             user_agent: format!("codex-otel-metrics/{}", env!("CARGO_PKG_VERSION")),
-            exporter: MetricsExporter::OtlpHttp,
+            exporter: MetricsExporter::StatsigHttp,
         }
     }
 
@@ -88,6 +88,16 @@ impl MetricsConfig {
     ) -> Self {
         self.exporter = MetricsExporter::InMemory(exporter);
         self
+    }
+
+    pub(crate) fn exporter_label(&self) -> String {
+        match &self.exporter {
+            MetricsExporter::StatsigHttp => format!(
+                "statsig_http endpoint={} interval={:?} timeout={:?}",
+                self.endpoint, self.export_interval, self.timeout
+            ),
+            MetricsExporter::InMemory(_) => "in_memory".to_string(),
+        }
     }
 }
 

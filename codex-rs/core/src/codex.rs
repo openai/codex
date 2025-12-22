@@ -151,6 +151,8 @@ use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
 use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::OtelManager;
+use codex_otel::metrics::MetricsClient;
+use codex_otel::metrics::MetricsConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -635,7 +637,8 @@ impl Session {
             config.otel.log_user_prompt,
             terminal::user_agent(),
             session_configuration.session_source.clone(),
-        );
+        )
+        .with_metrics(MetricsClient::new(MetricsConfig::default())?);
 
         otel_manager.conversation_starts(
             config.model_provider.name.as_str(),
@@ -648,6 +651,8 @@ impl Session {
             config.mcp_servers.keys().map(String::as_str).collect(),
             config.active_profile.clone(),
         );
+
+        otel_manager.counter("jif_test_1", 2, &[("value", "k_jif")])?;
 
         let mut default_shell = shell::default_user_shell();
         // Create the mutable state for the Session.
@@ -2780,6 +2785,8 @@ mod tests {
     use std::time::Duration;
     use tokio::time::sleep;
 
+    use codex_otel::metrics::MetricsClient;
+    use codex_otel::metrics::MetricsConfig;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
