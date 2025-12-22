@@ -16,6 +16,7 @@ import type { ReasoningEffort } from "../generated/ReasoningEffort";
 import type { GetAccountResponse } from "../generated/v2/GetAccountResponse";
 import type { GetAccountRateLimitsResponse } from "../generated/v2/GetAccountRateLimitsResponse";
 import type { SkillsListEntry } from "../generated/v2/SkillsListEntry";
+import type { Thread } from "../generated/v2/Thread";
 import type { AnyServerNotification } from "./types";
 
 type ModelSettings = { model: string | null; provider: string | null; reasoning: string | null };
@@ -244,6 +245,24 @@ export class BackendManager implements vscode.Disposable {
     const models = await this.fetchAllModels(proc);
     this.modelsByBackendKey.set(session.backendKey, models);
     return models;
+  }
+
+  public async listThreadsForWorkspaceFolder(
+    folder: vscode.WorkspaceFolder,
+    opts?: { cursor?: string | null; limit?: number | null; modelProviders?: string[] | null },
+  ): Promise<{ data: Thread[]; nextCursor: string | null }> {
+    await this.startForWorkspaceFolder(folder);
+    const backendKey = folder.uri.toString();
+    const proc = this.processes.get(backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+
+    const res = await proc.threadList({
+      cursor: opts?.cursor ?? null,
+      limit: opts?.limit ?? null,
+      modelProviders: opts?.modelProviders ?? null,
+    });
+    return { data: res.data ?? [], nextCursor: res.nextCursor ?? null };
   }
 
   private async fetchAllModels(proc: BackendProcess): Promise<Model[]> {

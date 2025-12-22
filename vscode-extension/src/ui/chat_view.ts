@@ -213,6 +213,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (type === "resumeFromHistory") {
+      await vscode.commands.executeCommand("codexMine.resumeFromHistory");
+      return;
+    }
+
     if (type === "showStatus") {
       await vscode.commands.executeCommand("codexMine.showStatus");
       return;
@@ -544,6 +549,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         <div id="title" class="title">Codex UI</div>
 	        <div class="actions">
 	          <button id="new">New</button>
+            <button id="resume">Resume</button>
 	          <button id="status">Status</button>
 	          <button id="diff" disabled>Open Latest Diff</button>
             <button id="settings" class="iconBtn settingsBtn" aria-label="Settings" title="Settings"></button>

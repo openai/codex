@@ -240,6 +240,133 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("codexMine.resumeFromHistory", async () => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      if (!sessions) throw new Error("sessions is not initialized");
+      if (!extensionContext) throw new Error("extensionContext is not set");
+
+      const folder = await pickWorkspaceFolder();
+      if (!folder) return;
+
+      await ensureBackendMatchesConfiguredCli(folder, "newSession");
+
+      const scopePick = await vscode.window.showQuickPick(
+        [
+          {
+            label: "This workspace only",
+            detail: "Show only threads whose cwd matches this workspace folder",
+            scope: "workspace" as const,
+          },
+          {
+            label: "All history",
+            detail: "Show all threads stored under CODEX_HOME (may have different cwd)",
+            scope: "all" as const,
+          },
+        ],
+        { title: "Codex UI: Resume from History" },
+      );
+      if (!scopePick) return;
+
+      const folderCwd = folder.uri.fsPath;
+      let cursor: string | null = null;
+      const collected: Thread[] = [];
+
+      for (;;) {
+        let res: { data: Thread[]; nextCursor: string | null };
+        try {
+          res = await backendManager.listThreadsForWorkspaceFolder(folder, {
+            cursor,
+            limit: 50,
+            modelProviders: null,
+          });
+        } catch (err) {
+          output.appendLine(`[resume] Failed to list threads: ${String(err)}`);
+          void vscode.window.showErrorMessage("Failed to list history.");
+          return;
+        }
+
+        const filtered =
+          scopePick.scope === "workspace"
+            ? res.data.filter((t) => t.cwd === folderCwd)
+            : res.data;
+        collected.push(...filtered);
+
+        const items = collected.map((t) => ({
+          label: formatThreadLabel(t.preview),
+          description: formatThreadWhen(t.createdAt),
+          detail: `${t.cwd} • ${t.modelProvider} • ${t.cliVersion}`,
+          thread: t,
+          kind: "thread" as const,
+        }));
+
+        const hasMore = Boolean(res.nextCursor);
+        const picked = await vscode.window.showQuickPick(
+          [
+            ...items,
+            ...(hasMore
+              ? [
+                  {
+                    label: "Load more…",
+                    description: "",
+                    detail: "",
+                    kind: "more" as const,
+                    nextCursor: res.nextCursor,
+                  },
+                ]
+              : []),
+          ] as any,
+          {
+            title: "Codex UI: Pick a thread to resume",
+            matchOnDescription: true,
+            matchOnDetail: true,
+          },
+        );
+
+        if (!picked) return;
+        if ((picked as any).kind === "more") {
+          cursor = (picked as any).nextCursor ?? null;
+          if (!cursor) return;
+          continue;
+        }
+
+        const thread = (picked as any).thread as Thread;
+        const session: Session = {
+          id: crypto.randomUUID(),
+          backendKey: folder.uri.toString(),
+          workspaceFolderUri: folder.uri.toString(),
+          title: normalizeSessionTitle(thread.preview || "Resumed"),
+          threadId: thread.id,
+        };
+
+        sessions.add(session.backendKey, session);
+        saveSessions(extensionContext, sessions);
+        ensureRuntime(session.id);
+        sessionTree?.refresh();
+
+        const rt = ensureRuntime(session.id);
+        upsertBlock(rt, {
+          id: newLocalId("system"),
+          type: "system",
+          title: "Resuming",
+          text: `threadId=${thread.id}\ncwd=${thread.cwd}\ncreatedAt=${thread.createdAt}`,
+        });
+        chatView?.refresh();
+
+        const resumed = await backendManager.resumeSession(
+          session,
+          getSessionModelState(),
+        );
+        void ensureModelsFetched(session);
+        hydrateRuntimeFromThread(session.id, resumed.thread);
+        setActiveSession(session.id);
+        refreshCustomPromptsFromDisk();
+        await showCodexMineViewContainer();
+        return;
+      }
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("codexMine.interruptTurn", async () => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       if (!sessions) throw new Error("sessions is not initialized");
@@ -1124,6 +1251,10 @@ async function handleSlashCommand(
     await vscode.commands.executeCommand("codexMine.newSession");
     return true;
   }
+  if (cmd === "resume") {
+    await vscode.commands.executeCommand("codexMine.resumeFromHistory");
+    return true;
+  }
   if (cmd === "diff") {
     await vscode.commands.executeCommand("codexMine.openLatestDiff", {
       sessionId: session.id,
@@ -1171,6 +1302,7 @@ async function handleSlashCommand(
       text: [
         "Slash commands:",
         "- /new: New session",
+        "- /resume: Resume from history",
         "- /diff: Open Latest Diff",
         "- /rename <title>: Rename session",
         "- /skills: Browse skills",
@@ -1192,6 +1324,23 @@ async function handleSlashCommand(
   }
 
   return false;
+}
+
+function formatThreadLabel(preview: string): string {
+  const v = String(preview || "").trim();
+  return v.length > 0 ? v : "(no preview)";
+}
+
+function formatThreadWhen(createdAtSec: number): string {
+  const ms = Math.max(0, createdAtSec) * 1000;
+  const d = new Date(ms);
+  const pad2 = (n: number): string => String(n).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const mm = pad2(d.getMonth() + 1);
+  const dd = pad2(d.getDate());
+  const hh = pad2(d.getHours());
+  const mi = pad2(d.getMinutes());
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
 }
 
 type ExpandMentionsResult =

@@ -1,6 +1,6 @@
 {
   "name": "codex-ui-vscode-extension",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "displayName": "Codex UI",
   "publisher": "harukary7518",
   "description": "Use Codex CLI (app-server) inside VS Code: sessions, chat, tools, diffs.",
@@ -33,6 +33,7 @@
     "onCommand:codexMine.showSkills",
     "onCommand:codexMine.showAgents",
     "onCommand:codexMine.selectCliVariant",
+    "onCommand:codexMine.resumeFromHistory",
     "onView:codexMine.chatView",
     "onView:codexMine.sessionsView"
   ],
@@ -101,6 +102,10 @@
       {
         "command": "codexMine.selectCliVariant",
         "title": "Codex UI: Select CLI (codex / codex-mine)"
+      },
+      {
+        "command": "codexMine.resumeFromHistory",
+        "title": "Codex UI: Resume from History"
       }
     ],
     "menus": {

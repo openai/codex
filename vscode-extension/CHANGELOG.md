@@ -28,6 +28,10 @@
 
 - ⚙ の CLI 切替を「ディレクトリ選択」ではなく「以降のデフォルト」に変更（グローバル設定を更新）
 
+## 0.1.5
+
+- app-server の `thread/list` を使って履歴一覧から `thread/resume` できる Resume 機能を追加（CHAT右上の Resume / `/resume`）
+
 ## 0.0.7
 
 - モデル一覧の取得と表示、および Reasoning effort 選択 UI を追加

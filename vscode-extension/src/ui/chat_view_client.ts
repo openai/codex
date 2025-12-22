@@ -143,6 +143,7 @@ function main(): void {
   const sendBtn = mustGet<HTMLButtonElement>("send");
   const diffBtn = mustGet<HTMLButtonElement>("diff");
   const newBtn = mustGet<HTMLButtonElement>("new");
+  const resumeBtn = mustGet<HTMLButtonElement>("resume");
   const statusBtn = mustGet<HTMLButtonElement>("status");
   const settingsBtn = mustGet<HTMLButtonElement>("settings");
   const tabsEl = mustGet("tabs");
@@ -299,6 +300,12 @@ function main(): void {
       insert: "/new ",
       label: "/new",
       detail: "New session",
+      kind: "slash",
+    },
+    {
+      insert: "/resume ",
+      label: "/resume",
+      detail: "Resume from history",
       kind: "slash",
     },
     {
@@ -958,6 +965,7 @@ function main(): void {
     sendBtn.setAttribute("aria-label", s.sending ? "Stop" : "Send");
     sendBtn.title = s.sending ? "Stop (Esc)" : "Send (Enter)";
     statusBtn.disabled = !s.activeSession || s.sending;
+    resumeBtn.disabled = s.sending;
     const variant = s.capabilities?.cliVariant ?? "unknown";
     settingsBtn.disabled = false;
     settingsBtn.title =
@@ -1455,6 +1463,9 @@ function sendCurrentInput(): void {
   );
   newBtn.addEventListener("click", () =>
     vscode.postMessage({ type: "newSession" }),
+  );
+  resumeBtn.addEventListener("click", () =>
+    vscode.postMessage({ type: "resumeFromHistory" }),
   );
   statusBtn.addEventListener("click", () =>
     vscode.postMessage({ type: "showStatus" }),

@@ -20,6 +20,8 @@ import type { ModelListParams } from "../generated/v2/ModelListParams";
 import type { ModelListResponse } from "../generated/v2/ModelListResponse";
 import type { ThreadArchiveParams } from "../generated/v2/ThreadArchiveParams";
 import type { ThreadArchiveResponse } from "../generated/v2/ThreadArchiveResponse";
+import type { ThreadListParams } from "../generated/v2/ThreadListParams";
+import type { ThreadListResponse } from "../generated/v2/ThreadListResponse";
 import type { GetAccountParams } from "../generated/v2/GetAccountParams";
 import type { GetAccountRateLimitsResponse } from "../generated/v2/GetAccountRateLimitsResponse";
 import type { GetAccountResponse } from "../generated/v2/GetAccountResponse";
@@ -140,6 +142,20 @@ export class BackendProcess implements vscode.Disposable {
       method: "thread/archive",
       params,
     });
+  }
+
+  public async threadList(
+    params: Partial<ThreadListParams> | undefined = undefined,
+  ): Promise<ThreadListResponse> {
+    const request: { method: "thread/list"; params: ThreadListParams } = {
+      method: "thread/list",
+      params: {
+        cursor: params?.cursor ?? null,
+        limit: params?.limit ?? null,
+        modelProviders: params?.modelProviders ?? null,
+      },
+    };
+    return this.rpc.request<ThreadListResponse>(request);
   }
 
   public async turnStart(params: TurnStartParams): Promise<TurnStartResponse> {
