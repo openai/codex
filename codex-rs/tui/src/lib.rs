@@ -57,6 +57,8 @@ pub mod live_wrap;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+// Model migration prompt UI is no longer used in production; keep it for snapshot tests.
+#[cfg(test)]
 mod model_migration;
 mod notifications;
 pub mod onboarding;
