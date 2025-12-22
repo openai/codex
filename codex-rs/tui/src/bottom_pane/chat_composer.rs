@@ -587,7 +587,46 @@ impl ChatComposer {
             if self.paste_burst.try_append_char_if_active(ch, now) {
                 return (InputResult::None, true);
             }
-            self.paste_burst.extend_window(now);
+            let mut flushed_pending = false;
+            // Non-ASCII input often comes from IMEs and can arrive in quick bursts.
+            // We do not want to hold the first char (flicker suppression) on this path, but we
+            // still want to detect paste-like bursts. Before applying any non-ASCII input, flush
+            // any existing burst buffer (including a pending first char from the ASCII path) so
+            // we don't carry that transient state forward.
+            if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+                self.handle_paste(pasted);
+                flushed_pending = true;
+            }
+            if let Some(decision) = self.paste_burst.on_plain_char_no_hold(now) {
+                match decision {
+                    CharDecision::BufferAppend => {
+                        self.paste_burst.append_char_to_buffer(ch, now);
+                        return (InputResult::None, true);
+                    }
+                    CharDecision::BeginBuffer { retro_chars } => {
+                        let cur = self.textarea.cursor();
+                        let txt = self.textarea.text();
+                        let safe_cur = Self::clamp_to_char_boundary(txt, cur);
+                        let before = &txt[..safe_cur];
+                        if let Some(grab) =
+                            self.paste_burst
+                                .decide_begin_buffer(now, before, retro_chars as usize)
+                        {
+                            if !grab.grabbed.is_empty() {
+                                self.textarea.replace_range(grab.start_byte..safe_cur, "");
+                            }
+                            self.paste_burst.append_char_to_buffer(ch, now);
+                            return (InputResult::None, true);
+                        }
+                    }
+                    _ => unreachable!("on_plain_char_no_hold returned unexpected variant"),
+                }
+            }
+            // Keep the Enter suppression window alive while a burst is in-flight. If we flushed a
+            // buffered burst above, handle_paste() clears the window and we should not re-extend it.
+            if !flushed_pending {
+                self.paste_burst.extend_window(now);
+            }
         }
         if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
             self.handle_paste(pasted);
@@ -1251,9 +1290,8 @@ impl ChatComposer {
         {
             let has_ctrl_or_alt = has_ctrl_or_alt(modifiers);
             if !has_ctrl_or_alt {
-                // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts and be
-                // misclassified by paste heuristics. Flush any active burst buffer and insert
-                // non-ASCII characters directly.
+                // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts, so avoid
+                // holding the first char while still allowing burst detection for paste input.
                 if !ch.is_ascii() {
                     return self.handle_non_ascii_char(input);
                 }
@@ -1275,7 +1313,6 @@ impl ChatComposer {
                             if !grab.grabbed.is_empty() {
                                 self.textarea.replace_range(grab.start_byte..safe_cur, "");
                             }
-                            self.paste_burst.begin_with_retro_grabbed(grab.grabbed, now);
                             self.paste_burst.append_char_to_buffer(ch, now);
                             return (InputResult::None, true);
                         }
@@ -2407,12 +2444,50 @@ mod tests {
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
 
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+        let _ = composer.flush_paste_burst_if_due();
+
         // The text should now contain newline
         let text = composer.textarea.text();
         assert!(
             text.contains('\n'),
             "Text should contain newline: got '{text}'"
         );
+    }
+
+    #[test]
+    fn burst_paste_fast_non_ascii_prefix_inserts_placeholder_on_flush() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let prefix = "你好".repeat(12);
+        let suffix = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 7);
+        let paste = format!("{prefix}{suffix}");
+        for ch in paste.chars() {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+        let flushed = composer.flush_paste_burst_if_due();
+        assert!(flushed, "expected flush after stopping fast input");
+
+        let char_count = paste.chars().count();
+        let expected_placeholder = format!("[Pasted Content {char_count} chars]");
+        assert_eq!(composer.textarea.text(), expected_placeholder);
+        assert_eq!(composer.pending_pastes.len(), 1);
+        assert_eq!(composer.pending_pastes[0].0, expected_placeholder);
+        assert_eq!(composer.pending_pastes[0].1, paste);
     }
 
     #[test]
