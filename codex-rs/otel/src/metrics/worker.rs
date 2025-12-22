@@ -1,4 +1,4 @@
-use crate::metrics::exporter::MetricEvent;
+use crate::metrics::MetricEvent;
 use crate::metrics::sink::MetricSink;
 use crate::metrics::util::error_or_panic;
 use std::thread;

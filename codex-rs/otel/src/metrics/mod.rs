@@ -1,7 +1,7 @@
 mod client;
 mod config;
 mod error;
-mod exporter;
+mod event;
 mod sink;
 mod tags;
 mod time;
@@ -20,3 +20,4 @@ pub use crate::metrics::client::MetricsClient;
 pub use crate::metrics::config::MetricsConfig;
 pub use crate::metrics::error::MetricsError;
 pub use crate::metrics::error::Result;
+pub(crate) use crate::metrics::event::MetricEvent;

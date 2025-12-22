@@ -1,6 +1,6 @@
+use crate::metrics::MetricEvent;
 use crate::metrics::MetricsConfig;
 use crate::metrics::config::MetricsExporter;
-use crate::metrics::exporter::MetricEvent;
 use crate::metrics::sink::in_memory::InMemoryExporter;
 use crate::metrics::sink::statsig::StatsigExporter;
 use std::pin::Pin;

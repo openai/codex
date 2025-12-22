@@ -1,5 +1,5 @@
+use crate::metrics::MetricEvent;
 use crate::metrics::MetricsError;
-use crate::metrics::exporter::MetricEvent;
 use crate::metrics::sink::MetricSink;
 use chrono::Utc;
 use http::HeaderName;

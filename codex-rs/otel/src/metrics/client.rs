@@ -1,10 +1,10 @@
 use crate::metrics::DEFAULT_QUEUE_CAPACITY;
 use crate::metrics::DEFAULT_SHUTDOWN_TIMEOUT;
+use crate::metrics::MetricEvent;
 use crate::metrics::config::MetricsConfig;
 use crate::metrics::config::MetricsExporter;
 use crate::metrics::error::MetricsError;
 use crate::metrics::error::Result;
-use crate::metrics::exporter::MetricEvent;
 use crate::metrics::sink::build_metric_sink;
 use crate::metrics::tags::merge_tags;
 use crate::metrics::time::duration_to_millis;
