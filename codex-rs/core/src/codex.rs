@@ -639,6 +639,7 @@ impl Session {
             session_configuration.session_source.clone(),
         )
         .with_metrics(MetricsClient::new(MetricsConfig::default())?);
+        config.features.emit_metrics(&otel_manager);
 
         otel_manager.conversation_starts(
             config.model_provider.name.as_str(),
@@ -651,8 +652,6 @@ impl Session {
             config.mcp_servers.keys().map(String::as_str).collect(),
             config.active_profile.clone(),
         );
-
-        otel_manager.counter("jif_test_1", 2, &[("value", "k_jif")])?;
 
         let mut default_shell = shell::default_user_shell();
         // Create the mutable state for the Session.

@@ -7,6 +7,7 @@
 
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
+use codex_otel::OtelManager;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -193,6 +194,23 @@ impl Features {
         self.legacy_usages
             .iter()
             .map(|usage| (usage.alias.as_str(), usage.feature))
+    }
+
+    pub fn emit_metrics(&self, otel: &OtelManager) {
+        for feature in FEATURES {
+            if self.enabled(feature.id) != feature.default_enabled {
+                if let Err(e) = otel.counter(
+                    "feature.state",
+                    1,
+                    &[
+                        ("feature", feature.key),
+                        ("value", &self.enabled(feature.id).to_string()),
+                    ],
+                ) {
+                    tracing::warn!("Error while emitting feature metrics {e:?}");
+                }
+            }
+        }
     }
 
     /// Apply a table of key -> bool toggles (e.g. from TOML).

@@ -10,9 +10,9 @@ fn build_in_memory_client() -> Result<MetricsClient> {
     MetricsClient::new(config)
 }
 
-// Validates invalid DSNs are rejected early.
+// Validates missing API key is rejected early.
 #[test]
-fn invalid_dsn_reports_error() -> Result<()> {
+fn empty_api_key_is_rejected() -> Result<()> {
     assert!(matches!(
         MetricsClient::new(MetricsConfig::new("")),
         Err(MetricsError::EmptyApiKey)
