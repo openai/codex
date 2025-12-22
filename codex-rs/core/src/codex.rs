@@ -2778,8 +2778,8 @@ mod tests {
     use std::time::Duration;
     use tokio::time::sleep;
 
-    use codex_otel::metrics::MetricsClient;
-    use codex_otel::metrics::MetricsConfig;
+    
+    
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
