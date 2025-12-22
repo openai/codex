@@ -113,3 +113,8 @@ If you don’t have the tool:
 - `vscode-extension/` は `codex-mine` に subtree で取り込み済みの前提で運用する。
 - `codex-mine` と `vscode-extension` の変更は同一コミットに混在して構わない（subtree push 時に `vscode-extension/` 配下のみが抽出される）。
 - 元リポジトリと同期したい場合は手動で `git subtree pull/push` を使う（submodule のような自動リンクではない）。
+
+# Marketplace Publish（vscode-extension）
+
+- Marketplace への `vsce publish` は **ユーザーが明示的に「Publishして」と指示した時のみ**実行する。
+- 指示がない場合は、ローカルの `vsix:package` / `code --install-extension` までに留める。

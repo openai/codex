@@ -26,6 +26,7 @@
 ## 0.1.3
 
 - Resume開始時に、Newと同様にディレクトリ（workspace folder）を選べるようにした（選択したディレクトリの履歴のみ表示）
+- Resume の一覧から `modelProvider` / `cliVersion` の表示を削除
 
 ## 0.0.7
 
