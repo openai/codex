@@ -16,7 +16,7 @@ declare const markdownit:
       renderer: { rules: Record<string, any> };
     });
 
-type Session = { id: string; title: string };
+type Session = { id: string; title: string; customTitle?: boolean };
 type ModelState = {
   model: string | null;
   provider: string | null;
@@ -215,6 +215,7 @@ function main(): void {
     idx: number,
   ): { label: string; tooltip: string } => {
     const title = String(sess.title || "").trim() || "Untitled";
+    if (sess.customTitle) return { label: title, tooltip: title };
     return { label: `${title} #${idx + 1}`, tooltip: title };
   };
 

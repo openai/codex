@@ -5,6 +5,7 @@ export type Session = {
   backendKey: string;
   workspaceFolderUri: string;
   title: string;
+  customTitle?: boolean;
   threadId: string;
 };
 
@@ -43,6 +44,7 @@ export class SessionStore {
     const session = this.sessionsById.get(sessionId) ?? null;
     if (!session) return null;
     session.title = title;
+    session.customTitle = true;
     return session;
   }
 

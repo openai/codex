@@ -3652,7 +3652,7 @@ function formatApprovalDetail(
 const SESSIONS_KEY = "codexMine.sessions.v1";
 type PersistedSession = Pick<
   Session,
-  "id" | "backendKey" | "workspaceFolderUri" | "title" | "threadId"
+  "id" | "backendKey" | "workspaceFolderUri" | "title" | "threadId" | "customTitle"
 >;
 
 function loadSessions(
@@ -3669,6 +3669,7 @@ function loadSessions(
     const backendKey = o["backendKey"];
     const workspaceFolderUri = o["workspaceFolderUri"];
     const title = o["title"];
+    const customTitle = o["customTitle"];
     const threadId = o["threadId"];
 
     if (
@@ -3686,6 +3687,7 @@ function loadSessions(
       backendKey,
       workspaceFolderUri,
       title,
+      customTitle: typeof customTitle === "boolean" ? customTitle : false,
       threadId,
     });
   }
@@ -3700,8 +3702,9 @@ function saveSessions(
 }
 
 function toPersistedSession(session: Session): PersistedSession {
-  const { id, backendKey, workspaceFolderUri, title, threadId } = session;
-  return { id, backendKey, workspaceFolderUri, title, threadId };
+  const { id, backendKey, workspaceFolderUri, title, customTitle, threadId } =
+    session;
+  return { id, backendKey, workspaceFolderUri, title, customTitle, threadId };
 }
 
 const RUNTIMES_KEY = "codexMine.sessionRuntime.v1";
