@@ -33,11 +33,14 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
 
 const METER_NAME: &str = "codex-otel-metrics";
 const STATSIG_USER_ID: &str = "codex-metrics";
 const STATSIG_SDK_TYPE: &str = "codex-otel-rust";
+const STATSIG_MAX_BATCH_EVENTS: usize = 50;
+const STATSIG_BATCH_WINDOW: Duration = Duration::from_millis(1000);
 
 #[derive(Clone, Debug)]
 enum MetricEvent {
@@ -351,16 +354,19 @@ impl MetricsWorker {
     async fn run(mut self, mut receiver: mpsc::Receiver<WorkerMessage>) {
         while let Some(message) = receiver.recv().await {
             match message {
-                WorkerMessage::Event(event) => self.export_event(event).await,
+                WorkerMessage::Event(event) => {
+                    let events = Self::collect_batch(event, &mut receiver).await;
+                    self.export_batch(events).await;
+                }
             }
         }
         self.shutdown().await;
     }
 
-    async fn export_event(&mut self, event: MetricEvent) {
+    async fn export_batch(&mut self, events: Vec<MetricEvent>) {
         match &mut self.exporter {
             WorkerExporter::Statsig(exporter) => {
-                if let Err(err) = exporter.export_event(event).await {
+                if let Err(err) = exporter.export_events(events).await {
                     error_or_panic(format!(
                         "statsig metrics export failed: {err} (exporter={})",
                         self.exporter_label
@@ -368,9 +374,47 @@ impl MetricsWorker {
                 }
             }
             WorkerExporter::InMemory(exporter) => {
-                exporter.export_event(event, &self.exporter_label).await;
+                exporter.export_events(events, &self.exporter_label).await;
             }
         }
+    }
+
+    async fn collect_batch(
+        first: MetricEvent,
+        receiver: &mut mpsc::Receiver<WorkerMessage>,
+    ) -> Vec<MetricEvent> {
+        let mut events = Vec::with_capacity(1);
+        events.push(first);
+
+        // Fast-path: drain anything already enqueued.
+        while events.len() < STATSIG_MAX_BATCH_EVENTS {
+            match receiver.try_recv() {
+                Ok(WorkerMessage::Event(event)) => events.push(event),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => return events,
+            }
+        }
+
+        if events.len() >= STATSIG_MAX_BATCH_EVENTS {
+            return events;
+        }
+
+        // Small coalescing window to catch near-simultaneous metrics without blocking callers.
+        let deadline = Instant::now() + STATSIG_BATCH_WINDOW;
+        while events.len() < STATSIG_MAX_BATCH_EVENTS {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+
+            match tokio::time::timeout(remaining, receiver.recv()).await {
+                Ok(Some(WorkerMessage::Event(event))) => events.push(event),
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+
+        events
     }
 
     async fn shutdown(&mut self) {
@@ -405,8 +449,10 @@ impl InMemoryExporter {
         }
     }
 
-    async fn export_event(&mut self, event: MetricEvent, exporter_label: &str) {
-        self.recorder.record_event(event);
+    async fn export_events(&mut self, events: Vec<MetricEvent>, exporter_label: &str) {
+        for event in events {
+            self.recorder.record_event(event);
+        }
         if let Err(err) = self.meter_provider.force_flush() {
             error_or_panic(format!(
                 "metrics flush failed: {err} (exporter={exporter_label})"
@@ -477,8 +523,12 @@ impl StatsigExporter {
         })
     }
 
-    async fn export_event(&self, event: MetricEvent) -> Result<()> {
-        let payload = self.build_payload(event);
+    async fn export_events(&self, events: Vec<MetricEvent>) -> Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        let payload = self.build_payload(events);
 
         let mut request = self
             .client
@@ -506,9 +556,12 @@ impl StatsigExporter {
         Ok(())
     }
 
-    fn build_payload(&self, event: MetricEvent) -> StatsigPayload {
+    fn build_payload(&self, events: Vec<MetricEvent>) -> StatsigPayload {
         let timestamp = Utc::now().timestamp_millis();
-        let events = vec![self.event_from_metric(event, timestamp)];
+        let events = events
+            .into_iter()
+            .map(|event| self.event_from_metric(event, timestamp))
+            .collect();
 
         StatsigPayload {
             events,
