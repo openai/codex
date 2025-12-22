@@ -425,6 +425,9 @@ impl ChatWidget {
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
+        // Now that Codex has selected the actual model, update the model family used for UI.
+        self.app_event_tx
+            .send(AppEvent::UpdateModel(model_for_header.clone()));
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -440,8 +443,14 @@ impl ChatWidget {
             cwds: Vec::new(),
             force_reload: false,
         });
+        let had_initial_message = self.initial_user_message.is_some();
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
+        }
+        if !had_initial_message {
+            // If there are queued inputs from startup, begin the first turn now.
+            // Subsequent queued inputs are sent turn-by-turn via `maybe_send_next_queued_input`.
+            self.maybe_send_next_queued_input();
         }
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
@@ -1409,9 +1418,7 @@ impl ChatWidget {
             is_first_run,
             model_family,
         } = common;
-        let model_slug = model_family.get_model_slug().to_string();
-        let mut config = config;
-        config.model = Some(model_slug.clone());
+        let config = config;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
@@ -1435,7 +1442,7 @@ impl ChatWidget {
             model_family,
             auth_manager,
             models_manager,
-            session_header: SessionHeader::new(model_slug),
+            session_header: SessionHeader::new("Starting...".to_string()),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -1687,7 +1694,7 @@ impl ChatWidget {
                     return;
                 }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
-                self.submit_user_message(INIT_PROMPT.to_string().into());
+                self.queue_user_message(INIT_PROMPT.to_string().into());
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
@@ -1697,7 +1704,14 @@ impl ChatWidget {
                 self.open_review_popup();
             }
             SlashCommand::Model => {
-                self.open_model_popup();
+                if self.conversation_id.is_none() {
+                    self.add_info_message(
+                        "`/model` is unavailable until startup finishes.".to_string(),
+                        None,
+                    );
+                } else {
+                    self.open_model_popup();
+                }
             }
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
@@ -1868,7 +1882,7 @@ impl ChatWidget {
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
-        if self.bottom_pane.is_task_running() {
+        if self.conversation_id.is_none() || self.bottom_pane.is_task_running() {
             self.queued_user_messages.push_back(user_message);
             self.refresh_queued_user_messages();
         } else {
@@ -2177,7 +2191,7 @@ impl ChatWidget {
 
     // If idle and there are queued inputs, submit exactly one to start the next turn.
     fn maybe_send_next_queued_input(&mut self) {
-        if self.bottom_pane.is_task_running() {
+        if self.conversation_id.is_none() || self.bottom_pane.is_task_running() {
             return;
         }
         if let Some(user_message) = self.queued_user_messages.pop_front() {

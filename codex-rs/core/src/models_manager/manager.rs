@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::TryLockError;
 use tracing::error;
@@ -29,6 +30,7 @@ use crate::models_manager::model_presets::builtin_model_presets;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
+const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const OPENAI_DEFAULT_API_MODEL: &str = "gpt-5.1-codex-max";
 const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "gpt-5.2-codex";
 const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
@@ -39,6 +41,7 @@ pub struct ModelsManager {
     // todo(aibrahim) merge available_models and model family creation into one struct
     local_models: Vec<ModelPreset>,
     remote_models: RwLock<Vec<ModelInfo>>,
+    refresh_lock: Mutex<()>,
     auth_manager: Arc<AuthManager>,
     etag: RwLock<Option<String>>,
     codex_home: PathBuf,
@@ -53,6 +56,7 @@ impl ModelsManager {
         Self {
             local_models: builtin_model_presets(auth_manager.get_auth_mode()),
             remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
+            refresh_lock: Mutex::new(()),
             auth_manager,
             etag: RwLock::new(None),
             codex_home,
@@ -68,6 +72,7 @@ impl ModelsManager {
         Self {
             local_models: builtin_model_presets(auth_manager.get_auth_mode()),
             remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
+            refresh_lock: Mutex::new(()),
             auth_manager,
             etag: RwLock::new(None),
             codex_home,
@@ -83,6 +88,11 @@ impl ModelsManager {
         {
             return Ok(());
         }
+
+        // Prevent duplicate `/models` refreshes when multiple callers try to refresh
+        // concurrently during startup (or when multiple features request models).
+        let _guard = self.refresh_lock.lock().await;
+
         if self.try_load_cache().await {
             return Ok(());
         }
@@ -94,10 +104,23 @@ impl ModelsManager {
         let client = ModelsClient::new(transport, api_provider, api_auth);
 
         let client_version = format_client_version_to_whole();
-        let ModelsResponse { models, etag } = client
-            .list_models(&client_version, HeaderMap::new())
-            .await
-            .map_err(map_api_error)?;
+        let response = tokio::time::timeout(
+            MODELS_REFRESH_TIMEOUT,
+            client.list_models(&client_version, HeaderMap::new()),
+        )
+        .await;
+
+        let ModelsResponse { models, etag } = match response {
+            Ok(response) => response.map_err(map_api_error)?,
+            Err(_) => {
+                error!(
+                    "timed out refreshing /models after {}s",
+                    MODELS_REFRESH_TIMEOUT.as_secs()
+                );
+                // Leave `remote_models` unchanged so the preloaded fallback remains available.
+                return Ok(());
+            }
+        };
 
         let etag = (!etag.is_empty()).then_some(etag);
 

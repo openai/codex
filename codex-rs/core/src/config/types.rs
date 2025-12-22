@@ -514,6 +514,12 @@ const fn default_true() -> bool {
 /// Settings for notices we display to users via the tui and app-server clients
 /// (primarily the Codex IDE extension). NOTE: these are different from
 /// notifications - notices are warnings, NUX screens, acknowledgements, etc.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PendingModelMigrationNotice {
+    pub from_model: String,
+    pub to_model: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Notice {
     /// Tracks whether the user has acknowledged the full access warning prompt.
@@ -530,6 +536,8 @@ pub struct Notice {
     /// Tracks acknowledged model migrations as old->new model slug mappings.
     #[serde(default)]
     pub model_migrations: BTreeMap<String, String>,
+    /// Persisted "show on next run" model migration notice.
+    pub pending_model_migration: Option<PendingModelMigrationNotice>,
 }
 
 impl Notice {
