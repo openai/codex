@@ -433,7 +433,6 @@ fn derive_default_model_family(model: &str) -> ModelFamily {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::openai_models::ClientVersion;
     use codex_protocol::openai_models::ModelVisibility;
     use codex_protocol::openai_models::ReasoningEffortPreset;
     use codex_protocol::openai_models::TruncationPolicyConfig;
