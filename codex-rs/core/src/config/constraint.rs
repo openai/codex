@@ -4,25 +4,25 @@ use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
-#[error("{message}")]
-pub struct ConstraintError {
-    pub message: String,
+pub enum ConstraintError {
+    #[error("value `{candidate}` is not in the allowed set {allowed}")]
+    InvalidValue { candidate: String, allowed: String },
+
+    #[error("field `{field_name}` cannot be empty")]
+    EmptyField { field_name: String },
 }
 
 impl ConstraintError {
     pub fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> Self {
-        Self {
-            message: format!(
-                "value `{}` is not in the allowed set {}",
-                candidate.into(),
-                allowed.into()
-            ),
+        Self::InvalidValue {
+            candidate: candidate.into(),
+            allowed: allowed.into(),
         }
     }
 
     pub fn empty_field(field_name: impl Into<String>) -> Self {
-        Self {
-            message: format!("field `{}` cannot be empty", field_name.into()),
+        Self::EmptyField {
+            field_name: field_name.into(),
         }
     }
 }

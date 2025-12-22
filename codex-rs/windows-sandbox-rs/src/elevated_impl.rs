@@ -7,7 +7,6 @@ mod windows_impl {
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
     use crate::identity::require_logon_sandbox_creds;
-    use crate::logging::debug_log;
     use crate::logging::log_failure;
     use crate::logging::log_note;
     use crate::logging::log_start;
@@ -15,7 +14,6 @@ mod windows_impl {
     use crate::policy::parse_policy;
     use crate::policy::SandboxPolicy;
     use crate::token::convert_string_sid_to_sid;
-    use crate::winutil::format_last_error;
     use crate::winutil::quote_windows_arg;
     use crate::winutil::to_wide;
     use anyhow::Result;
@@ -94,7 +92,7 @@ mod windows_impl {
     fn inject_git_safe_directory(
         env_map: &mut HashMap<String, String>,
         cwd: &Path,
-        logs_base_dir: Option<&Path>,
+        _logs_base_dir: Option<&Path>,
     ) {
         if let Some(git_root) = find_git_root(cwd) {
             let mut cfg_count: usize = env_map
@@ -109,10 +107,6 @@ mod windows_impl {
             env_map.insert(format!("GIT_CONFIG_VALUE_{cfg_count}"), git_path);
             cfg_count += 1;
             env_map.insert("GIT_CONFIG_COUNT".to_string(), cfg_count.to_string());
-            log_note(
-                &format!("injected git safe.directory for {}", git_root.display()),
-                logs_base_dir,
-            );
         }
     }
 
@@ -237,7 +231,6 @@ mod windows_impl {
         log_start(&command, logs_base_dir);
         let sandbox_creds =
             require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, codex_home)?;
-        log_note("cli creds ready", logs_base_dir);
         // Build capability SID for ACL grants.
         if matches!(
             &policy,
@@ -283,13 +276,6 @@ mod windows_impl {
             &stderr_name,
             PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
         )?;
-        log_note(
-            &format!(
-                "cli pipes created stdin={} stdout={} stderr={}",
-                stdin_name, stdout_name, stderr_name
-            ),
-            logs_base_dir,
-        );
 
         // Launch runner as sandbox user via CreateProcessWithLogonW.
         let runner_exe = find_runner_exe();
@@ -326,10 +312,6 @@ mod windows_impl {
             );
             return Err(e.into());
         }
-        log_note(
-            &format!("cli request file written path={}", req_file.display()),
-            logs_base_dir,
-        );
         let runner_full_cmd = format!(
             "{} {}",
             quote_windows_arg(&runner_cmdline),
@@ -338,14 +320,6 @@ mod windows_impl {
         let mut cmdline_vec: Vec<u16> = to_wide(&runner_full_cmd);
         let exe_w: Vec<u16> = to_wide(&runner_cmdline);
         let cwd_w: Vec<u16> = to_wide(cwd);
-        log_note(
-            &format!("cli prep done request_file={}", req_file.display()),
-            logs_base_dir,
-        );
-        log_note(
-            &format!("cli about to launch runner cmd={}", runner_full_cmd),
-            logs_base_dir,
-        );
 
         // Minimal CPWL launch: inherit env, no desktop override, no handle inheritance.
         let env_block: Option<Vec<u16>> = None;
@@ -380,23 +354,8 @@ mod windows_impl {
         };
         if spawn_res == 0 {
             let err = unsafe { GetLastError() } as i32;
-            let dbg = format!(
-                "CreateProcessWithLogonW failed: {} ({}) | cwd={} | cmd={} | req_file={} | env=inherit | si_flags={}",
-                err,
-                format_last_error(err),
-                cwd.display(),
-                runner_full_cmd,
-                req_file.display(),
-                si.dwFlags,
-            );
-            debug_log(&dbg, logs_base_dir);
-            log_note(&dbg, logs_base_dir);
             return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {}", err));
         }
-        log_note(
-            &format!("cli runner launched pid={}", pi.hProcess),
-            logs_base_dir,
-        );
 
         // Pipes are no longer passed as std handles; no stdin payload is sent.
         connect_pipe(h_stdin_pipe)?;

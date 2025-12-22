@@ -25,7 +25,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
-use crate::openai_models::models_manager::ModelsManager;
+use crate::models_manager::manager::ModelsManager;
 use codex_protocol::protocol::InitialHistory;
 
 /// Start an interactive sub-Codex conversation and return IO channels.

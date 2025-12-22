@@ -300,6 +300,17 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
 }
 
 pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
+    // Prefer a stable, user-local relative path when the file is under the current working
+    // directory. This keeps output deterministic in jj-only repos (no `.git`) and matches user
+    // expectations for "files in this project".
+    if let Some(rel) = pathdiff::diff_paths(path, cwd)
+        && !rel
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return rel.display().to_string();
+    }
+
     let path_in_same_repo = match (get_git_repo_root(cwd), get_git_repo_root(path)) {
         (Some(cwd_repo), Some(path_repo)) => cwd_repo == path_repo,
         _ => false,

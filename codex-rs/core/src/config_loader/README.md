@@ -10,7 +10,7 @@ This module is the canonical place to **load and describe Codex configuration la
 
 Exported from `codex_core::config_loader`:
 
-- `load_config_layers_state(codex_home, cli_overrides, overrides) -> ConfigLayerStack`
+- `load_config_layers_state(codex_home, cwd_opt, cli_overrides, overrides) -> ConfigLayerStack`
 - `ConfigLayerStack`
   - `effective_config() -> toml::Value`
   - `origins() -> HashMap<String, ConfigLayerMetadata>`
@@ -37,11 +37,14 @@ Most callers want the effective config plus metadata:
 
 ```rust
 use codex_core::config_loader::{load_config_layers_state, LoaderOverrides};
+use codex_utils_absolute_path::AbsolutePathBuf;
 use toml::Value as TomlValue;
 
 let cli_overrides: Vec<(String, TomlValue)> = Vec::new();
+let cwd = AbsolutePathBuf::current_dir()?;
 let layers = load_config_layers_state(
     &codex_home,
+    Some(cwd),
     &cli_overrides,
     LoaderOverrides::default(),
 ).await?;

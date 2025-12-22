@@ -177,7 +177,6 @@ pub struct ModelInfo {
     pub supported_reasoning_levels: Vec<ReasoningEffortPreset>,
     pub shell_type: ConfigShellToolType,
     pub visibility: ModelVisibility,
-    pub minimal_client_version: ClientVersion,
     pub supported_in_api: bool,
     pub priority: i32,
     pub upgrade: Option<String>,

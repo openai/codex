@@ -7,7 +7,7 @@ use chrono::DateTime;
 use chrono::Local;
 use codex_common::create_config_summary_entries;
 use codex_core::config::Config;
-use codex_core::openai_models::model_family::ModelFamily;
+use codex_core::models_manager::model_family::ModelFamily;
 use codex_core::protocol::NetworkAccess;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
@@ -119,7 +119,7 @@ impl StatusHistoryCell {
             .find(|(k, _)| *k == "approval")
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| "<unknown>".to_string());
-        let sandbox = match &config.sandbox_policy {
+        let sandbox = match config.sandbox_policy.get() {
             SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
             SandboxPolicy::ReadOnly => "read-only".to_string(),
             SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),

@@ -33,6 +33,7 @@ struct SkillFrontmatterMetadata {
 const SKILLS_FILENAME: &str = "SKILL.md";
 const SKILLS_DIR_NAME: &str = "skills";
 const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
+const ADMIN_SKILLS_ROOT: &str = "/etc/codex/skills";
 const MAX_NAME_LEN: usize = 64;
 const MAX_DESCRIPTION_LEN: usize = 1024;
 const MAX_SHORT_DESCRIPTION_LEN: usize = MAX_DESCRIPTION_LEN;
@@ -108,6 +109,13 @@ pub(crate) fn system_skills_root(codex_home: &Path) -> SkillRoot {
     }
 }
 
+pub(crate) fn admin_skills_root() -> SkillRoot {
+    SkillRoot {
+        path: PathBuf::from(ADMIN_SKILLS_ROOT),
+        scope: SkillScope::Admin,
+    }
+}
+
 pub(crate) fn repo_skills_root(cwd: &Path) -> Option<SkillRoot> {
     let base = if cwd.is_dir() { cwd } else { cwd.parent()? };
     let base = normalize_path(base).unwrap_or_else(|_| base.to_path_buf());
@@ -140,19 +148,26 @@ pub(crate) fn repo_skills_root(cwd: &Path) -> Option<SkillRoot> {
     })
 }
 
-fn skill_roots(config: &Config) -> Vec<SkillRoot> {
+pub(crate) fn skill_roots_for_cwd(codex_home: &Path, cwd: &Path) -> Vec<SkillRoot> {
     let mut roots = Vec::new();
 
-    if let Some(repo_root) = repo_skills_root(&config.cwd) {
+    if let Some(repo_root) = repo_skills_root(cwd) {
         roots.push(repo_root);
     }
 
     // Load order matters: we dedupe by name, keeping the first occurrence.
-    // This makes repo/user skills win over system skills.
-    roots.push(user_skills_root(&config.codex_home));
-    roots.push(system_skills_root(&config.codex_home));
+    // Priority order: repo, user, system, then admin.
+    roots.push(user_skills_root(codex_home));
+    roots.push(system_skills_root(codex_home));
+    if cfg!(unix) {
+        roots.push(admin_skills_root());
+    }
 
     roots
+}
+
+fn skill_roots(config: &Config) -> Vec<SkillRoot> {
+    skill_roots_for_cwd(&config.codex_home, &config.cwd)
 }
 
 fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut SkillLoadOutcome) {
@@ -622,7 +637,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loads_system_skills_with_lowest_priority() {
+    async fn loads_system_skills_when_present() {
         let codex_home = tempfile::tempdir().expect("tempdir");
 
         write_system_skill(&codex_home, "system", "dupe-skill", "from system");
@@ -761,6 +776,51 @@ mod tests {
         );
         assert_eq!(outcome.skills.len(), 1);
         assert_eq!(outcome.skills[0].name, "system-skill");
+        assert_eq!(outcome.skills[0].scope, SkillScope::System);
+    }
+
+    #[tokio::test]
+    async fn skill_roots_include_admin_with_lowest_priority_on_unix() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let cfg = make_config(&codex_home).await;
+
+        let scopes: Vec<SkillScope> = skill_roots(&cfg)
+            .into_iter()
+            .map(|root| root.scope)
+            .collect();
+        let mut expected = vec![SkillScope::User, SkillScope::System];
+        if cfg!(unix) {
+            expected.push(SkillScope::Admin);
+        }
+        assert_eq!(scopes, expected);
+    }
+
+    #[tokio::test]
+    async fn deduplicates_by_name_preferring_system_over_admin() {
+        let system_dir = tempfile::tempdir().expect("tempdir");
+        let admin_dir = tempfile::tempdir().expect("tempdir");
+
+        write_skill_at(system_dir.path(), "system", "dupe-skill", "from system");
+        write_skill_at(admin_dir.path(), "admin", "dupe-skill", "from admin");
+
+        let outcome = load_skills_from_roots([
+            SkillRoot {
+                path: system_dir.path().to_path_buf(),
+                scope: SkillScope::System,
+            },
+            SkillRoot {
+                path: admin_dir.path().to_path_buf(),
+                scope: SkillScope::Admin,
+            },
+        ]);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert_eq!(outcome.skills[0].name, "dupe-skill");
         assert_eq!(outcome.skills[0].scope, SkillScope::System);
     }
 

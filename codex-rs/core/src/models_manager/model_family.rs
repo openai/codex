@@ -117,7 +117,6 @@ impl ModelFamily {
             supported_reasoning_levels: _,
             shell_type,
             visibility: _,
-            minimal_client_version: _,
             supported_in_api: _,
             priority: _,
             upgrade: _,
@@ -434,7 +433,6 @@ fn derive_default_model_family(model: &str) -> ModelFamily {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::openai_models::ClientVersion;
     use codex_protocol::openai_models::ModelVisibility;
     use codex_protocol::openai_models::ReasoningEffortPreset;
     use codex_protocol::openai_models::TruncationPolicyConfig;
@@ -451,7 +449,6 @@ mod tests {
             }],
             shell_type: shell,
             visibility: ModelVisibility::List,
-            minimal_client_version: ClientVersion(0, 1, 0),
             supported_in_api: true,
             priority: 1,
             upgrade: None,
@@ -541,7 +538,6 @@ mod tests {
             }],
             shell_type: ConfigShellToolType::ShellCommand,
             visibility: ModelVisibility::List,
-            minimal_client_version: ClientVersion(0, 1, 0),
             supported_in_api: true,
             priority: 10,
             upgrade: None,

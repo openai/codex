@@ -10,7 +10,10 @@ pub fn create_config_summary_entries(config: &Config, model: &str) -> Vec<(&'sta
         ("model", model.to_string()),
         ("provider", config.model_provider_id.clone()),
         ("approval", config.approval_policy.value().to_string()),
-        ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
+        (
+            "sandbox",
+            summarize_sandbox_policy(config.sandbox_policy.get()),
+        ),
     ];
     if config.model_provider.wire_api == WireApi::Responses {
         let reasoning_effort = config

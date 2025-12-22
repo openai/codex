@@ -2,7 +2,7 @@ use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::features::Features;
-use crate::openai_models::model_family::ModelFamily;
+use crate::models_manager::model_family::ModelFamily;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
@@ -1126,7 +1126,7 @@ pub(crate) fn build_specs(
 mod tests {
     use crate::client_common::tools::FreeformTool;
     use crate::config::test_config;
-    use crate::openai_models::models_manager::ModelsManager;
+    use crate::models_manager::manager::ModelsManager;
     use crate::tools::registry::ConfiguredToolSpec;
     use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;

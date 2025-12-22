@@ -28,9 +28,9 @@ use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
-use codex_core::openai_models::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
-use codex_core::openai_models::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::models_manager::manager::ModelsManager;
+use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
+use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::ListSkillsResponseEvent;
@@ -458,7 +458,7 @@ impl App {
         {
             let should_check = codex_core::get_platform_sandbox().is_some()
                 && matches!(
-                    app.config.sandbox_policy,
+                    app.config.sandbox_policy.get(),
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
                         | codex_core::protocol::SandboxPolicy::ReadOnly
                 )
@@ -472,7 +472,7 @@ impl App {
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
-                let sandbox_policy = app.config.sandbox_policy.clone();
+                let sandbox_policy = app.config.sandbox_policy.get().clone();
                 Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
             }
         }
@@ -919,19 +919,29 @@ impl App {
             AppEvent::UpdateSandboxPolicy(policy) => {
                 #[cfg(target_os = "windows")]
                 let policy_is_workspace_write_or_ro = matches!(
-                    policy,
+                    &policy,
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
                         | codex_core::protocol::SandboxPolicy::ReadOnly
                 );
 
-                self.config.sandbox_policy = policy.clone();
+                if let Err(err) = self.config.sandbox_policy.set(policy.clone()) {
+                    tracing::warn!(%err, "failed to set sandbox policy on app config");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to set sandbox policy: {err}"));
+                    return Ok(true);
+                }
                 #[cfg(target_os = "windows")]
-                if !matches!(policy, codex_core::protocol::SandboxPolicy::ReadOnly)
+                if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
                     || codex_core::get_platform_sandbox().is_some()
                 {
                     self.config.forced_auto_mode_downgraded_on_windows = false;
                 }
-                self.chat_widget.set_sandbox_policy(policy);
+                if let Err(err) = self.chat_widget.set_sandbox_policy(policy) {
+                    tracing::warn!(%err, "failed to set sandbox policy on chat config");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to set sandbox policy: {err}"));
+                    return Ok(true);
+                }
 
                 // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
                 #[cfg(target_os = "windows")]
@@ -951,7 +961,7 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        let sandbox_policy = self.config.sandbox_policy.clone();
+                        let sandbox_policy = self.config.sandbox_policy.get().clone();
                         Self::spawn_world_writable_scan(
                             cwd,
                             env_map,
@@ -1423,7 +1433,7 @@ mod tests {
     }
 
     fn all_model_presets() -> Vec<ModelPreset> {
-        codex_core::openai_models::model_presets::all_model_presets().clone()
+        codex_core::models_manager::model_presets::all_model_presets().clone()
     }
 
     #[tokio::test]
