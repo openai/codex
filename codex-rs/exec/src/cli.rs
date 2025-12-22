@@ -11,7 +11,13 @@ pub struct Cli {
     pub command: Option<Command>,
 
     /// Optional image(s) to attach to the initial prompt.
-    #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
+    #[arg(
+        long = "image",
+        short = 'i',
+        value_name = "FILE",
+        value_delimiter = ',',
+        num_args = 1
+    )]
     pub images: Vec<PathBuf>,
 
     /// Model the agent should use.
@@ -106,6 +112,16 @@ pub struct ResumeArgs {
     /// Resume the most recent recorded session (newest) without specifying an id.
     #[arg(long = "last", default_value_t = false)]
     pub last: bool,
+
+    /// Optional image(s) to attach to the prompt sent after resuming.
+    #[arg(
+        long = "image",
+        short = 'i',
+        value_name = "FILE",
+        value_delimiter = ',',
+        num_args = 1
+    )]
+    pub images: Vec<PathBuf>,
 
     /// Prompt to send after resuming the session. If `-` is used, read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
