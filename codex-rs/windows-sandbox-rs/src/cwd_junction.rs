@@ -4,10 +4,8 @@ use codex_windows_sandbox::log_note;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
-use std::os::windows::process::CommandExt as _;
 use std::path::Path;
 use std::path::PathBuf;
-use std::os::windows::fs::MetadataExt as _;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
 fn junction_name_for_path(path: &Path) -> String {
@@ -23,15 +21,15 @@ fn junction_root_for_userprofile(userprofile: &str) -> PathBuf {
         .join("cwd")
 }
 
-pub fn create_cwd_junction(
-    requested_cwd: &Path,
-    log_dir: Option<&Path>,
-) -> Option<PathBuf> {
+pub fn create_cwd_junction(requested_cwd: &Path, log_dir: Option<&Path>) -> Option<PathBuf> {
     let userprofile = std::env::var("USERPROFILE").ok()?;
     let junction_root = junction_root_for_userprofile(&userprofile);
     if let Err(err) = std::fs::create_dir_all(&junction_root) {
         log_note(
-            &format!("junction: failed to create {}: {err}", junction_root.display()),
+            &format!(
+                "junction: failed to create {}: {err}",
+                junction_root.display()
+            ),
             log_dir,
         );
         return None;
@@ -74,7 +72,10 @@ pub fn create_cwd_junction(
 
         if let Err(err) = std::fs::remove_dir(&junction_path) {
             log_note(
-                &format!("junction: failed to remove existing {}: {err}", junction_path.display()),
+                &format!(
+                    "junction: failed to remove existing {}: {err}",
+                    junction_path.display()
+                ),
                 log_dir,
             );
             return None;
@@ -96,9 +97,7 @@ pub fn create_cwd_junction(
     let link_quoted = format!("\"{link}\"");
     let target_quoted = format!("\"{target}\"");
     log_note(
-        &format!(
-            "junction: creating via cmd /c mklink /J {link_quoted} {target_quoted}"
-        ),
+        &format!("junction: creating via cmd /c mklink /J {link_quoted} {target_quoted}"),
         log_dir,
     );
     let output = match std::process::Command::new("cmd")

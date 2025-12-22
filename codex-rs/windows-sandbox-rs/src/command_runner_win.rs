@@ -170,7 +170,10 @@ pub fn main() -> Result<()> {
         }
     };
     if use_junction {
-        log_note("junction: read ACL helper running; using junction CWD", log_dir);
+        log_note(
+            "junction: read ACL helper running; using junction CWD",
+            log_dir,
+        );
     }
     let effective_cwd = if use_junction {
         cwd_junction::create_cwd_junction(&req.cwd, log_dir).unwrap_or_else(|| req.cwd.clone())

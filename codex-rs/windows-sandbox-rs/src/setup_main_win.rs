@@ -360,7 +360,12 @@ fn apply_read_acls(
         }
         if !missing_psids.is_empty() {
             let result = unsafe {
-                ensure_allow_mask_aces_with_inheritance(root, &missing_psids, access_mask, inheritance)
+                ensure_allow_mask_aces_with_inheritance(
+                    root,
+                    &missing_psids,
+                    access_mask,
+                    inheritance,
+                )
             };
             match result {
                 Ok(_) => {
