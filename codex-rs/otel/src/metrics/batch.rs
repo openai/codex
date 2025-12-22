@@ -2,6 +2,8 @@ use crate::metrics::error::MetricsError;
 use crate::metrics::error::Result;
 use crate::metrics::tags::collect_tags;
 use crate::metrics::validation::validate_metric_name;
+use crate::metrics::validation::validate_tag_key;
+use crate::metrics::validation::validate_tag_value;
 
 #[cfg_attr(test, derive(PartialEq, Eq))]
 #[derive(Clone, Debug)]
@@ -118,6 +120,7 @@ pub(crate) enum MetricEvent {
 
 pub struct MetricsBatch {
     events: Vec<MetricEvent>,
+    default_tags: Vec<(String, String)>,
 }
 
 impl Default for MetricsBatch {
@@ -129,17 +132,32 @@ impl Default for MetricsBatch {
 impl MetricsBatch {
     /// Create an empty metrics batch.
     pub fn new() -> Self {
-        Self { events: Vec::new() }
+        Self {
+            events: Vec::new(),
+            default_tags: Vec::new(),
+        }
+    }
+
+    pub fn with_default_tags(default_tags: Vec<(String, String)>) -> Result<Self> {
+        for (key, value) in &default_tags {
+            validate_tag_key(key)?;
+            validate_tag_value(value)?;
+        }
+        Ok(Self {
+            events: Vec::new(),
+            default_tags,
+        })
     }
 
     /// Append a counter increment to the batch.
     pub fn counter(&mut self, name: &str, inc: i64, tags: &[(&str, &str)]) -> Result<()> {
         validate_metric_name(name)?;
-        let tags = collect_tags(tags)?;
+        let mut merged_tags = self.default_tags.clone();
+        merged_tags.extend(collect_tags(tags)?);
         self.events.push(MetricEvent::Counter {
             name: name.to_string(),
             value: inc,
-            tags,
+            tags: merged_tags,
         });
         Ok(())
     }
@@ -155,11 +173,12 @@ impl MetricsBatch {
         // Buckets remain part of the API, but OTEL histogram aggregation owns bucket selection.
         let _ = buckets.bounds();
         validate_metric_name(name)?;
-        let tags = collect_tags(tags)?;
+        let mut merged_tags = self.default_tags.clone();
+        merged_tags.extend(collect_tags(tags)?);
         self.events.push(MetricEvent::Histogram {
             name: name.to_string(),
             value,
-            tags,
+            tags: merged_tags,
         });
         Ok(())
     }

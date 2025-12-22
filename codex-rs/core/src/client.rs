@@ -18,7 +18,7 @@ use codex_api::common::Reasoning;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_app_server_protocol::AuthMode;
-use codex_otel::traces::otel_manager::OtelManager;
+use codex_otel::OtelManager;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;

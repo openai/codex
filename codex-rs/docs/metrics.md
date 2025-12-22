@@ -39,7 +39,7 @@ client and emit metrics through the same handle. By default, metrics sent via
 ```rust
 use codex_otel::metrics::HistogramBuckets;
 use codex_otel::metrics::MetricsConfig;
-use codex_otel::traces::otel_manager::OtelManager;
+use codex_otel::OtelManager;
 
 let manager = OtelManager::new(
     conversation_id,

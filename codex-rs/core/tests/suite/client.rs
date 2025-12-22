@@ -20,7 +20,7 @@ use codex_core::openai_models::models_manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
-use codex_otel::traces::otel_manager::OtelManager;
+use codex_otel::OtelManager;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;

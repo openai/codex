@@ -150,7 +150,7 @@ use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
 use codex_execpolicy::Policy as ExecPolicy;
-use codex_otel::traces::otel_manager::OtelManager;
+use codex_otel::OtelManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;

@@ -12,7 +12,7 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::openai_models::models_manager::ModelsManager;
-use codex_otel::traces::otel_manager::OtelManager;
+use codex_otel::OtelManager;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::protocol::SessionSource;
