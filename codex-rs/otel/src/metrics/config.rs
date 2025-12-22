@@ -1,6 +1,5 @@
 use crate::metrics::DEFAULT_API_KEY;
 use crate::metrics::DEFAULT_API_KEY_HEADER;
-use crate::metrics::DEFAULT_EXPORT_INTERVAL;
 use crate::metrics::DEFAULT_STATSIG_ENDPOINT;
 use crate::metrics::DEFAULT_TIMEOUT;
 use crate::metrics::error::Result;
@@ -22,7 +21,6 @@ pub struct MetricsConfig {
     pub(crate) api_key_header: String,
     pub(crate) default_tags: BTreeMap<String, String>,
     pub(crate) timeout: Duration,
-    pub(crate) export_interval: Duration,
     pub(crate) user_agent: String,
     pub(crate) exporter: MetricsExporter,
 }
@@ -36,7 +34,6 @@ impl MetricsConfig {
             api_key_header: DEFAULT_API_KEY_HEADER.to_string(),
             default_tags: BTreeMap::new(),
             timeout: DEFAULT_TIMEOUT,
-            export_interval: DEFAULT_EXPORT_INTERVAL,
             user_agent: format!("codex-otel-metrics/{}", env!("CARGO_PKG_VERSION")),
             exporter: MetricsExporter::StatsigHttp,
         }
@@ -70,12 +67,6 @@ impl MetricsConfig {
         self
     }
 
-    /// Override the export interval used by the in-memory exporter (tests).
-    pub fn with_export_interval(mut self, interval: Duration) -> Self {
-        self.export_interval = interval;
-        self
-    }
-
     /// Override the HTTP user agent header.
     pub fn with_user_agent(mut self, user_agent: impl Into<String>) -> Self {
         self.user_agent = user_agent.into();
@@ -92,10 +83,12 @@ impl MetricsConfig {
 
     pub(crate) fn exporter_label(&self) -> String {
         match &self.exporter {
-            MetricsExporter::StatsigHttp => format!(
-                "statsig_http endpoint={} interval={:?} timeout={:?}",
-                self.endpoint, self.export_interval, self.timeout
-            ),
+            MetricsExporter::StatsigHttp => {
+                format!(
+                    "statsig_http endpoint={} timeout={:?}",
+                    self.endpoint, self.timeout
+                )
+            }
             MetricsExporter::InMemory(_) => "in_memory".to_string(),
         }
     }

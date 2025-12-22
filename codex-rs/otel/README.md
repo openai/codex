@@ -4,7 +4,7 @@
 
 - Trace/log exporters and tracing subscriber layers (`codex_otel::traces::otel_provider`).
 - A structured event helper (`codex_otel::OtelManager`).
-- A Statsig OTLP metrics client (`codex_otel::metrics`).
+- A Statsig `log_event` metrics client (`codex_otel::metrics`).
 - A metrics facade on `OtelManager` so tracing + metrics share metadata.
 
 ## Tracing and logs

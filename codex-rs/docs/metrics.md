@@ -70,7 +70,6 @@ If you set `metrics: Some(MetricsConfig)` on `OtelSettings` and build an
 - `with_api_key_header(header)` to set the API key header name.
 - `with_tag(key, value)` to add default tags for every metric.
 - `with_timeout(duration)` to set the HTTP request timeout.
-- `with_export_interval(duration)` to tweak the in-memory exporter interval in tests.
 - `with_user_agent(agent)` to override the HTTP `User-Agent` header.
 
 The queue capacity is fixed at 1024 entries.

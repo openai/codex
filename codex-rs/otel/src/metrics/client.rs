@@ -55,7 +55,6 @@ enum MetricEvent {
 
 enum WorkerMessage {
     Event(MetricEvent),
-    Shutdown,
 }
 
 struct WorkerState {
@@ -272,21 +271,8 @@ impl MetricsClient {
         };
         let mut joined = false;
 
-        if let Some(sender) = sender {
-            match sender.try_send(WorkerMessage::Shutdown) {
-                Ok(()) | Err(TrySendError::Closed(_)) => {}
-                Err(TrySendError::Full(_)) => {
-                    if tokio::runtime::Handle::try_current().is_ok() {
-                        let sender = sender.clone();
-                        let _ =
-                            thread::spawn(move || sender.blocking_send(WorkerMessage::Shutdown))
-                                .join();
-                    } else {
-                        let _ = sender.blocking_send(WorkerMessage::Shutdown);
-                    }
-                }
-            }
-        }
+        // Dropping the sender closes the channel; the worker drains pending events and exits.
+        drop(sender);
 
         if timeout.is_zero() {
             if handle.is_finished() {
@@ -332,7 +318,7 @@ fn build_worker_exporter(config: &MetricsConfig) -> Result<WorkerExporter> {
     match &config.exporter {
         MetricsExporter::StatsigHttp => Ok(WorkerExporter::Statsig(StatsigExporter::from(config)?)),
         MetricsExporter::InMemory(exporter) => Ok(WorkerExporter::InMemory(
-            InMemoryExporter::from(config, exporter.clone()),
+            InMemoryExporter::from(config.default_tags.clone(), exporter.clone()),
         )),
     }
 }
@@ -363,19 +349,12 @@ impl MetricsWorker {
     }
 
     async fn run(mut self, mut receiver: mpsc::Receiver<WorkerMessage>) {
-        let mut received_shutdown = false;
         while let Some(message) = receiver.recv().await {
             match message {
                 WorkerMessage::Event(event) => self.export_event(event).await,
-                WorkerMessage::Shutdown => {
-                    received_shutdown = true;
-                    break;
-                }
             }
         }
-        if received_shutdown || matches!(&self.exporter, WorkerExporter::InMemory(_)) {
-            self.shutdown().await;
-        }
+        self.shutdown().await;
     }
 
     async fn export_event(&mut self, event: MetricEvent) {
@@ -413,15 +392,13 @@ struct InMemoryExporter {
 
 impl InMemoryExporter {
     fn from(
-        config: &MetricsConfig,
+        default_tags: BTreeMap<String, String>,
         exporter: opentelemetry_sdk::metrics::InMemoryMetricExporter,
     ) -> Self {
-        let reader = PeriodicReader::builder(exporter)
-            .with_interval(config.export_interval)
-            .build();
+        let reader = PeriodicReader::builder(exporter).build();
         let meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
         let meter = meter_provider.meter(METER_NAME);
-        let recorder = MetricRecorder::new(meter, config.default_tags.clone());
+        let recorder = MetricRecorder::new(meter, default_tags);
         Self {
             recorder,
             meter_provider,
