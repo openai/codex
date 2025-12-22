@@ -16,28 +16,11 @@
 
 ## 0.1.2
 
-- ⚙ から CLI を `upstream` / `codex-mine` / `auto` で切替できるようにした（適用には backend 再起動が必要）
+- ⚙ から CLI を `codex` / `codex-mine` / `auto` で切替できるようにした（以降のデフォルト。適用には backend 再起動が必要）
+  - `codex-mine` 選択時は `New` が常に codex-mine backend を使うように（必要なら自動再起動）
 - `codex-mine` 実行時のみ `/agents` を有効化し、`.codex/agents` / `$CODEX_HOME/agents` から選んで `@name` を入力欄へ挿入できるようにした
-
-## 0.1.3
-
-- CLI 切替の表示名を `codex` / `codex-mine` に統一し、⚙ を CHAT 右上へ移動
-- `cli.variant=codex-mine` のとき、`New` で必ず codex-mine backend を使うように（必要なら自動再起動）
-
-## 0.1.4
-
-- ⚙ の CLI 切替を「ディレクトリ選択」ではなく「以降のデフォルト」に変更（グローバル設定を更新）
-
-## 0.1.5
-
 - app-server の `thread/list` を使って履歴一覧から `thread/resume` できる Resume 機能を追加（CHAT右上の Resume / `/resume`）
-
-## 0.1.6
-
-- Resume の履歴一覧を「CODEX_HOME の全履歴」に固定（workspace/cwd で絞る選択UIを削除）
-
-## 0.1.7
-
+  - 履歴一覧は `CODEX_HOME` の全履歴を対象にする
 - セッションをリネームした場合は、タブ/SESSIONS表示から `#N` を外す（`#N` はデフォルト名の識別用途のみ）
 
 ## 0.0.7
