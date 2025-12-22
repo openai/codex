@@ -68,13 +68,13 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
     match cmd0 {
         Some(cmd) if cmd.ends_with("git") || cmd.ends_with("/git") => {
             matches!(
-                command.get(1).map(String::as_str), 
+                command.get(1).map(String::as_str),
                 Some("reset" | "rm" | "--force")
             )
         }
 
         Some("rm") => matches!(
-            command.get(1).map(String::as_str), 
+            command.get(1).map(String::as_str),
             Some("-f" | "-rf" | "-Rf" | "-fr" | "-fR" | "--force")
         ),
 
