@@ -48,9 +48,10 @@ fn time_result_records_success() -> Result<()> {
         match crate::harness::find_metric(&resource_metrics, "codex.request_latency").and_then(
             |metric| match metric.data() {
                 opentelemetry_sdk::metrics::data::AggregatedMetrics::F64(data) => match data {
-                    opentelemetry_sdk::metrics::data::MetricData::Histogram(histogram) => {
-                        histogram.data_points().next().map(|p| p.attributes())
-                    }
+                    opentelemetry_sdk::metrics::data::MetricData::Histogram(histogram) => histogram
+                        .data_points()
+                        .next()
+                        .map(opentelemetry_sdk::metrics::data::HistogramDataPoint::attributes),
                     _ => None,
                 },
                 _ => None,
@@ -90,9 +91,10 @@ fn time_result_records_on_error() -> Result<()> {
         match crate::harness::find_metric(&resource_metrics, "codex.request_latency").and_then(
             |metric| match metric.data() {
                 opentelemetry_sdk::metrics::data::AggregatedMetrics::F64(data) => match data {
-                    opentelemetry_sdk::metrics::data::MetricData::Histogram(histogram) => {
-                        histogram.data_points().next().map(|p| p.attributes())
-                    }
+                    opentelemetry_sdk::metrics::data::MetricData::Histogram(histogram) => histogram
+                        .data_points()
+                        .next()
+                        .map(opentelemetry_sdk::metrics::data::HistogramDataPoint::attributes),
                     _ => None,
                 },
                 _ => None,

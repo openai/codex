@@ -81,7 +81,7 @@ async fn statsig_http_exporter_sends_events() -> Result<()> {
         .and(header("statsig-api-key", "test-key"))
         .and(header("user-agent", "codex-test-agent"))
         .respond_with(ResponseTemplate::new(200))
-        .expect(2)
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -97,32 +97,31 @@ async fn statsig_http_exporter_sends_events() -> Result<()> {
     metrics.shutdown()?;
 
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 1);
+
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let events = body
+        .get("events")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(events.len(), 2);
+
+    let statsig_metadata = body
+        .get("statsigMetadata")
+        .and_then(Value::as_object)
+        .expect("statsig metadata missing");
+    assert_eq!(
+        statsig_metadata.get("sdkType").and_then(Value::as_str),
+        Some("codex-otel-rust")
+    );
+    assert_eq!(
+        statsig_metadata.get("sdkVersion").and_then(Value::as_str),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
 
     let mut events_by_name = BTreeMap::new();
-    for request in &requests {
-        let body: Value = serde_json::from_slice(&request.body).unwrap();
-        let events = body
-            .get("events")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        assert_eq!(events.len(), 1);
-
-        let statsig_metadata = body
-            .get("statsigMetadata")
-            .and_then(Value::as_object)
-            .expect("statsig metadata missing");
-        assert_eq!(
-            statsig_metadata.get("sdkType").and_then(Value::as_str),
-            Some("codex-otel-rust")
-        );
-        assert_eq!(
-            statsig_metadata.get("sdkVersion").and_then(Value::as_str),
-            Some(env!("CARGO_PKG_VERSION"))
-        );
-
-        let event = events[0].clone();
+    for event in events {
         let name = event
             .get("eventName")
             .and_then(Value::as_str)
@@ -135,31 +134,29 @@ async fn statsig_http_exporter_sends_events() -> Result<()> {
         .get("codex.turns")
         .expect("counter event missing");
     assert_eq!(counter.get("value").and_then(Value::as_f64), Some(1.0));
-    let counter_tags = counter
-        .get("metadata")
-        .and_then(|value| value.get("tags"))
-        .expect("counter tags missing");
-    let expected_counter_tags = BTreeMap::from([
+    let counter_metadata = counter.get("metadata").expect("counter metadata missing");
+    let expected_counter_metadata = BTreeMap::from([
+        ("metric_type".to_string(), "counter".to_string()),
         ("service".to_string(), "codex-cli".to_string()),
         ("env".to_string(), "prod".to_string()),
         ("model".to_string(), "gpt-5.1".to_string()),
     ]);
-    assert_eq!(json_tags(counter_tags), expected_counter_tags);
+    assert_eq!(json_tags(counter_metadata), expected_counter_metadata);
 
     let histogram = events_by_name
         .get("codex.tool_latency")
         .expect("histogram event missing");
     assert_eq!(histogram.get("value").and_then(Value::as_f64), Some(25.0));
-    let histogram_tags = histogram
+    let histogram_metadata = histogram
         .get("metadata")
-        .and_then(|value| value.get("tags"))
-        .expect("histogram tags missing");
-    let expected_histogram_tags = BTreeMap::from([
+        .expect("histogram metadata missing");
+    let expected_histogram_metadata = BTreeMap::from([
+        ("metric_type".to_string(), "histogram".to_string()),
         ("service".to_string(), "codex-cli".to_string()),
         ("env".to_string(), "prod".to_string()),
         ("tool".to_string(), "shell".to_string()),
     ]);
-    assert_eq!(json_tags(histogram_tags), expected_histogram_tags);
+    assert_eq!(json_tags(histogram_metadata), expected_histogram_metadata);
 
     Ok(())
 }

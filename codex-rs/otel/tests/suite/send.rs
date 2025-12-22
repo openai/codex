@@ -51,9 +51,10 @@ fn send_builds_payload_with_tags_and_histograms() -> Result<()> {
         match find_metric(&resource_metrics, "codex.tool_latency").and_then(|metric| {
             match metric.data() {
                 opentelemetry_sdk::metrics::data::AggregatedMetrics::F64(data) => match data {
-                    opentelemetry_sdk::metrics::data::MetricData::Histogram(histogram) => {
-                        histogram.data_points().next().map(|p| p.attributes())
-                    }
+                    opentelemetry_sdk::metrics::data::MetricData::Histogram(histogram) => histogram
+                        .data_points()
+                        .next()
+                        .map(opentelemetry_sdk::metrics::data::HistogramDataPoint::attributes),
                     _ => None,
                 },
                 _ => None,

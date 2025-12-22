@@ -155,7 +155,7 @@ impl MetricsClient {
         validate_tags(&config.default_tags)?;
 
         let exporter_label = config.exporter_label();
-        let worker_exporter_label = exporter_label.clone();
+        let worker_exporter_label = exporter_label;
         let exporter = build_worker_exporter(&config)?;
         let runtime = build_runtime()?;
 
@@ -623,6 +623,7 @@ struct StatsigEvent {
 struct StatsigEventMetadata {
     #[serde(rename = "metric_type")]
     metric_type: String,
+    #[serde(flatten)]
     tags: BTreeMap<String, String>,
 }
 
