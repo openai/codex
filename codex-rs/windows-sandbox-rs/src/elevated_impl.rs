@@ -14,7 +14,6 @@ mod windows_impl {
     use crate::policy::parse_policy;
     use crate::policy::SandboxPolicy;
     use crate::token::convert_string_sid_to_sid;
-    use crate::winutil::format_last_error;
     use crate::winutil::quote_windows_arg;
     use crate::winutil::to_wide;
     use anyhow::Result;
