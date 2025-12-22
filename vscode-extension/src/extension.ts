@@ -249,6 +249,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!folder) return;
 
       await ensureBackendMatchesConfiguredCli(folder, "newSession");
+      const wantedCwd = normalizeFsPathForCompare(folder.uri.fsPath);
 
       let cursor: string | null = null;
       const collected: Thread[] = [];
@@ -267,12 +268,15 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
 
-        collected.push(...res.data);
+        const filtered = res.data.filter(
+          (t) => normalizeFsPathForCompare(t.cwd) === wantedCwd,
+        );
+        collected.push(...filtered);
 
         const items = collected.map((t) => ({
           label: formatThreadLabel(t.preview),
           description: formatThreadWhen(t.createdAt),
-          detail: `${t.cwd} • ${t.modelProvider} • ${t.cliVersion}`,
+          detail: `${t.modelProvider} • ${t.cliVersion}`,
           thread: t,
           kind: "thread" as const,
         }));
@@ -1319,6 +1323,12 @@ function formatThreadWhen(createdAtSec: number): string {
   const hh = pad2(d.getHours());
   const mi = pad2(d.getMinutes());
   return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
+
+function normalizeFsPathForCompare(p: string): string {
+  const resolved = path.resolve(p);
+  // Windows: treat paths case-insensitively.
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 type ExpandMentionsResult =

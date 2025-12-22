@@ -25,7 +25,7 @@
 
 ## 0.1.3
 
-- Resume開始時に、Newと同様にディレクトリ（workspace folder）を選べるようにした
+- Resume開始時に、Newと同様にディレクトリ（workspace folder）を選べるようにした（選択したディレクトリの履歴のみ表示）
 
 ## 0.0.7
 
