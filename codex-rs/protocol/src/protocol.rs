@@ -210,6 +210,12 @@ pub enum Op {
     /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
 
+    /// Request Codex to drop the last N user turns from in-memory context.
+    ///
+    /// This does not attempt to revert local filesystem changes. Clients are
+    /// responsible for undoing any edits on disk.
+    ThreadRollback { num_turns: u32 },
+
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
@@ -541,6 +547,9 @@ pub enum EventMsg {
     /// Conversation history was compacted (either automatically or manually).
     ContextCompacted(ContextCompactedEvent),
 
+    /// Conversation history was rolled back by dropping the last N user turns.
+    ThreadRolledBack(ThreadRolledBackEvent),
+
     /// Agent has started a task
     TaskStarted(TaskStartedEvent),
 
@@ -718,6 +727,7 @@ pub enum CodexErrorInfo {
     ResponseTooManyFailedAttempts {
         http_status_code: Option<u16>,
     },
+    ThreadRollbackFailed,
     Other,
 }
 
@@ -1616,6 +1626,12 @@ pub struct UndoCompletedEvent {
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ThreadRolledBackEvent {
+    /// Number of user turns that were removed from context.
+    pub num_turns: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
