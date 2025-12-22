@@ -101,7 +101,7 @@ pub async fn load_config_layers_state(
     // exists, but is malformed, then this error should be propagated to the
     // user.
     let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home)?;
-    match tokio::fs::read_to_string(&user_file).await {
+    let user_layer = match tokio::fs::read_to_string(&user_file).await {
         Ok(contents) => {
             let user_config: TomlValue = toml::from_str(&contents).map_err(|e| {
                 io::Error::new(
@@ -123,13 +123,18 @@ pub async fn load_config_layers_state(
             })?;
             let user_config =
                 resolve_relative_paths_in_config_toml(user_config, user_config_parent)?;
-            layers.push(ConfigLayerEntry::new(
-                ConfigLayerSource::User { file: user_file },
-                user_config,
-            ));
+            ConfigLayerEntry::new(ConfigLayerSource::User { file: user_file }, user_config)
         }
         Err(e) => {
-            if e.kind() != io::ErrorKind::NotFound {
+            if e.kind() == io::ErrorKind::NotFound {
+                // If there is no config.toml file, record an empty entry
+                // for this user layer, as this may still have subfolders
+                // that are significant in the overall ConfigLayerStack.
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::User { file: user_file },
+                    TomlValue::Table(toml::map::Map::new()),
+                )
+            } else {
                 return Err(io::Error::new(
                     e.kind(),
                     format!(
@@ -139,7 +144,8 @@ pub async fn load_config_layers_state(
                 ));
             }
         }
-    }
+    };
+    layers.push(user_layer);
 
     if let Some(cwd) = cwd {
         let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
