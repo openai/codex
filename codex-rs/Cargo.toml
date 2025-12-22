@@ -146,7 +146,7 @@ indexmap = "2.12.0"
 insta = "1.44.3"
 itertools = "0.14.0"
 keyring = { version = "3.6", default-features = false }
-landlock = "0.4.1"
+landlock = "0.4.4"
 lazy_static = "1"
 libc = "0.2.177"
 log = "0.4"
