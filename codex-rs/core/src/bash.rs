@@ -196,9 +196,10 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
                         _ => return None,
                     }
                 }
-                if !concatenated.is_empty() {
-                    words.push(concatenated);
+                if concatenated.is_empty() {
+                    return None;
                 }
+                words.push(concatenated);
             }
             _ => return None,
         }
