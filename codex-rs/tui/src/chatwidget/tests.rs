@@ -1455,18 +1455,6 @@ async fn slash_resume_opens_picker() {
 }
 
 #[tokio::test]
-async fn slash_undo_sends_op() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    chat.dispatch_command(SlashCommand::Undo);
-
-    match rx.try_recv() {
-        Ok(AppEvent::CodexOp(Op::Undo)) => {}
-        other => panic!("expected AppEvent::CodexOp(Op::Undo), got {other:?}"),
-    }
-}
-
-#[tokio::test]
 async fn slash_rollout_displays_current_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let rollout_path = PathBuf::from("/tmp/codex-test-rollout.jsonl");
