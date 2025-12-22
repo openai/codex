@@ -1604,7 +1604,7 @@ pub struct StreamErrorEvent {
     /// human-readable message that is surfaced as the terminal error if retries
     /// are exhausted).
     #[serde(default)]
-    pub cause_message: Option<String>,
+    pub additional_details: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

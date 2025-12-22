@@ -224,10 +224,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::StreamError(StreamErrorEvent {
                 message,
-                cause_message,
+                additional_details,
                 ..
             }) => {
-                let message = match cause_message {
+                let message = match additional_details {
                     Some(cause) if !cause.trim().is_empty() => format!("{message} ({cause})"),
                     _ => message,
                 };

@@ -146,7 +146,7 @@ impl EventProcessorWithJsonOutput {
                 vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
             }
             EventMsg::StreamError(ev) => {
-                let message = match &ev.cause_message {
+                let message = match &ev.additional_details {
                     Some(cause) if !cause.trim().is_empty() => {
                         format!("{} ({})", ev.message, cause)
                     }

@@ -2875,13 +2875,13 @@ async fn stream_error_updates_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.bottom_pane.set_task_running(true);
     let msg = "Reconnecting... 2/5";
-    let cause = "idle timeout waiting for SSE";
+    let cause = "Idle timeout waiting for SSE";
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: msg.to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
-            cause_message: Some(cause.to_string()),
+            additional_details: Some(cause.to_string()),
         }),
     });
 
@@ -2932,7 +2932,7 @@ async fn stream_recovery_restores_previous_status_header() {
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: "Reconnecting... 1/5".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
-            cause_message: None,
+            additional_details: None,
         }),
     });
     drain_insert_history(&mut rx);

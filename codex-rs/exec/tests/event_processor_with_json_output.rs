@@ -583,7 +583,7 @@ fn stream_error_event_produces_error() {
         EventMsg::StreamError(codex_core::protocol::StreamErrorEvent {
             message: "retrying".to_string(),
             codex_error_info: Some(CodexErrorInfo::Other),
-            cause_message: None,
+            additional_details: None,
         }),
     ));
     assert_eq!(

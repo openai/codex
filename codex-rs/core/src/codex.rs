@@ -1422,14 +1422,14 @@ impl Session {
         message: impl Into<String>,
         codex_error: CodexErr,
     ) {
-        let cause_message = codex_error.to_string();
+        let additional_details = codex_error.to_string();
         let codex_error_info = CodexErrorInfo::ResponseStreamDisconnected {
             http_status_code: codex_error.http_status_code_value(),
         };
         let event = EventMsg::StreamError(StreamErrorEvent {
             message: message.into(),
             codex_error_info: Some(codex_error_info),
-            cause_message: Some(cause_message),
+            additional_details: Some(additional_details),
         });
         self.send_event(turn_context, event).await;
     }
