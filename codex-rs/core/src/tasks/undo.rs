@@ -38,6 +38,11 @@ impl SessionTask for UndoTask {
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
+        let _ = session
+            .session
+            .services
+            .otel_manager
+            .counter("codex.task.undo", 1, &[]);
         let sess = session.clone_session();
         sess.send_event(
             ctx.as_ref(),
