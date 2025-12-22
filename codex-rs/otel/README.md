@@ -72,6 +72,11 @@ manager.user_prompt(&prompt_items);
 
 ## Metrics (Statsig HTTP or in-memory)
 
+Modes:
+
+- Statsig HTTP: sends `log_event` batches to the configured Statsig endpoint (default outside tests).
+- In-memory: records via `opentelemetry_sdk::metrics::InMemoryMetricExporter` for tests/assertions; call `shutdown()` to flush.
+
 Statsig example:
 
 ```rust
