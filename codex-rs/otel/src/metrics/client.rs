@@ -6,9 +6,7 @@ use crate::metrics::config::MetricsExporter;
 use crate::metrics::error::MetricsError;
 use crate::metrics::error::Result;
 use crate::metrics::sink::build_metric_sink;
-use crate::metrics::tags::merge_tags;
-use crate::metrics::time::duration_to_millis;
-use crate::metrics::validation::validate_metric_name;
+use crate::metrics::validation::{validate_metric_name, validate_tag_key, validate_tag_value};
 use crate::metrics::validation::validate_tags;
 use crate::metrics::worker::spawn_worker;
 use std::collections::BTreeMap;
@@ -101,8 +99,7 @@ impl MetricsClient {
         duration: Duration,
         tags: &[(&str, &str)],
     ) -> Result<()> {
-        let millis = duration_to_millis(duration);
-        self.histogram(name, millis, tags)
+        self.histogram(name, duration.as_millis().min(i64::MAX as u128) as i64, tags)
     }
 
     /// Measure a closure and emit a histogram sample for the elapsed time.
@@ -215,4 +212,17 @@ fn build_runtime() -> Result<Runtime> {
         .enable_all()
         .build()
         .map_err(|source| MetricsError::RuntimeBuild { source })
+}
+
+pub(crate) fn merge_tags(
+    default_tags: &BTreeMap<String, String>,
+    tags: &[(&str, &str)],
+) -> Result<BTreeMap<String, String>> {
+    let mut merged = default_tags.clone();
+    for (key, value) in tags {
+        validate_tag_key(key)?;
+        validate_tag_value(value)?;
+        merged.insert((*key).to_string(), (*value).to_string());
+    }
+    Ok(merged)
 }

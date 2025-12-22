@@ -152,12 +152,6 @@ impl OtelManager {
         let mut tags = Vec::with_capacity(5);
         Self::push_metadata_tag(&mut tags, "auth_mode", self.metadata.auth_mode.as_deref())?;
         Self::push_metadata_tag(&mut tags, "model", Some(self.metadata.model.as_str()))?;
-        Self::push_metadata_tag(&mut tags, "slug", Some(self.metadata.slug.as_str()))?;
-        Self::push_metadata_tag(
-            &mut tags,
-            "terminal.type",
-            Some(self.metadata.terminal_type.as_str()),
-        )?;
         Self::push_metadata_tag(&mut tags, "app.version", Some(self.metadata.app_version))?;
         Ok(tags)
     }
