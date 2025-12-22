@@ -1,446 +1,450 @@
 use crate::config::NetworkMode;
 use crate::mitm;
 use crate::policy::normalize_host;
-use crate::responses::blocked_text;
-use crate::responses::json_blocked;
-use crate::responses::text_response;
 use crate::state::AppState;
 use crate::state::BlockedRequest;
+use anyhow::Context;
 use anyhow::Result;
-use hyper::Body;
-use hyper::Method;
-use hyper::Request;
-use hyper::Response;
-use hyper::Server;
-use hyper::StatusCode;
-use hyper::Uri;
-use hyper::body::to_bytes;
-use hyper::header::HOST;
-use hyper::header::HeaderName;
-use hyper::service::make_service_fn;
-use hyper::service::service_fn;
-use std::collections::HashSet;
+use anyhow::anyhow;
+use rama::Context as RamaContext;
+use rama::Layer;
+use rama::Service;
+use rama::http::Body;
+use rama::http::Request;
+use rama::http::Response;
+use rama::http::StatusCode;
+use rama::http::client::EasyHttpWebClient;
+use rama::http::layer::remove_header::RemoveRequestHeaderLayer;
+use rama::http::layer::remove_header::RemoveResponseHeaderLayer;
+use rama::http::layer::upgrade::UpgradeLayer;
+use rama::http::layer::upgrade::Upgraded;
+use rama::http::matcher::MethodMatcher;
+use rama::http::server::HttpServer;
+use rama::net::http::RequestContext;
+use rama::net::proxy::ProxyTarget;
+use rama::net::stream::SocketInfo;
+use rama::service::service_fn;
+use rama::tcp::client::service::Forwarder;
+use rama::tcp::server::TcpListener;
+use serde_json::json;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::copy_bidirectional;
-use tokio::net::TcpStream;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+type ContextState = Arc<AppState>;
+type ProxyContext = RamaContext<ContextState>;
+
 pub async fn run_http_proxy(state: Arc<AppState>, addr: SocketAddr) -> Result<()> {
-    let make_svc = make_service_fn(move |conn: &hyper::server::conn::AddrStream| {
-        let state = state.clone();
-        let client_addr = conn.remote_addr();
-        async move {
-            Ok::<_, Infallible>(service_fn(move |req| {
-                handle_proxy_request(req, state.clone(), client_addr)
-            }))
-        }
-    });
-    let server = Server::bind(&addr).serve(make_svc);
+    let listener = TcpListener::build_with_state(state)
+        .bind(addr)
+        .await
+        .map_err(|err| anyhow!("bind HTTP proxy: {err}"))?;
+
+    let http_service = HttpServer::auto(rama::rt::Executor::new()).service(
+        (
+            UpgradeLayer::new(
+                MethodMatcher::CONNECT,
+                service_fn(http_connect_accept),
+                service_fn(http_connect_proxy),
+            ),
+            RemoveResponseHeaderLayer::hop_by_hop(),
+            RemoveRequestHeaderLayer::hop_by_hop(),
+        )
+            .into_layer(service_fn(http_plain_proxy)),
+    );
+
     info!(addr = %addr, "HTTP proxy listening");
-    server.await?;
+
+    listener.serve(http_service).await;
     Ok(())
 }
 
-async fn handle_proxy_request(
-    req: Request<Body>,
-    state: Arc<AppState>,
-    client_addr: SocketAddr,
-) -> Result<Response<Body>, Infallible> {
-    let response = if req.method() == Method::CONNECT {
-        handle_connect(req, state, client_addr).await
-    } else {
-        handle_http_forward(req, state, client_addr).await
+async fn http_connect_accept(
+    mut ctx: ProxyContext,
+    req: Request,
+) -> Result<(Response, ProxyContext, Request), Response> {
+    let authority = match ctx
+        .get_or_try_insert_with_ctx::<RequestContext, _>(|ctx| (ctx, &req).try_into())
+        .map(|ctx| ctx.authority.clone())
+    {
+        Ok(authority) => authority,
+        Err(err) => {
+            warn!(error = %err, "CONNECT missing authority");
+            return Err(text_response(StatusCode::BAD_REQUEST, "missing authority"));
+        }
     };
-    Ok(response)
-}
 
-async fn handle_connect(
-    req: Request<Body>,
-    state: Arc<AppState>,
-    client_addr: SocketAddr,
-) -> Response<Body> {
-    let authority = match req.uri().authority() {
-        Some(auth) => auth.as_str().to_string(),
-        None => return text_response(StatusCode::BAD_REQUEST, "missing authority"),
-    };
-    let (authority_host, target_port) = split_authority(&authority);
-    let host = normalize_host(&authority_host);
+    let host = normalize_host(&authority.host().to_string());
     if host.is_empty() {
-        return text_response(StatusCode::BAD_REQUEST, "invalid host");
+        return Err(text_response(StatusCode::BAD_REQUEST, "invalid host"));
     }
 
-    match state.host_blocked(&host).await {
+    let app_state = ctx.state().clone();
+    let client = client_addr(&ctx);
+
+    match app_state.host_blocked(&host).await {
         Ok((true, reason)) => {
-            let _ = state
+            let _ = app_state
                 .record_blocked(BlockedRequest::new(
                     host.clone(),
                     reason.clone(),
-                    Some(client_addr.to_string()),
+                    client.clone(),
                     Some("CONNECT".to_string()),
                     None,
                     "http-connect".to_string(),
                 ))
                 .await;
-            warn!(client = %client_addr, host = %host, reason = %reason, "CONNECT blocked");
-            return blocked_text(&reason);
+            warn!(
+                client = %client.as_deref().unwrap_or_default(),
+                host = %host,
+                reason = %reason,
+                "CONNECT blocked"
+            );
+            return Err(blocked_text(&reason));
         }
         Ok((false, _)) => {
-            info!(client = %client_addr, host = %host, "CONNECT allowed");
+            info!(
+                client = %client.as_deref().unwrap_or_default(),
+                host = %host,
+                "CONNECT allowed"
+            );
         }
         Err(err) => {
             error!(error = %err, "failed to evaluate host");
-            return text_response(StatusCode::INTERNAL_SERVER_ERROR, "error");
+            return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
         }
     }
 
-    let mode = match state.network_mode().await {
+    let mode = match app_state.network_mode().await {
         Ok(mode) => mode,
         Err(err) => {
             error!(error = %err, "failed to read network mode");
-            return text_response(StatusCode::INTERNAL_SERVER_ERROR, "error");
+            return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
         }
     };
 
-    let mitm_state = match state.mitm_state().await {
+    let mitm_state = match app_state.mitm_state().await {
         Ok(state) => state,
         Err(err) => {
             error!(error = %err, "failed to load MITM state");
-            return text_response(StatusCode::INTERNAL_SERVER_ERROR, "error");
+            return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
         }
     };
+
     if mode == NetworkMode::Limited && mitm_state.is_none() {
-        let _ = state
+        let _ = app_state
             .record_blocked(BlockedRequest::new(
                 host.clone(),
                 "mitm_required".to_string(),
-                Some(client_addr.to_string()),
+                client.clone(),
                 Some("CONNECT".to_string()),
                 Some(NetworkMode::Limited),
                 "http-connect".to_string(),
             ))
             .await;
         warn!(
-            client = %client_addr,
+            client = %client.as_deref().unwrap_or_default(),
             host = %host,
             mode = "limited",
             allowed_methods = "GET, HEAD, OPTIONS",
             "CONNECT blocked; MITM required for read-only HTTPS in limited mode"
         );
-        return blocked_text("mitm_required");
+        return Err(blocked_text("mitm_required"));
     }
 
-    let on_upgrade = hyper::upgrade::on(req);
-    tokio::spawn(async move {
-        match on_upgrade.await {
-            Ok(upgraded) => {
-                if let Some(mitm_state) = mitm_state {
-                    info!(client = %client_addr, host = %host, mode = ?mode, "CONNECT MITM enabled");
-                    if let Err(err) =
-                        mitm::mitm_tunnel(upgraded, &host, target_port, mode, mitm_state).await
-                    {
-                        warn!(error = %err, "MITM tunnel error");
-                    }
-                    return;
-                }
-                let mut upgraded = upgraded;
-                match TcpStream::connect(&authority).await {
-                    Ok(mut server_stream) => {
-                        if let Err(err) =
-                            copy_bidirectional(&mut upgraded, &mut server_stream).await
-                        {
-                            warn!(error = %err, "tunnel error");
-                        }
-                    }
-                    Err(err) => {
-                        warn!(error = %err, "failed to connect to upstream");
-                    }
-                }
-            }
-            Err(err) => warn!(error = %err, "upgrade failed"),
-        }
-    });
+    ctx.insert(ProxyTarget(authority));
+    ctx.insert(mode);
+    if let Some(mitm_state) = mitm_state {
+        ctx.insert(mitm_state);
+    }
 
-    Response::builder()
-        .status(StatusCode::OK)
-        .body(Body::empty())
-        .unwrap_or_else(|_| Response::new(Body::empty()))
+    Ok((
+        Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::empty())
+            .unwrap_or_else(|_| Response::new(Body::empty())),
+        ctx,
+        req,
+    ))
 }
 
-async fn handle_http_forward(
-    req: Request<Body>,
-    state: Arc<AppState>,
-    client_addr: SocketAddr,
-) -> Response<Body> {
-    let (parts, body) = req.into_parts();
-    let method_allowed = match state.method_allowed(&parts.method).await {
+async fn http_connect_proxy(ctx: ProxyContext, upgraded: Upgraded) -> Result<(), Infallible> {
+    let mode = ctx
+        .get::<NetworkMode>()
+        .copied()
+        .unwrap_or(NetworkMode::Full);
+    let authority = match ctx.get::<ProxyTarget>().map(|target| target.0.clone()) {
+        Some(authority) => authority,
+        None => {
+            warn!("CONNECT missing proxy target");
+            return Ok(());
+        }
+    };
+    let host = normalize_host(&authority.host().to_string());
+
+    if let Some(mitm_state) = ctx.get::<Arc<mitm::MitmState>>().cloned() {
+        info!(host = %host, port = authority.port(), mode = ?mode, "CONNECT MITM enabled");
+        if let Err(err) = mitm::mitm_tunnel(
+            ctx,
+            upgraded,
+            host.as_str(),
+            authority.port(),
+            mode,
+            mitm_state,
+        )
+        .await
+        {
+            warn!(error = %err, "MITM tunnel error");
+        }
+        return Ok(());
+    }
+
+    let forwarder = Forwarder::ctx();
+    if let Err(err) = forwarder.serve(ctx, upgraded).await {
+        warn!(error = %err, "tunnel error");
+    }
+    Ok(())
+}
+
+async fn http_plain_proxy(mut ctx: ProxyContext, req: Request) -> Result<Response, Infallible> {
+    let app_state = ctx.state().clone();
+    let client = client_addr(&ctx);
+
+    let method_allowed = match app_state.method_allowed(req.method().as_str()).await {
         Ok(allowed) => allowed,
         Err(err) => {
             error!(error = %err, "failed to evaluate method policy");
-            return text_response(StatusCode::INTERNAL_SERVER_ERROR, "error");
+            return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
         }
     };
-    let unix_socket = parts
-        .headers
+
+    if let Some(socket_path) = req
+        .headers()
         .get("x-unix-socket")
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.to_string());
-
-    if let Some(socket_path) = unix_socket {
+        .map(|v| v.to_string())
+    {
         if !method_allowed {
             warn!(
-                client = %client_addr,
-                method = %parts.method,
+                client = %client.as_deref().unwrap_or_default(),
+                method = %req.method(),
                 mode = "limited",
                 allowed_methods = "GET, HEAD, OPTIONS",
                 "unix socket blocked by method policy"
             );
-            return json_blocked("unix-socket", "method_not_allowed");
+            return Ok(json_blocked("unix-socket", "method_not_allowed"));
         }
+
         if !cfg!(target_os = "macos") {
             warn!(path = %socket_path, "unix socket proxy unsupported on this platform");
-            return text_response(StatusCode::NOT_IMPLEMENTED, "unix sockets unsupported");
+            return Ok(text_response(
+                StatusCode::NOT_IMPLEMENTED,
+                "unix sockets unsupported",
+            ));
         }
-        match state.is_unix_socket_allowed(&socket_path).await {
+
+        match app_state.is_unix_socket_allowed(&socket_path).await {
             Ok(true) => {
-                info!(client = %client_addr, path = %socket_path, "unix socket allowed");
-                match proxy_via_unix_socket(Request::from_parts(parts, body), &socket_path).await {
-                    Ok(resp) => return resp,
+                info!(
+                    client = %client.as_deref().unwrap_or_default(),
+                    path = %socket_path,
+                    "unix socket allowed"
+                );
+                match proxy_via_unix_socket(ctx, req, &socket_path).await {
+                    Ok(resp) => return Ok(resp),
                     Err(err) => {
                         warn!(error = %err, "unix socket proxy failed");
-                        return text_response(StatusCode::BAD_GATEWAY, "unix socket proxy failed");
+                        return Ok(text_response(
+                            StatusCode::BAD_GATEWAY,
+                            "unix socket proxy failed",
+                        ));
                     }
                 }
             }
             Ok(false) => {
-                warn!(client = %client_addr, path = %socket_path, "unix socket blocked");
-                return json_blocked("unix-socket", "not_allowed");
+                warn!(
+                    client = %client.as_deref().unwrap_or_default(),
+                    path = %socket_path,
+                    "unix socket blocked"
+                );
+                return Ok(json_blocked("unix-socket", "not_allowed"));
             }
             Err(err) => {
                 warn!(error = %err, "unix socket check failed");
-                return text_response(StatusCode::INTERNAL_SERVER_ERROR, "error");
+                return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
             }
         }
     }
 
-    let host_header = parts
-        .headers
-        .get(HOST)
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.to_string())
-        .or_else(|| parts.uri.authority().map(|a| a.as_str().to_string()));
-
-    let authority = match host_header {
-        Some(h) => h,
-        None => return text_response(StatusCode::BAD_REQUEST, "missing host"),
+    let authority = match ctx
+        .get_or_try_insert_with_ctx::<RequestContext, _>(|ctx| (ctx, &req).try_into())
+        .map(|ctx| ctx.authority.clone())
+    {
+        Ok(authority) => authority,
+        Err(err) => {
+            warn!(error = %err, "missing host");
+            return Ok(text_response(StatusCode::BAD_REQUEST, "missing host"));
+        }
     };
-    let authority = authority.trim().to_string();
-    let host = normalize_host(&authority);
-    if host.is_empty() {
-        return text_response(StatusCode::BAD_REQUEST, "invalid host");
-    }
+    let host = normalize_host(&authority.host().to_string());
 
-    match state.host_blocked(&host).await {
+    match app_state.host_blocked(&host).await {
         Ok((true, reason)) => {
-            let _ = state
+            let _ = app_state
                 .record_blocked(BlockedRequest::new(
                     host.clone(),
                     reason.clone(),
-                    Some(client_addr.to_string()),
-                    Some(parts.method.to_string()),
+                    client.clone(),
+                    Some(req.method().as_str().to_string()),
                     None,
                     "http".to_string(),
                 ))
                 .await;
-            warn!(client = %client_addr, host = %host, reason = %reason, "request blocked");
-            return json_blocked(&host, &reason);
+            warn!(
+                client = %client.as_deref().unwrap_or_default(),
+                host = %host,
+                reason = %reason,
+                "request blocked"
+            );
+            return Ok(json_blocked(&host, &reason));
         }
         Ok((false, _)) => {}
         Err(err) => {
             error!(error = %err, "failed to evaluate host");
-            return text_response(StatusCode::INTERNAL_SERVER_ERROR, "error");
+            return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
         }
     }
 
     if !method_allowed {
-        let _ = state
+        let _ = app_state
             .record_blocked(BlockedRequest::new(
                 host.clone(),
                 "method_not_allowed".to_string(),
-                Some(client_addr.to_string()),
-                Some(parts.method.to_string()),
+                client.clone(),
+                Some(req.method().as_str().to_string()),
                 Some(NetworkMode::Limited),
                 "http".to_string(),
             ))
             .await;
         warn!(
-            client = %client_addr,
+            client = %client.as_deref().unwrap_or_default(),
             host = %host,
-            method = %parts.method,
+            method = %req.method(),
             mode = "limited",
             allowed_methods = "GET, HEAD, OPTIONS",
             "request blocked by method policy"
         );
-        return json_blocked(&host, "method_not_allowed");
+        return Ok(json_blocked(&host, "method_not_allowed"));
     }
+
     info!(
-        client = %client_addr,
+        client = %client.as_deref().unwrap_or_default(),
         host = %host,
-        method = %parts.method,
+        method = %req.method(),
         "request allowed"
     );
 
-    let uri = match build_forward_uri(&authority, &parts.uri) {
-        Ok(uri) => uri,
-        Err(err) => {
-            warn!(error = %err, "failed to build upstream uri");
-            return text_response(StatusCode::BAD_REQUEST, "invalid uri");
-        }
-    };
-
-    let body_bytes = match to_bytes(body).await {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            warn!(error = %err, "failed to read body");
-            return text_response(StatusCode::BAD_GATEWAY, "failed to read body");
-        }
-    };
-
-    let mut builder = Request::builder()
-        .method(parts.method)
-        .uri(uri)
-        .version(parts.version);
-    let hop_headers = hop_by_hop_headers();
-    for (name, value) in parts.headers.iter() {
-        let name_str = name.as_str().to_ascii_lowercase();
-        if hop_headers.contains(name_str.as_str())
-            || name == &HeaderName::from_static("x-unix-socket")
-        {
-            continue;
-        }
-        builder = builder.header(name, value);
-    }
-
-    let forwarded_req = match builder.body(Body::from(body_bytes)) {
-        Ok(req) => req,
-        Err(err) => {
-            warn!(error = %err, "failed to build request");
-            return text_response(StatusCode::BAD_GATEWAY, "invalid request");
-        }
-    };
-
-    match state.client.request(forwarded_req).await {
-        Ok(resp) => filter_response(resp),
+    let client = EasyHttpWebClient::default();
+    match client.serve(ctx, req).await {
+        Ok(resp) => Ok(resp),
         Err(err) => {
             warn!(error = %err, "upstream request failed");
-            text_response(StatusCode::BAD_GATEWAY, "upstream failure")
+            Ok(text_response(StatusCode::BAD_GATEWAY, "upstream failure"))
         }
     }
 }
 
-fn build_forward_uri(authority: &str, uri: &Uri) -> Result<Uri> {
-    let path = path_and_query(uri);
-    let target = format!("http://{authority}{path}");
-    Ok(target.parse()?)
-}
-
-fn filter_response(resp: Response<Body>) -> Response<Body> {
-    let mut builder = Response::builder().status(resp.status());
-    let hop_headers = hop_by_hop_headers();
-    for (name, value) in resp.headers().iter() {
-        if hop_headers.contains(name.as_str().to_ascii_lowercase().as_str()) {
-            continue;
-        }
-        builder = builder.header(name, value);
-    }
-    builder
-        .body(resp.into_body())
-        .unwrap_or_else(|_| Response::new(Body::from("proxy error")))
-}
-
-fn path_and_query(uri: &Uri) -> String {
-    uri.path_and_query()
-        .map(|pq| pq.as_str())
-        .unwrap_or("/")
-        .to_string()
-}
-
-fn hop_by_hop_headers() -> HashSet<&'static str> {
-    [
-        "connection",
-        "proxy-connection",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "te",
-        "trailer",
-        "transfer-encoding",
-        "upgrade",
-    ]
-    .into_iter()
-    .collect()
-}
-
-fn split_authority(authority: &str) -> (String, u16) {
-    if let Some(host) = authority.strip_prefix('[') {
-        if let Some(end) = host.find(']') {
-            let hostname = host[..end].to_string();
-            let port = host[end + 1..]
-                .strip_prefix(':')
-                .and_then(|p| p.parse::<u16>().ok())
-                .unwrap_or(443);
-            return (hostname, port);
-        }
-    }
-    let mut parts = authority.splitn(2, ':');
-    let host = parts.next().unwrap_or("").to_string();
-    let port = parts
-        .next()
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(443);
-    (host, port)
-}
-
-async fn proxy_via_unix_socket(req: Request<Body>, socket_path: &str) -> Result<Response<Body>> {
+async fn proxy_via_unix_socket(
+    ctx: ProxyContext,
+    req: Request,
+    socket_path: &str,
+) -> Result<Response> {
     #[cfg(target_os = "macos")]
     {
-        use hyper::client::conn::Builder as ConnBuilder;
-        use tokio::net::UnixStream;
+        use rama::unix::client::UnixConnector;
 
-        let path = path_and_query(req.uri());
-        let (parts, body) = req.into_parts();
-        let body_bytes = to_bytes(body).await?;
-        let mut builder = Request::builder()
-            .method(parts.method)
-            .uri(path)
-            .version(parts.version);
-        let hop_headers = hop_by_hop_headers();
-        for (name, value) in parts.headers.iter() {
-            let name_str = name.as_str().to_ascii_lowercase();
-            if hop_headers.contains(name_str.as_str())
-                || name == &HeaderName::from_static("x-unix-socket")
-            {
-                continue;
-            }
-            builder = builder.header(name, value);
-        }
-        let req = builder.body(Body::from(body_bytes))?;
-        let stream = UnixStream::connect(socket_path).await?;
-        let (mut sender, conn) = ConnBuilder::new().handshake(stream).await?;
-        tokio::spawn(async move {
-            if let Err(err) = conn.await {
-                warn!(error = %err, "unix socket connection error");
-            }
-        });
-        Ok(sender.send_request(req).await?)
+        let client = EasyHttpWebClient::builder()
+            .with_custom_transport_connector(UnixConnector::fixed(socket_path))
+            .without_tls_proxy_support()
+            .without_proxy_support()
+            .without_tls_support()
+            .build();
+
+        let (mut parts, body) = req.into_parts();
+        let path = parts
+            .uri
+            .path_and_query()
+            .map(|pq| pq.as_str())
+            .unwrap_or("/");
+        parts.uri = path
+            .parse()
+            .with_context(|| format!("invalid unix socket request path: {path}"))?;
+        parts.headers.remove("x-unix-socket");
+
+        let req = Request::from_parts(parts, body);
+        Ok(client.serve(ctx, req).await?)
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = ctx;
         let _ = req;
         let _ = socket_path;
         Err(anyhow::anyhow!("unix sockets not supported"))
+    }
+}
+
+fn client_addr(ctx: &ProxyContext) -> Option<String> {
+    ctx.get::<SocketInfo>()
+        .map(|info| info.peer_addr().to_string())
+}
+
+fn json_blocked(host: &str, reason: &str) -> Response {
+    let body = Body::from(json!({"status":"blocked","host":host,"reason":reason}).to_string());
+    Response::builder()
+        .status(StatusCode::FORBIDDEN)
+        .header("content-type", "application/json")
+        .header("x-proxy-error", blocked_header_value(reason))
+        .body(body)
+        .unwrap_or_else(|_| Response::new(Body::from("blocked")))
+}
+
+fn blocked_text(reason: &str) -> Response {
+    Response::builder()
+        .status(StatusCode::FORBIDDEN)
+        .header("content-type", "text/plain")
+        .header("x-proxy-error", blocked_header_value(reason))
+        .body(Body::from(blocked_message(reason)))
+        .unwrap_or_else(|_| Response::new(Body::from("blocked")))
+}
+
+fn text_response(status: StatusCode, body: &str) -> Response {
+    Response::builder()
+        .status(status)
+        .header("content-type", "text/plain")
+        .body(Body::from(body.to_string()))
+        .unwrap_or_else(|_| Response::new(Body::from(body.to_string())))
+}
+
+fn blocked_header_value(reason: &str) -> &'static str {
+    match reason {
+        "not_allowed" | "not_allowed_local" => "blocked-by-allowlist",
+        "denied" => "blocked-by-denylist",
+        "method_not_allowed" => "blocked-by-method-policy",
+        "mitm_required" => "blocked-by-mitm-required",
+        _ => "blocked-by-policy",
+    }
+}
+
+fn blocked_message(reason: &str) -> &'static str {
+    match reason {
+        "not_allowed" => "Codex blocked this request: domain not in allowlist.",
+        "not_allowed_local" => "Codex blocked this request: local addresses not allowed.",
+        "denied" => "Codex blocked this request: domain denied by policy.",
+        "method_not_allowed" => "Codex blocked this request: method not allowed in limited mode.",
+        "mitm_required" => "Codex blocked this request: MITM required for limited HTTPS.",
+        _ => "Codex blocked this request by network policy.",
     }
 }

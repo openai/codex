@@ -1,11 +1,10 @@
 use crate::config::NetworkMode;
-use hyper::Method;
 use std::net::IpAddr;
 
-pub fn method_allowed(mode: NetworkMode, method: &Method) -> bool {
+pub fn method_allowed(mode: NetworkMode, method: &str) -> bool {
     match mode {
         NetworkMode::Full => true,
-        NetworkMode::Limited => matches!(method, &Method::GET | &Method::HEAD | &Method::OPTIONS),
+        NetworkMode::Limited => matches!(method, "GET" | "HEAD" | "OPTIONS"),
     }
 }
 

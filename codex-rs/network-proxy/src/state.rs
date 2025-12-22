@@ -10,9 +10,6 @@ use anyhow::anyhow;
 use globset::GlobBuilder;
 use globset::GlobSet;
 use globset::GlobSetBuilder;
-use hyper::Client;
-use hyper::Method;
-use hyper::client::HttpConnector;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -72,16 +69,13 @@ struct ConfigState {
 
 #[derive(Clone)]
 pub struct AppState {
-    pub(crate) client: Client<HttpConnector>,
     state: Arc<RwLock<ConfigState>>,
 }
 
 impl AppState {
     pub async fn new(cfg_path: PathBuf) -> Result<Self> {
         let cfg_state = build_config_state(cfg_path)?;
-        let client = Client::new();
         Ok(Self {
-            client,
             state: Arc::new(RwLock::new(cfg_state)),
         })
     }
@@ -171,7 +165,7 @@ impl AppState {
             .any(|p| p == path))
     }
 
-    pub async fn method_allowed(&self, method: &Method) -> Result<bool> {
+    pub async fn method_allowed(&self, method: &str) -> Result<bool> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
         Ok(method_allowed(guard.cfg.network_proxy.mode, method))
