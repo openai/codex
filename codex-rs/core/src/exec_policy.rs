@@ -112,15 +112,52 @@ impl ExecPolicyManager {
         sandbox_policy: &SandboxPolicy,
         sandbox_permissions: SandboxPermissions,
     ) -> ExecApprovalRequirement {
-        create_exec_approval_requirement_for_command_with_policy(
-            self.current().as_ref(),
-            features,
-            command,
-            approval_policy,
-            sandbox_policy,
-            sandbox_permissions,
-        )
-        .await
+        let exec_policy = self.current();
+        let commands =
+            parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
+        let heuristics_fallback = |cmd: &[String]| {
+            if requires_initial_appoval(approval_policy, sandbox_policy, cmd, sandbox_permissions) {
+                Decision::Prompt
+            } else {
+                Decision::Allow
+            }
+        };
+        let evaluation = exec_policy.check_multiple(commands.iter(), &heuristics_fallback);
+
+        match evaluation.decision {
+            Decision::Forbidden => ExecApprovalRequirement::Forbidden {
+                reason: FORBIDDEN_REASON.to_string(),
+            },
+            Decision::Prompt => {
+                if matches!(approval_policy, AskForApproval::Never) {
+                    ExecApprovalRequirement::Forbidden {
+                        reason: PROMPT_CONFLICT_REASON.to_string(),
+                    }
+                } else {
+                    ExecApprovalRequirement::NeedsApproval {
+                        reason: derive_prompt_reason(&evaluation),
+                        proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
+                            try_derive_execpolicy_amendment_for_prompt_rules(
+                                &evaluation.matched_rules,
+                            )
+                        } else {
+                            None
+                        },
+                    }
+                }
+            }
+            Decision::Allow => ExecApprovalRequirement::Skip {
+                // Bypass sandbox if execpolicy allows the command
+                bypass_sandbox: evaluation.matched_rules.iter().any(|rule_match| {
+                    is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+                }),
+                proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
+                    try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
+                } else {
+                    None
+                },
+            },
+        }
     }
 
     pub(crate) async fn append_amendment_and_update(
@@ -263,58 +300,6 @@ fn derive_prompt_reason(evaluation: &Evaluation) -> Option<String> {
             None
         }
     })
-}
-
-async fn create_exec_approval_requirement_for_command_with_policy(
-    exec_policy: &Policy,
-    features: &Features,
-    command: &[String],
-    approval_policy: AskForApproval,
-    sandbox_policy: &SandboxPolicy,
-    sandbox_permissions: SandboxPermissions,
-) -> ExecApprovalRequirement {
-    let commands = parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
-    let heuristics_fallback = |cmd: &[String]| {
-        if requires_initial_appoval(approval_policy, sandbox_policy, cmd, sandbox_permissions) {
-            Decision::Prompt
-        } else {
-            Decision::Allow
-        }
-    };
-    let evaluation = exec_policy.check_multiple(commands.iter(), &heuristics_fallback);
-
-    match evaluation.decision {
-        Decision::Forbidden => ExecApprovalRequirement::Forbidden {
-            reason: FORBIDDEN_REASON.to_string(),
-        },
-        Decision::Prompt => {
-            if matches!(approval_policy, AskForApproval::Never) {
-                ExecApprovalRequirement::Forbidden {
-                    reason: PROMPT_CONFLICT_REASON.to_string(),
-                }
-            } else {
-                ExecApprovalRequirement::NeedsApproval {
-                    reason: derive_prompt_reason(&evaluation),
-                    proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
-                        try_derive_execpolicy_amendment_for_prompt_rules(&evaluation.matched_rules)
-                    } else {
-                        None
-                    },
-                }
-            }
-        }
-        Decision::Allow => ExecApprovalRequirement::Skip {
-            // Bypass sandbox if execpolicy allows the command
-            bypass_sandbox: evaluation.matched_rules.iter().any(|rule_match| {
-                is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
-            }),
-            proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
-                try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
-            } else {
-                None
-            },
-        },
-    }
 }
 
 async fn collect_policy_files(dir: &Path) -> Result<Vec<PathBuf>, ExecPolicyError> {
