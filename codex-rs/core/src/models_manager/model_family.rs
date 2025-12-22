@@ -117,7 +117,6 @@ impl ModelFamily {
             supported_reasoning_levels: _,
             shell_type,
             visibility: _,
-            minimal_client_version: _,
             supported_in_api: _,
             priority: _,
             upgrade: _,

@@ -75,7 +75,6 @@ async fn models_client_hits_models_endpoint() {
             ],
             shell_type: ConfigShellToolType::ShellCommand,
             visibility: ModelVisibility::List,
-            minimal_client_version: ClientVersion(0, 1, 0),
             supported_in_api: true,
             priority: 1,
             upgrade: None,
