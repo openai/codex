@@ -8,6 +8,7 @@
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
@@ -272,7 +273,7 @@ pub fn is_known_feature_key(key: &str) -> bool {
 }
 
 /// Deserializable features table for TOML.
-#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct FeaturesToml {
     #[serde(flatten)]
     pub entries: BTreeMap<String, bool>,

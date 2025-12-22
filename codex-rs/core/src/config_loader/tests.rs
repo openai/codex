@@ -1,8 +1,12 @@
 use super::LoaderOverrides;
 use super::load_config_layers_state;
 use crate::config::CONFIG_TOML_FILE;
+use crate::config::ConfigBuilder;
+use crate::config::ConfigOverrides;
+use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::config_requirements::ConfigRequirementsToml;
+use crate::config_loader::fingerprint::version_for_toml;
 use crate::config_loader::load_requirements_toml;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -206,5 +210,148 @@ allowed_approval_policies = ["never", "on-request"]
             .can_set(&AskForApproval::OnFailure)
             .is_err()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+
+    tokio::fs::write(
+        project_root.join(".codex").join(CONFIG_TOML_FILE),
+        "foo = \"root\"\n",
+    )
+    .await?;
+    tokio::fs::write(
+        nested.join(".codex").join(CONFIG_TOML_FILE),
+        "foo = \"child\"\n",
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .layers_high_to_low()
+        .into_iter()
+        .filter_map(|layer| match &layer.name {
+            super::ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(project_layers.len(), 2);
+    assert_eq!(project_layers[0].as_path(), nested.join(".codex").as_path());
+    assert_eq!(
+        project_layers[1].as_path(),
+        project_root.join(".codex").as_path()
+    );
+
+    let config = layers.effective_config();
+    let foo = config
+        .get("foo")
+        .and_then(TomlValue::as_str)
+        .expect("foo entry");
+    assert_eq!(foo, "child");
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_paths_resolve_relative_to_dot_codex_and_override_in_order() -> std::io::Result<()>
+{
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+
+    let root_cfg = r#"
+experimental_instructions_file = "root.txt"
+"#;
+    let nested_cfg = r#"
+experimental_instructions_file = "child.txt"
+"#;
+    tokio::fs::write(project_root.join(".codex").join(CONFIG_TOML_FILE), root_cfg).await?;
+    tokio::fs::write(nested.join(".codex").join(CONFIG_TOML_FILE), nested_cfg).await?;
+    tokio::fs::write(
+        project_root.join(".codex").join("root.txt"),
+        "root instructions",
+    )
+    .await?;
+    tokio::fs::write(
+        nested.join(".codex").join("child.txt"),
+        "child instructions",
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(nested.clone()),
+            ..ConfigOverrides::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.base_instructions.as_deref(),
+        Some("child instructions")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .layers_high_to_low()
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(
+        vec![&ConfigLayerEntry {
+            name: super::ConfigLayerSource::Project {
+                dot_codex_folder: AbsolutePathBuf::from_absolute_path(project_root.join(".codex"))?,
+            },
+            config: TomlValue::Table(toml::map::Map::new()),
+            version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
+        }],
+        project_layers
+    );
+
     Ok(())
 }

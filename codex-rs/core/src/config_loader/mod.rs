@@ -11,12 +11,14 @@ mod state;
 mod tests;
 
 use crate::config::CONFIG_TOML_FILE;
+use crate::config::ConfigToml;
 use crate::config_loader::config_requirements::ConfigRequirementsToml;
 use crate::config_loader::layer_io::LoadedConfigLayers;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
 use std::io;
 use std::path::Path;
@@ -109,6 +111,17 @@ pub async fn load_config_layers_state(
                     ),
                 )
             })?;
+            let user_config_parent = user_file.as_path().parent().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "User config file {} has no parent directory",
+                        user_file.as_path().display()
+                    ),
+                )
+            })?;
+            let user_config =
+                resolve_relative_paths_in_config_toml(user_config, user_config_parent)?;
             layers.push(ConfigLayerEntry::new(
                 ConfigLayerSource::User { file: user_file },
                 user_config,
@@ -127,8 +140,11 @@ pub async fn load_config_layers_state(
         }
     }
 
-    // TODO(mbolin): Add layers for cwd, tree, and repo config files.
-    let _ = cwd;
+    if let Some(cwd) = cwd {
+        let project_root = find_project_root(&cwd).await?;
+        let project_layers = load_project_layers(&cwd, &project_root).await?;
+        layers.extend(project_layers);
+    }
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.
     if !cli_overrides.is_empty() {
@@ -149,11 +165,20 @@ pub async fn load_config_layers_state(
         managed_config_from_mdm,
     } = loaded_config_layers;
     if let Some(config) = managed_config {
+        let managed_parent = config.file.as_path().parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Managed config file {} has no parent directory",
+                    config.file.as_path().display()
+                ),
+            )
+        })?;
+        let managed_config =
+            resolve_relative_paths_in_config_toml(config.managed_config, managed_parent)?;
         layers.push(ConfigLayerEntry::new(
-            ConfigLayerSource::LegacyManagedConfigTomlFromFile {
-                file: config.file.clone(),
-            },
-            config.managed_config,
+            ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: config.file },
+            managed_config,
         ));
     }
     if let Some(config) = managed_config_from_mdm {
@@ -235,6 +260,161 @@ async fn load_requirements_from_legacy_scheme(
     Ok(())
 }
 
+/// Takes a `toml::Value` parsed from a config.toml file and walks through it,
+/// resolving any `AbsolutePathBuf` fields against `base_dir`, returning a new
+/// `toml::Value` with the same shape but with paths resolved.
+///
+/// This ensures that multiple config layers can be merged together correctly
+/// even if they were loaded from different directories.
+fn resolve_relative_paths_in_config_toml(
+    value_from_config_toml: TomlValue,
+    base_dir: &Path,
+) -> io::Result<TomlValue> {
+    // Use the serialize/deserialize round-trip to convert the
+    // `toml::Value` into a `ConfigToml` with `AbsolutePath
+    let _guard = AbsolutePathBufGuard::new(base_dir);
+    let Ok(resolved) = value_from_config_toml.clone().try_into::<ConfigToml>() else {
+        return Ok(value_from_config_toml);
+    };
+    drop(_guard);
+
+    let resolved_value = TomlValue::try_from(resolved).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Failed to serialize resolved config: {e}"),
+        )
+    })?;
+
+    Ok(copy_shape_from_original(
+        &value_from_config_toml,
+        &resolved_value,
+    ))
+}
+
+/// Ensure that every field in `original` is present in the returned
+/// `toml::Value`, taking the value from `resolved` where possible. This ensures
+/// the fields that we "removed" during the serialize/deserialize round-trip in
+/// `resolve_config_paths` are preserved, out of an abundance of caution.
+fn copy_shape_from_original(original: &TomlValue, resolved: &TomlValue) -> TomlValue {
+    match (original, resolved) {
+        (TomlValue::Table(original_table), TomlValue::Table(resolved_table)) => {
+            let mut table = toml::map::Map::new();
+            for (key, original_value) in original_table {
+                let resolved_value = resolved_table.get(key).unwrap_or(original_value);
+                table.insert(
+                    key.clone(),
+                    copy_shape_from_original(original_value, resolved_value),
+                );
+            }
+            TomlValue::Table(table)
+        }
+        (TomlValue::Array(original_array), TomlValue::Array(resolved_array)) => {
+            let mut items = Vec::new();
+            for (index, original_value) in original_array.iter().enumerate() {
+                let resolved_value = resolved_array.get(index).unwrap_or(original_value);
+                items.push(copy_shape_from_original(original_value, resolved_value));
+            }
+            TomlValue::Array(items)
+        }
+        (_, resolved_value) => resolved_value.clone(),
+    }
+}
+
+async fn find_project_root(cwd: &AbsolutePathBuf) -> io::Result<AbsolutePathBuf> {
+    for ancestor in cwd.as_path().ancestors() {
+        let git_dir = ancestor.join(".git");
+        if tokio::fs::metadata(&git_dir).await.is_ok() {
+            return AbsolutePathBuf::from_absolute_path(ancestor);
+        }
+    }
+    Ok(cwd.clone())
+}
+
+/// Return the appropriate list of layers (each with
+/// [ConfigLayerSource::Project] as the source) between `cwd` and
+/// `project_root`, inclusive. The list is ordered in _increasing_ precdence,
+/// starting from folders closest to `project_root` (which is the lowest
+/// precedence) to those closest to `cwd` (which is the highest precedence).
+async fn load_project_layers(
+    cwd: &AbsolutePathBuf,
+    project_root: &AbsolutePathBuf,
+) -> io::Result<Vec<ConfigLayerEntry>> {
+    let mut dirs = cwd
+        .as_path()
+        .ancestors()
+        .scan(false, |done, a| {
+            if *done {
+                None
+            } else {
+                if a == project_root.as_path() {
+                    *done = true;
+                }
+                Some(a)
+            }
+        })
+        .collect::<Vec<_>>();
+    dirs.reverse();
+
+    let mut layers = Vec::new();
+    for dir in dirs {
+        let dot_codex = dir.join(".codex");
+        if !tokio::fs::metadata(&dot_codex)
+            .await
+            .map(|meta| meta.is_dir())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let dot_codex_abs = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
+        let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
+        match tokio::fs::read_to_string(&config_file).await {
+            Ok(contents) => {
+                let config: TomlValue = toml::from_str(&contents).map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "Error parsing project config file {}: {e}",
+                            config_file.as_path().display(),
+                        ),
+                    )
+                })?;
+                let config =
+                    resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
+                layers.push(ConfigLayerEntry::new(
+                    ConfigLayerSource::Project {
+                        dot_codex_folder: dot_codex_abs,
+                    },
+                    config,
+                ));
+            }
+            Err(err) => {
+                if err.kind() == io::ErrorKind::NotFound {
+                    // If there is no config.toml file, record an empty entry
+                    // for this project layer, as this may still have subfolders
+                    // that are significant in the overall ConfigLayerStack.
+                    layers.push(ConfigLayerEntry::new(
+                        ConfigLayerSource::Project {
+                            dot_codex_folder: dot_codex_abs,
+                        },
+                        TomlValue::Table(toml::map::Map::new()),
+                    ));
+                } else {
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!(
+                            "Failed to read project config file {}: {err}",
+                            config_file.as_path().display(),
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(layers)
+}
+
 /// The legacy mechanism for specifying admin-enforced configuration is to read
 /// from a file like `/etc/codex/managed_config.toml` that has the same
 /// structure as `config.toml` where fields like `approval_policy` can specify
@@ -264,5 +444,49 @@ impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
             config_requirements_toml.allowed_sandbox_modes = Some(vec![sandbox_mode.into()]);
         }
         config_requirements_toml
+    }
+}
+
+// Cannot name this `mod tests` because of tests.rs in this folder.
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn ensure_resolve_relative_paths_in_config_toml_preserves_all_fields() -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let base_dir = tmp.path();
+        let contents = r#"
+# This is a field recognized by config.toml that is an AbsolutePathBuf in
+# the ConfigToml struct.
+experimental_instructions_file = "./some_file.md"
+
+# This is a field recognized by config.toml.
+model = "gpt-1000"
+
+# This is a field not recognized by config.toml.
+foo = "xyzzy"
+"#;
+        let user_config: TomlValue = toml::from_str(contents)?;
+
+        let normalized_toml_value = resolve_relative_paths_in_config_toml(user_config, base_dir)?;
+        let mut expected_toml_value = toml::map::Map::new();
+        expected_toml_value.insert(
+            "experimental_instructions_file".to_string(),
+            TomlValue::String(
+                AbsolutePathBuf::resolve_path_against_base("./some_file.md", base_dir)?
+                    .as_path()
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+        );
+        expected_toml_value.insert(
+            "model".to_string(),
+            TomlValue::String("gpt-1000".to_string()),
+        );
+        expected_toml_value.insert("foo".to_string(), TomlValue::String("xyzzy".to_string()));
+        assert_eq!(normalized_toml_value, TomlValue::Table(expected_toml_value));
+        Ok(())
     }
 }

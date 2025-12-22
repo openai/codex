@@ -19,7 +19,7 @@ pub struct LoaderOverrides {
     pub managed_preferences_base64: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConfigLayerEntry {
     pub name: ConfigLayerSource,
     pub config: TomlValue,
@@ -170,7 +170,12 @@ fn verify_layer_ordering(layers: &[ConfigLayerEntry]) -> std::io::Result<Option<
         ));
     }
 
+    // The previous check ensured `layers` is sorted by precedence, so now we
+    // further verify that:
+    // 1. There is at most one user config layer.
+    // 2. Project layers are ordered from root to cwd.
     let mut user_layer_index: Option<usize> = None;
+    let mut previous_project_dot_codex_folder: Option<&AbsolutePathBuf> = None;
     for (index, layer) in layers.iter().enumerate() {
         if matches!(layer.name, ConfigLayerSource::User { .. }) {
             if user_layer_index.is_some() {
@@ -180,6 +185,32 @@ fn verify_layer_ordering(layers: &[ConfigLayerEntry]) -> std::io::Result<Option<
                 ));
             }
             user_layer_index = Some(index);
+        }
+
+        if let ConfigLayerSource::Project {
+            dot_codex_folder: current_project_dot_codex_folder,
+        } = &layer.name
+        {
+            if let Some(previous) = previous_project_dot_codex_folder {
+                let Some(parent) = previous.as_path().parent() else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "project layer has no parent directory",
+                    ));
+                };
+                if previous == current_project_dot_codex_folder
+                    || !current_project_dot_codex_folder
+                        .as_path()
+                        .ancestors()
+                        .any(|ancestor| ancestor == parent)
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "project layers are not ordered from root to cwd",
+                    ));
+                }
+            }
+            previous_project_dot_codex_folder = Some(current_project_dot_codex_folder);
         }
     }
 
