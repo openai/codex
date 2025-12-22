@@ -7,6 +7,7 @@ Codex configuration gives you fine-grained control over the model, execution env
 - [Feature flags](#feature-flags)
 - [Model selection](#model-selection)
 - [Execution environment](#execution-environment)
+- [Project root detection](#project-root-detection)
 - [MCP integration](#mcp-integration)
 - [Observability and telemetry](#observability-and-telemetry)
 - [Profiles and overrides](#profiles-and-overrides)
@@ -414,6 +415,17 @@ set = { PATH = "/usr/bin", MY_FLAG = "1" }
 ```
 
 Currently, `CODEX_SANDBOX_NETWORK_DISABLED=1` is also added to the environment, assuming network is disabled. This is not configurable.
+
+## Project root detection
+
+Codex discovers `.codex/` project layers by walking up from the working directory until it hits a project marker. By default it looks for `.git`. You can override the marker list in user/system/MDM config:
+
+```toml
+# $CODEX_HOME/config.toml
+project_root_markers = [".git", ".hg", ".sl"]
+```
+
+Set `project_root_markers = []` to skip searching parent directories and treat the current working directory as the project root.
 
 ## MCP integration
 
