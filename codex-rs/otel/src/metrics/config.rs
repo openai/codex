@@ -7,6 +7,7 @@ use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use std::collections::BTreeMap;
 use std::time::Duration;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 
 #[derive(Clone, Debug)]
 pub(crate) enum MetricsExporter {
@@ -16,7 +17,7 @@ pub(crate) enum MetricsExporter {
         timeout: Duration,
         user_agent: String,
     },
-    InMemory(opentelemetry_sdk::metrics::InMemoryMetricExporter),
+    InMemory(InMemoryMetricExporter),
 }
 
 impl MetricsExporter {
@@ -107,7 +108,7 @@ impl MetricsConfig {
         match &self.exporter {
             MetricsExporter::StatsigHttp {
                 endpoint, timeout, ..
-            } => format!("statsig_http endpoint={} timeout={:?}", endpoint, timeout),
+            } => format!("statsig_http endpoint={endpoint} timeout={timeout:?}"),
             MetricsExporter::InMemory(_) => "in_memory".to_string(),
         }
     }
@@ -116,7 +117,7 @@ impl MetricsConfig {
 impl Default for MetricsConfig {
     fn default() -> Self {
         if cfg!(test) {
-            Self::statsig("MOCK_API_KEY")
+            Self::in_memory(InMemoryMetricExporter::default())
         } else {
             Self::statsig(DEFAULT_API_KEY)
         }

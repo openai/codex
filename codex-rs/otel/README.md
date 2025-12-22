@@ -70,92 +70,25 @@ let manager = OtelManager::new(
 manager.user_prompt(&prompt_items);
 ```
 
-## Metrics (Statsig HTTP)
+## Metrics (Statsig HTTP or in-memory)
 
-The metrics client sends counters and histograms to Statsig via the `log_event`
-endpoint. Use placeholders for the Statsig endpoint and API key header until
-you have real values:
+Statsig example:
 
 ```rust
-use codex_otel::metrics::MetricsClient;
-use codex_otel::metrics::MetricsConfig;
-
-let metrics = MetricsClient::new(
-    MetricsConfig::new("<statsig-api-key>")
-        .with_endpoint("<statsig-log-event-endpoint>")
-        .with_api_key_header("<statsig-api-key-header>"),
-)?;
+let metrics = MetricsClient::new(MetricsConfig::default())?;
 
 metrics.counter("codex.session_started", 1, &[("source", "tui")])?;
+metrics.histogram("codex.request_latency", 83, &[("route", "chat")])?;
 ```
 
-## Metrics via OtelManager
-
-Attach metrics once in `OtelSettings.metrics` and reuse them from
-`OtelManager`:
+In-memory (tests):
 
 ```rust
-use codex_otel::config::{OtelExporter, OtelHttpProtocol, OtelSettings};
-use codex_otel::metrics::MetricsConfig;
-use codex_otel::OtelManager;
-use codex_otel::traces::otel_provider::OtelProvider;
-use tracing_subscriber::prelude::*;
-
-let settings = OtelSettings {
-    environment: "dev".into(),
-    service_name: "codex-cli".into(),
-    service_version: env!("CARGO_PKG_VERSION").into(),
-    codex_home: std::path::PathBuf::from("/tmp"),
-    exporter: OtelExporter::OtlpHttp {
-        endpoint: "https://otlp.example.com".into(),
-        headers: std::collections::HashMap::new(),
-        protocol: OtelHttpProtocol::Binary,
-        tls: None,
-    },
-    trace_exporter: OtelExporter::OtlpHttp {
-        endpoint: "https://otlp.example.com".into(),
-        headers: std::collections::HashMap::new(),
-        protocol: OtelHttpProtocol::Binary,
-        tls: None,
-    },
-    metrics: Some(
-        MetricsConfig::new("<statsig-api-key>")
-            .with_endpoint("<statsig-log-event-endpoint>")
-            .with_api_key_header("<statsig-api-key-header>"),
-    ),
-};
-
-let provider = OtelProvider::from(&settings)?;
-if let Some(p) = &provider {
-    tracing_subscriber::registry()
-        .with(p.logger_layer())
-        .with(p.tracing_layer())
-        .init();
-}
-
-let manager = OtelManager::new(
-    conversation_id,
-    model,
-    slug,
-    account_id,
-    account_email,
-    auth_mode,
-    log_user_prompts,
-    terminal_type,
-    session_source,
-);
-let manager = provider
-    .as_ref()
-    .map(|p| manager.with_provider_metrics(p))
-    .unwrap_or(manager);
-
-manager.counter("codex.session_started", 1, &[("source", "tui")])?;
-manager.histogram("codex.request_latency", 83, &[("route", "chat")])?;
+let exporter = InMemoryMetricExporter::default();
+let metrics = MetricsClient::new(MetricsConfig::in_memory(exporter.clone()))?;
+metrics.counter("codex.turns", 1, &[("model", "gpt-5.1")])?;
+metrics.shutdown()?; // flushes in-memory exporter
 ```
-
-By default, `OtelManager` adds metadata tags to metrics: `auth_mode`, `model`,
-`slug`, `terminal.type`, and `app.version`. Use
-`with_metrics_without_metadata_tags` to disable these tags.
 
 ## Shutdown
 
