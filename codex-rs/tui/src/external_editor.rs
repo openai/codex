@@ -12,6 +12,7 @@ use tokio::process::Command;
 pub(crate) enum EditorError {
     #[error("neither VISUAL nor EDITOR is set")]
     MissingEditor,
+    #[cfg(not(windows))]
     #[error("failed to parse editor command")]
     ParseFailed,
     #[error("editor command is empty")]
@@ -27,34 +28,6 @@ fn resolve_windows_program(program: &str) -> std::path::PathBuf {
     which::which(program).unwrap_or_else(|_| std::path::PathBuf::from(program))
 }
 
-/// Naively splits editor command into a vector of strings, respecting quotes.
-/// Avoids shlex issues parsing backslashes for Windows paths.
-#[cfg(windows)]
-fn split_editor_command_windows(raw: &str) -> Option<Vec<String>> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut in_quotes = false;
-
-    for ch in raw.chars() {
-        match ch {
-            '"' => in_quotes = !in_quotes,
-            c if c.is_whitespace() && !in_quotes => {
-                if !cur.is_empty() {
-                    out.push(std::mem::take(&mut cur));
-                }
-            }
-            _ => cur.push(ch),
-        }
-    }
-    if !cur.is_empty() {
-        out.push(cur);
-    }
-    if in_quotes {
-        return None; // unmatched quote
-    }
-    Some(out)
-}
-
 /// Resolve the editor command from environment variables.
 /// Prefers `VISUAL` over `EDITOR`.
 pub(crate) fn resolve_editor_command() -> std::result::Result<Vec<String>, EditorError> {
@@ -64,7 +37,7 @@ pub(crate) fn resolve_editor_command() -> std::result::Result<Vec<String>, Edito
     let parts = {
         #[cfg(windows)]
         {
-            split_editor_command_windows(&raw).ok_or(EditorError::ParseFailed)?
+            winsplit::split(&raw)
         }
         #[cfg(not(windows))]
         {

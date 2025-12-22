@@ -104,6 +104,7 @@ windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_System_Console",
 ] }
+winsplit = "0.1"
 
 # Clipboard support via `arboard` is not available on Android/Termux.
 # Only include it for non-Android targets so the crate builds on Android.
