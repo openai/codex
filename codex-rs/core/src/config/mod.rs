@@ -800,6 +800,11 @@ pub struct ConfigToml {
     #[serde(default)]
     pub ghost_snapshot: Option<GhostSnapshotToml>,
 
+    /// Markers used to detect the project root when searching parent
+    /// directories for `.codex` folders. Defaults to [".git"] when unset.
+    #[serde(default)]
+    pub project_root_markers: Option<Vec<String>>,
+
     /// When `true`, checks for Codex updates on startup and surfaces update prompts.
     /// Set to `false` only if your Codex updates are centrally managed.
     /// Defaults to `true`.

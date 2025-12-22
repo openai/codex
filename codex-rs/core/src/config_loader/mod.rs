@@ -32,6 +32,7 @@ pub use state::LoaderOverrides;
 
 /// On Unix systems, load requirements from this file path, if present.
 const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/codex/requirements.toml";
+const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 
 /// To build up the set of admin-enforced constraints, we build up from multiple
 /// configuration layers in the following order, but a constraint defined in an
@@ -141,7 +142,14 @@ pub async fn load_config_layers_state(
     }
 
     if let Some(cwd) = cwd {
-        let project_root = find_project_root(&cwd).await?;
+        let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
+        for layer in &layers {
+            merge_toml_values(&mut merged_so_far, &layer.config);
+        }
+        let project_root_markers = project_root_markers_from_config(&merged_so_far)?
+            .unwrap_or_else(default_project_root_markers);
+
+        let project_root = find_project_root(&cwd, &project_root_markers).await?;
         let project_layers = load_project_layers(&cwd, &project_root).await?;
         layers.extend(project_layers);
     }
@@ -260,6 +268,53 @@ async fn load_requirements_from_legacy_scheme(
     Ok(())
 }
 
+/// Reads `project_root_markers` from the [toml::Value] produced by merging
+/// `config.toml` from the config layers in the stack preceding
+/// [ConfigLayerSource::Project].
+///
+/// Invariants:
+/// - If `project_root_markers` is not specified, returns `Ok(None)`.
+/// - If `project_root_markers` is specified, returns `Ok(Some(markers))` where
+///   `markers` is a `Vec<String>` (including `Ok(Some(Vec::new()))` for an
+///   empty array, which indicates that root detection should be disabled).
+/// - Returns an error if `project_root_markers` is specified but is not an
+///   array of strings.
+fn project_root_markers_from_config(config: &TomlValue) -> io::Result<Option<Vec<String>>> {
+    let Some(table) = config.as_table() else {
+        return Ok(None);
+    };
+    let Some(markers_value) = table.get("project_root_markers") else {
+        return Ok(None);
+    };
+    let TomlValue::Array(entries) = markers_value else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "project_root_markers must be an array of strings",
+        ));
+    };
+    if entries.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    let mut markers = Vec::new();
+    for entry in entries {
+        let Some(marker) = entry.as_str() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "project_root_markers must be an array of strings",
+            ));
+        };
+        markers.push(marker.to_string());
+    }
+    Ok(Some(markers))
+}
+
+fn default_project_root_markers() -> Vec<String> {
+    DEFAULT_PROJECT_ROOT_MARKERS
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
 /// Takes a `toml::Value` parsed from a config.toml file and walks through it,
 /// resolving any `AbsolutePathBuf` fields against `base_dir`, returning a new
 /// `toml::Value` with the same shape but with paths resolved.
@@ -320,11 +375,20 @@ fn copy_shape_from_original(original: &TomlValue, resolved: &TomlValue) -> TomlV
     }
 }
 
-async fn find_project_root(cwd: &AbsolutePathBuf) -> io::Result<AbsolutePathBuf> {
+async fn find_project_root(
+    cwd: &AbsolutePathBuf,
+    project_root_markers: &[String],
+) -> io::Result<AbsolutePathBuf> {
+    if project_root_markers.is_empty() {
+        return Ok(cwd.clone());
+    }
+
     for ancestor in cwd.as_path().ancestors() {
-        let git_dir = ancestor.join(".git");
-        if tokio::fs::metadata(&git_dir).await.is_ok() {
-            return AbsolutePathBuf::from_absolute_path(ancestor);
+        for marker in project_root_markers {
+            let marker_path = ancestor.join(marker);
+            if tokio::fs::metadata(&marker_path).await.is_ok() {
+                return AbsolutePathBuf::from_absolute_path(ancestor);
+            }
         }
     }
     Ok(cwd.clone())
