@@ -245,23 +245,8 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!sessions) throw new Error("sessions is not initialized");
       if (!extensionContext) throw new Error("extensionContext is not set");
 
-      const folder = (() => {
-        if (activeSessionId) {
-          const s = sessions.getById(activeSessionId);
-          if (s) {
-            const f = resolveWorkspaceFolderForSession(s);
-            if (f) return f;
-          }
-        }
-        const fs = vscode.workspace.workspaceFolders ?? [];
-        return fs[0] ?? null;
-      })();
-      if (!folder) {
-        void vscode.window.showErrorMessage(
-          "No workspace folder found. Open a folder/workspace to resume from history.",
-        );
-        return;
-      }
+      const folder = await pickWorkspaceFolder();
+      if (!folder) return;
 
       await ensureBackendMatchesConfiguredCli(folder, "newSession");
 
