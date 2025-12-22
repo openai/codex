@@ -28,6 +28,12 @@
 - Resume開始時に、Newと同様にディレクトリ（workspace folder）を選べるようにした（選択したディレクトリの履歴のみ表示）
 - Resume の一覧から `modelProvider` / `cliVersion` の表示を削除
 
+## 0.1.4
+
+- Resume: 履歴復元が警告/デバッグ出力に邪魔されないよう修正
+- Resume: 一覧で時刻を先に表示
+- デバッグ/Legacyイベントの表示を折りたたみに変更（デフォルト閉じる）
+
 ## 0.0.7
 
 - モデル一覧の取得と表示、および Reasoning effort 選択 UI を追加
