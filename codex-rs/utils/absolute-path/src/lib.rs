@@ -43,6 +43,13 @@ impl AbsolutePathBuf {
         Self::resolve_path_against_base(path, &self.0)
     }
 
+    pub fn parent(&self) -> Option<Self> {
+        self.0.parent().map(|p| {
+            #[expect(clippy::expect_used)]
+            Self::from_absolute_path(p).expect("parent of AbsolutePathBuf must be absolute")
+        })
+    }
+
     pub fn as_path(&self) -> &Path {
         &self.0
     }

@@ -28,6 +28,7 @@ pub use config_requirements::ConfigRequirements;
 pub use merge::merge_toml_values;
 pub use state::ConfigLayerEntry;
 pub use state::ConfigLayerStack;
+pub use state::ConfigLayerStackOrdering;
 pub use state::LoaderOverrides;
 
 /// On Unix systems, load requirements from this file path, if present.
