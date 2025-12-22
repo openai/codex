@@ -17,6 +17,7 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::ResumeSelection;
+use crate::transcript_copy::TranscriptCopyUi;
 use crate::transcript_selection::TRANSCRIPT_GUTTER_COLS;
 use crate::transcript_selection::TranscriptSelection;
 use crate::transcript_selection::TranscriptSelectionPoint;
@@ -334,6 +335,7 @@ pub(crate) struct App {
     transcript_selection: TranscriptSelection,
     transcript_view_top: usize,
     transcript_total_lines: usize,
+    transcript_copy_ui: TranscriptCopyUi,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -484,6 +486,8 @@ impl App {
             },
         );
 
+        let copy_selection_shortcut = crate::transcript_copy::detect_copy_selection_shortcut();
+
         let mut app = Self {
             server: conversation_manager.clone(),
             app_event_tx,
@@ -499,6 +503,7 @@ impl App {
             transcript_selection: TranscriptSelection::default(),
             transcript_view_top: 0,
             transcript_total_lines: 0,
+            transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(copy_selection_shortcut),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -668,6 +673,7 @@ impl App {
                         transcript_scrolled,
                         selection_active,
                         scroll_position,
+                        self.copy_selection_key(),
                     );
                 }
             }
@@ -816,6 +822,22 @@ impl App {
         }
 
         self.apply_transcript_selection(transcript_area, frame.buffer);
+        if let (Some(anchor), Some(head)) = (
+            self.transcript_selection.anchor,
+            self.transcript_selection.head,
+        ) && anchor != head
+        {
+            self.transcript_copy_ui.render_copy_pill(
+                transcript_area,
+                frame.buffer,
+                (anchor.line_index, anchor.column),
+                (head.line_index, head.column),
+                self.transcript_view_top,
+                self.transcript_total_lines,
+            );
+        } else {
+            self.transcript_copy_ui.clear_affordance();
+        }
         chat_top
     }
 
@@ -904,6 +926,15 @@ impl App {
 
         let streaming = self.chat_widget.is_task_running();
 
+        if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left))
+            && self
+                .transcript_copy_ui
+                .hit_test(mouse_event.column, mouse_event.row)
+        {
+            self.copy_transcript_selection(tui);
+            return;
+        }
+
         match mouse_event.kind {
             MouseEventKind::ScrollUp => {
                 let scroll_update = self.mouse_scroll_update(ScrollDirection::Up);
@@ -927,6 +958,7 @@ impl App {
             }
             MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {}
             MouseEventKind::Down(MouseButton::Left) => {
+                self.transcript_copy_ui.set_dragging(true);
                 if let Some(point) = self.transcript_point_from_coordinates(
                     transcript_area,
                     base_x,
@@ -960,6 +992,7 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                self.transcript_copy_ui.set_dragging(false);
                 if self.transcript_selection.anchor == self.transcript_selection.head {
                     self.transcript_selection = TranscriptSelection::default();
                     tui.frame_requester().schedule_frame();
@@ -1373,6 +1406,10 @@ impl App {
         if let Err(err) = clipboard_copy::copy_text(text) {
             tracing::error!(error = %err, "failed to copy selection to clipboard");
         }
+    }
+
+    fn copy_selection_key(&self) -> crate::key_hint::KeyBinding {
+        self.transcript_copy_ui.key_binding()
     }
 
     /// Map a mouse position in the transcript area to a content-relative
@@ -1999,11 +2036,11 @@ impl App {
                 }
             }
             KeyEvent {
-                code: KeyCode::Char('y'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                code: KeyCode::Char(ch),
+                modifiers,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
-            } => {
+            } if self.transcript_copy_ui.is_copy_key(ch, modifiers) => {
                 self.copy_transcript_selection(tui);
             }
             KeyEvent {
@@ -2147,6 +2184,7 @@ mod tests {
     use crate::history_cell::HistoryCell;
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
+    use crate::transcript_copy::CopySelectionShortcut;
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
@@ -2188,6 +2226,9 @@ mod tests {
             transcript_selection: TranscriptSelection::default(),
             transcript_view_top: 0,
             transcript_total_lines: 0,
+            transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(
+                CopySelectionShortcut::CtrlShiftC,
+            ),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -2234,6 +2275,9 @@ mod tests {
                 transcript_selection: TranscriptSelection::default(),
                 transcript_view_top: 0,
                 transcript_total_lines: 0,
+                transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(
+                    CopySelectionShortcut::CtrlShiftC,
+                ),
                 overlay: None,
                 deferred_history_lines: Vec::new(),
                 has_emitted_history_lines: false,
@@ -2485,6 +2529,184 @@ mod tests {
             let cell = &buf_scrolled[(x, 1)];
             assert!(cell.style().add_modifier.is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn transcript_selection_renders_copy_affordance() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut app = make_test_app().await;
+        app.transcript_total_lines = 3;
+        app.transcript_view_top = 0;
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 3,
+        };
+
+        app.transcript_selection = TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 2,
+            }),
+            head: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 6,
+            }),
+        };
+
+        let mut buf = Buffer::empty(area);
+        for y in 0..area.height {
+            for x in 2..area.width.saturating_sub(1) {
+                buf[(x, y)].set_symbol("X");
+            }
+        }
+
+        app.apply_transcript_selection(area, &mut buf);
+        let anchor = app.transcript_selection.anchor.expect("anchor");
+        let head = app.transcript_selection.head.expect("head");
+        app.transcript_copy_ui.render_copy_pill(
+            area,
+            &mut buf,
+            (anchor.line_index, anchor.column),
+            (head.line_index, head.column),
+            app.transcript_view_top,
+            app.transcript_total_lines,
+        );
+
+        let mut s = String::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            s.push('\n');
+        }
+
+        assert!(s.contains("copy"));
+        assert!(s.contains("ctrl + shift + c"));
+        assert!(app.transcript_copy_ui.hit_test(10, 2));
+    }
+
+    #[tokio::test]
+    async fn transcript_selection_renders_ctrl_y_copy_affordance_in_vscode_mode() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut app = make_test_app().await;
+        app.transcript_copy_ui = TranscriptCopyUi::new_with_shortcut(CopySelectionShortcut::CtrlY);
+        app.transcript_total_lines = 3;
+        app.transcript_view_top = 0;
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 3,
+        };
+
+        app.transcript_selection = TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 2,
+            }),
+            head: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 6,
+            }),
+        };
+
+        let mut buf = Buffer::empty(area);
+        for y in 0..area.height {
+            for x in 2..area.width.saturating_sub(1) {
+                buf[(x, y)].set_symbol("X");
+            }
+        }
+
+        app.apply_transcript_selection(area, &mut buf);
+        let anchor = app.transcript_selection.anchor.expect("anchor");
+        let head = app.transcript_selection.head.expect("head");
+        app.transcript_copy_ui.render_copy_pill(
+            area,
+            &mut buf,
+            (anchor.line_index, anchor.column),
+            (head.line_index, head.column),
+            app.transcript_view_top,
+            app.transcript_total_lines,
+        );
+
+        let mut s = String::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            s.push('\n');
+        }
+
+        assert!(s.contains("copy"));
+        assert!(s.contains("ctrl + y"));
+        assert!(!s.contains("ctrl + shift + c"));
+        assert!(app.transcript_copy_ui.hit_test(10, 2));
+    }
+
+    #[tokio::test]
+    async fn transcript_selection_hides_copy_affordance_while_dragging() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut app = make_test_app().await;
+        app.transcript_total_lines = 3;
+        app.transcript_view_top = 0;
+        app.transcript_copy_ui.set_dragging(true);
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 3,
+        };
+
+        app.transcript_selection = TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 2,
+            }),
+            head: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 6,
+            }),
+        };
+
+        let mut buf = Buffer::empty(area);
+        for y in 0..area.height {
+            for x in 2..area.width.saturating_sub(1) {
+                buf[(x, y)].set_symbol("X");
+            }
+        }
+
+        let anchor = app.transcript_selection.anchor.expect("anchor");
+        let head = app.transcript_selection.head.expect("head");
+        app.transcript_copy_ui.render_copy_pill(
+            area,
+            &mut buf,
+            (anchor.line_index, anchor.column),
+            (head.line_index, head.column),
+            app.transcript_view_top,
+            app.transcript_total_lines,
+        );
+
+        let mut s = String::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            s.push('\n');
+        }
+
+        assert!(!s.contains("copy"));
+        assert!(!app.transcript_copy_ui.hit_test(10, 2));
     }
 
     #[tokio::test]

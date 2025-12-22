@@ -440,6 +440,8 @@ feedback are already implemented:
   stable, and follow mode resumes after the selection is cleared.
 - Copy operates on the full selection range (including offscreen lines), using the same wrapping as
   on-screen rendering.
+- Copy selection uses `Ctrl+Shift+C` (VS Code uses `Ctrl+Y` because `Ctrl+Shift+C` is unavailable in
+  the terminal) and shows an on-screen “copy” affordance near the selection.
 
 ### 10.2 Roadmap (prioritized)
 
@@ -462,9 +464,6 @@ Vim) behavior as we can while still owning the viewport.
 
 - **Streaming wrapping polish.** Ensure all streaming paths use display-time wrapping only, and add
   tests that cover resizing after streaming has started.
-- **Copy shortcut and discoverability.** Switch copy from `Ctrl+Y` to `Ctrl+Shift+C`, and add an
-  on-screen copy affordance (e.g. a small button near the selection) that also displays the
-  shortcut.
 - **Selection semantics.** Define and implement selection behavior across multi-step output (and
   whether step boundaries should be copy boundaries), while continuing to exclude the left gutter
   from copied text.
@@ -532,9 +531,9 @@ explicit discussion before we commit to further UI changes.
 
 - **Selection affordances.**
 
-  - Today, the primary hint that selection is active is the reversed text and the “Ctrl+Y copy
-    selection” footer text. Do we want an explicit “Selecting… (Esc to cancel)” status while a drag
-    is in progress, or would that be redundant/clutter for most users?
+  - Today, the primary hint that selection is active is the reversed text plus the on-screen “copy”
+    affordance (`Ctrl+Shift+C`) and the footer hint. Do we want an explicit “Selecting… (Esc to
+    cancel)” status while a drag is in progress, or would that be redundant/clutter for most users?
 
 - **Suspend banners in scrollback.**
 
