@@ -1762,6 +1762,7 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
+ "which",
  "windows-sys 0.52.0",
 ]
 

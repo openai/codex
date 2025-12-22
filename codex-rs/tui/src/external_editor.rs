@@ -4,7 +4,6 @@ use std::process::Stdio;
 
 use color_eyre::eyre::Report;
 use color_eyre::eyre::Result;
-use shlex::split as shlex_split;
 use tempfile::Builder;
 use thiserror::Error;
 use tokio::process::Command;
@@ -19,13 +18,59 @@ pub(crate) enum EditorError {
     EmptyCommand,
 }
 
+/// Tries to resolve the full path to a Windows program, respecting PATH + PATHEXT.
+/// Falls back to the original program name if resolution fails.
+#[cfg(windows)]
+fn resolve_windows_program(program: &str) -> std::path::PathBuf {
+    // On Windows, `Command::new("code")` will not resolve `code.cmd` shims on PATH.
+    // Use `which` so we respect PATH + PATHEXT (e.g., `code` -> `code.cmd`).
+    which::which(program).unwrap_or_else(|_| std::path::PathBuf::from(program))
+}
+
+/// Naively splits editor command into a vector of strings, respecting quotes.
+/// Avoids shlex issues parsing backslashes for Windows paths.
+#[cfg(windows)]
+fn split_editor_command_windows(raw: &str) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+
+    for ch in raw.chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            c if c.is_whitespace() && !in_quotes => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    if in_quotes {
+        return None; // unmatched quote
+    }
+    Some(out)
+}
+
 /// Resolve the editor command from environment variables.
 /// Prefers `VISUAL` over `EDITOR`.
 pub(crate) fn resolve_editor_command() -> std::result::Result<Vec<String>, EditorError> {
     let raw = env::var("VISUAL")
         .or_else(|_| env::var("EDITOR"))
         .map_err(|_| EditorError::MissingEditor)?;
-    let parts = shlex_split(&raw).ok_or(EditorError::ParseFailed)?;
+    let parts = {
+        #[cfg(windows)]
+        {
+            split_editor_command_windows(&raw).ok_or(EditorError::ParseFailed)?
+        }
+        #[cfg(not(windows))]
+        {
+            shlex::split(&raw).ok_or(EditorError::ParseFailed)?
+        }
+    };
     if parts.is_empty() {
         return Err(EditorError::EmptyCommand);
     }
@@ -42,7 +87,17 @@ pub(crate) async fn run_editor(seed: &str, editor_cmd: &[String]) -> Result<Stri
     let temp_path = Builder::new().suffix(".md").tempfile()?.into_temp_path();
     fs::write(&temp_path, seed)?;
 
-    let mut cmd = Command::new(&editor_cmd[0]);
+    let mut cmd = {
+        #[cfg(windows)]
+        {
+            // handles .cmd/.bat shims
+            Command::new(resolve_windows_program(&editor_cmd[0]))
+        }
+        #[cfg(not(windows))]
+        {
+            Command::new(&editor_cmd[0])
+        }
+    };
     if editor_cmd.len() > 1 {
         cmd.args(&editor_cmd[1..]);
     }
