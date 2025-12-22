@@ -11,7 +11,6 @@ different Statsig project.
 ## Quick start
 
 ```rust
-use codex_otel::metrics::HistogramBuckets;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 
@@ -22,10 +21,8 @@ let metrics = MetricsClient::new(
         .with_tag("service", "codex-cli")?,
 )?;
 
-let buckets = HistogramBuckets::from_values(&[25, 50, 100, 250, 500, 1000])?;
-
 metrics.counter("codex.session_started", 1, &[("source", "tui")])?;
-metrics.histogram("codex.request_latency", 83, &buckets, &[("route", "chat")])?;
+metrics.histogram("codex.request_latency", 83, &[("route", "chat")])?;
 ```
 
 ## OtelManager facade
@@ -37,7 +34,6 @@ client and emit metrics through the same handle. By default, metrics sent via
 `with_metrics_without_metadata_tags` to opt out.
 
 ```rust
-use codex_otel::metrics::HistogramBuckets;
 use codex_otel::metrics::MetricsConfig;
 use codex_otel::OtelManager;
 
@@ -57,10 +53,8 @@ let manager = OtelManager::new(
         .with_endpoint("<statsig-log-event-endpoint>")
         .with_api_key_header("<statsig-api-key-header>"),
 )?;
-
-let buckets = HistogramBuckets::from_values(&[25, 50, 100, 250, 500])?;
 manager.counter("codex.session_started", 1, &[("source", "tui")])?;
-manager.histogram("codex.request_latency", 83, &buckets, &[("route", "chat")])?;
+manager.histogram("codex.request_latency", 83, &[("route", "chat")])?;
 ```
 
 If you set `metrics: Some(MetricsConfig)` on `OtelSettings` and build an
@@ -81,19 +75,13 @@ If you set `metrics: Some(MetricsConfig)` on `OtelSettings` and build an
 
 The queue capacity is fixed at 1024 entries.
 
-## Histograms
-
-Histogram samples are sent as individual Statsig events. The
-`HistogramBuckets` type is retained for API compatibility and validation but
-is not used to pre-bucket samples.
-
 ## Timing
 
 Measure a closure and emit a histogram sample for the elapsed time in
 milliseconds:
 
 ```rust
-let result = metrics.time("codex.request_latency", &buckets, &[("route", "chat")], || {
+let result = metrics.time("codex.request_latency", &[("route", "chat")], || {
     "ok"
 })?;
 ```
@@ -104,7 +92,6 @@ If the closure already returns `codex_otel::metrics::Result<T>`, use
 ```rust
 let result = metrics.time_result(
     "codex.request_latency",
-    &buckets,
     &[("route", "chat")],
     || Ok("ok"),
 )?;
@@ -116,20 +103,8 @@ If you already have a duration, record it directly:
 metrics.record_duration(
     "codex.request_latency",
     std::time::Duration::from_millis(83),
-    &buckets,
     &[("route", "chat")],
 )?;
-```
-
-## Batching
-
-Batching reduces overhead and keeps metrics aligned in time:
-
-```rust
-let mut batch = metrics.batch();
-batch.counter("codex.turns", 1, &[("model", "gpt-5.1")])?;
-batch.histogram("codex.tool_latency", 140, &buckets, &[("tool", "shell")])?;
-metrics.send(batch)?;
 ```
 
 ## Shutdown and queue capacity

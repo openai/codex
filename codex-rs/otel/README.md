@@ -77,7 +77,6 @@ endpoint. Use placeholders for the Statsig endpoint and API key header until
 you have real values:
 
 ```rust
-use codex_otel::metrics::HistogramBuckets;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 
@@ -87,7 +86,6 @@ let metrics = MetricsClient::new(
         .with_api_key_header("<statsig-api-key-header>"),
 )?;
 
-let buckets = HistogramBuckets::from_values(&[25, 50, 100, 250, 500, 1000])?;
 metrics.counter("codex.session_started", 1, &[("source", "tui")])?;
 ```
 
@@ -98,7 +96,7 @@ Attach metrics once in `OtelSettings.metrics` and reuse them from
 
 ```rust
 use codex_otel::config::{OtelExporter, OtelHttpProtocol, OtelSettings};
-use codex_otel::metrics::{HistogramBuckets, MetricsConfig};
+use codex_otel::metrics::MetricsConfig;
 use codex_otel::OtelManager;
 use codex_otel::traces::otel_provider::OtelProvider;
 use tracing_subscriber::prelude::*;
@@ -151,16 +149,13 @@ let manager = provider
     .map(|p| manager.with_provider_metrics(p))
     .unwrap_or(manager);
 
-let buckets = HistogramBuckets::from_values(&[25, 50, 100, 250, 500])?;
 manager.counter("codex.session_started", 1, &[("source", "tui")])?;
-manager.histogram("codex.request_latency", 83, &buckets, &[("route", "chat")])?;
+manager.histogram("codex.request_latency", 83, &[("route", "chat")])?;
 ```
 
 By default, `OtelManager` adds metadata tags to metrics: `auth_mode`, `model`,
 `slug`, `terminal.type`, and `app.version`. Use
 `with_metrics_without_metadata_tags` to disable these tags.
-
-For batching, use `OtelManager::batch()` and `OtelManager::send()`.
 
 ## Shutdown
 

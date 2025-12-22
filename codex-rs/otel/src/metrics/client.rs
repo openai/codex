@@ -1,17 +1,16 @@
 use crate::metrics::DEFAULT_QUEUE_CAPACITY;
 use crate::metrics::DEFAULT_SHUTDOWN_TIMEOUT;
 use crate::metrics::SHUTDOWN_POLL_INTERVAL;
-use crate::metrics::batch::HistogramBuckets;
-use crate::metrics::batch::MetricEvent;
-use crate::metrics::batch::MetricsBatch;
 use crate::metrics::config::MetricsConfig;
 use crate::metrics::config::MetricsExporter;
 use crate::metrics::error::MetricsError;
 use crate::metrics::error::Result;
+use crate::metrics::tags::collect_tags;
 use crate::metrics::tags::merge_tags;
 use crate::metrics::tags::tags_to_attributes;
 use crate::metrics::time::duration_to_millis;
 use crate::metrics::util::error_or_panic;
+use crate::metrics::validation::validate_metric_name;
 use crate::metrics::validation::validate_tags;
 use chrono::Utc;
 use opentelemetry::KeyValue;
@@ -40,8 +39,22 @@ const METER_NAME: &str = "codex-otel-metrics";
 const STATSIG_USER_ID: &str = "codex-metrics";
 const STATSIG_SDK_TYPE: &str = "codex-otel-rust";
 
+#[derive(Clone, Debug)]
+enum MetricEvent {
+    Counter {
+        name: String,
+        value: i64,
+        tags: Vec<(String, String)>,
+    },
+    Histogram {
+        name: String,
+        value: i64,
+        tags: Vec<(String, String)>,
+    },
+}
+
 enum WorkerMessage {
-    Batch(MetricsBatch),
+    Event(MetricEvent),
     Shutdown,
 }
 
@@ -69,15 +82,13 @@ impl MetricRecorder {
         }
     }
 
-    fn record_batch(&mut self, batch: MetricsBatch) {
-        for event in batch.into_events() {
-            match event {
-                MetricEvent::Counter { name, value, tags } => {
-                    self.record_counter(&name, value, &tags);
-                }
-                MetricEvent::Histogram { name, value, tags } => {
-                    self.record_histogram(&name, value, &tags);
-                }
+    fn record_event(&mut self, event: MetricEvent) {
+        match event {
+            MetricEvent::Counter { name, value, tags } => {
+                self.record_counter(&name, value, &tags);
+            }
+            MetricEvent::Histogram { name, value, tags } => {
+                self.record_histogram(&name, value, &tags);
             }
         }
     }
@@ -160,22 +171,24 @@ impl MetricsClient {
 
     /// Send a single counter increment without blocking the caller.
     pub fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) -> Result<()> {
-        let mut batch = MetricsBatch::new();
-        batch.counter(name, inc, tags)?;
-        self.send(batch)
+        validate_metric_name(name)?;
+        let tags = collect_tags(tags)?;
+        self.send_event(MetricEvent::Counter {
+            name: name.to_string(),
+            value: inc,
+            tags,
+        })
     }
 
     /// Send a single histogram sample.
-    pub fn histogram(
-        &self,
-        name: &str,
-        value: i64,
-        buckets: &HistogramBuckets,
-        tags: &[(&str, &str)],
-    ) -> Result<()> {
-        let mut batch = MetricsBatch::new();
-        batch.histogram(name, value, buckets, tags)?;
-        self.send(batch)
+    pub fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) -> Result<()> {
+        validate_metric_name(name)?;
+        let tags = collect_tags(tags)?;
+        self.send_event(MetricEvent::Histogram {
+            name: name.to_string(),
+            value,
+            tags,
+        })
     }
 
     /// Record a duration in milliseconds using a histogram.
@@ -183,24 +196,17 @@ impl MetricsClient {
         &self,
         name: &str,
         duration: Duration,
-        buckets: &HistogramBuckets,
         tags: &[(&str, &str)],
     ) -> Result<()> {
         let millis = duration_to_millis(duration);
-        self.histogram(name, millis, buckets, tags)
+        self.histogram(name, millis, tags)
     }
 
     /// Measure a closure and emit a histogram sample for the elapsed time.
-    pub fn time<T>(
-        &self,
-        name: &str,
-        buckets: &HistogramBuckets,
-        tags: &[(&str, &str)],
-        f: impl FnOnce() -> T,
-    ) -> Result<T> {
+    pub fn time<T>(&self, name: &str, tags: &[(&str, &str)], f: impl FnOnce() -> T) -> Result<T> {
         let start = Instant::now();
         let output = f();
-        self.record_duration(name, start.elapsed(), buckets, tags)?;
+        self.record_duration(name, start.elapsed(), tags)?;
         Ok(output)
     }
 
@@ -208,7 +214,6 @@ impl MetricsClient {
     pub fn time_result<T>(
         &self,
         name: &str,
-        buckets: &HistogramBuckets,
         tags: &[(&str, &str)],
         f: impl FnOnce() -> Result<T>,
     ) -> Result<T> {
@@ -216,27 +221,17 @@ impl MetricsClient {
         let output = f();
         match output {
             Ok(value) => {
-                self.record_duration(name, start.elapsed(), buckets, tags)?;
+                self.record_duration(name, start.elapsed(), tags)?;
                 Ok(value)
             }
             Err(err) => {
-                let _ = self.record_duration(name, start.elapsed(), buckets, tags);
+                let _ = self.record_duration(name, start.elapsed(), tags);
                 Err(err)
             }
         }
     }
 
-    /// Create an empty batch for multi-metric sends.
-    pub fn batch(&self) -> MetricsBatch {
-        MetricsBatch::new()
-    }
-
-    /// Enqueue a batch of metrics for the worker to send.
-    pub fn send(&self, batch: MetricsBatch) -> Result<()> {
-        if batch.is_empty() {
-            return Ok(());
-        }
-
+    fn send_event(&self, event: MetricEvent) -> Result<()> {
         let sender = self
             .state
             .sender
@@ -246,7 +241,7 @@ impl MetricsClient {
             return Err(MetricsError::WorkerUnavailable);
         };
 
-        match sender.try_send(WorkerMessage::Batch(batch)) {
+        match sender.try_send(WorkerMessage::Event(event)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(MetricsError::QueueFull {
                 capacity: self.state.capacity,
@@ -371,7 +366,7 @@ impl MetricsWorker {
         let mut received_shutdown = false;
         while let Some(message) = receiver.recv().await {
             match message {
-                WorkerMessage::Batch(batch) => self.export_batch(batch).await,
+                WorkerMessage::Event(event) => self.export_event(event).await,
                 WorkerMessage::Shutdown => {
                     received_shutdown = true;
                     break;
@@ -383,10 +378,10 @@ impl MetricsWorker {
         }
     }
 
-    async fn export_batch(&mut self, batch: MetricsBatch) {
+    async fn export_event(&mut self, event: MetricEvent) {
         match &mut self.exporter {
             WorkerExporter::Statsig(exporter) => {
-                if let Err(err) = exporter.export_batch(batch).await {
+                if let Err(err) = exporter.export_event(event).await {
                     error_or_panic(format!(
                         "statsig metrics export failed: {err} (exporter={})",
                         self.exporter_label
@@ -394,7 +389,7 @@ impl MetricsWorker {
                 }
             }
             WorkerExporter::InMemory(exporter) => {
-                exporter.export(batch, &self.exporter_label).await;
+                exporter.export_event(event, &self.exporter_label).await;
             }
         }
     }
@@ -433,12 +428,11 @@ impl InMemoryExporter {
         }
     }
 
-    async fn export(&mut self, batch: MetricsBatch, exporter_label: &str) {
-        let event_count = batch.len();
-        self.recorder.record_batch(batch);
+    async fn export_event(&mut self, event: MetricEvent, exporter_label: &str) {
+        self.recorder.record_event(event);
         if let Err(err) = self.meter_provider.force_flush() {
             error_or_panic(format!(
-                "metrics flush failed: {err} (events={event_count}, exporter={exporter_label})"
+                "metrics flush failed: {err} (exporter={exporter_label})"
             ));
         }
     }
@@ -506,11 +500,8 @@ impl StatsigExporter {
         })
     }
 
-    async fn export_batch(&self, batch: MetricsBatch) -> Result<()> {
-        let payload = self.build_payload(batch);
-        if payload.events.is_empty() {
-            return Ok(());
-        }
+    async fn export_event(&self, event: MetricEvent) -> Result<()> {
+        let payload = self.build_payload(event);
 
         let mut request = self
             .client
@@ -538,13 +529,9 @@ impl StatsigExporter {
         Ok(())
     }
 
-    fn build_payload(&self, batch: MetricsBatch) -> StatsigPayload {
+    fn build_payload(&self, event: MetricEvent) -> StatsigPayload {
         let timestamp = Utc::now().timestamp_millis();
-        let events = batch
-            .into_events()
-            .into_iter()
-            .map(|event| self.event_from_metric(event, timestamp))
-            .collect();
+        let events = vec![self.event_from_metric(event, timestamp)];
 
         StatsigPayload {
             events,

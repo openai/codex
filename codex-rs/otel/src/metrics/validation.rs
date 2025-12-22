@@ -24,11 +24,6 @@ pub(crate) fn validate_metric_name(name: &str) -> Result<()> {
 
 pub(crate) fn validate_tag_key(key: &str) -> Result<()> {
     validate_tag_component(key, "tag key")?;
-    if key == "le" {
-        return Err(MetricsError::ReservedTagKey {
-            key: key.to_string(),
-        });
-    }
     Ok(())
 }
 

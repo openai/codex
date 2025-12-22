@@ -1,5 +1,3 @@
-use super::HistogramBuckets;
-use super::MetricsBatch;
 use super::MetricsClient;
 use super::MetricsConfig;
 use super::MetricsError;
@@ -83,7 +81,7 @@ async fn statsig_http_exporter_sends_events() -> Result<()> {
         .and(header("statsig-api-key", "test-key"))
         .and(header("user-agent", "codex-test-agent"))
         .respond_with(ResponseTemplate::new(200))
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
 
@@ -93,30 +91,49 @@ async fn statsig_http_exporter_sends_events() -> Result<()> {
         .with_tag("service", "codex-cli")?
         .with_tag("env", "prod")?;
     let metrics = MetricsClient::new(config)?;
-    let buckets = HistogramBuckets::from_values(&[25, 50])?;
 
-    let mut batch = metrics.batch();
-    batch.counter("codex.turns", 1, &[("model", "gpt-5.1")])?;
-    batch.histogram("codex.tool_latency", 25, &buckets, &[("tool", "shell")])?;
-    metrics.send(batch)?;
+    metrics.counter("codex.turns", 1, &[("model", "gpt-5.1")])?;
+    metrics.histogram("codex.tool_latency", 25, &[("tool", "shell")])?;
     metrics.shutdown()?;
 
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
 
-    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
-    let events = body
-        .get("events")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    assert_eq!(events.len(), 2);
+    let mut events_by_name = BTreeMap::new();
+    for request in &requests {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        let events = body
+            .get("events")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(events.len(), 1);
 
-    let counter = &events[0];
-    assert_eq!(
-        counter.get("eventName").and_then(Value::as_str),
-        Some("codex.turns")
-    );
+        let statsig_metadata = body
+            .get("statsigMetadata")
+            .and_then(Value::as_object)
+            .expect("statsig metadata missing");
+        assert_eq!(
+            statsig_metadata.get("sdkType").and_then(Value::as_str),
+            Some("codex-otel-rust")
+        );
+        assert_eq!(
+            statsig_metadata.get("sdkVersion").and_then(Value::as_str),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+
+        let event = events[0].clone();
+        let name = event
+            .get("eventName")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        events_by_name.insert(name, event);
+    }
+
+    let counter = events_by_name
+        .get("codex.turns")
+        .expect("counter event missing");
     assert_eq!(counter.get("value").and_then(Value::as_f64), Some(1.0));
     let counter_tags = counter
         .get("metadata")
@@ -129,11 +146,9 @@ async fn statsig_http_exporter_sends_events() -> Result<()> {
     ]);
     assert_eq!(json_tags(counter_tags), expected_counter_tags);
 
-    let histogram = &events[1];
-    assert_eq!(
-        histogram.get("eventName").and_then(Value::as_str),
-        Some("codex.tool_latency")
-    );
+    let histogram = events_by_name
+        .get("codex.tool_latency")
+        .expect("histogram event missing");
     assert_eq!(histogram.get("value").and_then(Value::as_f64), Some(25.0));
     let histogram_tags = histogram
         .get("metadata")
@@ -146,19 +161,6 @@ async fn statsig_http_exporter_sends_events() -> Result<()> {
     ]);
     assert_eq!(json_tags(histogram_tags), expected_histogram_tags);
 
-    let statsig_metadata = body
-        .get("statsigMetadata")
-        .and_then(Value::as_object)
-        .expect("statsig metadata missing");
-    assert_eq!(
-        statsig_metadata.get("sdkType").and_then(Value::as_str),
-        Some("codex-otel-rust")
-    );
-    assert_eq!(
-        statsig_metadata.get("sdkVersion").and_then(Value::as_str),
-        Some(env!("CARGO_PKG_VERSION"))
-    );
-
     Ok(())
 }
 
@@ -166,12 +168,9 @@ async fn statsig_http_exporter_sends_events() -> Result<()> {
 // Ensures counters/histograms record with default + per-call tags.
 fn send_builds_metrics_with_tags_and_histograms() -> Result<()> {
     let (metrics, exporter) = build_test_client()?;
-    let buckets = HistogramBuckets::from_values(&[25, 50, 100])?;
 
-    let mut batch = metrics.batch();
-    batch.counter("codex.turns", 1, &[("model", "gpt-5.1"), ("env", "dev")])?;
-    batch.histogram("codex.tool_latency", 25, &buckets, &[("tool", "shell")])?;
-    metrics.send(batch)?;
+    metrics.counter("codex.turns", 1, &[("model", "gpt-5.1"), ("env", "dev")])?;
+    metrics.histogram("codex.tool_latency", 25, &[("tool", "shell")])?;
     metrics.shutdown()?;
 
     let resource_metrics = latest_metrics(&exporter);
@@ -239,14 +238,12 @@ fn send_merges_default_tags_per_metric() -> Result<()> {
         .with_in_memory_exporter(exporter.clone());
     let metrics = MetricsClient::new(config)?;
 
-    let mut batch = metrics.batch();
-    batch.counter("codex.alpha", 1, &[("env", "dev"), ("component", "alpha")])?;
-    batch.counter(
+    metrics.counter("codex.alpha", 1, &[("env", "dev"), ("component", "alpha")])?;
+    metrics.counter(
         "codex.beta",
         2,
         &[("service", "worker"), ("component", "beta")],
     )?;
-    metrics.send(batch)?;
     metrics.shutdown()?;
 
     let resource_metrics = latest_metrics(&exporter);
@@ -302,12 +299,10 @@ fn send_merges_default_tags_per_metric() -> Result<()> {
 // Ensures duration recording maps to histogram output.
 fn record_duration_uses_histogram() -> Result<()> {
     let (metrics, exporter) = build_test_client()?;
-    let buckets = HistogramBuckets::from_values(&[10, 20])?;
 
     metrics.record_duration(
         "codex.request_latency",
         Duration::from_millis(15),
-        &buckets,
         &[("route", "chat")],
     )?;
     metrics.shutdown()?;
@@ -345,11 +340,9 @@ fn record_duration_uses_histogram() -> Result<()> {
 // Ensures time_result propagates errors but still records timing.
 fn time_result_records_on_error() -> Result<()> {
     let (metrics, exporter) = build_test_client()?;
-    let buckets = HistogramBuckets::from_values(&[10, 20])?;
 
     let Err(err) = metrics.time_result(
         "codex.request_latency",
-        &buckets,
         &[("route", "chat")],
         || -> Result<&'static str> { Err(MetricsError::EmptyMetricName) },
     ) else {
@@ -392,20 +385,10 @@ fn invalid_tag_component_is_rejected() -> Result<()> {
 }
 
 #[test]
-// Ensures the reserved histogram bucketing tag key is rejected in config defaults.
-fn reserved_tag_key_is_rejected_in_config() -> Result<()> {
-    let Err(err) = MetricsConfig::default().with_tag("le", "10") else {
-        panic!("expected error");
-    };
-    assert!(matches!(err, MetricsError::ReservedTagKey { key } if key == "le"));
-    Ok(())
-}
-
-#[test]
 // Ensures per-metric tag keys are validated.
-fn counter_rejects_invalid_tag_key() {
-    let mut batch = MetricsBatch::new();
-    let Err(err) = batch.counter("codex.turns", 1, &[("bad key", "value")]) else {
+fn counter_rejects_invalid_tag_key() -> Result<()> {
+    let (metrics, _exporter) = build_test_client()?;
+    let Err(err) = metrics.counter("codex.turns", 1, &[("bad key", "value")]) else {
         panic!("expected error");
     };
     assert!(matches!(
@@ -413,29 +396,15 @@ fn counter_rejects_invalid_tag_key() {
         MetricsError::InvalidTagComponent { label, value }
             if label == "tag key" && value == "bad key"
     ));
-}
-
-#[test]
-// Ensures per-metric tag keys cannot use reserved histogram bucketing keys.
-fn counter_rejects_reserved_tag_key() {
-    let mut batch = MetricsBatch::new();
-    let Err(err) = batch.counter("codex.turns", 1, &[("le", "10")]) else {
-        panic!("expected error");
-    };
-    assert!(matches!(err, MetricsError::ReservedTagKey { key } if key == "le"));
+    metrics.shutdown()?;
+    Ok(())
 }
 
 #[test]
 // Ensures per-metric tag values are validated.
 fn histogram_rejects_invalid_tag_value() -> Result<()> {
-    let mut batch = MetricsBatch::new();
-    let buckets = HistogramBuckets::from_values(&[10])?;
-    let Err(err) = batch.histogram(
-        "codex.request_latency",
-        3,
-        &buckets,
-        &[("route", "bad value")],
-    ) else {
+    let (metrics, _exporter) = build_test_client()?;
+    let Err(err) = metrics.histogram("codex.request_latency", 3, &[("route", "bad value")]) else {
         panic!("expected error");
     };
     assert!(matches!(
@@ -443,32 +412,22 @@ fn histogram_rejects_invalid_tag_value() -> Result<()> {
         MetricsError::InvalidTagComponent { label, value }
             if label == "tag value" && value == "bad value"
     ));
+    metrics.shutdown()?;
     Ok(())
 }
 
 #[test]
-// Ensures histogram calls reject reserved tag keys even though they no longer add `le`.
-fn histogram_rejects_reserved_tag_key() -> Result<()> {
-    let mut batch = MetricsBatch::new();
-    let buckets = HistogramBuckets::from_values(&[10])?;
-    let Err(err) = batch.histogram("codex.request_latency", 3, &buckets, &[("le", "10")]) else {
-        panic!("expected error");
-    };
-    assert!(matches!(err, MetricsError::ReservedTagKey { key } if key == "le"));
-    Ok(())
-}
-
-#[test]
-// Ensures invalid metric names are rejected when building a batch.
+// Ensures invalid metric names are rejected.
 fn counter_rejects_invalid_metric_name() -> Result<()> {
-    let mut batch = MetricsBatch::new();
-    let Err(err) = batch.counter("bad name", 1, &[]) else {
+    let (metrics, _exporter) = build_test_client()?;
+    let Err(err) = metrics.counter("bad name", 1, &[]) else {
         panic!("expected error");
     };
     assert!(matches!(
         err,
         MetricsError::InvalidMetricName { name } if name == "bad name"
     ));
+    metrics.shutdown()?;
     Ok(())
 }
 

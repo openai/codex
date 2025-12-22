@@ -2,8 +2,6 @@ pub mod config;
 pub mod metrics;
 pub mod traces;
 
-use crate::metrics::HistogramBuckets;
-use crate::metrics::MetricsBatch;
 use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::metrics::Result as MetricsResult;
@@ -84,38 +82,30 @@ impl OtelManager {
         metrics.counter(name, inc, &tags)
     }
 
-    pub fn histogram(
-        &self,
-        name: &str,
-        value: i64,
-        buckets: &HistogramBuckets,
-        tags: &[(&str, &str)],
-    ) -> MetricsResult<()> {
+    pub fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) -> MetricsResult<()> {
         let Some(metrics) = &self.metrics else {
             return Ok(());
         };
         let tags = self.tags_with_metadata(tags)?;
-        metrics.histogram(name, value, buckets, &tags)
+        metrics.histogram(name, value, &tags)
     }
 
     pub fn record_duration(
         &self,
         name: &str,
         duration: Duration,
-        buckets: &HistogramBuckets,
         tags: &[(&str, &str)],
     ) -> MetricsResult<()> {
         let Some(metrics) = &self.metrics else {
             return Ok(());
         };
         let tags = self.tags_with_metadata(tags)?;
-        metrics.record_duration(name, duration, buckets, &tags)
+        metrics.record_duration(name, duration, &tags)
     }
 
     pub fn time<T>(
         &self,
         name: &str,
-        buckets: &HistogramBuckets,
         tags: &[(&str, &str)],
         f: impl FnOnce() -> T,
     ) -> MetricsResult<T> {
@@ -123,13 +113,12 @@ impl OtelManager {
             return Ok(f());
         };
         let tags = self.tags_with_metadata(tags)?;
-        metrics.time(name, buckets, &tags, f)
+        metrics.time(name, &tags, f)
     }
 
     pub fn time_result<T>(
         &self,
         name: &str,
-        buckets: &HistogramBuckets,
         tags: &[(&str, &str)],
         f: impl FnOnce() -> MetricsResult<T>,
     ) -> MetricsResult<T> {
@@ -137,18 +126,7 @@ impl OtelManager {
             return f();
         };
         let tags = self.tags_with_metadata(tags)?;
-        metrics.time_result(name, buckets, &tags, f)
-    }
-
-    pub fn batch(&self) -> MetricsResult<MetricsBatch> {
-        MetricsBatch::with_default_tags(self.metadata_tags_owned()?)
-    }
-
-    pub fn send(&self, batch: MetricsBatch) -> MetricsResult<()> {
-        let Some(metrics) = &self.metrics else {
-            return Ok(());
-        };
-        metrics.send(batch)
+        metrics.time_result(name, &tags, f)
     }
 
     pub fn shutdown_metrics(&self) -> MetricsResult<()> {
@@ -182,14 +160,6 @@ impl OtelManager {
         )?;
         Self::push_metadata_tag(&mut tags, "app.version", Some(self.metadata.app_version))?;
         Ok(tags)
-    }
-
-    fn metadata_tags_owned(&self) -> MetricsResult<Vec<(String, String)>> {
-        let tags = self.metadata_tag_refs()?;
-        Ok(tags
-            .into_iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect())
     }
 
     fn push_metadata_tag<'a>(

@@ -1,7 +1,7 @@
 use crate::metrics::DEFAULT_API_KEY;
 use crate::metrics::DEFAULT_API_KEY_HEADER;
 use crate::metrics::DEFAULT_EXPORT_INTERVAL;
-use crate::metrics::DEFAULT_OTLP_ENDPOINT;
+use crate::metrics::DEFAULT_STATSIG_ENDPOINT;
 use crate::metrics::DEFAULT_TIMEOUT;
 use crate::metrics::error::Result;
 use crate::metrics::validation::validate_tag_key;
@@ -31,7 +31,7 @@ impl MetricsConfig {
     /// Create a config with the provided API key and default settings.
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
-            endpoint: DEFAULT_OTLP_ENDPOINT.to_string(),
+            endpoint: DEFAULT_STATSIG_ENDPOINT.to_string(),
             api_key: api_key.into(),
             api_key_header: DEFAULT_API_KEY_HEADER.to_string(),
             default_tags: BTreeMap::new(),
@@ -42,7 +42,7 @@ impl MetricsConfig {
         }
     }
 
-    /// Override the OTLP endpoint.
+    /// Override the Statsig endpoint.
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = endpoint.into();
         self
@@ -64,13 +64,13 @@ impl MetricsConfig {
         Ok(self)
     }
 
-    /// Override the OTLP exporter timeout.
+    /// Override the HTTP client timeout.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
-    /// Override the OTLP export interval.
+    /// Override the export interval used by the in-memory exporter (tests).
     pub fn with_export_interval(mut self, interval: Duration) -> Self {
         self.export_interval = interval;
         self

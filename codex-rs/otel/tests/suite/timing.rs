@@ -2,22 +2,19 @@ use crate::harness::attributes_to_map;
 use crate::harness::build_metrics_with_defaults;
 use crate::harness::histogram_data;
 use crate::harness::latest_metrics;
-use codex_otel::metrics::HistogramBuckets;
 use codex_otel::metrics::MetricsError;
 use codex_otel::metrics::Result;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 
-// Ensures duration recording maps to the expected bucket tag.
+// Ensures duration recording maps to histogram output.
 #[test]
-fn record_duration_uses_matching_bucket() -> Result<()> {
+fn record_duration_records_histogram() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[])?;
-    let buckets = HistogramBuckets::from_values(&[10, 20])?;
 
     metrics.record_duration(
         "codex.request_latency",
         Duration::from_millis(15),
-        &buckets,
         &[("route", "chat")],
     )?;
     metrics.shutdown()?;
@@ -36,14 +33,8 @@ fn record_duration_uses_matching_bucket() -> Result<()> {
 #[test]
 fn time_result_records_success() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[])?;
-    let buckets = HistogramBuckets::from_values(&[10, 20])?;
 
-    let value = metrics.time_result(
-        "codex.request_latency",
-        &buckets,
-        &[("route", "chat")],
-        || Ok("ok"),
-    )?;
+    let value = metrics.time_result("codex.request_latency", &[("route", "chat")], || Ok("ok"))?;
     assert_eq!(value, "ok");
     metrics.shutdown()?;
 
@@ -78,12 +69,10 @@ fn time_result_records_success() -> Result<()> {
 #[test]
 fn time_result_records_on_error() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[])?;
-    let buckets = HistogramBuckets::from_values(&[10, 20])?;
 
     let err = metrics
         .time_result(
             "codex.request_latency",
-            &buckets,
             &[("route", "chat")],
             || -> Result<&'static str> { Err(MetricsError::EmptyMetricName) },
         )
