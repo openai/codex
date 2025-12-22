@@ -1,5 +1,5 @@
 use crate::metrics::exporter::MetricEvent;
-use crate::metrics::exporter::WorkerExporter;
+use crate::metrics::sink::MetricSink;
 use crate::metrics::util::error_or_panic;
 use std::thread;
 use std::time::Duration;
@@ -8,9 +8,12 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 
+const MAX_BATCH_SIZE: usize = 50;
+const BATCH_TIMEOUT: Duration = Duration::from_millis(1000);
+
 pub(crate) fn spawn_worker(
     runtime: Runtime,
-    exporter: WorkerExporter,
+    exporter: Box<dyn MetricSink>,
     exporter_label: String,
     receiver: mpsc::Receiver<MetricEvent>,
 ) -> thread::JoinHandle<()> {
@@ -21,12 +24,12 @@ pub(crate) fn spawn_worker(
 }
 
 struct MetricsWorker {
-    exporter: WorkerExporter,
+    exporter: Box<dyn MetricSink>,
     exporter_label: String,
 }
 
 impl MetricsWorker {
-    fn new(exporter: WorkerExporter, exporter_label: String) -> Self {
+    fn new(exporter: Box<dyn MetricSink>, exporter_label: String) -> Self {
         Self {
             exporter,
             exporter_label,
@@ -42,18 +45,11 @@ impl MetricsWorker {
     }
 
     async fn export_batch(&mut self, events: Vec<MetricEvent>) {
-        match &mut self.exporter {
-            WorkerExporter::Statsig(exporter) => {
-                if let Err(err) = exporter.export_events(events).await {
-                    error_or_panic(format!(
-                        "statsig metrics export failed: {err} (exporter={})",
-                        self.exporter_label
-                    ));
-                }
-            }
-            WorkerExporter::InMemory(exporter) => {
-                exporter.export_events(events, &self.exporter_label).await;
-            }
+        if let Err(err) = self.exporter.export_batch(events).await {
+            error_or_panic(format!(
+                "metrics export failed: {err} (exporter={})",
+                self.exporter_label
+            ));
         }
     }
 
@@ -64,8 +60,7 @@ impl MetricsWorker {
         let mut events = Vec::with_capacity(1);
         events.push(first);
 
-        // Fast-path: drain anything already enqueued.
-        while events.len() < 50 {
+        while events.len() < MAX_BATCH_SIZE {
             match receiver.try_recv() {
                 Ok(event) => events.push(event),
                 Err(TryRecvError::Empty) => break,
@@ -73,13 +68,12 @@ impl MetricsWorker {
             }
         }
 
-        if events.len() >= 50 {
+        if events.len() >= MAX_BATCH_SIZE {
             return events;
         }
 
-        // Small coalescing window to catch near-simultaneous metrics without blocking callers.
-        let deadline = Instant::now() + Duration::from_millis(1000);
-        while events.len() < 50 {
+        let deadline = Instant::now() + BATCH_TIMEOUT;
+        while events.len() < MAX_BATCH_SIZE {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
@@ -96,8 +90,11 @@ impl MetricsWorker {
     }
 
     async fn shutdown(&mut self) {
-        if let WorkerExporter::InMemory(exporter) = &mut self.exporter {
-            exporter.shutdown(&self.exporter_label).await;
+        if let Err(err) = self.exporter.shutdown().await {
+            error_or_panic(format!(
+                "metrics shutdown failed: {err} (exporter={})",
+                self.exporter_label
+            ));
         }
     }
 }

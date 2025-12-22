@@ -5,12 +5,13 @@ use crate::metrics::config::MetricsExporter;
 use crate::metrics::error::MetricsError;
 use crate::metrics::error::Result;
 use crate::metrics::exporter::MetricEvent;
-use crate::metrics::exporter::build_worker_exporter;
-use crate::metrics::tags::collect_tags;
+use crate::metrics::sink::build_metric_sink;
+use crate::metrics::tags::merge_tags;
 use crate::metrics::time::duration_to_millis;
 use crate::metrics::validation::validate_metric_name;
 use crate::metrics::validation::validate_tags;
 use crate::metrics::worker::spawn_worker;
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -18,12 +19,13 @@ use std::time::Instant;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-/// Background metrics client that enqueues metrics to a tokio-backed worker.
+/// Background metrics client that enqueues metrics to a worker thread.
 #[derive(Clone)]
 pub struct MetricsClient {
     sender: std::sync::Arc<Mutex<Option<mpsc::Sender<MetricEvent>>>>,
     handle: std::sync::Arc<Mutex<Option<thread::JoinHandle<()>>>>,
     capacity: usize,
+    default_tags: BTreeMap<String, String>,
 }
 
 impl std::fmt::Debug for MetricsClient {
@@ -55,7 +57,8 @@ impl MetricsClient {
         }
 
         let exporter_label = config.exporter_label();
-        let exporter = build_worker_exporter(&config)?;
+        let exporter = build_metric_sink(&config)?;
+        let default_tags = config.default_tags.clone();
         let runtime = build_runtime()?;
 
         let (sender, receiver) = mpsc::channel(capacity);
@@ -65,13 +68,14 @@ impl MetricsClient {
             sender: std::sync::Arc::new(Mutex::new(Some(sender))),
             handle: std::sync::Arc::new(Mutex::new(Some(handle))),
             capacity,
+            default_tags,
         })
     }
 
     /// Send a single counter increment without blocking the caller.
     pub fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) -> Result<()> {
         validate_metric_name(name)?;
-        let tags = collect_tags(tags)?;
+        let tags = merge_tags(&self.default_tags, tags)?;
         self.send_event(MetricEvent::Counter {
             name: name.to_string(),
             value: inc,
@@ -82,7 +86,7 @@ impl MetricsClient {
     /// Send a single histogram sample.
     pub fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) -> Result<()> {
         validate_metric_name(name)?;
-        let tags = collect_tags(tags)?;
+        let tags = merge_tags(&self.default_tags, tags)?;
         self.send_event(MetricEvent::Histogram {
             name: name.to_string(),
             value,

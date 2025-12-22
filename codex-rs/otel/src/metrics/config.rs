@@ -1,13 +1,13 @@
-use crate::metrics::DEFAULT_API_KEY;
-use crate::metrics::DEFAULT_API_KEY_HEADER;
-use crate::metrics::DEFAULT_STATSIG_ENDPOINT;
 use crate::metrics::DEFAULT_TIMEOUT;
 use crate::metrics::error::Result;
+use crate::metrics::sink::statsig::DEFAULT_API_KEY;
+use crate::metrics::sink::statsig::DEFAULT_API_KEY_HEADER;
+use crate::metrics::sink::statsig::DEFAULT_STATSIG_ENDPOINT;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use std::collections::BTreeMap;
 use std::time::Duration;
-use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 
 #[derive(Clone, Debug)]
 pub(crate) enum MetricsExporter {
