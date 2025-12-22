@@ -118,3 +118,4 @@ If you don’t have the tool:
 
 - Marketplace への `vsce publish` は **ユーザーが明示的に「Publishして」と指示した時のみ**実行する。
 - 指示がない場合は、ローカルの `vsix:package` / `code --install-extension` までに留める。
+- `vsce unpublish` は拡張を **Marketplace から完全に削除（全バージョン削除）**する挙動で、以前のバージョンへ戻す操作ではないため、**今後は実行しない**（必要なら Web 管理画面での手順含めてユーザーに確認する）。
