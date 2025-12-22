@@ -3576,7 +3576,33 @@ function findRecentWebSearchBlockIdByQuery(
 
 function hydrateRuntimeFromThread(sessionId: string, thread: Thread): void {
   const rt = ensureRuntime(sessionId);
-  if (rt.blocks.length > 0) return;
+
+  const hasConversationBlocks = rt.blocks.some((b) => {
+    switch (b.type) {
+      case "user":
+      case "assistant":
+      case "command":
+      case "fileChange":
+      case "mcp":
+      case "webSearch":
+      case "reasoning":
+      case "plan":
+      case "divider":
+        return true;
+      default:
+        return false;
+    }
+  });
+  if (hasConversationBlocks) return;
+
+  // Preserve non-conversation blocks that may have arrived before hydration (e.g. legacy warnings).
+  const preserved = rt.blocks.filter((b) =>
+    b.type === "info" ||
+    b.type === "system" ||
+    b.type === "note" ||
+    b.type === "error",
+  );
+
   rt.blocks.length = 0;
   rt.blockIndexById.clear();
 
@@ -3590,7 +3616,7 @@ function hydrateRuntimeFromThread(sessionId: string, thread: Thread): void {
           .map((c) => c.text)
           .join("\n");
         if (text)
-          upsertBlock(rt, { id: newLocalId("user"), type: "user", text });
+          upsertBlock(rt, { id: item.id, type: "user", text });
       }
       if (item.type === "agentMessage") {
         if (item.text)
@@ -3598,6 +3624,8 @@ function hydrateRuntimeFromThread(sessionId: string, thread: Thread): void {
       }
     }
   }
+
+  for (const b of preserved) upsertBlock(rt, b);
 }
 
 function formatApprovalDetail(
