@@ -2,6 +2,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 import type { Session } from "../sessions";
+import { listAgentsFromDisk } from "../agents_disk";
 
 export type ChatBlock =
   | { id: string; type: "user"; text: string }
@@ -379,6 +380,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           (p) => typeof p === "string" && p.length > 0 && !p.startsWith("../"),
         );
       this.view?.webview.postMessage({ type: "fileIndex", files: rels });
+      return;
+    }
+
+    if (type === "requestAgentIndex") {
+      const sessionId = anyMsg["sessionId"];
+      if (typeof sessionId !== "string") return;
+      const st = this.getState();
+      const active = st.activeSession;
+      if (!active || active.id !== sessionId) {
+        this.postState();
+        return;
+      }
+
+      const caps = st.capabilities ?? { agents: false, cliVariant: "unknown" as const };
+      if (!caps.agents) {
+        this.view?.webview.postMessage({ type: "agentIndex", agents: [] });
+        return;
+      }
+
+      const folderUri = vscode.Uri.parse(active.workspaceFolderUri);
+      const folder = vscode.workspace.getWorkspaceFolder(folderUri);
+      if (!folder) {
+        this.view?.webview.postMessage({ type: "agentIndex", agents: [] });
+        return;
+      }
+
+      const { agents } = await listAgentsFromDisk(folder.uri.fsPath);
+      this.view?.webview.postMessage({
+        type: "agentIndex",
+        agents: agents.map((a) => a.name),
+      });
       return;
     }
 

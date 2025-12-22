@@ -113,7 +113,7 @@ type SuggestItem = {
   insert: string;
   label: string;
   detail?: string;
-  kind: "slash" | "at" | "file";
+  kind: "slash" | "at" | "file" | "agent";
 };
 
 function main(): void {
@@ -376,7 +376,10 @@ function main(): void {
   let suggestIndex = 0;
   let fileIndex: string[] | null = null;
   let fileIndexForSessionId: string | null = null;
-  let fileIndexRequested = false;
+  let fileIndexRequestedForSessionId: string | null = null;
+  let agentIndex: string[] | null = null;
+  let agentIndexForSessionId: string | null = null;
+  let agentIndexRequestedForSessionId: string | null = null;
   let activeReplace: null | {
     from: number;
     to: number;
@@ -722,6 +725,8 @@ function main(): void {
         const label = it.label.toLowerCase();
         const altLabel = label.startsWith("/prompts:")
           ? ("/" + label.slice("/prompts:".length))
+          : label.startsWith("@agents:")
+            ? label.slice("@agents:".length)
           : label;
         const useAlt = !q.includes("prompts:");
         const hay = useAlt ? altLabel : label;
@@ -777,8 +782,34 @@ function main(): void {
     if (atTok) {
       const query = atTok.token.slice(1);
       let items: SuggestItem[] = [...atSuggestions];
+      const caps = state.capabilities ?? { agents: false, cliVariant: "unknown" as const };
 
       if (query.length > 0 || atTok.token === "@") {
+        if (caps.agents) {
+          if (agentIndex && agentIndexForSessionId === state.activeSession.id) {
+            const q = query.toLowerCase();
+            const rankedNames = agentIndex
+              .filter((n) => n.toLowerCase().includes(q))
+              .slice(0, 50);
+            const agentItems = rankedNames.map((name) => ({
+              insert: "@agents:" + name + " ",
+              label: "@agents:" + name,
+              detail: "",
+              kind: "agent" as const,
+            }));
+            // Prefer agents over file paths.
+            items = items.concat(agentItems);
+          } else {
+            if (agentIndexRequestedForSessionId !== state.activeSession.id) {
+              agentIndexRequestedForSessionId = state.activeSession.id;
+              vscode.postMessage({
+                type: "requestAgentIndex",
+                sessionId: state.activeSession.id,
+              });
+            }
+          }
+        }
+
         if (fileIndex && fileIndexForSessionId === state.activeSession.id) {
           const q = query.toLowerCase();
           const rankedPaths = fileIndex
@@ -817,8 +848,8 @@ function main(): void {
           }));
           items = items.concat(fileItems);
         } else {
-          if (!fileIndexRequested) {
-            fileIndexRequested = true;
+          if (fileIndexRequestedForSessionId !== state.activeSession.id) {
+            fileIndexRequestedForSessionId = state.activeSession.id;
             vscode.postMessage({
               type: "requestFileIndex",
               sessionId: state.activeSession.id,
@@ -1611,6 +1642,7 @@ function sendCurrentInput(): void {
       type?: unknown;
       state?: unknown;
       files?: unknown;
+      agents?: unknown;
       text?: unknown;
     };
     if (anyMsg.type === "state") {
@@ -1629,6 +1661,20 @@ function sendCurrentInput(): void {
       } else {
         fileIndex = null;
         fileIndexForSessionId = null;
+      }
+      renderSuggest();
+      return;
+    }
+    if (anyMsg.type === "agentIndex") {
+      const agents = Array.isArray(anyMsg.agents)
+        ? anyMsg.agents.filter((a): a is string => typeof a === "string")
+        : [];
+      if (state.activeSession) {
+        agentIndex = agents;
+        agentIndexForSessionId = state.activeSession.id;
+      } else {
+        agentIndex = null;
+        agentIndexForSessionId = null;
       }
       renderSuggest();
       return;
