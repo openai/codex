@@ -39,11 +39,16 @@ pub(crate) async fn apply_patch(
     call_id: &str,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
+    let session_patch_approved = {
+        let store = sess.services.patch_approvals.lock().await;
+        store.is_action_approved(&action, &action.cwd)
+    };
     match assess_patch_safety(
         &action,
         turn_context.approval_policy,
         &turn_context.sandbox_policy,
         &turn_context.cwd,
+        session_patch_approved,
     ) {
         SafetyCheck::AutoApprove {
             user_explicitly_approved,
@@ -69,7 +74,12 @@ pub(crate) async fn apply_patch(
                     None,
                 )
                 .await;
-            match rx_approve.await.unwrap_or_default() {
+            let decision = rx_approve.await.unwrap_or_default();
+            if matches!(decision, ReviewDecision::ApprovedForSession) {
+                let mut store = sess.services.patch_approvals.lock().await;
+                store.approve_action(&action, &action.cwd);
+            }
+            match decision {
                 ReviewDecision::Approved
                 | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                 | ReviewDecision::ApprovedForSession => {

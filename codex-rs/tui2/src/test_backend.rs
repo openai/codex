@@ -2,6 +2,7 @@ use std::fmt::{self};
 use std::io::Write;
 use std::io::{self};
 
+use crossterm::style::Colored;
 use ratatui::prelude::CrosstermBackend;
 
 use ratatui::backend::Backend;
@@ -26,6 +27,9 @@ impl VT100Backend {
     /// Creates a new `TestBackend` with the specified width and height.
     pub fn new(width: u16, height: u16) -> Self {
         crossterm::style::Colored::set_ansi_color_disabled(false);
+        // Our tests assert against ANSI-colored output. crossterm suppresses ANSI color sequences
+        // when `NO_COLOR` is set, which is common in CI and in sandboxed environments.
+        Colored::set_ansi_color_disabled(false);
         Self {
             crossterm_backend: CrosstermBackend::new(vt100::Parser::new(height, width, 0)),
         }
