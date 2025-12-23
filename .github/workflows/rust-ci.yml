@@ -284,7 +284,8 @@ jobs:
         working-directory: codex-rs
     env:
       CARGO_INCREMENTAL: "0"
-      CARGO_TARGET_DIR: ${{ github.workspace }}/.target/${{ matrix.target }}-${{ matrix.profile }}
+      # Tests run with the custom ci-test profile; keep target dir keyed to it.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.target/${{ matrix.target }}-ci-test
 
     strategy:
       fail-fast: false
@@ -337,7 +338,7 @@ jobs:
         with:
           workspaces: |
             codex-rs
-          shared-key: rust-ci-tests-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}
+          shared-key: rust-ci-tests-${{ matrix.runner }}-${{ matrix.target }}-ci-test
           cache-targets: true
           cache-on-failure: true
 
@@ -355,10 +356,7 @@ jobs:
           set -euo pipefail
           RECIPE="${RUNNER_TEMP}/chef-recipe.json"
           cargo chef prepare --recipe-path "$RECIPE"
-          PROFILE_ARGS="--profile ${{ matrix.profile }}"
-          if [[ "${{ matrix.profile }}" == "release" ]]; then
-            PROFILE_ARGS="--release"
-          fi
+          PROFILE_ARGS="--profile ci-test"
           cargo chef cook --recipe-path "$RECIPE" --target ${{ matrix.target }} $PROFILE_ARGS --all-features
 
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
