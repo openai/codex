@@ -53,6 +53,10 @@ pub(crate) const fn ctrl_alt(key: KeyCode) -> KeyBinding {
     KeyBinding::new(key, KeyModifiers::CONTROL.union(KeyModifiers::ALT))
 }
 
+pub(crate) const fn ctrl_shift(key: KeyCode) -> KeyBinding {
+    KeyBinding::new(key, KeyModifiers::CONTROL.union(KeyModifiers::SHIFT))
+}
+
 fn modifiers_to_string(modifiers: KeyModifiers) -> String {
     let mut result = String::new();
     if modifiers.contains(KeyModifiers::CONTROL) {

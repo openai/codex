@@ -77,6 +77,7 @@ features = [
 version = "0.52"
 
 [dev-dependencies]
+pretty_assertions = { workspace = true }
 tempfile = "3"
 
 [build-dependencies]

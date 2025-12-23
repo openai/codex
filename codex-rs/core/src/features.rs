@@ -8,6 +8,7 @@
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
@@ -19,6 +20,7 @@ pub(crate) use legacy::LegacyFeatureToggles;
 pub enum Stage {
     Experimental,
     Beta {
+        name: &'static str,
         menu_description: &'static str,
         announcement: &'static str,
     },
@@ -28,6 +30,13 @@ pub enum Stage {
 }
 
 impl Stage {
+    pub fn beta_menu_name(self) -> Option<&'static str> {
+        match self {
+            Stage::Beta { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
     pub fn beta_menu_description(self) -> Option<&'static str> {
         match self {
             Stage::Beta {
@@ -61,8 +70,6 @@ pub enum Feature {
     // Experimental
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
-    /// Enable experimental RMCP features such as OAuth login.
-    RmcpClient,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
     /// Allow the model to request web searches.
@@ -85,6 +92,8 @@ pub enum Feature {
     Tui2,
     /// Enable discovery and injection of skills.
     Skills,
+    /// Enforce UTF8 output in Powershell.
+    PowershellUtf8,
 }
 
 impl Feature {
@@ -218,7 +227,6 @@ impl Features {
         let base_legacy = LegacyFeatureToggles {
             experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
-            experimental_use_rmcp_client: cfg.experimental_use_rmcp_client,
             tools_web_search: cfg.tools.as_ref().and_then(|t| t.web_search),
             tools_view_image: cfg.tools.as_ref().and_then(|t| t.view_image),
             ..Default::default()
@@ -235,7 +243,6 @@ impl Features {
                 .experimental_use_freeform_apply_patch,
 
             experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
-            experimental_use_rmcp_client: config_profile.experimental_use_rmcp_client,
             tools_web_search: config_profile.tools_web_search,
             tools_view_image: config_profile.tools_view_image,
         };
@@ -266,7 +273,7 @@ pub fn is_known_feature_key(key: &str) -> bool {
 }
 
 /// Deserializable features table for TOML.
-#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct FeaturesToml {
     #[serde(flatten)]
     pub entries: BTreeMap<String, bool>,
@@ -287,7 +294,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::GhostCommit,
         key: "undo",
         stage: Stage::Stable,
-        default_enabled: true,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ParallelToolCalls,
@@ -323,28 +330,21 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UnifiedExec,
         key: "unified_exec",
-        // stage: Stage::Beta {
-        //     menu_description: "Run long-running terminal commands in the background.",
-        //     announcement: "NEW! Try Background terminals for long running processes. Enable in /experimental!",
-        // },
-        stage: Stage::Experimental,
+        stage: Stage::Beta {
+            name: "Background terminal",
+            menu_description: "Run long-running terminal commands in the background.",
+            announcement: "NEW! Try Background terminals for long running processes. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ShellSnapshot,
         key: "shell_snapshot",
-        // stage: Stage::Beta {
-        //     menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
-        //     announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
-        // },
-        stage: Stage::Experimental,
-        default_enabled: false,
-    },
-    // Unstable features.
-    FeatureSpec {
-        id: Feature::RmcpClient,
-        key: "rmcp_client",
-        stage: Stage::Experimental,
+        stage: Stage::Beta {
+            name: "Shell snapshot",
+            menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
+            announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -387,11 +387,11 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Skills,
         key: "skills",
         stage: Stage::Experimental,
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
-        id: Feature::ShellSnapshot,
-        key: "shell_snapshot",
+        id: Feature::PowershellUtf8,
+        key: "powershell_utf8",
         stage: Stage::Experimental,
         default_enabled: false,
     },

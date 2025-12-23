@@ -539,6 +539,7 @@ server_notification_definitions! {
     ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
+    DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
