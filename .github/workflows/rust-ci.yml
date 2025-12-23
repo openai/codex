@@ -282,8 +282,7 @@ jobs:
         working-directory: codex-rs
     env:
       CARGO_INCREMENTAL: "0"
-      # Tests run with the custom ci-test profile; keep target dir keyed to it.
-      CARGO_TARGET_DIR: ${{ github.workspace }}/.target/${{ matrix.target }}-ci-test
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.target/${{ matrix.target }}-${{ matrix.profile }}
 
     strategy:
       fail-fast: false
@@ -336,7 +335,7 @@ jobs:
         with:
           workspaces: |
             codex-rs
-          shared-key: rust-ci-tests-${{ matrix.runner }}-${{ matrix.target }}-ci-test
+          shared-key: rust-ci-tests-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}
           cache-targets: true
           cache-on-failure: true
 
