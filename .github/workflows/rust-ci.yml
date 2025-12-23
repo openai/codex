@@ -203,14 +203,12 @@ jobs:
           cache-on-failure: true
 
       - name: Install cargo-chef
-        if: ${{ matrix.profile == 'release' || contains(matrix.target, 'windows') }}
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: cargo-chef
           version: 0.1.71
 
       - name: Pre-warm dependency cache (cargo-chef)
-        if: ${{ matrix.profile == 'release' || contains(matrix.target, 'windows') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -343,14 +341,12 @@ jobs:
           cache-on-failure: true
 
       - name: Install cargo-chef
-        if: ${{ matrix.profile == 'release' || contains(matrix.target, 'windows') }}
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: cargo-chef
           version: 0.1.71
 
       - name: Pre-warm dependency cache (cargo-chef)
-        if: ${{ matrix.profile == 'release' || contains(matrix.target, 'windows') }}
         shell: bash
         run: |
           set -euo pipefail
