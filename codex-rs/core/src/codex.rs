@@ -3162,7 +3162,7 @@ mod tests {
 
         let turn_context = Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
-            models_manager.clone(),
+            models_manager,
             &otel_manager,
             session_configuration.provider.clone(),
             &session_configuration,
@@ -3250,7 +3250,7 @@ mod tests {
 
         let turn_context = Arc::new(Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
-            models_manager.clone(),
+            models_manager,
             &otel_manager,
             session_configuration.provider.clone(),
             &session_configuration,
