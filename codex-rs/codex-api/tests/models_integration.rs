@@ -88,7 +88,6 @@ async fn models_client_hits_models_endpoint() {
             reasoning_summary_format: ReasoningSummaryFormat::None,
             experimental_supported_tools: Vec::new(),
         }],
-        etag: String::new(),
     };
 
     Mock::given(method("GET"))
@@ -104,13 +103,13 @@ async fn models_client_hits_models_endpoint() {
     let transport = ReqwestTransport::new(reqwest::Client::new());
     let client = ModelsClient::new(transport, provider(&base_url), DummyAuth);
 
-    let result = client
+    let (models, _) = client
         .list_models("0.1.0", HeaderMap::new())
         .await
         .expect("models request should succeed");
 
-    assert_eq!(result.models.len(), 1);
-    assert_eq!(result.models[0].slug, "gpt-test");
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].slug, "gpt-test");
 
     let received = server
         .received_requests()
