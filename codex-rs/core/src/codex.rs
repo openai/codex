@@ -91,6 +91,7 @@ use crate::exec_policy::ExecPolicyUpdateError;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
+use crate::patch_approval_store::PatchApprovalStore;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
@@ -665,6 +666,7 @@ impl Session {
             otel_manager,
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            patch_approvals: Mutex::new(PatchApprovalStore::default()),
             skills_manager,
         };
 
@@ -3140,6 +3142,7 @@ mod tests {
             otel_manager: otel_manager.clone(),
             models_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            patch_approvals: Mutex::new(PatchApprovalStore::default()),
             skills_manager,
         };
 
@@ -3227,6 +3230,7 @@ mod tests {
             otel_manager: otel_manager.clone(),
             models_manager,
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            patch_approvals: Mutex::new(PatchApprovalStore::default()),
             skills_manager,
         };
 

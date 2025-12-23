@@ -1081,6 +1081,18 @@ fn format_file_change_diff(change: &CoreFileChange) -> String {
     }
 }
 
+fn map_file_change_approval_decision(
+    decision: ApprovalDecision,
+) -> (ReviewDecision, Option<PatchApplyStatus>) {
+    match decision {
+        ApprovalDecision::Accept => (ReviewDecision::Approved, None),
+        ApprovalDecision::AcceptForSession => (ReviewDecision::ApprovedForSession, None),
+        ApprovalDecision::AcceptWithExecpolicyAmendment { .. } => (ReviewDecision::Approved, None),
+        ApprovalDecision::Decline => (ReviewDecision::Denied, Some(PatchApplyStatus::Declined)),
+        ApprovalDecision::Cancel => (ReviewDecision::Abort, Some(PatchApplyStatus::Declined)),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn on_file_change_request_approval_response(
     event_turn_id: String,
@@ -1103,19 +1115,8 @@ async fn on_file_change_request_approval_response(
                     }
                 });
 
-            let (decision, completion_status) = match response.decision {
-                ApprovalDecision::Accept
-                | ApprovalDecision::AcceptForSession
-                | ApprovalDecision::AcceptWithExecpolicyAmendment { .. } => {
-                    (ReviewDecision::Approved, None)
-                }
-                ApprovalDecision::Decline => {
-                    (ReviewDecision::Denied, Some(PatchApplyStatus::Declined))
-                }
-                ApprovalDecision::Cancel => {
-                    (ReviewDecision::Abort, Some(PatchApplyStatus::Declined))
-                }
-            };
+            let (decision, completion_status) =
+                map_file_change_approval_decision(response.decision);
             // Allow EventMsg::PatchApplyEnd to emit ItemCompleted for accepted patches.
             // Only short-circuit on declines/cancels/failures.
             (decision, completion_status)
@@ -1328,6 +1329,14 @@ mod tests {
 
     fn new_turn_summary_store() -> TurnSummaryStore {
         Arc::new(Mutex::new(HashMap::new()))
+    }
+
+    #[test]
+    fn file_change_accept_for_session_maps_to_approved_for_session() {
+        let (decision, completion_status) =
+            map_file_change_approval_decision(ApprovalDecision::AcceptForSession);
+        assert_eq!(decision, ReviewDecision::ApprovedForSession);
+        assert_eq!(completion_status, None);
     }
 
     #[tokio::test]

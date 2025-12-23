@@ -7,11 +7,9 @@ use crossterm::Command;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Color as CColor;
-use crossterm::style::Colors;
 use crossterm::style::Print;
 use crossterm::style::SetAttribute;
 use crossterm::style::SetBackgroundColor;
-use crossterm::style::SetColors;
 use crossterm::style::SetForegroundColor;
 use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
@@ -96,16 +94,18 @@ where
         queue!(writer, Print("\r\n"))?;
         queue!(
             writer,
-            SetColors(Colors::new(
+            SetForegroundColor(
                 line.style
                     .fg
                     .map(std::convert::Into::into)
-                    .unwrap_or(CColor::Reset),
+                    .unwrap_or(CColor::Reset)
+            ),
+            SetBackgroundColor(
                 line.style
                     .bg
                     .map(std::convert::Into::into)
                     .unwrap_or(CColor::Reset)
-            ))
+            )
         )?;
         queue!(writer, Clear(ClearType::UntilNewLine))?;
         // Merge line-level style into each span so that ANSI colors reflect
@@ -262,12 +262,12 @@ where
         }
         let next_fg = span.style.fg.unwrap_or(Color::Reset);
         let next_bg = span.style.bg.unwrap_or(Color::Reset);
-        if next_fg != fg || next_bg != bg {
-            queue!(
-                writer,
-                SetColors(Colors::new(next_fg.into(), next_bg.into()))
-            )?;
+        if next_fg != fg {
+            queue!(writer, SetForegroundColor(next_fg.into()))?;
             fg = next_fg;
+        }
+        if next_bg != bg {
+            queue!(writer, SetBackgroundColor(next_bg.into()))?;
             bg = next_bg;
         }
 
