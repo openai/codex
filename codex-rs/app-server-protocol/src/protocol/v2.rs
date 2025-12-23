@@ -237,6 +237,8 @@ pub enum ConfigLayerSource {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     User {
+        /// This is the path to the user's config.toml file, though it is not
+        /// guaranteed to exist.
         file: AbsolutePathBuf,
     },
 
