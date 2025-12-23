@@ -26,6 +26,7 @@ pub(crate) struct FooterProps {
     pub(crate) transcript_selection_active: bool,
     pub(crate) transcript_scroll_position: Option<(usize, usize)>,
     pub(crate) transcript_copy_selection_key: KeyBinding,
+    pub(crate) transcript_find_visible: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -119,6 +120,11 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 line.push_span(props.transcript_copy_selection_key);
                 line.push_span(" copy selection".dim());
             }
+            if props.transcript_find_visible {
+                line.push_span(" · ".dim());
+                line.push_span(key_hint::ctrl(KeyCode::Char('g')));
+                line.push_span(" next match".dim());
+            }
             vec![line]
         }
         FooterMode::ShortcutOverlay => {
@@ -131,6 +137,7 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 use_shift_enter_hint: props.use_shift_enter_hint,
                 esc_backtrack_hint: props.esc_backtrack_hint,
                 is_wsl,
+                transcript_find_visible: props.transcript_find_visible,
             };
             shortcut_overlay_lines(state)
         }
@@ -152,6 +159,7 @@ struct ShortcutsState {
     use_shift_enter_hint: bool,
     esc_backtrack_hint: bool,
     is_wsl: bool,
+    transcript_find_visible: bool,
 }
 
 fn ctrl_c_reminder_line(state: CtrlCReminderState) -> Line<'static> {
@@ -187,6 +195,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut newline = Line::from("");
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
+    let mut find_next = Line::from("");
     let mut edit_previous = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
@@ -198,6 +207,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::InsertNewline => newline = text,
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
+                ShortcutId::FindNext => find_next = text,
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
@@ -205,16 +215,11 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         }
     }
 
-    let ordered = vec![
-        commands,
-        newline,
-        file_paths,
-        paste_image,
-        edit_previous,
-        quit,
-        Line::from(""),
-        show_transcript,
-    ];
+    let mut ordered = vec![commands, newline, file_paths, paste_image];
+    if find_next.width() > 0 {
+        ordered.push(find_next);
+    }
+    ordered.extend(vec![edit_previous, quit, Line::from(""), show_transcript]);
 
     build_columns(ordered)
 }
@@ -286,6 +291,7 @@ enum ShortcutId {
     InsertNewline,
     FilePaths,
     PasteImage,
+    FindNext,
     EditPrevious,
     Quit,
     ShowTranscript,
@@ -309,6 +315,7 @@ enum DisplayCondition {
     WhenShiftEnterHint,
     WhenNotShiftEnterHint,
     WhenUnderWSL,
+    WhenTranscriptFindVisible,
 }
 
 impl DisplayCondition {
@@ -318,6 +325,7 @@ impl DisplayCondition {
             DisplayCondition::WhenShiftEnterHint => state.use_shift_enter_hint,
             DisplayCondition::WhenNotShiftEnterHint => !state.use_shift_enter_hint,
             DisplayCondition::WhenUnderWSL => state.is_wsl,
+            DisplayCondition::WhenTranscriptFindVisible => state.transcript_find_visible,
         }
     }
 }
@@ -407,6 +415,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         label: " to paste images",
     },
     ShortcutDescriptor {
+        id: ShortcutId::FindNext,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('g')),
+            condition: DisplayCondition::WhenTranscriptFindVisible,
+        }],
+        prefix: "",
+        label: " next match",
+    },
+    ShortcutDescriptor {
         id: ShortcutId::EditPrevious,
         bindings: &[ShortcutBinding {
             key: key_hint::plain(KeyCode::Esc),
@@ -469,6 +486,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_find_visible: false,
             },
         );
 
@@ -485,6 +503,7 @@ mod tests {
                 transcript_selection_active: true,
                 transcript_scroll_position: Some((3, 42)),
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_find_visible: false,
             },
         );
 
@@ -501,6 +520,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_find_visible: false,
             },
         );
 
@@ -517,6 +537,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_find_visible: false,
             },
         );
 
@@ -533,6 +554,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_find_visible: false,
             },
         );
 
@@ -549,6 +571,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_find_visible: false,
             },
         );
 
@@ -565,6 +588,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_find_visible: false,
             },
         );
 
@@ -581,6 +605,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_find_visible: false,
             },
         );
 
@@ -597,6 +622,7 @@ mod tests {
                 transcript_selection_active: false,
                 transcript_scroll_position: None,
                 transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_find_visible: false,
             },
         );
     }

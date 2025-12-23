@@ -3097,12 +3097,14 @@ impl ChatWidget {
         selection_active: bool,
         scroll_position: Option<(usize, usize)>,
         copy_selection_key: crate::key_hint::KeyBinding,
+        find_visible: bool,
     ) {
         self.bottom_pane.set_transcript_ui_state(
             scrolled,
             selection_active,
             scroll_position,
             copy_selection_key,
+            find_visible,
         );
     }
 

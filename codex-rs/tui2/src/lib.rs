@@ -78,6 +78,7 @@ mod terminal_palette;
 mod text_formatting;
 mod tooltips;
 mod transcript_copy;
+mod transcript_find;
 mod transcript_selection;
 mod tui;
 mod ui_consts;

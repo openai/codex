@@ -124,6 +124,7 @@ pub(crate) struct ChatComposer {
     transcript_selection_active: bool,
     transcript_scroll_position: Option<(usize, usize)>,
     transcript_copy_selection_key: KeyBinding,
+    transcript_find_visible: bool,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
 }
@@ -176,6 +177,7 @@ impl ChatComposer {
             transcript_selection_active: false,
             transcript_scroll_position: None,
             transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+            transcript_find_visible: false,
             skills: None,
             dismissed_skill_popup_token: None,
         };
@@ -1545,6 +1547,7 @@ impl ChatComposer {
             transcript_selection_active: self.transcript_selection_active,
             transcript_scroll_position: self.transcript_scroll_position,
             transcript_copy_selection_key: self.transcript_copy_selection_key,
+            transcript_find_visible: self.transcript_find_visible,
         }
     }
 
@@ -1577,11 +1580,13 @@ impl ChatComposer {
         selection_active: bool,
         scroll_position: Option<(usize, usize)>,
         copy_selection_key: KeyBinding,
+        find_visible: bool,
     ) {
         self.transcript_scrolled = scrolled;
         self.transcript_selection_active = selection_active;
         self.transcript_scroll_position = scroll_position;
         self.transcript_copy_selection_key = copy_selection_key;
+        self.transcript_find_visible = find_visible;
     }
 
     fn sync_popups(&mut self) {
