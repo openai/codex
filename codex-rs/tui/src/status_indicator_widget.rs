@@ -10,21 +10,22 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::text::Text;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
-use textwrap::Options;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::exec_cell::spinner;
 use crate::key_hint;
-use crate::render::line_utils::prefix_lines;
 use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
 use crate::text_formatting::capitalize_first;
 use crate::tui::FrameRequester;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_lines;
 
 const DETAILS_MAX_LINES: usize = 3;
 const DETAILS_PREFIX: &str = "  └ ";
@@ -166,34 +167,28 @@ impl StatusIndicatorWidget {
         }
 
         let prefix_width = UnicodeWidthStr::width(DETAILS_PREFIX);
-        let subsequent_prefix = " ".repeat(prefix_width);
-        let wrap_width = usize::from(width).saturating_sub(prefix_width).max(1);
+        let opts = RtOptions::new(usize::from(width))
+            .initial_indent(Line::from(DETAILS_PREFIX.dim()))
+            .subsequent_indent(Line::from(Span::from(" ".repeat(prefix_width)).dim()))
+            .break_words(true);
 
-        let opts = Options::new(wrap_width).break_words(true);
-        let mut out: Vec<Line<'static>> = Vec::new();
-        let mut truncated = false;
-        'outer: for raw_line in details.lines() {
-            for wrapped in textwrap::wrap(raw_line, &opts) {
-                if out.len() == DETAILS_MAX_LINES {
-                    truncated = true;
-                    break 'outer;
-                }
-                out.push(vec![wrapped.to_string().dim()].into());
+        let mut out = word_wrap_lines(details.lines().map(|line| vec![line.dim()]), opts);
+
+        if out.len() > DETAILS_MAX_LINES {
+            out.truncate(DETAILS_MAX_LINES);
+
+            let content_width = usize::from(width).saturating_sub(prefix_width).max(1);
+            let max_base_len = content_width.saturating_sub(1);
+
+            if let Some(last) = out.last_mut()
+                && let Some(span) = last.spans.last_mut()
+            {
+                let trimmed: String = span.content.as_ref().chars().take(max_base_len).collect();
+                *span = format!("{trimmed}…").dim();
             }
         }
 
-        // Each details line is constructed as one span
-        if truncated
-            && let Some(last) = out.last_mut()
-            && let Some(span) = last.spans.first()
-        {
-            let last_text = span.content.to_string();
-            let max_base_len = wrap_width.saturating_sub(1);
-            let trimmed: String = last_text.chars().take(max_base_len).collect();
-            last.spans[0] = format!("{trimmed}…").dim();
-        }
-
-        prefix_lines(out, DETAILS_PREFIX.dim(), subsequent_prefix.dim())
+        out
     }
 }
 
