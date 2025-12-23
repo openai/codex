@@ -23,6 +23,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::WarningEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::user_input::UserInput;
+use core_test_support::RequestBodyExt;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -796,8 +797,9 @@ async fn mount_initial_flow(server: &MockServer) {
     let sse5 = sse(vec![ev_completed("r5")]);
 
     let match_first = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        let body = req.text_body();
         body.contains("\"text\":\"hello world\"")
+            && !body_contains_text(body.as_str(), SUMMARIZATION_PROMPT)
             && !body.contains(&format!("\"text\":\"{SUMMARY_TEXT}\""))
             && !body.contains("\"text\":\"AFTER_COMPACT\"")
             && !body.contains("\"text\":\"AFTER_RESUME\"")
@@ -806,13 +808,13 @@ async fn mount_initial_flow(server: &MockServer) {
     mount_sse_once_match(server, match_first, sse1).await;
 
     let match_compact = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body_contains_text(body, SUMMARIZATION_PROMPT) || body.contains(&json_fragment(FIRST_REPLY))
+        let body = req.text_body();
+        body_contains_text(body.as_str(), SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(server, match_compact, sse2).await;
 
     let match_after_compact = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        let body = req.text_body();
         body.contains("\"text\":\"AFTER_COMPACT\"")
             && !body.contains("\"text\":\"AFTER_RESUME\"")
             && !body.contains("\"text\":\"AFTER_FORK\"")
@@ -820,13 +822,13 @@ async fn mount_initial_flow(server: &MockServer) {
     mount_sse_once_match(server, match_after_compact, sse3).await;
 
     let match_after_resume = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        let body = req.text_body();
         body.contains("\"text\":\"AFTER_RESUME\"")
     };
     mount_sse_once_match(server, match_after_resume, sse4).await;
 
     let match_after_fork = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        let body = req.text_body();
         body.contains("\"text\":\"AFTER_FORK\"")
     };
     mount_sse_once_match(server, match_after_fork, sse5).await;
@@ -840,13 +842,13 @@ async fn mount_second_compact_flow(server: &MockServer) {
     let sse7 = sse(vec![ev_completed("r7")]);
 
     let match_second_compact = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("AFTER_FORK")
+        let body = req.text_body();
+        body_contains_text(body.as_str(), SUMMARIZATION_PROMPT) && body.contains("AFTER_FORK")
     };
     mount_sse_once_match(server, match_second_compact, sse6).await;
 
     let match_after_second_resume = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        let body = req.text_body();
         body.contains(&format!("\"text\":\"{AFTER_SECOND_RESUME}\""))
     };
     mount_sse_once_match(server, match_after_second_resume, sse7).await;

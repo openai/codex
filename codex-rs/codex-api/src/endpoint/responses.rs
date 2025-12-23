@@ -6,6 +6,7 @@ use crate::common::TextControls;
 use crate::endpoint::streaming::StreamingClient;
 use crate::error::ApiError;
 use crate::provider::Provider;
+use crate::provider::RequestCompression;
 use crate::provider::WireApi;
 use crate::requests::ResponsesRequest;
 use crate::requests::ResponsesRequestBuilder;
@@ -15,7 +16,6 @@ use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
 use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
-use serde_json::Value;
 use std::sync::Arc;
 use tracing::instrument;
 
@@ -33,6 +33,7 @@ pub struct ResponsesOptions {
     pub conversation_id: Option<String>,
     pub session_source: Option<SessionSource>,
     pub extra_headers: HeaderMap,
+    pub request_compression: RequestCompression,
 }
 
 impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
@@ -56,7 +57,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         &self,
         request: ResponsesRequest,
     ) -> Result<ResponseStream, ApiError> {
-        self.stream(request.body, request.headers).await
+        self.stream(request).await
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -75,6 +76,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             conversation_id,
             session_source,
             extra_headers,
+            request_compression,
         } = options;
 
         let request = ResponsesRequestBuilder::new(model, &prompt.instructions, &prompt.input)
@@ -88,6 +90,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             .session_source(session_source)
             .store_override(store_override)
             .extra_headers(extra_headers)
+            .request_compression(request_compression)
             .build(self.streaming.provider())?;
 
         self.stream_request(request).await
@@ -100,13 +103,14 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         }
     }
 
-    pub async fn stream(
-        &self,
-        body: Value,
-        extra_headers: HeaderMap,
-    ) -> Result<ResponseStream, ApiError> {
+    pub async fn stream(&self, request: ResponsesRequest) -> Result<ResponseStream, ApiError> {
         self.streaming
-            .stream(self.path(), body, extra_headers, spawn_response_stream)
+            .stream(
+                self.path(),
+                request.body,
+                request.headers,
+                spawn_response_stream,
+            )
             .await
     }
 }

@@ -19,6 +19,7 @@ tracing = { workspace = true }
 eventsource-stream = { workspace = true }
 regex-lite = { workspace = true }
 tokio-util = { workspace = true, features = ["codec"] }
+zstd = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

@@ -41,6 +41,13 @@ impl RetryConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RequestCompression {
+    #[default]
+    None,
+    Zstd,
+}
+
 /// HTTP endpoint configuration used to talk to a concrete API deployment.
 ///
 /// Encapsulates base URL, default headers, query params, retry policy, and

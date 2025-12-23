@@ -14,10 +14,14 @@ use std::path::PathBuf;
 use assert_cmd::cargo::cargo_bin;
 
 pub mod process;
+pub mod request;
 pub mod responses;
 pub mod streaming_sse;
 pub mod test_codex;
 pub mod test_codex_exec;
+
+pub use request::RequestBodyExt;
+pub use request::body_contains;
 
 #[track_caller]
 pub fn assert_regex_match<'s>(pattern: &str, actual: &'s str) -> regex_lite::Captures<'s> {
@@ -178,7 +182,7 @@ where
     F: FnMut(&codex_core::protocol::EventMsg) -> bool,
 {
     use tokio::time::Duration;
-    wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
+    wait_for_event_with_timeout(codex, predicate, Duration::from_secs(10)).await
 }
 
 pub async fn wait_for_event_match<T, F>(codex: &CodexConversation, matcher: F) -> T

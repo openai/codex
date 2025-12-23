@@ -14,6 +14,7 @@ use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use core_test_support::RequestBodyExt;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
@@ -129,7 +130,6 @@ async fn summarize_context_three_requests_and_instructions() {
 
     // SSE 3: minimal completed; we only need to capture the request body.
     let sse3 = sse(vec![ev_completed("r3")]);
-
     // Mount the three expected requests in sequence so the assertions below can
     // inspect them without relying on specific prompt markers.
     let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3]).await;
@@ -356,7 +356,8 @@ async fn manual_compact_uses_custom_prompt() {
     let requests = get_responses_requests(&server).await;
     let body = requests
         .iter()
-        .find_map(|req| req.body_json::<serde_json::Value>().ok())
+        .map(core_test_support::RequestBodyExt::json_body::<serde_json::Value>)
+        .next()
         .expect("summary request body");
 
     let input = body
@@ -585,9 +586,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     // collect the requests payloads from the model
     let requests_payloads = get_responses_requests(&server).await;
 
-    let body = requests_payloads[0]
-        .body_json::<serde_json::Value>()
-        .unwrap();
+    let body = requests_payloads[0].json_body::<serde_json::Value>();
     let input = body.get("input").and_then(|v| v.as_array()).unwrap();
 
     fn normalize_inputs(values: &[serde_json::Value]) -> Vec<serde_json::Value> {
@@ -628,9 +627,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         prefixed_third_summary.as_str(),
     ];
     for (i, expected_summary) in compaction_indices.into_iter().zip(expected_summaries) {
-        let body = requests_payloads.clone()[i]
-            .body_json::<serde_json::Value>()
-            .unwrap();
+        let body = requests_payloads.clone()[i].json_body::<serde_json::Value>();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
         let input = normalize_inputs(input);
         assert_eq!(input.len(), 3);
@@ -993,7 +990,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     ]);
 
     for (i, request) in requests_payloads.iter().enumerate() {
-        let body = request.body_json::<serde_json::Value>().unwrap();
+        let body = request.json_body::<serde_json::Value>();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
         let expected_input = expected_requests_inputs[i].as_array().unwrap();
         assert_eq!(normalize_inputs(input), normalize_inputs(expected_input));
@@ -1032,30 +1029,30 @@ async fn auto_compact_runs_after_token_limit_hit() {
     let prefixed_auto_summary = AUTO_SUMMARY_TEXT;
 
     let first_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        let body = req.text_body();
         body.contains(FIRST_AUTO_MSG)
             && !body.contains(SECOND_AUTO_MSG)
-            && !body_contains_text(body, SUMMARIZATION_PROMPT)
+            && !body_contains_text(body.as_str(), SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        let body = req.text_body();
         body.contains(SECOND_AUTO_MSG)
             && body.contains(FIRST_AUTO_MSG)
-            && !body_contains_text(body, SUMMARIZATION_PROMPT)
+            && !body_contains_text(body.as_str(), SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body_contains_text(body, SUMMARIZATION_PROMPT)
+        let body = req.text_body();
+        body_contains_text(body.as_str(), SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
-
     let fourth_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(POST_AUTO_USER_MSG) && !body_contains_text(body, SUMMARIZATION_PROMPT)
+        let body = req.text_body();
+        body.contains(POST_AUTO_USER_MSG)
+            && !body_contains_text(body.as_str(), SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, fourth_matcher, sse4).await;
 
@@ -1117,10 +1114,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         requests.len()
     );
     let is_auto_compact = |req: &wiremock::Request| {
-        body_contains_text(
-            std::str::from_utf8(&req.body).unwrap_or(""),
-            SUMMARIZATION_PROMPT,
-        )
+        body_contains_text(req.text_body().as_str(), SUMMARIZATION_PROMPT)
     };
     let auto_compact_count = requests.iter().filter(|req| is_auto_compact(req)).count();
     assert_eq!(
@@ -1142,20 +1136,16 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .enumerate()
         .rev()
         .find_map(|(idx, req)| {
-            let body = std::str::from_utf8(&req.body).unwrap_or("");
-            (body.contains(POST_AUTO_USER_MSG) && !body_contains_text(body, SUMMARIZATION_PROMPT))
+            let body = req.text_body();
+            (body.contains(POST_AUTO_USER_MSG) && !body_contains_text(&body, SUMMARIZATION_PROMPT))
                 .then_some(idx)
         })
         .expect("follow-up request missing");
     assert_eq!(follow_up_index, 3, "follow-up request should be last");
 
-    let body_first = requests[0].body_json::<serde_json::Value>().unwrap();
-    let body_auto = requests[auto_compact_index]
-        .body_json::<serde_json::Value>()
-        .unwrap();
-    let body_follow_up = requests[follow_up_index]
-        .body_json::<serde_json::Value>()
-        .unwrap();
+    let body_first = requests[0].json_body::<serde_json::Value>();
+    let body_auto = requests[auto_compact_index].json_body::<serde_json::Value>();
+    let body_follow_up = requests[follow_up_index].json_body::<serde_json::Value>();
     let instructions = body_auto
         .get("instructions")
         .and_then(|v| v.as_str())
@@ -1255,24 +1245,24 @@ async fn auto_compact_persists_rollout_entries() {
     ]);
 
     let first_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        let body = req.text_body();
         body.contains(FIRST_AUTO_MSG)
             && !body.contains(SECOND_AUTO_MSG)
-            && !body_contains_text(body, SUMMARIZATION_PROMPT)
+            && !body_contains_text(body.as_str(), SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        let body = req.text_body();
         body.contains(SECOND_AUTO_MSG)
             && body.contains(FIRST_AUTO_MSG)
-            && !body_contains_text(body, SUMMARIZATION_PROMPT)
+            && !body_contains_text(body.as_str(), SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body_contains_text(body, SUMMARIZATION_PROMPT)
+        let body = req.text_body();
+        body_contains_text(body.as_str(), SUMMARIZATION_PROMPT)
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
 

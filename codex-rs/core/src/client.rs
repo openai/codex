@@ -156,6 +156,9 @@ impl ModelClient {
         let mut refreshed = false;
         loop {
             let auth = auth_manager.as_ref().and_then(|m| m.auth());
+            let request_compression = self
+                .provider
+                .request_compression_for(auth.as_ref().map(|a| a.mode), &self.config.features);
             let api_provider = self
                 .provider
                 .to_api_provider(auth.as_ref().map(|a| a.mode))?;
@@ -171,6 +174,7 @@ impl ModelClient {
                     &api_prompt,
                     Some(conversation_id.clone()),
                     Some(session_source.clone()),
+                    request_compression,
                 )
                 .await;
 
@@ -245,6 +249,9 @@ impl ModelClient {
         let mut refreshed = false;
         loop {
             let auth = auth_manager.as_ref().and_then(|m| m.auth());
+            let request_compression = self
+                .provider
+                .request_compression_for(auth.as_ref().map(|a| a.mode), &self.config.features);
             let api_provider = self
                 .provider
                 .to_api_provider(auth.as_ref().map(|a| a.mode))?;
@@ -263,6 +270,7 @@ impl ModelClient {
                 conversation_id: Some(conversation_id.clone()),
                 session_source: Some(session_source.clone()),
                 extra_headers: beta_feature_headers(&self.config),
+                request_compression,
             };
 
             let stream_result = client

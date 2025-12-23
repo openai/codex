@@ -21,6 +21,7 @@ use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use codex_core::review_format::render_review_output_text;
 use codex_protocol::user_input::UserInput;
+use core_test_support::RequestBodyExt;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::responses::get_responses_requests;
@@ -430,7 +431,7 @@ async fn review_uses_custom_review_model_from_config() {
     let request = requests
         .first()
         .expect("expected POST request to /responses");
-    let body = request.body_json::<serde_json::Value>().unwrap();
+    let body = request.json_body::<serde_json::Value>();
     assert_eq!(body["model"].as_str().unwrap(), "gpt-5.1");
 
     server.verify().await;
@@ -551,7 +552,7 @@ async fn review_input_isolated_from_parent_history() {
     let request = requests
         .first()
         .expect("expected POST request to /responses");
-    let body = request.body_json::<serde_json::Value>().unwrap();
+    let body = request.json_body::<serde_json::Value>();
     let input = body["input"].as_array().expect("input array");
     assert!(
         input.len() >= 2,
@@ -675,7 +676,7 @@ async fn review_history_surfaces_in_parent_session() {
     // Critically, no messages from the review thread should appear.
     let requests = get_responses_requests(&server).await;
     assert_eq!(requests.len(), 2);
-    let body = requests[1].body_json::<serde_json::Value>().unwrap();
+    let body = requests[1].json_body::<serde_json::Value>();
     let input = body["input"].as_array().expect("input array");
 
     // Must include the followup as the last item for this turn

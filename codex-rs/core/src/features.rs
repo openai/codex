@@ -74,6 +74,8 @@ pub enum Feature {
     ApplyPatchFreeform,
     /// Allow the model to request web searches.
     WebSearchRequest,
+    /// Allow request body compression when using ChatGPT auth.
+    RequestCompression,
     /// Gate the execpolicy enforcement for shell/unified exec.
     ExecPolicy,
     /// Enable Windows sandbox (restricted token) on Windows.
@@ -150,16 +152,16 @@ impl FeatureOverrides {
 impl Features {
     /// Starts with built-in defaults.
     pub fn with_defaults() -> Self {
-        let mut set = BTreeSet::new();
+        let mut features = Self {
+            enabled: BTreeSet::new(),
+            legacy_usages: BTreeSet::new(),
+        };
         for spec in FEATURES {
             if spec.default_enabled {
-                set.insert(spec.id);
+                features.enable(spec.id);
             }
         }
-        Self {
-            enabled: set,
-            legacy_usages: BTreeSet::new(),
-        }
+        features
     }
 
     pub fn enabled(&self, f: Feature) -> bool {
@@ -196,7 +198,7 @@ impl Features {
             .map(|usage| (usage.alias.as_str(), usage.feature))
     }
 
-    /// Apply a table of key -> bool toggles (e.g. from TOML).
+    /// Apply a table of key -> value toggles (e.g. from TOML).
     pub fn apply_map(&mut self, m: &BTreeMap<String, bool>) {
         for (k, v) in m {
             match feature_for_key(k) {
@@ -324,6 +326,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RequestCompression,
+        key: "request_compression",
+        stage: Stage::Experimental,
         default_enabled: false,
     },
     // Beta program. Rendered in the `/experimental` menu for users.

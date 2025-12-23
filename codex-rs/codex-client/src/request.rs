@@ -6,11 +6,17 @@ use serde_json::Value;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
+pub enum Body {
+    Json(Value),
+    Bytes(Bytes),
+}
+
+#[derive(Debug, Clone)]
 pub struct Request {
     pub method: Method,
     pub url: String,
     pub headers: HeaderMap,
-    pub body: Option<Value>,
+    pub body: Option<Body>,
     pub timeout: Option<Duration>,
 }
 
@@ -26,7 +32,7 @@ impl Request {
     }
 
     pub fn with_json<T: Serialize>(mut self, body: &T) -> Self {
-        self.body = serde_json::to_value(body).ok();
+        self.body = serde_json::to_value(body).ok().map(Body::Json);
         self
     }
 }

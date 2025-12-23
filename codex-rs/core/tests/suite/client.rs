@@ -29,6 +29,8 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
+use core_test_support::RequestBodyExt;
+use core_test_support::body_contains;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses::ev_completed_with_tokens;
@@ -51,7 +53,6 @@ use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
-use wiremock::matchers::body_string_contains;
 use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -503,7 +504,7 @@ async fn chatgpt_auth_sends_correct_request() {
     let request_authorization = request.headers.get("authorization").unwrap();
     let request_originator = request.headers.get("originator").unwrap();
     let request_chatgpt_account_id = request.headers.get("chatgpt-account-id").unwrap();
-    let request_body = request.body_json::<serde_json::Value>().unwrap();
+    let request_body = request.json_body::<serde_json::Value>();
 
     assert_eq!(
         request_conversation_id.to_str().unwrap(),
@@ -1477,7 +1478,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
 
     mount_sse_once_match(
         &server,
-        body_string_contains("trigger context window"),
+        body_contains("trigger context window"),
         sse_failed(
             "resp_context_window",
             "context_length_exceeded",
@@ -1488,7 +1489,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
 
     mount_sse_once_match(
         &server,
-        body_string_contains("seed turn"),
+        body_contains("seed turn"),
         sse_completed("resp_seed"),
     )
     .await;
@@ -1857,8 +1858,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     ]);
 
     let r3_input_array = requests[2]
-        .body_json::<serde_json::Value>()
-        .unwrap()
+        .json_body::<serde_json::Value>()
         .get("input")
         .and_then(|v| v.as_array())
         .cloned()

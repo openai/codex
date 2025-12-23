@@ -1,6 +1,7 @@
 use crate::default_client::CodexHttpClient;
 use crate::default_client::CodexRequestBuilder;
 use crate::error::TransportError;
+use crate::request::Body;
 use crate::request::Request;
 use crate::request::Response;
 use async_trait::async_trait;
@@ -52,7 +53,10 @@ impl ReqwestTransport {
             builder = builder.timeout(timeout);
         }
         if let Some(body) = req.body {
-            builder = builder.json(&body);
+            builder = match body {
+                Body::Json(value) => builder.json(&value),
+                Body::Bytes(bytes) => builder.body(bytes),
+            };
         }
         Ok(builder)
     }
@@ -92,10 +96,10 @@ impl HttpTransport for ReqwestTransport {
     async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError> {
         if enabled!(Level::TRACE) {
             trace!(
-                "{} to {}: {}",
-                req.method,
-                req.url,
-                req.body.as_ref().unwrap_or_default()
+                method = %req.method,
+                url = %req.url,
+                body = ?req.body,
+                "Sending streaming request"
             );
         }
 

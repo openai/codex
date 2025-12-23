@@ -331,6 +331,7 @@ impl<'a> ChatRequestBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
     use codex_protocol::protocol::SessionSource;

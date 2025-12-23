@@ -14,14 +14,17 @@ base64 = { workspace = true }
 codex-core = { workspace = true, features = ["test-support"] }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+http = { workspace = true }
 notify = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
 shlex = { workspace = true }
+zstd = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
