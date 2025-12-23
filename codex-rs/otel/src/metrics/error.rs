@@ -1,4 +1,3 @@
-use std::time::Duration;
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, MetricsError>;
@@ -15,53 +14,21 @@ pub enum MetricsError {
     #[error("{label} contains invalid characters: {value}")]
     InvalidTagComponent { label: String, value: String },
 
-    // Config.
-    #[error("failed to build tokio runtime")]
-    RuntimeBuild {
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("invalid api key header: {header}")]
-    InvalidApiKeyHeader {
-        header: String,
-        #[source]
-        source: reqwest::header::InvalidHeaderName,
-    },
-    #[error("invalid header value: {header}")]
-    InvalidHeaderValue {
-        header: String,
-        #[source]
-        source: reqwest::header::InvalidHeaderValue,
-    },
-    #[error("failed to build metrics http client")]
-    HttpClientBuild {
-        #[source]
-        source: reqwest::Error,
-    },
-    #[error("metrics endpoint cannot be empty")]
-    EmptyEndpoint,
-    #[error("metrics api key cannot be empty")]
-    EmptyApiKey,
+    #[error("metrics exporter is disabled")]
+    ExporterDisabled,
 
-    // Worker.
-    #[error("metrics queue capacity must be positive")]
-    QueueCapacityZero,
-    #[error("metrics queue is full (capacity {capacity})")]
-    QueueFull { capacity: usize },
-    #[error("metrics worker is unavailable")]
-    WorkerUnavailable,
-    #[error("metrics worker thread panicked")]
-    WorkerPanicked,
-    #[error("metrics shutdown timed out after {timeout:?}")]
-    ShutdownTimeout { timeout: Duration },
-    #[error("failed to send statsig metrics request")]
-    StatsigRequestFailed {
+    #[error("failed to build OTLP metrics exporter")]
+    ExporterBuild {
         #[source]
-        source: reqwest::Error,
+        source: opentelemetry_otlp::ExporterBuildError,
     },
-    #[error("statsig metrics request failed: {status} {body}")]
-    StatsigResponseError {
-        status: reqwest::StatusCode,
-        body: String,
+
+    #[error("invalid OTLP metrics configuration: {message}")]
+    InvalidConfig { message: String },
+
+    #[error("failed to flush or shutdown metrics provider")]
+    ProviderShutdown {
+        #[source]
+        source: opentelemetry_sdk::error::OTelSdkError,
     },
 }

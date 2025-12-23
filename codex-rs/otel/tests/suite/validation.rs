@@ -6,26 +6,21 @@ use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 
 fn build_in_memory_client() -> Result<MetricsClient> {
     let exporter = InMemoryMetricExporter::default();
-    let config = MetricsConfig::in_memory(exporter);
+    let config = MetricsConfig::in_memory("test", "codex-cli", env!("CARGO_PKG_VERSION"), exporter);
     MetricsClient::new(config)
-}
-
-// Validates missing API key is rejected early.
-#[test]
-fn empty_api_key_is_rejected() -> Result<()> {
-    assert!(matches!(
-        MetricsClient::new(MetricsConfig::new("")),
-        Err(MetricsError::EmptyApiKey)
-    ));
-    Ok(())
 }
 
 // Ensures invalid tag components are rejected during config build.
 #[test]
 fn invalid_tag_component_is_rejected() -> Result<()> {
-    let err = MetricsConfig::default()
-        .with_tag("bad key", "value")
-        .unwrap_err();
+    let err = MetricsConfig::in_memory(
+        "test",
+        "codex-cli",
+        env!("CARGO_PKG_VERSION"),
+        InMemoryMetricExporter::default(),
+    )
+    .with_tag("bad key", "value")
+    .unwrap_err();
     assert!(matches!(
         err,
         MetricsError::InvalidTagComponent { label, value }

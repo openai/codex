@@ -62,7 +62,7 @@ impl OtelManager {
                 terminal_type,
             },
             session_span,
-            metrics: None,
+            metrics: crate::metrics::global(),
             metrics_use_metadata_tags: true,
         }
     }

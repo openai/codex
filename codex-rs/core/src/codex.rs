@@ -148,10 +148,7 @@ use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
-use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::OtelManager;
-use codex_otel::metrics::MetricsClient;
-use codex_otel::metrics::MetricsConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -631,8 +628,7 @@ impl Session {
             config.otel.log_user_prompt,
             terminal::user_agent(),
             session_configuration.session_source.clone(),
-        )
-        .with_metrics(MetricsClient::new(MetricsConfig::default())?);
+        );
         config.features.emit_metrics(&otel_manager);
 
         otel_manager.conversation_starts(

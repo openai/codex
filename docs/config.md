@@ -538,7 +538,8 @@ Some of the most common MCPs we've seen are:
 
 ### otel
 
-Codex can emit [OpenTelemetry](https://opentelemetry.io/) **log events** that
+Codex can emit [OpenTelemetry](https://opentelemetry.io/) **log events**,
+**trace spans**, and **metrics** that
 describe each run: outbound API requests, streamed responses, user input,
 tool-approval decisions, and the result of every tool invocation. Export is
 **disabled by default** so local runs remain self-contained. Opt in by adding an
@@ -548,6 +549,8 @@ tool-approval decisions, and the result of every tool invocation. Export is
 [otel]
 environment = "staging"   # defaults to "dev"
 exporter = "none"          # defaults to "none"; set to otlp-http or otlp-grpc to send events
+trace_exporter = "none"    # defaults to `exporter`; set to otlp-http or otlp-grpc to send spans
+metrics_exporter = "none"  # defaults to "none"; set to otlp-http or otlp-grpc to send metrics
 log_user_prompt = false    # defaults to false; redact prompt text unless explicitly enabled
 ```
 
@@ -611,7 +614,7 @@ These event shapes may change as we iterate.
 
 ### Choosing an exporter
 
-Set `otel.exporter` to control where events go:
+Set `otel.exporter` to control where log events go (the event catalog below):
 
 - `none` – leaves instrumentation active but skips exporting. This is the
   default.
@@ -652,9 +655,42 @@ client-certificate = "/etc/codex/certs/client.pem"
 client-private-key = "/etc/codex/certs/client-key.pem"
 ```
 
+Statsig supports OTLP ingestion over OTLP/HTTP JSON. To export Codex metrics and traces to Statsig:
+
+```toml
+[otel.metrics_exporter."otlp-http"]
+endpoint = "https://api.statsig.com/otlp"
+protocol = "json"
+
+[otel.metrics_exporter."otlp-http".headers]
+"statsig-api-key" = "${STATSIG_SERVER_SDK_SECRET}"
+
+[otel.trace_exporter."otlp-http"]
+endpoint = "https://api.statsig.com/otlp"
+protocol = "json"
+
+[otel.trace_exporter."otlp-http".headers]
+"statsig-api-key" = "${STATSIG_SERVER_SDK_SECRET}"
+```
+
+If you have a legacy Statsig client key + custom ingest host, wire those credentials via headers too:
+
+```toml
+[otel.metrics_exporter."otlp-http"]
+endpoint = "https://ab.chatgpt.com"
+protocol = "json"
+
+[otel.metrics_exporter."otlp-http".headers]
+"statsig-api-key" = "client-MkRuleRQBd6qakfnDYqJVR9JuXcY57Ljly3vi5JVUIO"
+```
+
 If the exporter is `none` nothing is written anywhere; otherwise you must run or point to your
 own collector. All exporters run on a background batch worker that is flushed on
 shutdown.
+
+`otel.trace_exporter` and `otel.metrics_exporter` accept the same exporter types as `otel.exporter`,
+but send OTEL trace spans and metrics respectively. You can point them at different endpoints if
+your backend uses separate ingest URLs per signal.
 
 If you build Codex from source the OTEL crate is still behind an `otel` feature
 flag; the official prebuilt binaries ship with the feature enabled. When the

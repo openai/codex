@@ -2,6 +2,8 @@ pub mod config;
 pub mod metrics;
 pub mod traces;
 
+mod otlp;
+
 use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::metrics::Result as MetricsResult;

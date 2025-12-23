@@ -13,10 +13,9 @@ path = "src/lib.rs"
 workspace = true
 
 [features]
-# Opt-in switch for integration tests in other crates that depend on `codex-otel`:
-# enable this feature in `dev-dependencies` to make `MetricsConfig::default()` use
-# an in-memory exporter instead of emitting Statsig HTTP requests.
-test-in-memory-metrics = []
+## Provides a built-in default metrics exporter to an internal Statsig endpoint.
+## Intended for production binaries; tests should not rely on it.
+statsig-default-metrics-exporter = []
 
 [dependencies]
 chrono = { workspace = true }

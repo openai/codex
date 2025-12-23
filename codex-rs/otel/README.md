@@ -4,7 +4,7 @@
 
 - Trace/log exporters and tracing subscriber layers (`codex_otel::traces::otel_provider`).
 - A structured event helper (`codex_otel::OtelManager`).
-- A Statsig `log_event` metrics client (`codex_otel::metrics`).
+- OpenTelemetry metrics support via OTLP exporters (`codex_otel::metrics`).
 - A metrics facade on `OtelManager` so tracing + metrics share metadata.
 
 ## Tracing and logs
@@ -70,40 +70,69 @@ let manager = OtelManager::new(
 manager.user_prompt(&prompt_items);
 ```
 
-## Metrics (Statsig HTTP or in-memory)
+## Metrics (OTLP or in-memory)
 
 Modes:
 
-- Statsig HTTP: sends `log_event` batches to the configured Statsig endpoint (default outside tests).
+- OTLP: exports metrics via the OpenTelemetry OTLP exporter (HTTP or gRPC).
 - In-memory: records via `opentelemetry_sdk::metrics::InMemoryMetricExporter` for tests/assertions; call `shutdown()` to flush.
 
-Statsig example:
+Statsig ingestion (OTLP/HTTP JSON) example:
 
 ```rust
-let metrics = MetricsClient::new(MetricsConfig::default())?;
+use codex_otel::config::{OtelExporter, OtelHttpProtocol};
+
+let metrics = MetricsClient::new(MetricsConfig::otlp(
+    "dev",
+    "codex-cli",
+    env!("CARGO_PKG_VERSION"),
+    OtelExporter::OtlpHttp {
+        endpoint: "https://api.statsig.com/otlp".to_string(),
+        headers: std::collections::HashMap::from([(
+            "statsig-api-key".to_string(),
+            std::env::var("STATSIG_SERVER_SDK_SECRET")?,
+        )]),
+        protocol: OtelHttpProtocol::Json,
+        tls: None,
+    },
+))?;
 
 metrics.counter("codex.session_started", 1, &[("source", "tui")])?;
 metrics.histogram("codex.request_latency", 83, &[("route", "chat")])?;
+```
+
+When built with the `codex-otel/statsig-default-metrics-exporter` feature you can also use the
+crate-provided defaults (client key + `ab.chatgpt.com`) instead of wiring the header yourself:
+
+```rust
+use codex_otel::config::statsig_default_metrics_exporter;
+
+let metrics = MetricsClient::new(MetricsConfig::otlp(
+    "dev",
+    "codex-cli",
+    env!("CARGO_PKG_VERSION"),
+    statsig_default_metrics_exporter(),
+))?;
 ```
 
 In-memory (tests):
 
 ```rust
 let exporter = InMemoryMetricExporter::default();
-let metrics = MetricsClient::new(MetricsConfig::in_memory(exporter.clone()))?;
+let metrics = MetricsClient::new(MetricsConfig::in_memory(
+    "test",
+    "codex-cli",
+    env!("CARGO_PKG_VERSION"),
+    exporter.clone(),
+))?;
 metrics.counter("codex.turns", 1, &[("model", "gpt-5.1")])?;
 metrics.shutdown()?; // flushes in-memory exporter
 ```
 
-Note: `MetricsConfig::default()` only switches to in-memory automatically for unit tests inside
-`codex-otel` itself (`cfg(test)`). For integration tests in other crates, either construct an
-in-memory config explicitly (as above) or enable the `test-in-memory-metrics` feature on the
-`codex-otel` dependency in that crate’s `dev-dependencies`.
-
 ## Shutdown
 
 - `OtelProvider::shutdown()` stops the OTEL exporter.
-- `OtelManager::shutdown_metrics()` flushes and stops the metrics worker.
+- `OtelManager::shutdown_metrics()` flushes and shuts down the metrics provider.
 
 Both are optional because drop performs best-effort shutdown, but calling them
 explicitly gives deterministic flushing (or a shutdown error if flushing does

@@ -6,9 +6,9 @@
 
 ## Tracing
 
-Codex does not export OpenTelemetry traces today. The only OTEL output is log
-events emitted by the `codex_otel` crate, and those are exported only when an
-OTEL exporter is configured; otherwise nothing is sent.
+Codex can export OpenTelemetry **log events**, **trace spans**, and **metrics**
+when OTEL exporters are configured in `config.toml` (`[otel]`).
+By default, exporters are disabled and nothing is sent.
 
 ## Feedback
 

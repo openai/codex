@@ -336,6 +336,10 @@ log_user_prompt = false
 environment = "dev"
 # Exporter: none (default) | otlp-http | otlp-grpc
 exporter = "none"
+# Optional trace exporter (spans). Default: same as `exporter`
+trace_exporter = "none"
+# Optional metrics exporter. Default: none
+metrics_exporter = "none"
 
 # Example OTLP/HTTP exporter configuration
 # [otel.exporter."otlp-http"]
@@ -362,4 +366,19 @@ exporter = "none"
 # ca-certificate = "certs/otel-ca.pem"
 # client-certificate = "/etc/codex/certs/client.pem"
 # client-private-key = "/etc/codex/certs/client-key.pem"
+
+# Example separate exporters for traces/metrics (e.g., Statsig OTLP ingestion)
+# [otel.metrics_exporter."otlp-http"]
+# endpoint = "https://api.statsig.com/otlp"
+# protocol = "json"
+#
+# [otel.metrics_exporter."otlp-http".headers]
+# "statsig-api-key" = "${STATSIG_SERVER_SDK_SECRET}"
+#
+# [otel.trace_exporter."otlp-http"]
+# endpoint = "https://api.statsig.com/otlp"
+# protocol = "json"
+#
+# [otel.trace_exporter."otlp-http".headers]
+# "statsig-api-key" = "${STATSIG_SERVER_SDK_SECRET}"
 ```

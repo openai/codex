@@ -13,7 +13,12 @@ pub(crate) fn build_metrics_with_defaults(
     default_tags: &[(&str, &str)],
 ) -> Result<(MetricsClient, InMemoryMetricExporter)> {
     let exporter = InMemoryMetricExporter::default();
-    let mut config = MetricsConfig::in_memory(exporter.clone());
+    let mut config = MetricsConfig::in_memory(
+        "test",
+        "codex-cli",
+        env!("CARGO_PKG_VERSION"),
+        exporter.clone(),
+    );
     for (key, value) in default_tags {
         config = config.with_tag(*key, *value)?;
     }

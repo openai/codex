@@ -1,97 +1,160 @@
-use crate::metrics::DEFAULT_QUEUE_CAPACITY;
-use crate::metrics::DEFAULT_SHUTDOWN_TIMEOUT;
-use crate::metrics::MetricEvent;
+use crate::config::OtelExporter;
+use crate::config::OtelHttpProtocol;
+use crate::metrics::MetricsError;
+use crate::metrics::Result;
 use crate::metrics::config::MetricsConfig;
 use crate::metrics::config::MetricsExporter;
-use crate::metrics::error::MetricsError;
-use crate::metrics::error::Result;
-use crate::metrics::sink::build_metric_sink;
 use crate::metrics::validation::validate_metric_name;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use crate::metrics::validation::validate_tags;
-use crate::metrics::worker::spawn_worker;
+use opentelemetry::KeyValue;
+use opentelemetry::metrics::Histogram;
+use opentelemetry::metrics::Meter;
+use opentelemetry::metrics::MeterProvider as _;
+use opentelemetry::metrics::UpDownCounter;
+use opentelemetry_otlp::OTEL_EXPORTER_OTLP_METRICS_TIMEOUT;
+use opentelemetry_otlp::Protocol;
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::WithHttpConfig;
+use opentelemetry_otlp::WithTonicConfig;
+use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::metrics::PeriodicReader;
+use opentelemetry_sdk::metrics::SdkMeterProvider;
+use opentelemetry_sdk::metrics::Temporality;
+use opentelemetry_semantic_conventions as semconv;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Mutex;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
-use tokio::runtime::Runtime;
-use tokio::sync::mpsc;
+use tracing::debug;
 
-/// Background metrics client that enqueues metrics to a worker thread.
-#[derive(Clone)]
-pub struct MetricsClient {
-    sender: std::sync::Arc<Mutex<Option<mpsc::Sender<MetricEvent>>>>,
-    handle: std::sync::Arc<Mutex<Option<thread::JoinHandle<()>>>>,
-    capacity: usize,
+const ENV_ATTRIBUTE: &str = "env";
+const METER_NAME: &str = "codex";
+
+#[derive(Debug)]
+struct MetricsClientInner {
+    meter_provider: SdkMeterProvider,
+    meter: Meter,
+    counters: Mutex<HashMap<String, UpDownCounter<i64>>>,
+    histograms: Mutex<HashMap<String, Histogram<f64>>>,
     default_tags: BTreeMap<String, String>,
 }
 
-impl std::fmt::Debug for MetricsClient {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MetricsClient")
-            .field("capacity", &self.capacity)
-            .finish()
+impl MetricsClientInner {
+    fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) -> Result<()> {
+        validate_metric_name(name)?;
+        let attributes = self.attributes(tags)?;
+
+        let mut counters = self
+            .counters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let counter = counters
+            .entry(name.to_string())
+            .or_insert_with(|| self.meter.i64_up_down_counter(name.to_string()).build());
+        counter.add(inc, &attributes);
+        Ok(())
+    }
+
+    fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) -> Result<()> {
+        validate_metric_name(name)?;
+        let attributes = self.attributes(tags)?;
+
+        let mut histograms = self
+            .histograms
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let histogram = histograms
+            .entry(name.to_string())
+            .or_insert_with(|| self.meter.f64_histogram(name.to_string()).build());
+        histogram.record(value as f64, &attributes);
+        Ok(())
+    }
+
+    fn attributes(&self, tags: &[(&str, &str)]) -> Result<Vec<KeyValue>> {
+        if tags.is_empty() {
+            return Ok(self
+                .default_tags
+                .iter()
+                .map(|(key, value)| KeyValue::new(key.clone(), value.clone()))
+                .collect());
+        }
+
+        let mut merged = self.default_tags.clone();
+        for (key, value) in tags {
+            validate_tag_key(key)?;
+            validate_tag_value(value)?;
+            merged.insert((*key).to_string(), (*value).to_string());
+        }
+
+        Ok(merged
+            .into_iter()
+            .map(|(key, value)| KeyValue::new(key, value))
+            .collect())
+    }
+
+    fn shutdown(&self) -> Result<()> {
+        debug!("flushing OTEL metrics");
+        self.meter_provider
+            .force_flush()
+            .map_err(|source| MetricsError::ProviderShutdown { source })?;
+        self.meter_provider
+            .shutdown()
+            .map_err(|source| MetricsError::ProviderShutdown { source })?;
+        Ok(())
     }
 }
+
+/// OpenTelemetry metrics client used by Codex.
+#[derive(Clone, Debug)]
+pub struct MetricsClient(std::sync::Arc<MetricsClientInner>);
 
 impl MetricsClient {
     /// Build a metrics client from configuration and validate defaults.
     pub fn new(config: MetricsConfig) -> Result<Self> {
-        let capacity = DEFAULT_QUEUE_CAPACITY;
-
-        if capacity == 0 {
-            return Err(MetricsError::QueueCapacityZero);
-        }
-
         validate_tags(&config.default_tags)?;
 
-        if let MetricsExporter::StatsigHttp { endpoint, .. } = &config.exporter {
-            if endpoint.is_empty() {
-                return Err(MetricsError::EmptyEndpoint);
+        let resource = Resource::builder()
+            .with_service_name(config.service_name.clone())
+            .with_attributes(vec![
+                KeyValue::new(
+                    semconv::attribute::SERVICE_VERSION,
+                    config.service_version.clone(),
+                ),
+                KeyValue::new(ENV_ATTRIBUTE, config.environment.clone()),
+            ])
+            .build();
+
+        let temporality = Temporality::default();
+        let (meter_provider, meter) = match config.exporter {
+            MetricsExporter::InMemory(exporter) => {
+                build_provider(resource, exporter, config.export_interval)
             }
-            if config.api_key.is_empty() {
-                return Err(MetricsError::EmptyApiKey);
+            MetricsExporter::Otlp(exporter) => {
+                let exporter = build_otlp_metric_exporter(exporter, temporality)?;
+                build_provider(resource, exporter, config.export_interval)
             }
-        }
+        };
 
-        let exporter_label = config.exporter_label();
-        let exporter = build_metric_sink(&config)?;
-        let default_tags = config.default_tags.clone();
-        let runtime = build_runtime()?;
-
-        let (sender, receiver) = mpsc::channel(capacity);
-        let handle = spawn_worker(runtime, exporter, exporter_label, receiver);
-
-        Ok(Self {
-            sender: std::sync::Arc::new(Mutex::new(Some(sender))),
-            handle: std::sync::Arc::new(Mutex::new(Some(handle))),
-            capacity,
-            default_tags,
-        })
+        Ok(Self(std::sync::Arc::new(MetricsClientInner {
+            meter_provider,
+            meter,
+            counters: Mutex::new(HashMap::new()),
+            histograms: Mutex::new(HashMap::new()),
+            default_tags: config.default_tags,
+        })))
     }
 
-    /// Send a single counter increment without blocking the caller.
+    /// Send a single counter increment.
     pub fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) -> Result<()> {
-        validate_metric_name(name)?;
-        let tags = merge_tags(&self.default_tags, tags)?;
-        self.send_event(MetricEvent::Counter {
-            name: name.to_string(),
-            value: inc,
-            tags,
-        })
+        self.0.counter(name, inc, tags)
     }
 
     /// Send a single histogram sample.
     pub fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) -> Result<()> {
-        validate_metric_name(name)?;
-        let tags = merge_tags(&self.default_tags, tags)?;
-        self.send_event(MetricEvent::Histogram {
-            name: name.to_string(),
-            value,
-            tags,
-        })
+        self.0.histogram(name, value, tags)
     }
 
     /// Record a duration in milliseconds using a histogram.
@@ -125,110 +188,114 @@ impl MetricsClient {
     ) -> Result<T> {
         let start = Instant::now();
         let output = f();
+        let duration_result = self.record_duration(name, start.elapsed(), tags);
         match output {
             Ok(value) => {
-                self.record_duration(name, start.elapsed(), tags)?;
+                duration_result?;
                 Ok(value)
             }
             Err(err) => {
-                let _ = self.record_duration(name, start.elapsed(), tags);
+                let _ = duration_result;
                 Err(err)
             }
         }
     }
 
-    fn send_event(&self, event: MetricEvent) -> Result<()> {
-        let sender = self
-            .sender
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(sender) = sender.as_ref() else {
-            return Err(MetricsError::WorkerUnavailable);
-        };
-
-        match sender.try_send(event) {
-            Ok(()) => Ok(()),
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Err(MetricsError::QueueFull {
-                capacity: self.capacity,
-            }),
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                Err(MetricsError::WorkerUnavailable)
-            }
-        }
-    }
-
-    /// Flush queued metrics and stop the worker thread.
+    /// Flush metrics and stop the underlying OTEL meter provider.
     pub fn shutdown(&self) -> Result<()> {
-        self.shutdown_inner(DEFAULT_SHUTDOWN_TIMEOUT)
+        self.0.shutdown()
     }
+}
 
-    fn shutdown_inner(&self, timeout: Duration) -> Result<()> {
-        let sender = self
-            .sender
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        let mut handle = self
-            .handle
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(handle) = handle.take() else {
-            return Ok(());
-        };
-        let mut joined = false;
+fn build_provider<E>(
+    resource: Resource,
+    exporter: E,
+    interval: Option<Duration>,
+) -> (SdkMeterProvider, Meter)
+where
+    E: opentelemetry_sdk::metrics::exporter::PushMetricExporter + 'static,
+{
+    let mut reader_builder = PeriodicReader::builder(exporter);
+    if let Some(interval) = interval {
+        reader_builder = reader_builder.with_interval(interval);
+    }
+    let reader = reader_builder.build();
+    let provider = SdkMeterProvider::builder()
+        .with_resource(resource)
+        .with_reader(reader)
+        .build();
+    let meter = provider.meter(METER_NAME);
+    (provider, meter)
+}
 
-        // Dropping the sender closes the channel; the worker drains pending events and exits.
-        drop(sender);
+fn build_otlp_metric_exporter(
+    exporter: OtelExporter,
+    temporality: Temporality,
+) -> Result<opentelemetry_otlp::MetricExporter> {
+    match exporter {
+        OtelExporter::None => Err(MetricsError::ExporterDisabled),
+        OtelExporter::OtlpGrpc {
+            endpoint,
+            headers,
+            tls,
+        } => {
+            debug!("Using OTLP Grpc exporter for metrics: {endpoint}");
 
-        if timeout.is_zero() {
-            if handle.is_finished() {
-                handle.join().map_err(|_| MetricsError::WorkerPanicked)?;
-                joined = true;
+            let header_map = crate::otlp::build_header_map(&headers);
+
+            let base_tls_config = tonic::transport::ClientTlsConfig::new()
+                .with_enabled_roots()
+                .assume_http2(true);
+
+            let tls_config = match tls.as_ref() {
+                Some(tls) => crate::otlp::build_grpc_tls_config(&endpoint, base_tls_config, tls)
+                    .map_err(|err| MetricsError::InvalidConfig {
+                        message: err.to_string(),
+                    })?,
+                None => base_tls_config,
+            };
+
+            opentelemetry_otlp::MetricExporter::builder()
+                .with_tonic()
+                .with_endpoint(endpoint)
+                .with_temporality(temporality)
+                .with_metadata(tonic::metadata::MetadataMap::from_headers(header_map))
+                .with_tls_config(tls_config)
+                .build()
+                .map_err(|source| MetricsError::ExporterBuild { source })
+        }
+        OtelExporter::OtlpHttp {
+            endpoint,
+            headers,
+            protocol,
+            tls,
+        } => {
+            debug!("Using OTLP Http exporter for metrics: {endpoint}");
+
+            let protocol = match protocol {
+                OtelHttpProtocol::Binary => Protocol::HttpBinary,
+                OtelHttpProtocol::Json => Protocol::HttpJson,
+            };
+
+            let mut exporter_builder = opentelemetry_otlp::MetricExporter::builder()
+                .with_http()
+                .with_endpoint(endpoint)
+                .with_temporality(temporality)
+                .with_protocol(protocol)
+                .with_headers(headers);
+
+            if let Some(tls) = tls.as_ref() {
+                let client =
+                    crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_METRICS_TIMEOUT)
+                        .map_err(|err| MetricsError::InvalidConfig {
+                            message: err.to_string(),
+                        })?;
+                exporter_builder = exporter_builder.with_http_client(client);
             }
-        } else {
-            let start = Instant::now();
-            while start.elapsed() < timeout {
-                if handle.is_finished() {
-                    handle.join().map_err(|_| MetricsError::WorkerPanicked)?;
-                    joined = true;
-                    break;
-                }
-                thread::sleep(crate::metrics::SHUTDOWN_POLL_INTERVAL);
-            }
-        }
 
-        if joined {
-            return Ok(());
-        }
-
-        Err(MetricsError::ShutdownTimeout { timeout })
-    }
-}
-
-impl Drop for MetricsClient {
-    fn drop(&mut self) {
-        if std::sync::Arc::strong_count(&self.sender) == 1 {
-            let _ = self.shutdown_inner(DEFAULT_SHUTDOWN_TIMEOUT);
+            exporter_builder
+                .build()
+                .map_err(|source| MetricsError::ExporterBuild { source })
         }
     }
-}
-
-fn build_runtime() -> Result<Runtime> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|source| MetricsError::RuntimeBuild { source })
-}
-
-pub(crate) fn merge_tags(
-    default_tags: &BTreeMap<String, String>,
-    tags: &[(&str, &str)],
-) -> Result<BTreeMap<String, String>> {
-    let mut merged = default_tags.clone();
-    for (key, value) in tags {
-        validate_tag_key(key)?;
-        validate_tag_value(value)?;
-        merged.insert((*key).to_string(), (*value).to_string());
-    }
-    Ok(merged)
 }
