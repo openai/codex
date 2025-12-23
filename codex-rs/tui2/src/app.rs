@@ -18,6 +18,7 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::ResumeSelection;
 use crate::transcript_copy_ui::TranscriptCopyUi;
+use crate::transcript_find::TranscriptFind;
 use crate::transcript_multi_click::TranscriptMultiClick;
 use crate::transcript_selection::TRANSCRIPT_GUTTER_COLS;
 use crate::transcript_selection::TranscriptSelection;
@@ -334,6 +335,7 @@ pub(crate) struct App {
     transcript_view_top: usize,
     transcript_total_lines: usize,
     transcript_copy_ui: TranscriptCopyUi,
+    transcript_find: TranscriptFind,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -502,6 +504,7 @@ impl App {
             transcript_view_top: 0,
             transcript_total_lines: 0,
             transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(copy_selection_shortcut),
+            transcript_find: TranscriptFind::default(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -651,7 +654,11 @@ impl App {
                                 frame.buffer,
                             );
                         }
-                        if let Some((x, y)) = self.chat_widget.cursor_pos(chat_area) {
+                        if let Some((x, y)) =
+                            self.transcript_find.cursor_position(frame.area(), chat_top)
+                        {
+                            frame.set_cursor_position((x, y));
+                        } else if let Some((x, y)) = self.chat_widget.cursor_pos(chat_area) {
                             frame.set_cursor_position((x, y));
                         }
                     })?;
@@ -674,6 +681,7 @@ impl App {
                         selection_active,
                         scroll_position,
                         self.copy_selection_key(),
+                        self.transcript_find.is_visible(),
                     );
                 }
             }
@@ -722,6 +730,17 @@ impl App {
             return area.y;
         }
 
+        if let Some((cell_index, line_in_cell)) = self.transcript_find.on_render(
+            &lines,
+            &line_meta,
+            transcript_area.width,
+            self.transcript_view_top,
+        ) {
+            self.transcript_scroll = TranscriptScroll::Scrolled {
+                cell_index,
+                line_in_cell,
+            };
+        }
         let is_user_cell: Vec<bool> = cells
             .iter()
             .map(|c| c.as_any().is::<UserHistoryCell>())
@@ -793,7 +812,10 @@ impl App {
                 }
             }
 
-            lines[line_index].render_ref(row_area, frame.buffer);
+            let line = self
+                .transcript_find
+                .render_line(line_index, &lines[line_index]);
+            line.render_ref(row_area, frame.buffer);
         }
 
         self.apply_transcript_selection(transcript_area, frame.buffer);
@@ -812,6 +834,19 @@ impl App {
             );
         } else {
             self.transcript_copy_ui.clear_affordance();
+        }
+
+        if let Some(prompt_line) = self.transcript_find.render_prompt_line()
+            && chat_top > area.y
+        {
+            let prompt_area = Rect {
+                x: area.x,
+                y: chat_top.saturating_sub(1),
+                width: area.width,
+                height: 1,
+            };
+            Clear.render_ref(prompt_area, frame.buffer);
+            Paragraph::new(prompt_line).render_ref(prompt_area, frame.buffer);
         }
         chat_top
     }
@@ -1356,6 +1391,7 @@ impl App {
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 self.current_model = model_family.get_model_slug().to_string();
+                self.transcript_find.clear();
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
@@ -1444,6 +1480,7 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
+                self.transcript_find.note_lines_changed();
                 let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
                     // Only insert a separating blank line for new cells that are not
@@ -1891,6 +1928,11 @@ impl App {
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+        if self.transcript_find.handle_key_event(&key_event) {
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('t'),
@@ -2115,6 +2157,7 @@ mod tests {
             transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(
                 CopySelectionShortcut::CtrlShiftC,
             ),
+            transcript_find: TranscriptFind::default(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -2165,6 +2208,7 @@ mod tests {
                 transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(
                     CopySelectionShortcut::CtrlShiftC,
                 ),
+                transcript_find: TranscriptFind::default(),
                 overlay: None,
                 deferred_history_lines: Vec::new(),
                 has_emitted_history_lines: false,
