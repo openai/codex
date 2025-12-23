@@ -6,6 +6,8 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 
 use crate::command_safety::is_dangerous_command::requires_initial_appoval;
+use crate::config_loader::ConfigLayerStack;
+use crate::config_loader::ConfigLayerStackOrdering;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
@@ -94,9 +96,9 @@ impl ExecPolicyManager {
 
     pub(crate) async fn load(
         features: &Features,
-        codex_home: &Path,
+        config_stack: &ConfigLayerStack,
     ) -> Result<Self, ExecPolicyError> {
-        let policy = load_exec_policy_for_features(features, codex_home).await?;
+        let policy = load_exec_policy_for_features(features, config_stack).await?;
         Ok(Self::new(Arc::new(policy)))
     }
 
@@ -194,18 +196,28 @@ impl Default for ExecPolicyManager {
 
 async fn load_exec_policy_for_features(
     features: &Features,
-    codex_home: &Path,
+    config_stack: &ConfigLayerStack,
 ) -> Result<Policy, ExecPolicyError> {
     if !features.enabled(Feature::ExecPolicy) {
         Ok(Policy::empty())
     } else {
-        load_exec_policy(codex_home).await
+        load_exec_policy(config_stack).await
     }
 }
 
-pub async fn load_exec_policy(codex_home: &Path) -> Result<Policy, ExecPolicyError> {
-    let policy_dir = codex_home.join(RULES_DIR_NAME);
-    let policy_paths = collect_policy_files(&policy_dir).await?;
+pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy, ExecPolicyError> {
+    // Iterate the layers in increasing order of precedence, adding the *.rules
+    // from each layer, so that higher-precedence layers can override
+    // rules defined in lower-precedence ones.
+    let mut policy_paths = Vec::new();
+    for layer in config_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst) {
+        if let Some(config_folder) = layer.config_folder() {
+            #[expect(clippy::expect_used)]
+            let policy_dir = config_folder.join(RULES_DIR_NAME).expect("safe join");
+            let layer_policy_paths = collect_policy_files(&policy_dir).await?;
+            policy_paths.extend(layer_policy_paths);
+        }
+    }
 
     let mut parser = PolicyParser::new();
     for policy_path in &policy_paths {
@@ -226,11 +238,7 @@ pub async fn load_exec_policy(codex_home: &Path) -> Result<Policy, ExecPolicyErr
     }
 
     let policy = parser.build();
-    tracing::debug!(
-        "loaded execpolicy from {} files in {}",
-        policy_paths.len(),
-        policy_dir.display()
-    );
+    tracing::debug!("loaded execpolicy from {} files", policy_paths.len());
 
     Ok(policy)
 }
@@ -302,7 +310,8 @@ fn derive_prompt_reason(evaluation: &Evaluation) -> Option<String> {
     })
 }
 
-async fn collect_policy_files(dir: &Path) -> Result<Vec<PathBuf>, ExecPolicyError> {
+async fn collect_policy_files(dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, ExecPolicyError> {
+    let dir = dir.as_ref();
     let mut read_dir = match fs::read_dir(dir).await {
         Ok(read_dir) => read_dir,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
@@ -345,28 +354,51 @@ async fn collect_policy_files(dir: &Path) -> Result<Vec<PathBuf>, ExecPolicyErro
 
     policy_paths.sort();
 
+    tracing::debug!(
+        "loaded {} .rules files in {}",
+        policy_paths.len(),
+        dir.display()
+    );
     Ok(policy_paths)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_loader::ConfigLayerEntry;
+    use crate::config_loader::ConfigLayerStack;
+    use crate::config_loader::ConfigRequirements;
     use crate::features::Feature;
     use crate::features::Features;
+    use codex_app_server_protocol::ConfigLayerSource;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SandboxPolicy;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::path::Path;
     use std::sync::Arc;
     use tempfile::tempdir;
+    use toml::Value as TomlValue;
+
+    fn config_stack_for_dot_codex_folder(dot_codex_folder: &Path) -> ConfigLayerStack {
+        let dot_codex_folder = AbsolutePathBuf::from_absolute_path(dot_codex_folder)
+            .expect("absolute dot_codex_folder");
+        let layer = ConfigLayerEntry::new(
+            ConfigLayerSource::Project { dot_codex_folder },
+            TomlValue::Table(Default::default()),
+        );
+        ConfigLayerStack::new(vec![layer], ConfigRequirements::default()).expect("ConfigLayerStack")
+    }
 
     #[tokio::test]
     async fn returns_empty_policy_when_feature_disabled() {
         let mut features = Features::with_defaults();
         features.disable(Feature::ExecPolicy);
         let temp_dir = tempdir().expect("create temp dir");
+        let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
 
-        let manager = ExecPolicyManager::load(&features, temp_dir.path())
+        let manager = ExecPolicyManager::load(&features, &config_stack)
             .await
             .expect("manager result");
         let policy = manager.current();
@@ -400,6 +432,7 @@ mod tests {
     #[tokio::test]
     async fn loads_policies_from_policy_subdirectory() {
         let temp_dir = tempdir().expect("create temp dir");
+        let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
         let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
         fs::create_dir_all(&policy_dir).expect("create policy dir");
         fs::write(
@@ -408,7 +441,7 @@ mod tests {
         )
         .expect("write policy file");
 
-        let policy = load_exec_policy(temp_dir.path())
+        let policy = load_exec_policy(&config_stack)
             .await
             .expect("policy result");
         let command = [vec!["rm".to_string()]];
@@ -427,13 +460,14 @@ mod tests {
     #[tokio::test]
     async fn ignores_policies_outside_policy_dir() {
         let temp_dir = tempdir().expect("create temp dir");
+        let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
         fs::write(
             temp_dir.path().join("root.rules"),
             r#"prefix_rule(pattern=["ls"], decision="prompt")"#,
         )
         .expect("write policy file");
 
-        let policy = load_exec_policy(temp_dir.path())
+        let policy = load_exec_policy(&config_stack)
             .await
             .expect("policy result");
         let command = [vec!["ls".to_string()]];
@@ -447,6 +481,69 @@ mod tests {
             },
             policy.check_multiple(command.iter(), &|_| Decision::Allow)
         );
+    }
+
+    #[tokio::test]
+    async fn loads_policies_from_multiple_config_layers() -> anyhow::Result<()> {
+        let user_dir = tempdir()?;
+        let project_dir = tempdir()?;
+
+        let user_policy_dir = user_dir.path().join(RULES_DIR_NAME);
+        fs::create_dir_all(&user_policy_dir)?;
+        fs::write(
+            user_policy_dir.join("user.rules"),
+            r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+        )?;
+
+        let project_policy_dir = project_dir.path().join(RULES_DIR_NAME);
+        fs::create_dir_all(&project_policy_dir)?;
+        fs::write(
+            project_policy_dir.join("project.rules"),
+            r#"prefix_rule(pattern=["ls"], decision="prompt")"#,
+        )?;
+
+        let user_config_toml =
+            AbsolutePathBuf::from_absolute_path(user_dir.path().join("config.toml"))?;
+        let project_dot_codex_folder = AbsolutePathBuf::from_absolute_path(project_dir.path())?;
+        let layers = vec![
+            ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: user_config_toml,
+                },
+                TomlValue::Table(Default::default()),
+            ),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: project_dot_codex_folder,
+                },
+                TomlValue::Table(Default::default()),
+            ),
+        ];
+        let config_stack = ConfigLayerStack::new(layers, ConfigRequirements::default())?;
+
+        let policy = load_exec_policy(&config_stack).await?;
+
+        assert_eq!(
+            Evaluation {
+                decision: Decision::Forbidden,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: vec!["rm".to_string()],
+                    decision: Decision::Forbidden
+                }],
+            },
+            policy.check_multiple([vec!["rm".to_string()]].iter(), &|_| Decision::Allow)
+        );
+        assert_eq!(
+            Evaluation {
+                decision: Decision::Prompt,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: vec!["ls".to_string()],
+                    decision: Decision::Prompt
+                }],
+            },
+            policy.check_multiple([vec!["ls".to_string()]].iter(), &|_| Decision::Allow)
+        );
+        Ok(())
     }
 
     #[tokio::test]

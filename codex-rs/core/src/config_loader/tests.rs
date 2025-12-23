@@ -88,9 +88,24 @@ async fn returns_empty_when_all_layers_missing() {
     )
     .await
     .expect("load layers");
-    assert!(
-        layers.get_user_layer().is_none(),
-        "no user layer when CODEX_HOME/config.toml does not exist"
+    let user_layer = layers
+        .get_user_layer()
+        .expect("expected a user layer even when CODEX_HOME/config.toml does not exist");
+    assert_eq!(
+        &ConfigLayerEntry {
+            name: super::ConfigLayerSource::User {
+                file: AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, tmp.path())
+                    .expect("resolve user config.toml path")
+            },
+            config: TomlValue::Table(toml::map::Map::new()),
+            version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
+        },
+        user_layer,
+    );
+    assert_eq!(
+        user_layer.config,
+        TomlValue::Table(toml::map::Map::new()),
+        "expected empty config for user layer when config.toml does not exist"
     );
 
     let binding = layers.effective_config();
@@ -104,9 +119,10 @@ async fn returns_empty_when_all_layers_missing() {
         .iter()
         .filter(|layer| matches!(layer.name, super::ConfigLayerSource::System { .. }))
         .count();
+    let expected_system_layers = if cfg!(unix) { 1 } else { 0 };
     assert_eq!(
-        num_system_layers, 0,
-        "managed config layer should be absent when file missing"
+        num_system_layers, expected_system_layers,
+        "system layer should be present only on unix"
     );
 
     #[cfg(not(target_os = "macos"))]
