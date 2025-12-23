@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use crate::env;
 
-pub fn normalize_for_path_comparison(path: &Path) -> std::io::Result<PathBuf> {
-    let canonical = path.canonicalize()?;
+pub fn normalize_for_path_comparison(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
+    let canonical = path.as_ref().canonicalize()?;
     Ok(normalize_for_wsl(canonical))
 }
 

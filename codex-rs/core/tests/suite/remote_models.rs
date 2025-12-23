@@ -10,14 +10,13 @@ use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::features::Feature;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::openai_models::ClientVersion;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -73,7 +72,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         }],
         shell_type: ConfigShellToolType::UnifiedExec,
         visibility: ModelVisibility::List,
-        minimal_client_version: ClientVersion(0, 1, 0),
         supported_in_api: true,
         priority: 1,
         upgrade: None,
@@ -213,7 +211,6 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         }],
         shell_type: ConfigShellToolType::ShellCommand,
         visibility: ModelVisibility::List,
-        minimal_client_version: ClientVersion(0, 1, 0),
         supported_in_api: true,
         priority: 1,
         upgrade: None,
@@ -316,7 +313,7 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
@@ -374,7 +371,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
@@ -388,7 +385,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     );
 
     let selected = manager.get_model(&None, &config).await;
-    assert_eq!(selected, "caribou");
+    assert_eq!(selected, "gpt-5.2-codex");
 
     let available = manager.list_models(&config).await;
     assert!(
@@ -440,7 +437,7 @@ where
     let home = Arc::new(TempDir::new()?);
     let cwd = Arc::new(TempDir::new()?);
 
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.cwd = cwd.path().to_path_buf();
     config.features.enable(Feature::RemoteModels);
 
@@ -478,7 +475,6 @@ fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> 
         }],
         shell_type: ConfigShellToolType::ShellCommand,
         visibility,
-        minimal_client_version: ClientVersion(0, 1, 0),
         supported_in_api: true,
         priority,
         upgrade: None,

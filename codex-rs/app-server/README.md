@@ -172,7 +172,7 @@ You can optionally specify config overrides on the new turn. If specified, these
     "cwd": "/Users/me/project",
     "approvalPolicy": "unlessTrusted",
     "sandboxPolicy": {
-        "mode": "workspaceWrite",
+        "type": "workspaceWrite",
         "writableRoots": ["/Users/me/project"],
         "networkAccess": true
     },
@@ -285,10 +285,12 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 { "id": 32, "result": { "exitCode": 0, "stdout": "...", "stderr": "" } }
 ```
 
+- For clients that are already sandboxed externally, set `sandboxPolicy` to `{"type":"externalSandbox","networkAccess":"enabled"}` (or omit `networkAccess` to keep it restricted). Codex will not enforce its own sandbox in this mode; it tells the model it has full file-system access and passes the `networkAccess` state through `environment_context`.
+
 Notes:
 
 - Empty `command` arrays are rejected.
-- `sandboxPolicy` accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags).
+- `sandboxPolicy` accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags, `externalSandbox` with `networkAccess` `restricted|enabled`).
 - When omitted, `timeoutMs` falls back to the server default.
 
 ## Events

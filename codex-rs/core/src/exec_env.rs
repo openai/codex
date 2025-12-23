@@ -82,7 +82,7 @@ mod tests {
     }
 
     #[test]
-    fn test_core_inherit_and_default_excludes() {
+    fn test_core_inherit_defaults_keep_sensitive_vars() {
         let vars = make_vars(&[
             ("PATH", "/usr/bin"),
             ("HOME", "/home/user"),
@@ -90,7 +90,32 @@ mod tests {
             ("SECRET_TOKEN", "t"),
         ]);
 
-        let policy = ShellEnvironmentPolicy::default(); // inherit Core, default excludes on
+        let policy = ShellEnvironmentPolicy::default(); // inherit All, default excludes ignored
+        let result = populate_env(vars, &policy);
+
+        let expected: HashMap<String, String> = hashmap! {
+            "PATH".to_string() => "/usr/bin".to_string(),
+            "HOME".to_string() => "/home/user".to_string(),
+            "API_KEY".to_string() => "secret".to_string(),
+            "SECRET_TOKEN".to_string() => "t".to_string(),
+        };
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_core_inherit_with_default_excludes_enabled() {
+        let vars = make_vars(&[
+            ("PATH", "/usr/bin"),
+            ("HOME", "/home/user"),
+            ("API_KEY", "secret"),
+            ("SECRET_TOKEN", "t"),
+        ]);
+
+        let policy = ShellEnvironmentPolicy {
+            ignore_default_excludes: false, // apply KEY/SECRET/TOKEN filter
+            ..Default::default()
+        };
         let result = populate_env(vars, &policy);
 
         let expected: HashMap<String, String> = hashmap! {
@@ -162,6 +187,7 @@ mod tests {
 
         let policy = ShellEnvironmentPolicy {
             inherit: ShellEnvironmentPolicyInherit::All,
+            ignore_default_excludes: false,
             ..Default::default()
         };
 

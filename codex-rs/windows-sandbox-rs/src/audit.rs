@@ -271,7 +271,7 @@ pub fn apply_capability_denies_for_world_writable(
             })?,
             Vec::new(),
         ),
-        SandboxPolicy::DangerFullAccess => {
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
             return Ok(());
         }
     };

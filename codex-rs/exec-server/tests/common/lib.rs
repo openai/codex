@@ -1,4 +1,4 @@
-use codex_core::MCP_SANDBOX_STATE_NOTIFICATION;
+use codex_core::MCP_SANDBOX_STATE_METHOD;
 use codex_core::SandboxState;
 use codex_core::protocol::SandboxPolicy;
 use rmcp::ClientHandler;
@@ -7,10 +7,12 @@ use rmcp::RoleClient;
 use rmcp::Service;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::ClientInfo;
+use rmcp::model::ClientRequest;
 use rmcp::model::CreateElicitationRequestParam;
 use rmcp::model::CreateElicitationResult;
-use rmcp::model::CustomClientNotification;
+use rmcp::model::CustomRequest;
 use rmcp::model::ElicitationAction;
+use rmcp::model::ServerResult;
 use rmcp::service::RunningService;
 use rmcp::transport::ConfigureCommandExt;
 use rmcp::transport::TokioChildProcess;
@@ -82,7 +84,7 @@ pub async fn notify_readable_sandbox<P, S>(
     sandbox_cwd: P,
     codex_linux_sandbox_exe: Option<PathBuf>,
     service: &RunningService<RoleClient, S>,
-) -> anyhow::Result<()>
+) -> anyhow::Result<ServerResult>
 where
     P: AsRef<Path>,
     S: Service<RoleClient> + ClientHandler,
@@ -92,14 +94,14 @@ where
         codex_linux_sandbox_exe,
         sandbox_cwd: sandbox_cwd.as_ref().to_path_buf(),
     };
-    send_sandbox_notification(sandbox_state, service).await
+    send_sandbox_state_update(sandbox_state, service).await
 }
 
 pub async fn notify_writable_sandbox_only_one_folder<P, S>(
     writable_folder: P,
     codex_linux_sandbox_exe: Option<PathBuf>,
     service: &RunningService<RoleClient, S>,
-) -> anyhow::Result<()>
+) -> anyhow::Result<ServerResult>
 where
     P: AsRef<Path>,
     S: Service<RoleClient> + ClientHandler,
@@ -119,24 +121,23 @@ where
         codex_linux_sandbox_exe,
         sandbox_cwd: writable_folder.as_ref().to_path_buf(),
     };
-    send_sandbox_notification(sandbox_state, service).await
+    send_sandbox_state_update(sandbox_state, service).await
 }
 
-async fn send_sandbox_notification<S>(
+async fn send_sandbox_state_update<S>(
     sandbox_state: SandboxState,
     service: &RunningService<RoleClient, S>,
-) -> anyhow::Result<()>
+) -> anyhow::Result<ServerResult>
 where
     S: Service<RoleClient> + ClientHandler,
 {
-    let sandbox_state_notification = CustomClientNotification::new(
-        MCP_SANDBOX_STATE_NOTIFICATION,
-        Some(serde_json::to_value(sandbox_state)?),
-    );
-    service
-        .send_notification(sandbox_state_notification.into())
+    let response = service
+        .send_request(ClientRequest::CustomRequest(CustomRequest::new(
+            MCP_SANDBOX_STATE_METHOD,
+            Some(serde_json::to_value(sandbox_state)?),
+        )))
         .await?;
-    Ok(())
+    Ok(response)
 }
 
 pub struct InteractiveClient {
