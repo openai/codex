@@ -262,7 +262,10 @@ impl ModelClient {
                 store_override: None,
                 conversation_id: Some(conversation_id.clone()),
                 session_source: Some(session_source.clone()),
-                extra_headers: beta_feature_headers(&self.config),
+                extra_headers: beta_feature_headers(
+                    &self.config,
+                    self.get_model_family().models_etag,
+                ),
             };
 
             let stream_result = client
@@ -398,7 +401,7 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
     }
 }
 
-fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
+fn beta_feature_headers(config: &Config, etag: Option<String>) -> ApiHeaderMap {
     let enabled = FEATURES
         .iter()
         .filter_map(|spec| {
@@ -415,6 +418,11 @@ fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
         && let Ok(header_value) = HeaderValue::from_str(value.as_str())
     {
         headers.insert("x-codex-beta-features", header_value);
+    }
+    if let Some(etag) = etag
+        && let Ok(header_value) = HeaderValue::from_str(&etag)
+    {
+        headers.insert("X-If-Models-Match", header_value);
     }
     headers
 }
