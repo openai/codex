@@ -321,14 +321,22 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::disallowed_methods)]
     fn write_spans_emits_truecolor_and_indexed_sgr() {
-        let spans = [Span::styled(
-            "X",
-            Style::default()
-                .fg(Color::Rgb(1, 2, 3))
-                .bg(Color::Indexed(42)),
-        )];
+        // This test asserts that `write_spans` emits the correct SGR sequences for colors that
+        // can't be represented with the theme-aware ANSI palette:
+        //
+        // - `ratatui::style::Color::Rgb` (truecolor; `38;2;r;g;b`)
+        // - `ratatui::style::Color::Indexed` (256-color index; `48;5;n`)
+        //
+        // Those constructors are intentionally disallowed in production code (see
+        // `codex-rs/clippy.toml`), but the test needs them so the output bytes are fully
+        // deterministic.
+        #[expect(clippy::disallowed_methods)]
+        let fg = Color::Rgb(1, 2, 3);
+        #[expect(clippy::disallowed_methods)]
+        let bg = Color::Indexed(42);
+
+        let spans = [Span::styled("X", Style::default().fg(fg).bg(bg))];
 
         let mut actual: Vec<u8> = Vec::new();
         write_spans(&mut actual, spans.iter()).unwrap();
