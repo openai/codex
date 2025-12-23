@@ -500,6 +500,7 @@ pub struct Event {
     pub id: String,
     /// Optional agent identifier associated with this event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub agent_id: Option<AgentId>,
     /// Payload
     pub msg: EventMsg,
