@@ -176,10 +176,8 @@ impl StatusIndicatorWidget {
 
         if out.len() > DETAILS_MAX_LINES {
             out.truncate(DETAILS_MAX_LINES);
-
             let content_width = usize::from(width).saturating_sub(prefix_width).max(1);
             let max_base_len = content_width.saturating_sub(1);
-
             if let Some(last) = out.last_mut()
                 && let Some(span) = last.spans.last_mut()
             {
@@ -290,6 +288,27 @@ mod tests {
 
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
+        terminal
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn renders_wrapped_details_panama_two_lines() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), false);
+        w.update_details(Some("A man a plan a canal panama".to_string()));
+        w.set_interrupt_hint_visible(false);
+
+        // Freeze time-dependent rendering (elapsed + spinner) to keep the snapshot stable.
+        w.is_paused = true;
+        w.elapsed_running = Duration::ZERO;
+
+        // Prefix is 4 columns, so a width of 30 yields a content width of 26: one column
+        // short of fitting the whole phrase (27 cols), forcing exactly one wrap without ellipsis.
+        let mut terminal = Terminal::new(TestBackend::new(30, 3)).expect("terminal");
         terminal
             .draw(|f| w.render(f.area(), f.buffer_mut()))
             .expect("draw");
