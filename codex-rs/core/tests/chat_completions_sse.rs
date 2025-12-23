@@ -1,5 +1,6 @@
 use assert_matches::assert_matches;
 use codex_core::AuthManager;
+use codex_core::auth::AuthCredentialsStoreMode;
 use std::sync::Arc;
 use tracing_test::traced_test;
 
@@ -99,6 +100,11 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         summary,
         conversation_id,
         SessionSource::Exec,
+        Arc::new(ModelsManager::new(Arc::new(AuthManager::new(
+            config.codex_home.clone(),
+            false,
+            AuthCredentialsStoreMode::File,
+        )))),
     );
 
     let mut prompt = Prompt::default();

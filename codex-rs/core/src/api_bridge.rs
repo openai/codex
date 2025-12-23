@@ -20,6 +20,7 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
         ApiError::ContextWindowExceeded => CodexErr::ContextWindowExceeded,
         ApiError::QuotaExceeded => CodexErr::QuotaExceeded,
         ApiError::UsageNotIncluded => CodexErr::UsageNotIncluded,
+        ApiError::ModelsCatalogChanged => CodexErr::ModelsCatalogChanged,
         ApiError::Retryable { message, delay } => CodexErr::Stream(message, delay),
         ApiError::Stream(msg) => CodexErr::Stream(msg, None),
         ApiError::Api { status, message } => CodexErr::UnexpectedStatus(UnexpectedResponseError {
@@ -43,6 +44,8 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                     } else {
                         CodexErr::InvalidRequest(body_text)
                     }
+                } else if status == http::StatusCode::PRECONDITION_FAILED {
+                    CodexErr::ModelsCatalogChanged
                 } else if status == http::StatusCode::INTERNAL_SERVER_ERROR {
                     CodexErr::InternalServerError
                 } else if status == http::StatusCode::TOO_MANY_REQUESTS {

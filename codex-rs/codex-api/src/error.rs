@@ -25,6 +25,8 @@ pub enum ApiError {
     },
     #[error("rate limit: {0}")]
     RateLimit(String),
+    #[error("models catalog has changed. Please refresh your models list.")]
+    ModelsCatalogChanged,
 }
 
 impl From<RateLimitError> for ApiError {

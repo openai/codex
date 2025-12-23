@@ -482,6 +482,7 @@ impl Session {
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
+        models_manager: Arc<ModelsManager>,
         otel_manager: &OtelManager,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
@@ -506,6 +507,7 @@ impl Session {
             session_configuration.model_reasoning_summary,
             conversation_id,
             session_configuration.session_source.clone(),
+            Arc::clone(&models_manager),
         );
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -911,6 +913,7 @@ impl Session {
             .await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
+            Arc::clone(&self.services.models_manager),
             &self.services.otel_manager,
             session_configuration.provider.clone(),
             &session_configuration,
@@ -2128,6 +2131,7 @@ async fn spawn_review_thread(
         per_turn_config.model_reasoning_summary,
         sess.conversation_id,
         parent_turn_context.client.get_session_source(),
+        Arc::clone(&sess.services.models_manager),
     );
 
     let review_turn_context = TurnContext {
@@ -2441,6 +2445,17 @@ async fn run_turn(
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
                 if retries < max_retries {
                     retries += 1;
+                    if matches!(e, CodexErr::ModelsCatalogChanged) {
+                        if let Err(err) = sess
+                            .services
+                            .models_manager
+                            .refresh_available_models()
+                            .await
+                        {
+                            error!("failed to refresh available models: {err}");
+                        }
+                        continue;
+                    }
                     let delay = match e {
                         CodexErr::Stream(_, Some(delay)) => delay,
                         _ => backoff(retries),
@@ -3140,13 +3155,14 @@ mod tests {
             exec_policy,
             auth_manager: auth_manager.clone(),
             otel_manager: otel_manager.clone(),
-            models_manager,
+            models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
         };
 
         let turn_context = Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
+            models_manager.clone(),
             &otel_manager,
             session_configuration.provider.clone(),
             &session_configuration,
@@ -3227,13 +3243,14 @@ mod tests {
             exec_policy,
             auth_manager: Arc::clone(&auth_manager),
             otel_manager: otel_manager.clone(),
-            models_manager,
+            models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
+            models_manager.clone(),
             &otel_manager,
             session_configuration.provider.clone(),
             &session_configuration,

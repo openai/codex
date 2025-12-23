@@ -127,9 +127,8 @@ impl ModelsManager {
 
     /// Look up the requested model family while applying remote metadata overrides.
     pub async fn construct_model_family(&self, model: &str, config: &Config) -> ModelFamily {
-        let etag = self.etag.read().await.clone();
         Self::find_family_for_model(model)
-            .with_remote_overrides(self.remote_models(config).await, etag)
+            .with_remote_overrides(self.remote_models(config).await)
             .with_config_overrides(config)
     }
 
@@ -154,6 +153,10 @@ impl ModelsManager {
             return OPENAI_DEFAULT_CHATGPT_MODEL.to_string();
         }
         OPENAI_DEFAULT_API_MODEL.to_string()
+    }
+
+    pub async fn get_etag(&self) -> Option<String> {
+        self.etag.read().await.clone()
     }
 
     #[cfg(any(test, feature = "test-support"))]

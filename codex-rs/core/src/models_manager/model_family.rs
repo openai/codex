@@ -81,9 +81,6 @@ pub struct ModelFamily {
     pub shell_type: ConfigShellToolType,
 
     pub truncation_policy: TruncationPolicy,
-
-    /// The ETag of the models cache, if known.
-    pub models_etag: Option<String>,
 }
 
 impl ModelFamily {
@@ -102,17 +99,12 @@ impl ModelFamily {
         }
         self
     }
-    pub(super) fn with_remote_overrides(
-        mut self,
-        remote_models: Vec<ModelInfo>,
-        etag: Option<String>,
-    ) -> Self {
+    pub(super) fn with_remote_overrides(mut self, remote_models: Vec<ModelInfo>) -> Self {
         for model in remote_models {
             if model.slug == self.slug {
                 self.apply_remote_overrides(model);
             }
         }
-        self.models_etag = etag;
         self
     }
 
@@ -194,7 +186,6 @@ macro_rules! model_family {
             default_verbosity: None,
             default_reasoning_effort: None,
             truncation_policy: TruncationPolicy::Bytes(10_000),
-            models_etag: None,
         };
 
         // apply overrides
@@ -436,7 +427,6 @@ fn derive_default_model_family(model: &str) -> ModelFamily {
         default_verbosity: None,
         default_reasoning_effort: None,
         truncation_policy: TruncationPolicy::Bytes(10_000),
-        models_etag: None,
     }
 }
 
@@ -480,21 +470,18 @@ mod tests {
         let family = model_family!("gpt-4o-mini", "gpt-4o-mini");
         assert_ne!(family.default_reasoning_effort, Some(ReasoningEffort::High));
 
-        let updated = family.with_remote_overrides(
-            vec![
-                remote(
-                    "gpt-4o-mini",
-                    ReasoningEffort::High,
-                    ConfigShellToolType::ShellCommand,
-                ),
-                remote(
-                    "other-model",
-                    ReasoningEffort::Low,
-                    ConfigShellToolType::UnifiedExec,
-                ),
-            ],
-            None,
-        );
+        let updated = family.with_remote_overrides(vec![
+            remote(
+                "gpt-4o-mini",
+                ReasoningEffort::High,
+                ConfigShellToolType::ShellCommand,
+            ),
+            remote(
+                "other-model",
+                ReasoningEffort::Low,
+                ConfigShellToolType::UnifiedExec,
+            ),
+        ]);
 
         assert_eq!(
             updated.default_reasoning_effort,
@@ -511,14 +498,11 @@ mod tests {
             shell_type: ConfigShellToolType::Local
         );
 
-        let updated = family.clone().with_remote_overrides(
-            vec![remote(
-                "other",
-                ReasoningEffort::High,
-                ConfigShellToolType::ShellCommand,
-            )],
-            None,
-        );
+        let updated = family.clone().with_remote_overrides(vec![remote(
+            "other",
+            ReasoningEffort::High,
+            ConfigShellToolType::ShellCommand,
+        )]);
 
         assert_eq!(
             updated.default_reasoning_effort,
@@ -543,34 +527,31 @@ mod tests {
             reasoning_summary_format: ReasoningSummaryFormat::None,
         );
 
-        let updated = family.with_remote_overrides(
-            vec![ModelInfo {
-                slug: "gpt-5.1".to_string(),
-                display_name: "gpt-5.1".to_string(),
-                description: Some("desc".to_string()),
-                default_reasoning_level: ReasoningEffort::High,
-                supported_reasoning_levels: vec![ReasoningEffortPreset {
-                    effort: ReasoningEffort::High,
-                    description: "High".to_string(),
-                }],
-                shell_type: ConfigShellToolType::ShellCommand,
-                visibility: ModelVisibility::List,
-                supported_in_api: true,
-                priority: 10,
-                upgrade: None,
-                base_instructions: Some("Remote instructions".to_string()),
-                supports_reasoning_summaries: true,
-                support_verbosity: true,
-                default_verbosity: Some(Verbosity::High),
-                apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
-                truncation_policy: TruncationPolicyConfig::tokens(2_000),
-                supports_parallel_tool_calls: true,
-                context_window: Some(400_000),
-                reasoning_summary_format: ReasoningSummaryFormat::Experimental,
-                experimental_supported_tools: vec!["alpha".to_string(), "beta".to_string()],
+        let updated = family.with_remote_overrides(vec![ModelInfo {
+            slug: "gpt-5.1".to_string(),
+            display_name: "gpt-5.1".to_string(),
+            description: Some("desc".to_string()),
+            default_reasoning_level: ReasoningEffort::High,
+            supported_reasoning_levels: vec![ReasoningEffortPreset {
+                effort: ReasoningEffort::High,
+                description: "High".to_string(),
             }],
-            None,
-        );
+            shell_type: ConfigShellToolType::ShellCommand,
+            visibility: ModelVisibility::List,
+            supported_in_api: true,
+            priority: 10,
+            upgrade: None,
+            base_instructions: Some("Remote instructions".to_string()),
+            supports_reasoning_summaries: true,
+            support_verbosity: true,
+            default_verbosity: Some(Verbosity::High),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            truncation_policy: TruncationPolicyConfig::tokens(2_000),
+            supports_parallel_tool_calls: true,
+            context_window: Some(400_000),
+            reasoning_summary_format: ReasoningSummaryFormat::Experimental,
+            experimental_supported_tools: vec!["alpha".to_string(), "beta".to_string()],
+        }]);
 
         assert_eq!(
             updated.default_reasoning_effort,

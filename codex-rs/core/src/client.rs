@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
+use crate::models_manager::manager::ModelsManager;
 use codex_api::AggregateStreamExt;
 use codex_api::ChatClient as ApiChatClient;
 use codex_api::CompactClient as ApiCompactClient;
@@ -58,6 +59,7 @@ pub struct ModelClient {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
     model_family: ModelFamily,
+    models_manager: Arc<ModelsManager>,
     otel_manager: OtelManager,
     provider: ModelProviderInfo,
     conversation_id: ConversationId,
@@ -78,6 +80,7 @@ impl ModelClient {
         summary: ReasoningSummaryConfig,
         conversation_id: ConversationId,
         session_source: SessionSource,
+        models_manager: Arc<ModelsManager>,
     ) -> Self {
         Self {
             config,
@@ -89,6 +92,7 @@ impl ModelClient {
             effort,
             summary,
             session_source,
+            models_manager,
         }
     }
 
@@ -264,7 +268,7 @@ impl ModelClient {
                 session_source: Some(session_source.clone()),
                 extra_headers: beta_feature_headers(
                     &self.config,
-                    self.get_model_family().models_etag,
+                    self.models_manager.get_etag().await,
                 ),
             };
 
