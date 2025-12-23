@@ -7,7 +7,7 @@ This is a compact guide to build and validate the Codex network proxy locally.
 From the Codex repo:
 
 ```bash
-cd /Users/viyatb/code/codex/codex-rs
+cd codex/codex-rs
 cargo build -p codex-network-proxy
 ```
 
@@ -44,7 +44,7 @@ enabled = false
 ## Run the proxy
 
 ```bash
-cd /Users/viyatb/code/codex/codex-rs
+cd codex/codex-rs
 cargo run -p codex-network-proxy -- proxy
 ```
 
