@@ -56,7 +56,6 @@ use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
 
-#[derive(Debug, Clone)]
 /// Visual transcript lines plus soft-wrap joiners.
 ///
 /// A history cell can produce multiple "visual lines" once prefixes/indents and wrapping are
@@ -87,6 +86,7 @@ use unicode_width::UnicodeWidthStr;
 /// Consumers:
 /// - `transcript_render` threads joiners through transcript flattening/wrapping.
 /// - `transcript_copy` uses them to join wrapped prose while preserving hard breaks.
+#[derive(Debug, Clone)]
 pub(crate) struct TranscriptLinesWithJoiners {
     /// Visual transcript lines for a history cell, including any indent/prefix spans.
     ///

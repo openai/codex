@@ -40,12 +40,15 @@
 //! - "word" selection uses display width (`unicode_width`) and a lightweight
 //!   character class heuristic.
 //! - "paragraph" selection is based on contiguous non-empty wrapped lines.
+//! - "cell" selection selects all wrapped lines that belong to a single history
+//!   cell (the unit returned by `HistoryCell::display_lines`).
 
 use crate::history_cell::HistoryCell;
 use crate::transcript_selection::TRANSCRIPT_GUTTER_COLS;
 use crate::transcript_selection::TranscriptSelection;
 use crate::transcript_selection::TranscriptSelectionPoint;
-use crate::wrapping::word_wrap_lines_borrowed;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_line;
 use ratatui::text::Line;
 use std::sync::Arc;
 use std::time::Duration;
@@ -259,6 +262,7 @@ fn max_column_distance(prev_click_count: u8) -> u16 {
 /// - triple click selects the entire wrapped line
 /// - quad+ click selects the containing paragraph (contiguous non-empty wrapped
 ///   lines, with empty/spacer lines treated as paragraph breaks)
+/// - quint+ click selects the entire history cell
 ///
 /// Returned selections are always “active” (both `anchor` and `head` set). This
 /// intentionally differs from normal single-click behavior in TUI2 (which only
@@ -293,7 +297,7 @@ fn selection_for_click(
     // Rebuild the same logical line stream the transcript renders from. This
     // keeps expansion boundaries aligned with current streaming output and the
     // current wrap width.
-    let lines = build_transcript_lines(cells, width);
+    let (lines, line_cell_index) = build_transcript_lines_with_cell_index(cells, width);
     if lines.is_empty() {
         return TranscriptSelection {
             anchor: Some(point),
@@ -301,9 +305,13 @@ fn selection_for_click(
         };
     }
 
-    // Expand based on the wrapped *visual* lines so triple/quad-click selection
-    // respects the current wrap width.
-    let wrapped = word_wrap_lines_borrowed(&lines, width.max(1) as usize);
+    // Expand based on the wrapped *visual* lines so triple/quad/quint-click
+    // selection respects the current wrap width.
+    let (wrapped, wrapped_cell_index) = word_wrap_lines_with_cell_index(
+        &lines,
+        &line_cell_index,
+        RtOptions::new(width.max(1) as usize),
+    );
     if wrapped.is_empty() {
         return TranscriptSelection {
             anchor: Some(point),
@@ -345,9 +353,24 @@ fn selection_for_click(
         };
     }
 
-    let (start_line, end_line) =
-        paragraph_bounds_in_wrapped_lines(&wrapped, TRANSCRIPT_GUTTER_COLS, line_index)
-            .unwrap_or((line_index, line_index));
+    if click_count == 4 {
+        let (start_line, end_line) =
+            paragraph_bounds_in_wrapped_lines(&wrapped, TRANSCRIPT_GUTTER_COLS, line_index)
+                .unwrap_or((line_index, line_index));
+        return TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint::new(start_line, 0)),
+            head: Some(TranscriptSelectionPoint::new(end_line, max_content_col)),
+        };
+    }
+
+    let Some((start_line, end_line)) =
+        cell_bounds_in_wrapped_lines(&wrapped_cell_index, line_index)
+    else {
+        return TranscriptSelection {
+            anchor: Some(point),
+            head: Some(point),
+        };
+    };
     TranscriptSelection {
         anchor: Some(TranscriptSelectionPoint::new(start_line, 0)),
         head: Some(TranscriptSelectionPoint::new(end_line, max_content_col)),
@@ -359,6 +382,7 @@ fn selection_for_click(
 /// This mirrors `App::build_transcript_lines` semantics: insert a blank spacer
 /// line between non-continuation cells so word/paragraph boundaries match what
 /// the user sees.
+#[cfg(test)]
 fn build_transcript_lines(cells: &[Arc<dyn HistoryCell>], width: u16) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut has_emitted_lines = false;
@@ -384,6 +408,126 @@ fn build_transcript_lines(cells: &[Arc<dyn HistoryCell>], width: u16) -> Vec<Lin
     }
 
     lines
+}
+
+/// Like [`build_transcript_lines`], but also returns a per-line mapping to the
+/// originating history cell index.
+///
+/// This mapping lets us implement "select the whole history cell" in terms of
+/// wrapped visual line indices.
+fn build_transcript_lines_with_cell_index(
+    cells: &[Arc<dyn HistoryCell>],
+    width: u16,
+) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut line_cell_index: Vec<Option<usize>> = Vec::new();
+    let mut has_emitted_lines = false;
+
+    for (cell_index, cell) in cells.iter().enumerate() {
+        let cell_lines = cell.display_lines(width);
+        if cell_lines.is_empty() {
+            continue;
+        }
+
+        if !cell.is_stream_continuation() {
+            if has_emitted_lines {
+                lines.push(Line::from(""));
+                line_cell_index.push(None);
+            } else {
+                has_emitted_lines = true;
+            }
+        }
+
+        line_cell_index.extend(std::iter::repeat_n(Some(cell_index), cell_lines.len()));
+        lines.extend(cell_lines);
+    }
+
+    debug_assert_eq!(lines.len(), line_cell_index.len());
+    (lines, line_cell_index)
+}
+
+/// Wrap lines and carry forward a per-line mapping to history cell index.
+///
+/// This mirrors [`word_wrap_lines_borrowed`] behavior so selection expansion
+/// uses the same wrapped line model as rendering.
+fn word_wrap_lines_with_cell_index<'a, O>(
+    lines: &'a [Line<'a>],
+    line_cell_index: &[Option<usize>],
+    width_or_options: O,
+) -> (Vec<Line<'a>>, Vec<Option<usize>>)
+where
+    O: Into<RtOptions<'a>>,
+{
+    debug_assert_eq!(lines.len(), line_cell_index.len());
+
+    let base_opts: RtOptions<'a> = width_or_options.into();
+    let mut out: Vec<Line<'a>> = Vec::new();
+    let mut out_cell_index: Vec<Option<usize>> = Vec::new();
+
+    let mut first = true;
+    for (line, cell_index) in lines.iter().zip(line_cell_index.iter().copied()) {
+        let opts = if first {
+            base_opts.clone()
+        } else {
+            base_opts
+                .clone()
+                .initial_indent(base_opts.subsequent_indent.clone())
+        };
+
+        let wrapped = word_wrap_line(line, opts);
+        out_cell_index.extend(std::iter::repeat_n(cell_index, wrapped.len()));
+        out.extend(wrapped);
+        first = false;
+    }
+
+    debug_assert_eq!(out.len(), out_cell_index.len());
+    (out, out_cell_index)
+}
+
+/// Expand to the contiguous range of wrapped lines that belong to a single
+/// history cell.
+///
+/// `line_index` is in wrapped line coordinates. If the line at `line_index` is
+/// a spacer (no cell index), we select the nearest preceding cell, falling back
+/// to the next cell below.
+fn cell_bounds_in_wrapped_lines(
+    wrapped_cell_index: &[Option<usize>],
+    line_index: usize,
+) -> Option<(usize, usize)> {
+    let total = wrapped_cell_index.len();
+    if total == 0 {
+        return None;
+    }
+
+    let mut target = line_index.min(total.saturating_sub(1));
+    let mut cell_index = wrapped_cell_index[target];
+    if cell_index.is_none() {
+        if let Some(found) = (0..target)
+            .rev()
+            .find(|idx| wrapped_cell_index[*idx].is_some())
+        {
+            target = found;
+            cell_index = wrapped_cell_index[found];
+        } else if let Some(found) =
+            (target + 1..total).find(|idx| wrapped_cell_index[*idx].is_some())
+        {
+            target = found;
+            cell_index = wrapped_cell_index[found];
+        }
+    }
+    let cell_index = cell_index?;
+
+    let mut start = target;
+    while start > 0 && wrapped_cell_index[start - 1] == Some(cell_index) {
+        start = start.saturating_sub(1);
+    }
+
+    let mut end = target;
+    while end + 1 < total && wrapped_cell_index[end + 1] == Some(cell_index) {
+        end = end.saturating_add(1);
+    }
+
+    Some((start, end))
 }
 
 /// Coarse character classes used for "word-ish" selection.
@@ -971,5 +1115,107 @@ mod tests {
         let lines = build_transcript_lines(&cells, width);
         let text: Vec<String> = lines.iter().map(flatten_line_text).collect();
         assert_eq!(text, vec!["› first", "  cont", "", "› second"]);
+    }
+
+    #[test]
+    fn quint_click_selects_entire_history_cell() {
+        let cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(StaticCell::new(vec![
+                Line::from("› first"),
+                Line::from(""),
+                Line::from("  second"),
+            ])),
+            Arc::new(StaticCell::new(vec![Line::from("› other")])),
+        ];
+        let width = 40;
+
+        let mut multi = TranscriptMultiClick::default();
+        let t0 = Instant::now();
+        let point = TranscriptSelectionPoint::new(2, 1);
+        let mut selection = TranscriptSelection::default();
+
+        multi.on_mouse_down_at(&mut selection, &cells, width, Some(point), t0);
+        multi.on_mouse_down_at(
+            &mut selection,
+            &cells,
+            width,
+            Some(point),
+            t0 + Duration::from_millis(10),
+        );
+        multi.on_mouse_down_at(
+            &mut selection,
+            &cells,
+            width,
+            Some(point),
+            t0 + Duration::from_millis(20),
+        );
+        multi.on_mouse_down_at(
+            &mut selection,
+            &cells,
+            width,
+            Some(point),
+            t0 + Duration::from_millis(30),
+        );
+        multi.on_mouse_down_at(
+            &mut selection,
+            &cells,
+            width,
+            Some(TranscriptSelectionPoint::new(2, 10)),
+            t0 + Duration::from_millis(40),
+        );
+
+        let max_content_col = width
+            .saturating_sub(1)
+            .saturating_sub(TRANSCRIPT_GUTTER_COLS);
+        assert_eq!(
+            selection.anchor.zip(selection.head).map(|(a, h)| (
+                a.line_index,
+                a.column,
+                h.line_index,
+                h.column
+            )),
+            Some((0, 0, 2, max_content_col))
+        );
+    }
+
+    #[test]
+    fn quint_click_on_spacer_selects_cell_above() {
+        let cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(StaticCell::new(vec![Line::from("› first")])),
+            Arc::new(StaticCell::new(vec![Line::from("› second")])),
+        ];
+        let width = 40;
+
+        let mut multi = TranscriptMultiClick::default();
+        let t0 = Instant::now();
+        let mut selection = TranscriptSelection::default();
+
+        // Index 1 is the spacer line inserted between the two non-continuation cells.
+        let point = TranscriptSelectionPoint::new(1, 0);
+        for (idx, dt) in [0u64, 10, 20, 30, 40].into_iter().enumerate() {
+            multi.on_mouse_down_at(
+                &mut selection,
+                &cells,
+                width,
+                Some(TranscriptSelectionPoint::new(
+                    point.line_index,
+                    if idx < 3 { 0 } else { (idx as u16) * 5 },
+                )),
+                t0 + Duration::from_millis(dt),
+            );
+        }
+
+        let max_content_col = width
+            .saturating_sub(1)
+            .saturating_sub(TRANSCRIPT_GUTTER_COLS);
+        assert_eq!(
+            selection.anchor.zip(selection.head).map(|(a, h)| (
+                a.line_index,
+                a.column,
+                h.line_index,
+                h.column
+            )),
+            Some((0, 0, 0, max_content_col))
+        );
     }
 }
