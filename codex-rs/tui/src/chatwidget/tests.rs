@@ -911,6 +911,7 @@ fn begin_unified_exec_startup(
     };
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
+        agent_id: None,
         msg: EventMsg::ExecCommandBegin(event.clone()),
     });
     event
@@ -919,6 +920,7 @@ fn begin_unified_exec_startup(
 fn terminal_interaction(chat: &mut ChatWidget, call_id: &str, process_id: &str, stdin: &str) {
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
+        agent_id: None,
         msg: EventMsg::TerminalInteraction(TerminalInteractionEvent {
             call_id: call_id.to_string(),
             process_id: process_id.to_string(),
@@ -1324,6 +1326,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
 
     chat.handle_codex_event(Event {
         id: "turn-wait-1".into(),
+        agent_id: None,
         msg: EventMsg::TaskComplete(TaskCompleteEvent {
             last_agent_message: None,
         }),
@@ -1373,6 +1376,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
 
     chat.handle_codex_event(Event {
         id: "turn-wait-3".into(),
+        agent_id: None,
         msg: EventMsg::TaskComplete(TaskCompleteEvent {
             last_agent_message: None,
         }),
@@ -3420,9 +3424,9 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     assert!(first_idx < second_idx, "messages out of order: {combined}");
 }
 
-#[test]
-fn non_selected_agent_events_buffer_until_switch() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None);
+#[tokio::test]
+async fn non_selected_agent_events_buffer_until_switch() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {
         id: "ev1".into(),
@@ -3452,9 +3456,9 @@ fn non_selected_agent_events_buffer_until_switch() {
     );
 }
 
-#[test]
-fn approval_ops_route_to_requesting_agent() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None);
+#[tokio::test]
+async fn approval_ops_route_to_requesting_agent() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     let ev = ExecApprovalRequestEvent {
         call_id: "call-1".into(),
         turn_id: "turn-1".into(),
@@ -3488,9 +3492,9 @@ fn approval_ops_route_to_requesting_agent() {
     }
 }
 
-#[test]
-fn ctrl_n_create_agent_from_composer_routes_submission() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None);
+#[tokio::test]
+async fn ctrl_n_create_agent_from_composer_routes_submission() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.set_composer_text("hello".to_string());
 
     chat.create_agent_from_composer("worker_3".to_string());
