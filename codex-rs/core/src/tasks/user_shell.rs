@@ -68,9 +68,36 @@ impl SessionTask for UserShellCommandTask {
         // allows commands that use shell features (pipes, &&, redirects, etc.).
         // We do not source rc files or otherwise reformat the script.
         let use_login_shell = true;
+        // Fix for Issue #8472: On macOS, System Integrity Protection (SIP) strips DYLD_* environment
+        // variables when spawning restricted binaries (like /bin/sh or /bin/zsh).
+        // This means setting them via `Command::env` is ineffective for the child shell.
+        // We workaround this by explicitly exporting them in the shell command string itself.
+        #[cfg(target_os = "macos")]
+        let command_str = {
+            let cmd = self.command.clone();
+            let mut exports = String::new();
+            for (key, value) in &turn_context.shell_environment_policy.set {
+                if key.starts_with("DYLD_") {
+                    // Simple escaping: wrap in single quotes, escape existing single quotes.
+                    let escaped_val = value.replace("'", "'\\''");
+                    use std::fmt::Write;
+                    let _ = write!(exports, "export {}='{}'; ", key, escaped_val);
+                }
+            }
+            if !exports.is_empty() {
+                exports.push_str(&cmd);
+                exports
+            } else {
+                cmd
+            }
+        };
+
+        #[cfg(not(target_os = "macos"))]
+        let command_str = self.command.clone();
+
         let command = session
             .user_shell()
-            .derive_exec_args(&self.command, use_login_shell);
+            .derive_exec_args(&command_str, use_login_shell);
 
         let call_id = Uuid::new_v4().to_string();
         let raw_command = self.command.clone();
