@@ -55,7 +55,7 @@ impl ConfigLayerEntry {
     pub fn config_folder(&self) -> Option<AbsolutePathBuf> {
         match &self.name {
             ConfigLayerSource::Mdm { .. } => None,
-            ConfigLayerSource::System { .. } => None,
+            ConfigLayerSource::System { file } => file.parent(),
             ConfigLayerSource::User { file } => file.parent(),
             ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder.clone()),
             ConfigLayerSource::SessionFlags => None,
