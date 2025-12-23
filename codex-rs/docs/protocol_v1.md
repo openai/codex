@@ -20,9 +20,10 @@ These are entities exit on the codex backend. The intent of this section is to e
    - `Codex` starts with no `Session`, and it is initialized by `Op::ConfigureSession`, which should be the first message sent by the UI.
    - The current `Session` can be reconfigured with additional `Op::ConfigureSession` calls.
    - Any running execution is aborted when the session is reconfigured.
+   - A session hosts one or more agents, each with its own conversation history and turn loop.
 3. `Task`
    - A `Task` is `Codex` executing work in response to user input.
-   - `Session` has at most one `Task` running at a time.
+   - Each agent has at most one `Task` running at a time (tasks can run concurrently across agents).
    - Receiving `Op::UserInput` starts a `Task`
    - Consists of a series of `Turn`s
    - The `Task` executes to until:
@@ -44,7 +45,7 @@ The term "UI" is used to refer to the application driving `Codex`. This may be t
 
 When a `Turn` completes, the `response_id` from the `Model`'s final `response.completed` message is stored in the `Session` state to resume the thread given the next `Op::UserInput`. The `response_id` is also returned in the `EventMsg::TurnComplete` to the UI, which can be used to fork the thread from an earlier point by providing it in the `Op::UserInput`.
 
-Since only 1 `Task` can be run at a time, for parallel tasks it is recommended that a single `Codex` be run for each thread of work.
+Since each agent can only run 1 `Task` at a time, parallel tasks should be routed to different agents (or separate Codex sessions).
 
 ## Interface
 
@@ -58,6 +59,7 @@ Since only 1 `Task` can be run at a time, for parallel tasks it is recommended t
 - `Event`
   - These are messages sent on the `EQ` (`Codex` -> UI)
   - Each `Event` has a non-unique ID, matching the `sub_id` from the `Op::UserInput` that started the current task.
+  - `Event` includes an optional `agent_id`; when omitted, clients should treat it as the default agent (`root`).
   - `EventMsg` refers to the enum of all possible `Event` payloads
     - This enum is `non_exhaustive`; variants can be added at future dates
     - It should be expected that new `EventMsg` variants will be added over time to expose more detailed information about the model's actions.
@@ -66,6 +68,7 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
 
 - `Op`
   - `Op::UserInput` – Any input from the user to kick off a `Task`
+  - `Op::ForAgent` – Route a nested `Op` to a specific agent (defaults to the `root` agent when omitted)
   - `Op::Interrupt` – Interrupts a running task
   - `Op::ExecApproval` – Approve or deny code execution
   - `Op::ListSkills` – Request skills for one or more cwd values (optionally `force_reload`)

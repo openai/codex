@@ -109,7 +109,8 @@ impl Session {
         input: Vec<UserInput>,
         task: T,
     ) {
-        self.abort_all_tasks(TurnAbortReason::Replaced).await;
+        self.abort_agent_tasks(&turn_context.agent_id, TurnAbortReason::Replaced)
+            .await;
 
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
@@ -152,14 +153,25 @@ impl Session {
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
         };
-        self.register_new_active_task(running_task).await;
+        self.register_new_active_task(&turn_context.agent_id, running_task)
+            .await;
+    }
+
+    pub async fn abort_agent_tasks(self: &Arc<Self>, agent_id: &AgentId, reason: TurnAbortReason) {
+        for task in self.take_running_tasks_for_agent(agent_id).await {
+            self.handle_task_abort(task, reason.clone()).await;
+        }
+        self.maybe_close_unified_exec_sessions().await;
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
-        for task in self.take_all_running_tasks().await {
-            self.handle_task_abort(task, reason.clone()).await;
+        for agent in self.agent_states().await {
+            let agent_id = agent.agent_id.clone();
+            for task in self.take_running_tasks_for_agent(&agent_id).await {
+                self.handle_task_abort(task, reason.clone()).await;
+            }
         }
-        self.close_unified_exec_sessions().await;
+        self.maybe_close_unified_exec_sessions().await;
     }
 
     pub async fn on_task_finished(
@@ -167,32 +179,31 @@ impl Session {
         turn_context: Arc<TurnContext>,
         last_agent_message: Option<String>,
     ) {
-        let mut active = self.active_turn.lock().await;
-        let should_close_sessions = if let Some(at) = active.as_mut()
-            && at.remove_task(&turn_context.sub_id)
+        let agent = self.get_or_create_agent(&turn_context.agent_id).await;
         {
-            *active = None;
-            true
-        } else {
-            false
-        };
-        drop(active);
-        if should_close_sessions {
-            self.close_unified_exec_sessions().await;
+            let mut active = agent.active_turn.lock().await;
+            if let Some(at) = active.as_mut()
+                && at.remove_task(&turn_context.sub_id)
+            {
+                *active = None;
+            }
         }
+        self.maybe_close_unified_exec_sessions().await;
         let event = EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message });
         self.send_event(turn_context.as_ref(), event).await;
     }
 
-    async fn register_new_active_task(&self, task: RunningTask) {
-        let mut active = self.active_turn.lock().await;
+    async fn register_new_active_task(&self, agent_id: &AgentId, task: RunningTask) {
+        let agent = self.get_or_create_agent(agent_id).await;
+        let mut active = agent.active_turn.lock().await;
         let mut turn = ActiveTurn::default();
         turn.add_task(task);
         *active = Some(turn);
     }
 
-    async fn take_all_running_tasks(&self) -> Vec<RunningTask> {
-        let mut active = self.active_turn.lock().await;
+    async fn take_running_tasks_for_agent(&self, agent_id: &AgentId) -> Vec<RunningTask> {
+        let agent = self.get_or_create_agent(agent_id).await;
+        let mut active = agent.active_turn.lock().await;
         match active.take() {
             Some(mut at) => {
                 at.clear_pending().await;
@@ -203,7 +214,10 @@ impl Session {
         }
     }
 
-    async fn close_unified_exec_sessions(&self) {
+    async fn maybe_close_unified_exec_sessions(&self) {
+        if self.has_active_tasks().await {
+            return;
+        }
         self.services
             .unified_exec_manager
             .terminate_all_sessions()

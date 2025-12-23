@@ -130,9 +130,8 @@ use crate::skills::SkillInjections;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
-use crate::state::ActiveTurn;
+use crate::state::AgentState;
 use crate::state::SessionServices;
-use crate::state::SessionState;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
@@ -292,7 +291,7 @@ impl Codex {
         let conversation_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(session, config, rx_sub));
+        tokio::spawn(dispatch_loop(session, config, rx_sub));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -342,15 +341,19 @@ impl Codex {
 pub(crate) struct Session {
     conversation_id: ConversationId,
     tx_event: Sender<Event>,
-    state: Mutex<SessionState>,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     features: Features,
-    pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    agents: RwLock<HashMap<AgentId, Arc<AgentState>>>,
+    default_session_configuration: SessionConfiguration,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
 }
 
+/// Per-agent mutable state shared across async tasks.
+///
+/// The struct itself is stored in an `Arc`, so fields use `Mutex` to guard
+/// concurrent mutation rather than additional `Arc` layers.
 /// The context needed for a single turn of the conversation.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -657,7 +660,14 @@ impl Session {
                     .await
                     .map(Arc::new);
         }
-        let state = SessionState::new(session_configuration.clone());
+        let mut agents = HashMap::new();
+        agents.insert(
+            DEFAULT_AGENT_ID.to_string(),
+            Arc::new(AgentState::new(
+                DEFAULT_AGENT_ID.to_string(),
+                session_configuration.clone(),
+            )),
+        );
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -678,9 +688,9 @@ impl Session {
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
-            state: Mutex::new(state),
             features: config.features.clone(),
-            active_turn: Mutex::new(None),
+            agents: RwLock::new(agents),
+            default_session_configuration: session_configuration.clone(),
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
@@ -690,6 +700,7 @@ impl Session {
         let initial_messages = initial_history.get_event_msgs();
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
+            agent_id: Some(DEFAULT_AGENT_ID.to_string()),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: session_configuration.model.clone(),
@@ -753,83 +764,125 @@ impl Session {
         }
     }
 
-    fn next_internal_sub_id(&self) -> String {
+    fn next_internal_sub_id(&self, agent_id: &AgentId) -> String {
         let id = self
             .next_internal_sub_id
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        format!("auto-compact-{id}")
+        format!("auto-{agent_id}-{id}")
     }
 
-    async fn get_total_token_usage(&self) -> i64 {
-        let state = self.state.lock().await;
+    async fn get_total_token_usage(&self, agent_id: &AgentId) -> i64 {
+        let agent = self.get_or_create_agent(agent_id).await;
+        let state = agent.state.lock().await;
         state.get_total_token_usage()
     }
 
+    async fn seed_new_agent_history(&self, agent: Arc<AgentState>) {
+        let agent_id = agent.agent_id.clone();
+        let session_configuration = {
+            let state = agent.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let turn_context = self
+            .new_turn_from_configuration(
+                &agent_id,
+                self.next_internal_sub_id(&agent_id),
+                session_configuration,
+                None,
+                false,
+            )
+            .await;
+        let items = self.build_initial_context(&turn_context);
+        {
+            let mut state = agent.state.lock().await;
+            state.record_items(items.iter(), turn_context.truncation_policy);
+        }
+        self.persist_rollout_response_items(&agent_id, &items).await;
+        self.send_raw_response_items(&turn_context, &items).await;
+        self.flush_rollout().await;
+    }
+
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
-        let turn_context = self.new_default_turn().await;
-        match conversation_history {
+        #[derive(Clone, Copy)]
+        enum SeedMode {
+            Resumed,
+            Forked,
+        }
+
+        let (mode, rollout_lines) = match conversation_history {
             InitialHistory::New => {
-                // Build and record initial items (user instructions + environment context)
-                let items = self.build_initial_context(&turn_context);
-                self.record_conversation_items(&turn_context, &items).await;
-                // Ensure initial items are visible to immediate readers (e.g., tests, forks).
-                self.flush_rollout().await;
+                let agent = self.ensure_agent(&DEFAULT_AGENT_ID, false).await;
+                self.seed_new_agent_history(agent).await;
+                return;
             }
-            InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
-                let rollout_items = conversation_history.get_rollout_items();
-                let persist = matches!(conversation_history, InitialHistory::Forked(_));
+            InitialHistory::Resumed(resumed) => (SeedMode::Resumed, resumed.history),
+            InitialHistory::Forked(lines) => (SeedMode::Forked, lines),
+        };
 
-                // If resuming, warn when the last recorded model differs from the current one.
-                if let InitialHistory::Resumed(_) = conversation_history
-                    && let Some(prev) = rollout_items.iter().rev().find_map(|it| {
-                        if let RolloutItem::TurnContext(ctx) = it {
-                            Some(ctx.model.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                {
-                    let curr = turn_context.client.get_model();
-                    if prev != curr {
-                        warn!(
-                            "resuming session with different model: previous={prev}, current={curr}"
-                        );
-                        self.send_event(
-                            &turn_context,
-                            EventMsg::Warning(WarningEvent {
-                                message: format!(
-                                    "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
-                         Consider switching back to `{prev}` as it may affect Codex performance."
-                                ),
-                            }),
-                        )
-                            .await;
+        let mut items_by_agent: HashMap<AgentId, Vec<RolloutItem>> = HashMap::new();
+        for line in rollout_lines {
+            let agent_id = line
+                .agent_id
+                .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string());
+            items_by_agent.entry(agent_id).or_default().push(line.item);
+        }
+
+        for (agent_id, rollout_items) in items_by_agent {
+            let _agent = self.ensure_agent(&agent_id, false).await;
+            let turn_context = self
+                .new_default_turn_for_agent_with_sub_id(
+                    &agent_id,
+                    self.next_internal_sub_id(&agent_id),
+                )
+                .await;
+
+            if matches!(mode, SeedMode::Resumed)
+                && let Some(prev) = rollout_items.iter().rev().find_map(|it| {
+                    if let RolloutItem::TurnContext(ctx) = it {
+                        Some(ctx.model.as_str())
+                    } else {
+                        None
                     }
+                })
+            {
+                let curr = turn_context.client.get_model();
+                if prev != curr {
+                    warn!("resuming session with different model: previous={prev}, current={curr}");
+                    self.send_event(
+                        &turn_context,
+                        EventMsg::Warning(WarningEvent {
+                            message: format!(
+                                "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
+                         Consider switching back to `{prev}` as it may affect Codex performance."
+                            ),
+                        }),
+                    )
+                    .await;
                 }
+            }
 
-                // Always add response items to conversation history
-                let reconstructed_history =
-                    self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
-                if !reconstructed_history.is_empty() {
-                    self.record_into_history(&reconstructed_history, &turn_context)
-                        .await;
-                }
+            let reconstructed_history =
+                self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
+            if !reconstructed_history.is_empty() {
+                self.record_into_history(&reconstructed_history, &turn_context)
+                    .await;
+            }
 
-                // If persisting, persist all rollout items as-is (recorder filters)
-                if persist && !rollout_items.is_empty() {
-                    self.persist_rollout_items(&rollout_items).await;
-                }
-                // Flush after seeding history and any persisted rollout copy.
-                self.flush_rollout().await;
+            if matches!(mode, SeedMode::Forked) && !rollout_items.is_empty() {
+                self.persist_rollout_items(&agent_id, &rollout_items).await;
             }
         }
+
+        self.flush_rollout().await;
     }
 
     pub(crate) async fn update_settings(
         &self,
+        agent_id: &AgentId,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let mut state = self.state.lock().await;
+        let agent = self.get_or_create_agent(agent_id).await;
+        let mut state = agent.state.lock().await;
 
         match state.session_configuration.apply(&updates) {
             Ok(updated) => {
@@ -845,11 +898,13 @@ impl Session {
 
     pub(crate) async fn new_turn_with_sub_id(
         &self,
+        agent_id: &AgentId,
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
         let (session_configuration, sandbox_policy_changed) = {
-            let mut state = self.state.lock().await;
+            let agent = self.get_or_create_agent(agent_id).await;
+            let mut state = agent.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
                     let sandbox_policy_changed =
@@ -861,6 +916,7 @@ impl Session {
                     drop(state);
                     self.send_event_raw(Event {
                         id: sub_id.clone(),
+                        agent_id: Some(agent_id.clone()),
                         msg: EventMsg::Error(ErrorEvent {
                             message: err.to_string(),
                             codex_error_info: Some(CodexErrorInfo::BadRequest),
@@ -933,17 +989,22 @@ impl Session {
         Arc::new(turn_context)
     }
 
-    pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
-        self.new_default_turn_with_sub_id(self.next_internal_sub_id())
+    pub(crate) async fn new_default_turn_for_agent(&self, agent_id: &AgentId) -> Arc<TurnContext> {
+        self.new_default_turn_for_agent_with_sub_id(agent_id, self.next_internal_sub_id(agent_id))
             .await
     }
 
-    pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
+    pub(crate) async fn new_default_turn_for_agent_with_sub_id(
+        &self,
+        agent_id: &AgentId,
+        sub_id: String,
+    ) -> Arc<TurnContext> {
+        let agent = self.ensure_agent(agent_id, false).await;
         let session_configuration = {
-            let state = self.state.lock().await;
+            let state = agent.state.lock().await;
             state.session_configuration.clone()
         };
-        self.new_turn_from_configuration(sub_id, session_configuration, None, false)
+        self.new_turn_from_configuration(agent_id, sub_id, session_configuration, None, false)
             .await
     }
 
@@ -991,7 +1052,8 @@ impl Session {
     pub(crate) async fn send_event_raw(&self, event: Event) {
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
-        self.persist_rollout_items(&rollout_items).await;
+        let agent_id = event.agent_id.as_ref().unwrap_or(&DEFAULT_AGENT_ID);
+        self.persist_rollout_items(agent_id, &rollout_items).await;
         if let Err(e) = self.tx_event.send(event).await {
             error!("failed to send tool call event: {e}");
         }
@@ -1032,11 +1094,8 @@ impl Session {
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
         let features = self.features.clone();
-        let codex_home = self
-            .state
-            .lock()
-            .await
-            .session_configuration
+        let session_configuration = &self.default_session_configuration;
+        let codex_home = session_configuration
             .original_config_do_not_use
             .codex_home
             .clone();
@@ -1074,7 +1133,8 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
         let prev_entry = {
-            let mut active = self.active_turn.lock().await;
+            let agent = self.get_or_create_agent(&turn_context.agent_id).await;
+            let mut active = agent.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
@@ -1114,7 +1174,8 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
         let prev_entry = {
-            let mut active = self.active_turn.lock().await;
+            let agent = self.get_or_create_agent(&turn_context.agent_id).await;
+            let mut active = agent.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
@@ -1139,24 +1200,23 @@ impl Session {
     }
 
     pub async fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
-        let entry = {
-            let mut active = self.active_turn.lock().await;
-            match active.as_mut() {
-                Some(at) => {
-                    let mut ts = at.turn_state.lock().await;
-                    ts.remove_pending_approval(sub_id)
+        for agent in self.agent_states().await {
+            let entry = {
+                let mut active = agent.active_turn.lock().await;
+                match active.as_mut() {
+                    Some(at) => {
+                        let mut ts = at.turn_state.lock().await;
+                        ts.remove_pending_approval(sub_id)
+                    }
+                    None => None,
                 }
-                None => None,
-            }
-        };
-        match entry {
-            Some(tx_approve) => {
+            };
+            if let Some(tx_approve) = entry {
                 tx_approve.send(decision).ok();
-            }
-            None => {
-                warn!("No pending approval found for sub_id: {sub_id}");
+                return;
             }
         }
+        warn!("No pending approval found for sub_id: {sub_id}");
     }
 
     pub async fn resolve_elicitation(
@@ -1227,7 +1287,8 @@ impl Session {
         items: &[ResponseItem],
         turn_context: &TurnContext,
     ) {
-        let mut state = self.state.lock().await;
+        let agent = self.get_or_create_agent(&turn_context.agent_id).await;
+        let mut state = agent.state.lock().await;
         state.record_items(items.iter(), turn_context.truncation_policy);
     }
 
@@ -1247,18 +1308,19 @@ impl Session {
         self.record_conversation_items(ctx, &[item]).await;
     }
 
-    pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
-        let mut state = self.state.lock().await;
+    pub(crate) async fn replace_history(&self, agent_id: &AgentId, items: Vec<ResponseItem>) {
+        let agent = self.get_or_create_agent(agent_id).await;
+        let mut state = agent.state.lock().await;
         state.replace_history(items);
     }
 
-    async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
+    async fn persist_rollout_response_items(&self, agent_id: &AgentId, items: &[ResponseItem]) {
         let rollout_items: Vec<RolloutItem> = items
             .iter()
             .cloned()
             .map(RolloutItem::ResponseItem)
             .collect();
-        self.persist_rollout_items(&rollout_items).await;
+        self.persist_rollout_items(agent_id, &rollout_items).await;
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {
@@ -1303,7 +1365,7 @@ impl Session {
         items
     }
 
-    pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
+    pub(crate) async fn persist_rollout_items(&self, agent_id: &AgentId, items: &[RolloutItem]) {
         let recorder = {
             let guard = self.services.rollout.lock().await;
             guard.clone()
@@ -1315,8 +1377,9 @@ impl Session {
         }
     }
 
-    pub(crate) async fn clone_history(&self) -> ContextManager {
-        let state = self.state.lock().await;
+    pub(crate) async fn clone_history(&self, agent_id: &AgentId) -> ContextManager {
+        let agent = self.get_or_create_agent(agent_id).await;
+        let state = agent.state.lock().await;
         state.clone_history()
     }
 
@@ -1326,7 +1389,8 @@ impl Session {
         token_usage: Option<&TokenUsage>,
     ) {
         {
-            let mut state = self.state.lock().await;
+            let agent = self.get_or_create_agent(&turn_context.agent_id).await;
+            let mut state = agent.state.lock().await;
             if let Some(token_usage) = token_usage {
                 state.update_token_info_from_usage(
                     token_usage,
@@ -1346,7 +1410,8 @@ impl Session {
             return;
         };
         {
-            let mut state = self.state.lock().await;
+            let agent = self.get_or_create_agent(&turn_context.agent_id).await;
+            let mut state = agent.state.lock().await;
             let mut info = state.token_info().unwrap_or(TokenUsageInfo {
                 total_token_usage: TokenUsage::default(),
                 last_token_usage: TokenUsage::default(),
@@ -1376,7 +1441,8 @@ impl Session {
         new_rate_limits: RateLimitSnapshot,
     ) {
         {
-            let mut state = self.state.lock().await;
+            let agent = self.get_or_create_agent(&turn_context.agent_id).await;
+            let mut state = agent.state.lock().await;
             state.set_rate_limits(new_rate_limits);
         }
         self.send_token_count_event(turn_context).await;
@@ -1384,7 +1450,8 @@ impl Session {
 
     async fn send_token_count_event(&self, turn_context: &TurnContext) {
         let (info, rate_limits) = {
-            let state = self.state.lock().await;
+            let agent = self.get_or_create_agent(&turn_context.agent_id).await;
+            let state = agent.state.lock().await;
             state.token_info_and_rate_limits()
         };
         let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
@@ -1395,7 +1462,8 @@ impl Session {
         let context_window = turn_context.client.get_model_context_window();
         if let Some(context_window) = context_window {
             {
-                let mut state = self.state.lock().await;
+                let agent = self.get_or_create_agent(&turn_context.agent_id).await;
+                let mut state = agent.state.lock().await;
                 state.set_token_usage_full(context_window);
             }
             self.send_token_count_event(turn_context).await;
@@ -1474,8 +1542,13 @@ impl Session {
     }
 
     /// Returns the input if there was no task running to inject into
-    pub async fn inject_input(&self, input: Vec<UserInput>) -> Result<(), Vec<UserInput>> {
-        let mut active = self.active_turn.lock().await;
+    pub async fn inject_input(
+        &self,
+        agent_id: &AgentId,
+        input: Vec<UserInput>,
+    ) -> Result<(), Vec<UserInput>> {
+        let agent = self.get_or_create_agent(agent_id).await;
+        let mut active = agent.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
@@ -1486,8 +1559,9 @@ impl Session {
         }
     }
 
-    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
-        let mut active = self.active_turn.lock().await;
+    pub async fn get_pending_input(&self, agent_id: &AgentId) -> Vec<ResponseInputItem> {
+        let agent = self.get_or_create_agent(agent_id).await;
+        let mut active = agent.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
@@ -1559,11 +1633,13 @@ impl Session {
             .await
     }
 
-    pub async fn interrupt_task(self: &Arc<Self>) {
+    pub async fn interrupt_task(self: &Arc<Self>, agent_id: &AgentId) {
         info!("interrupt received: abort current task, if any");
-        let has_active_turn = { self.active_turn.lock().await.is_some() };
+        let agent = self.get_or_create_agent(agent_id).await;
+        let has_active_turn = { agent.active_turn.lock().await.is_some() };
         if has_active_turn {
-            self.abort_all_tasks(TurnAbortReason::Interrupted).await;
+            self.abort_agent_tasks(agent_id, TurnAbortReason::Interrupted)
+                .await;
         } else {
             self.cancel_mcp_startup().await;
         }
@@ -1584,14 +1660,152 @@ impl Session {
     async fn cancel_mcp_startup(&self) {
         self.services.mcp_startup_cancellation_token.cancel();
     }
+
+    /// Returns the agent state if it already exists; does not create or seed it.
+    async fn get_agent(&self, agent_id: &AgentId) -> Option<Arc<AgentState>> {
+        let agents = self.agents.read().await;
+        agents.get(agent_id).cloned()
+    }
+
+    /// Ensures an agent exists, creating it with the default session configuration if needed.
+    /// When `seed_history` is true, records the initial context and emits rollout items.
+    async fn ensure_agent(&self, agent_id: &AgentId, seed_history: bool) -> Arc<AgentState> {
+        if let Some(agent) = self.get_agent(agent_id).await {
+            return agent;
+        }
+
+        let agent = Arc::new(AgentState::new(
+            agent_id.clone(),
+            self.default_session_configuration.clone(),
+        ));
+        {
+            let mut agents = self.agents.write().await;
+            agents.insert(agent_id.clone(), Arc::clone(&agent));
+        }
+
+        if seed_history {
+            self.seed_new_agent_history(Arc::clone(&agent)).await;
+        }
+        agent
+    }
+
+    /// Returns an existing agent state or creates it without seeding history.
+    pub(crate) async fn get_or_create_agent(&self, agent_id: &AgentId) -> Arc<AgentState> {
+        self.ensure_agent(agent_id, false).await
+    }
+
+    /// Snapshot of all agent states currently tracked by the session.
+    pub(crate) async fn agent_states(&self) -> Vec<Arc<AgentState>> {
+        let agents = self.agents.read().await;
+        agents.values().cloned().collect()
+    }
+
+    /// Returns true if any agent currently has an active task.
+    pub(crate) async fn has_active_tasks(&self) -> bool {
+        for agent in self.agent_states().await {
+            if agent.active_turn.lock().await.is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Aborts the active task that owns `sub_id` (the per-turn submission/turn id).
+    /// This is used when approvals arrive without an agent id, so we must locate the owner.
+    async fn abort_task_for_sub_id(self: &Arc<Self>, sub_id: &str, reason: TurnAbortReason) {
+        for agent in self.agent_states().await {
+            let matches_sub_id = {
+                let active = agent.active_turn.lock().await;
+                active
+                    .as_ref()
+                    .map(|active| active.tasks.contains_key(sub_id))
+                    .unwrap_or(false)
+            };
+            if matches_sub_id {
+                self.abort_agent_tasks(&agent.agent_id, reason).await;
+                return;
+            }
+        }
+    }
+
+    /// Returns the agent id that owns `sub_id` (the per-turn submission/turn id), if any.
+    async fn agent_id_for_sub_id(&self, sub_id: &str) -> Option<AgentId> {
+        for agent in self.agent_states().await {
+            let matches_sub_id = {
+                let active = agent.active_turn.lock().await;
+                active
+                    .as_ref()
+                    .map(|active| active.tasks.contains_key(sub_id))
+                    .unwrap_or(false)
+            };
+            if matches_sub_id {
+                return Some(agent.agent_id.clone());
+            }
+        }
+        None
+    }
 }
 
-async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
+async fn dispatch_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
+    let mut agent_channels: HashMap<AgentId, Sender<Submission>> = HashMap::new();
+    let root_tx = spawn_agent_loop(
+        Arc::clone(&sess),
+        Arc::clone(&config),
+        DEFAULT_AGENT_ID.to_string(),
+    )
+    .await;
+    agent_channels.insert(DEFAULT_AGENT_ID.to_string(), root_tx);
+
+    while let Ok(sub) = rx_sub.recv().await {
+        let (agent_id, op) = match sub.op {
+            Op::ForAgent { agent_id, op } => (agent_id, *op),
+            op => (DEFAULT_AGENT_ID.to_string(), op),
+        };
+
+        if matches!(op, Op::Shutdown) {
+            if handlers::shutdown(&sess, sub.id.clone()).await {
+                break;
+            }
+            continue;
+        }
+
+        let tx = match agent_channels.get(&agent_id) {
+            Some(tx) => tx.clone(),
+            None => {
+                let tx = spawn_agent_loop(Arc::clone(&sess), Arc::clone(&config), agent_id.clone())
+                    .await;
+                agent_channels.insert(agent_id.clone(), tx.clone());
+                tx
+            }
+        };
+
+        if tx.send(Submission { id: sub.id, op }).await.is_err() {
+            agent_channels.remove(&agent_id);
+        }
+    }
+}
+
+async fn spawn_agent_loop(
+    sess: Arc<Session>,
+    config: Arc<Config>,
+    agent_id: AgentId,
+) -> Sender<Submission> {
+    sess.ensure_agent(&agent_id, true).await;
+    let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
+    tokio::spawn(submission_loop(sess, config, agent_id, rx_sub));
+    tx_sub
+}
+
+async fn submission_loop(
+    sess: Arc<Session>,
+    config: Arc<Config>,
+    agent_id: AgentId,
+    rx_sub: Receiver<Submission>,
+) {
     // Seed with context in case there is an OverrideTurnContext first.
     let mut previous_context: Option<Arc<TurnContext>> =
         Some(sess.new_default_turn_for_agent(&agent_id).await);
 
-    // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
         match sub.op.clone() {
@@ -1684,11 +1898,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             } => {
                 handlers::resolve_elicitation(&sess, server_name, request_id, decision).await;
             }
-            Op::Shutdown => {
-                if handlers::shutdown(&sess, sub.id.clone()).await {
-                    break;
-                }
-            }
             Op::Review { review_request } => {
                 handlers::review(&sess, &agent_id, &config, sub.id.clone(), review_request).await;
             }
@@ -1715,7 +1924,9 @@ mod handlers {
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
+    use codex_protocol::protocol::AgentId;
     use codex_protocol::protocol::CodexErrorInfo;
+    use codex_protocol::protocol::DEFAULT_AGENT_ID;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
@@ -1737,8 +1948,8 @@ mod handlers {
     use tracing::info;
     use tracing::warn;
 
-    pub async fn interrupt(sess: &Arc<Session>) {
-        sess.interrupt_task().await;
+    pub async fn interrupt(sess: &Arc<Session>, agent_id: &AgentId) {
+        sess.interrupt_task(agent_id).await;
     }
 
     pub async fn override_turn_context(
@@ -1747,9 +1958,10 @@ mod handlers {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) {
-        if let Err(err) = sess.update_settings(updates).await {
+        if let Err(err) = sess.update_settings(agent_id, updates).await {
             sess.send_event_raw(Event {
                 id: sub_id,
+                agent_id: Some(agent_id.clone()),
                 msg: EventMsg::Error(ErrorEvent {
                     message: err.to_string(),
                     codex_error_info: Some(CodexErrorInfo::BadRequest),
@@ -1792,7 +2004,7 @@ mod handlers {
             _ => unreachable!(),
         };
 
-        let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
+        let Ok(current_context) = sess.new_turn_with_sub_id(agent_id, sub_id, updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
         };
@@ -1802,7 +2014,7 @@ mod handlers {
             .user_prompt(&items);
 
         // Attempt to inject input into current task
-        if let Err(items) = sess.inject_input(items).await {
+        if let Err(items) = sess.inject_input(agent_id, items).await {
             if let Some(env_item) =
                 sess.build_environment_update_item(previous_context.as_ref(), &current_context)
             {
@@ -1823,7 +2035,9 @@ mod handlers {
         command: String,
         previous_context: &mut Option<Arc<TurnContext>>,
     ) {
-        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        let turn_context = sess
+            .new_default_turn_for_agent_with_sub_id(agent_id, sub_id)
+            .await;
         sess.spawn_task(
             Arc::clone(&turn_context),
             Vec::new(),
@@ -1872,15 +2086,18 @@ mod handlers {
             let message = format!("Failed to apply execpolicy amendment: {err}");
             tracing::warn!("{message}");
             let warning = EventMsg::Warning(WarningEvent { message });
+            let agent_id = sess.agent_id_for_sub_id(&id).await;
             sess.send_event_raw(Event {
                 id: id.clone(),
+                agent_id,
                 msg: warning,
             })
             .await;
         }
         match decision {
             ReviewDecision::Abort => {
-                sess.interrupt_task().await;
+                sess.abort_task_for_sub_id(&id, TurnAbortReason::Interrupted)
+                    .await;
             }
             other => sess.notify_approval(&id, other).await,
         }
@@ -1889,7 +2106,8 @@ mod handlers {
     pub async fn patch_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
         match decision {
             ReviewDecision::Abort => {
-                sess.interrupt_task().await;
+                sess.abort_task_for_sub_id(&id, TurnAbortReason::Interrupted)
+                    .await;
             }
             other => sess.notify_approval(&id, other).await,
         }
@@ -1902,9 +2120,13 @@ mod handlers {
         text: String,
     ) {
         let id = sess.conversation_id;
+        let agent_id = agent_id.clone();
         let config = Arc::clone(config);
         tokio::spawn(async move {
-            if let Err(e) = crate::message_history::append_entry(&text, &id, &config).await {
+            if let Err(e) =
+                crate::message_history::append_entry(&text, Some(agent_id.as_str()), &id, &config)
+                    .await
+            {
                 warn!("failed to append to message history: {e}");
             }
         });
@@ -1920,6 +2142,7 @@ mod handlers {
     ) {
         let config = Arc::clone(config);
         let sess_clone = Arc::clone(sess);
+        let agent_id = agent_id.clone();
 
         tokio::spawn(async move {
             // Run lookup in blocking thread because it does file IO + locking.
@@ -1931,12 +2154,14 @@ mod handlers {
 
             let event = Event {
                 id: sub_id,
+                agent_id: Some(agent_id),
                 msg: EventMsg::GetHistoryEntryResponse(
                     crate::protocol::GetHistoryEntryResponseEvent {
                         offset,
                         log_id,
                         entry: entry_opt.map(|e| codex_protocol::message_history::HistoryEntry {
                             conversation_id: e.session_id,
+                            agent_id: e.agent_id,
                             ts: e.ts,
                             text: e.text,
                         }),
@@ -1966,12 +2191,13 @@ mod handlers {
         .await;
         let event = Event {
             id: sub_id,
+            agent_id: Some(agent_id.clone()),
             msg: EventMsg::McpListToolsResponse(snapshot),
         };
         sess.send_event_raw(event).await;
     }
 
-    pub async fn list_custom_prompts(sess: &Session, agent_id: &str, sub_id: String) {
+    pub async fn list_custom_prompts(sess: &Session, agent_id: &AgentId, sub_id: String) {
         let custom_prompts: Vec<CustomPrompt> =
             if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
                 crate::custom_prompts::discover_prompts_in(&dir).await
@@ -1981,6 +2207,7 @@ mod handlers {
 
         let event = Event {
             id: sub_id,
+            agent_id: Some(agent_id.clone()),
             msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
                 custom_prompts,
             }),
@@ -1996,7 +2223,8 @@ mod handlers {
         force_reload: bool,
     ) {
         let cwds = if cwds.is_empty() {
-            let state = sess.state.lock().await;
+            let agent = sess.get_or_create_agent(agent_id).await;
+            let state = agent.state.lock().await;
             vec![state.session_configuration.cwd.clone()]
         } else {
             cwds
@@ -2026,19 +2254,24 @@ mod handlers {
         };
         let event = Event {
             id: sub_id,
+            agent_id: Some(agent_id.clone()),
             msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
         };
         sess.send_event_raw(event).await;
     }
 
-    pub async fn undo(sess: &Arc<Session>, sub_id: String) {
-        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+    pub async fn undo(sess: &Arc<Session>, agent_id: &AgentId, sub_id: String) {
+        let turn_context = sess
+            .new_default_turn_for_agent_with_sub_id(agent_id, sub_id)
+            .await;
         sess.spawn_task(turn_context, Vec::new(), UndoTask::new())
             .await;
     }
 
-    pub async fn compact(sess: &Arc<Session>, sub_id: String) {
-        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+    pub async fn compact(sess: &Arc<Session>, agent_id: &AgentId, sub_id: String) {
+        let turn_context = sess
+            .new_default_turn_for_agent_with_sub_id(agent_id, sub_id)
+            .await;
 
         sess.spawn_task(
             Arc::clone(&turn_context),
@@ -2070,6 +2303,7 @@ mod handlers {
             warn!("failed to shutdown rollout recorder: {e}");
             let event = Event {
                 id: sub_id.clone(),
+                agent_id: Some(DEFAULT_AGENT_ID.to_string()),
                 msg: EventMsg::Error(ErrorEvent {
                     message: "Failed to shutdown rollout recorder".to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),
@@ -2080,6 +2314,7 @@ mod handlers {
 
         let event = Event {
             id: sub_id,
+            agent_id: Some(DEFAULT_AGENT_ID.to_string()),
             msg: EventMsg::ShutdownComplete,
         };
         sess.send_event_raw(event).await;
@@ -2093,7 +2328,9 @@ mod handlers {
         sub_id: String,
         review_request: ReviewRequest,
     ) {
-        let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+        let turn_context = sess
+            .new_default_turn_for_agent_with_sub_id(agent_id, sub_id.clone())
+            .await;
         match resolve_review_request(review_request, config.cwd.as_path()) {
             Ok(resolved) => {
                 spawn_review_thread(
@@ -2108,6 +2345,7 @@ mod handlers {
             Err(err) => {
                 let event = Event {
                     id: sub_id,
+                    agent_id: Some(agent_id.clone()),
                     msg: EventMsg::Error(ErrorEvent {
                         message: err.to_string(),
                         codex_error_info: Some(CodexErrorInfo::Other),
@@ -2174,6 +2412,7 @@ async fn spawn_review_thread(
     );
 
     let review_turn_context = TurnContext {
+        agent_id: parent_turn_context.agent_id.clone(),
         sub_id: sub_id.to_string(),
         client,
         tools_config,
@@ -2260,7 +2499,7 @@ pub(crate) async fn run_task(
         .get_model_family()
         .auto_compact_token_limit()
         .unwrap_or(i64::MAX);
-    let total_usage_tokens = sess.get_total_token_usage().await;
+    let total_usage_tokens = sess.get_total_token_usage(&turn_context.agent_id).await;
     if total_usage_tokens >= auto_compact_limit {
         run_auto_compact(&sess, &turn_context).await;
     }
@@ -2307,7 +2546,7 @@ pub(crate) async fn run_task(
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
         let pending_input = sess
-            .get_pending_input()
+            .get_pending_input(&turn_context.agent_id)
             .await
             .into_iter()
             .map(ResponseItem::from)
@@ -2317,7 +2556,9 @@ pub(crate) async fn run_task(
         let turn_input: Vec<ResponseItem> = {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
-            sess.clone_history().await.get_history_for_prompt()
+            sess.clone_history(&turn_context.agent_id)
+                .await
+                .get_history_for_prompt()
         };
 
         let turn_input_messages = turn_input
@@ -2342,7 +2583,7 @@ pub(crate) async fn run_task(
                     needs_follow_up,
                     last_agent_message: turn_last_agent_message,
                 } = turn_output;
-                let total_usage_tokens = sess.get_total_token_usage().await;
+                let total_usage_tokens = sess.get_total_token_usage(&turn_context.agent_id).await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
@@ -2370,7 +2611,8 @@ pub(crate) async fn run_task(
                 break;
             }
             Err(CodexErr::InvalidImageRequest()) => {
-                let mut state = sess.state.lock().await;
+                let agent = sess.get_or_create_agent(&turn_context.agent_id).await;
+                let mut state = agent.state.lock().await;
                 error_or_panic(
                     "Invalid image detected, replacing it in the last turn to prevent poisoning",
                 );
@@ -2566,7 +2808,8 @@ async fn try_run_turn(
         truncation_policy: Some(turn_context.truncation_policy.into()),
     });
 
-    sess.persist_rollout_items(&[rollout_item]).await;
+    sess.persist_rollout_items(&turn_context.agent_id, &[rollout_item])
+        .await;
     let mut stream = turn_context
         .client
         .clone()
@@ -2790,7 +3033,6 @@ mod tests {
 
     use codex_protocol::models::FunctionCallOutputPayload;
 
-    use super::AgentState;
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
     use crate::protocol::DEFAULT_AGENT_ID;
@@ -2799,6 +3041,8 @@ mod tests {
     use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
     use crate::protocol::RolloutLine;
+    use crate::state::AgentState;
+    use crate::state::SessionState;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
@@ -2830,7 +3074,11 @@ mod tests {
     #[tokio::test]
     async fn reconstruct_history_matches_live_compactions() {
         let (session, turn_context) = make_session_and_context().await;
-        let (rollout_items, expected) = sample_rollout(&session, &turn_context);
+        let (rollout_lines, expected) = sample_rollout(&session, &turn_context);
+        let rollout_items = rollout_lines
+            .iter()
+            .map(|line| line.item.clone())
+            .collect::<Vec<_>>();
 
         let reconstructed = session.reconstruct_history_from_rollout(&turn_context, &rollout_items);
 
@@ -2850,7 +3098,7 @@ mod tests {
             }))
             .await;
 
-        let actual = session.state.lock().await.clone_history().get_history();
+        let actual = session.clone_history(&DEFAULT_AGENT_ID).await.get_history();
         assert_eq!(expected, actual);
     }
 
@@ -2863,7 +3111,7 @@ mod tests {
             .record_initial_history(InitialHistory::Forked(rollout_items))
             .await;
 
-        let actual = session.state.lock().await.clone_history().get_history();
+        let actual = session.clone_history(&DEFAULT_AGENT_ID).await.get_history();
         assert_eq!(expected, actual);
     }
 
@@ -3173,8 +3421,13 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let state = SessionState::new(session_configuration.clone());
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
+        let agent_id = DEFAULT_AGENT_ID.to_string();
+        let agent = Arc::new(AgentState::new(
+            agent_id.clone(),
+            session_configuration.clone(),
+        ));
+        let agents = std::collections::HashMap::from([(agent_id.clone(), Arc::clone(&agent))]);
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -3200,15 +3453,16 @@ mod tests {
             per_turn_config,
             model_family,
             conversation_id,
+            agent_id,
             "turn_id".to_string(),
         );
 
         let session = Session {
             conversation_id,
             tx_event,
-            state: Mutex::new(state),
             features: config.features.clone(),
-            active_turn: Mutex::new(None),
+            agents: RwLock::new(agents),
+            default_session_configuration: session_configuration,
             services,
             next_internal_sub_id: AtomicU64::new(0),
         };
@@ -3260,8 +3514,13 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let state = SessionState::new(session_configuration.clone());
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
+        let agent_id = DEFAULT_AGENT_ID.to_string();
+        let agent = Arc::new(AgentState::new(
+            agent_id.clone(),
+            session_configuration.clone(),
+        ));
+        let agents = std::collections::HashMap::from([(agent_id.clone(), Arc::clone(&agent))]);
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -3294,9 +3553,9 @@ mod tests {
         let session = Arc::new(Session {
             conversation_id,
             tx_event,
-            state: Mutex::new(state),
             features: config.features.clone(),
-            active_turn: Mutex::new(None),
+            agents: RwLock::new(agents),
+            default_session_configuration: session_configuration,
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
@@ -3315,7 +3574,7 @@ mod tests {
             .record_model_warning("too many unified exec sessions", &turn_context)
             .await;
 
-        let mut history = session.clone_history().await;
+        let mut history = session.clone_history(&DEFAULT_AGENT_ID).await;
         let history_items = history.get_history();
         let last = history_items.last().expect("warning recorded");
 
@@ -3462,7 +3721,7 @@ mod tests {
             }
         }
 
-        let history = sess.clone_history().await.get_history();
+        let history = sess.clone_history(&DEFAULT_AGENT_ID).await.get_history();
         let _ = history;
     }
 
@@ -3521,9 +3780,16 @@ mod tests {
     fn sample_rollout(
         session: &Session,
         turn_context: &TurnContext,
-    ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
+    ) -> (Vec<RolloutLine>, Vec<ResponseItem>) {
         let mut rollout_items = Vec::new();
         let mut live_history = ContextManager::new();
+        let mut push_line = |item| {
+            rollout_items.push(RolloutLine {
+                timestamp: "t".to_string(),
+                agent_id: None,
+                item,
+            });
+        };
 
         let initial_context = session.build_initial_context(turn_context);
         for item in &initial_context {

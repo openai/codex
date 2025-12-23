@@ -148,6 +148,7 @@ impl ConversationManager {
             Event {
                 id,
                 msg: EventMsg::SessionConfigured(session_configured),
+                ..
             } if id == INITIAL_SUBMIT_ID => session_configured,
             _ => {
                 return Err(CodexErr::SessionConfiguredNotFirstEvent);
@@ -269,12 +270,16 @@ impl ConversationManager {
 /// (0-based) and all items that follow it.
 fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> InitialHistory {
     // Work directly on rollout items, and cut the vector at the nth user message input.
-    let items: Vec<RolloutItem> = history.get_rollout_items();
+    let lines: Vec<RolloutLine> = history.get_rollout_lines();
+    let root_lines: Vec<RolloutLine> = lines
+        .into_iter()
+        .filter(|line| line.agent_id.as_deref().unwrap_or(&DEFAULT_AGENT_ID) == *DEFAULT_AGENT_ID)
+        .collect();
 
     // Find indices of user message inputs in rollout order.
     let mut user_positions: Vec<usize> = Vec::new();
-    for (idx, item) in items.iter().enumerate() {
-        if let RolloutItem::ResponseItem(item @ ResponseItem::Message { .. }) = item
+    for (idx, line) in root_lines.iter().enumerate() {
+        if let RolloutItem::ResponseItem(item @ ResponseItem::Message { .. }) = &line.item
             && matches!(
                 crate::event_mapping::parse_turn_item(item),
                 Some(TurnItem::UserMessage(_))
@@ -291,7 +296,7 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
 
     // Cut strictly before the nth user message (do not keep the nth itself).
     let cut_idx = user_positions[n];
-    let rolled: Vec<RolloutItem> = items.into_iter().take(cut_idx).collect();
+    let rolled: Vec<RolloutLine> = root_lines.into_iter().take(cut_idx).collect();
 
     if rolled.is_empty() {
         InitialHistory::New
@@ -355,13 +360,17 @@ mod tests {
         ];
 
         // Wrap as InitialHistory::Forked with response items only.
-        let initial: Vec<RolloutItem> = items
+        let initial: Vec<RolloutLine> = items
             .iter()
             .cloned()
-            .map(RolloutItem::ResponseItem)
+            .map(|item| RolloutLine {
+                timestamp: "t".to_string(),
+                agent_id: None,
+                item: RolloutItem::ResponseItem(item),
+            })
             .collect();
         let truncated = truncate_before_nth_user_message(InitialHistory::Forked(initial), 1);
-        let got_items = truncated.get_rollout_items();
+        let got_items = truncated.get_rollout_items_for_agent(&DEFAULT_AGENT_ID);
         let expected_items = vec![
             RolloutItem::ResponseItem(items[0].clone()),
             RolloutItem::ResponseItem(items[1].clone()),
@@ -372,10 +381,14 @@ mod tests {
             serde_json::to_value(&expected_items).unwrap()
         );
 
-        let initial2: Vec<RolloutItem> = items
+        let initial2: Vec<RolloutLine> = items
             .iter()
             .cloned()
-            .map(RolloutItem::ResponseItem)
+            .map(|item| RolloutLine {
+                timestamp: "t".to_string(),
+                agent_id: None,
+                item: RolloutItem::ResponseItem(item),
+            })
             .collect();
         let truncated2 = truncate_before_nth_user_message(InitialHistory::Forked(initial2), 2);
         assert_matches!(truncated2, InitialHistory::New);
@@ -390,14 +403,18 @@ mod tests {
         items.push(user_msg("second question"));
         items.push(assistant_msg("answer"));
 
-        let rollout_items: Vec<RolloutItem> = items
+        let rollout_items: Vec<RolloutLine> = items
             .iter()
             .cloned()
-            .map(RolloutItem::ResponseItem)
+            .map(|item| RolloutLine {
+                timestamp: "t".to_string(),
+                agent_id: None,
+                item: RolloutItem::ResponseItem(item),
+            })
             .collect();
 
         let truncated = truncate_before_nth_user_message(InitialHistory::Forked(rollout_items), 1);
-        let got_items = truncated.get_rollout_items();
+        let got_items = truncated.get_rollout_items_for_agent(&DEFAULT_AGENT_ID);
 
         let expected: Vec<RolloutItem> = vec![
             RolloutItem::ResponseItem(items[0].clone()),
