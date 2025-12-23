@@ -228,7 +228,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ..
             }) => {
                 let message = match additional_details {
-                    Some(cause) if !cause.trim().is_empty() => format!("{message} ({cause})"),
+                    Some(details) if !details.trim().is_empty() => format!("{message} ({details})"),
                     _ => message,
                 };
                 ts_msg!(self, "{}", message.style(self.dimmed));

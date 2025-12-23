@@ -147,8 +147,8 @@ impl EventProcessorWithJsonOutput {
             }
             EventMsg::StreamError(ev) => {
                 let message = match &ev.additional_details {
-                    Some(cause) if !cause.trim().is_empty() => {
-                        format!("{} ({})", ev.message, cause)
+                    Some(details) if !details.trim().is_empty() => {
+                        format!("{} ({})", ev.message, details)
                     }
                     _ => ev.message.clone(),
                 };
