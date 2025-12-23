@@ -45,11 +45,10 @@ pub struct OtelManager {
 }
 
 impl OtelManager {
-    pub fn with_model(&self, model: &str, slug: &str) -> Self {
-        let mut manager = self.clone();
-        manager.metadata.model = model.to_owned();
-        manager.metadata.slug = slug.to_owned();
-        manager
+    pub fn with_model(mut self, model: &str, slug: &str) -> Self {
+        self.metadata.model = model.to_owned();
+        self.metadata.slug = slug.to_owned();
+        self
     }
 
     pub fn with_metrics(mut self, metrics: MetricsClient) -> Self {
