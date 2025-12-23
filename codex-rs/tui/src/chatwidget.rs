@@ -3019,7 +3019,7 @@ impl ChatWidget {
             })];
             items.push(SelectionItem {
                 name: agent_id.clone(),
-                description: Some("View messages and send input to this agent.".to_string()),
+                description: None,
                 is_current,
                 is_default: agent_id == DEFAULT_AGENT_ID.as_str(),
                 actions,
@@ -3029,7 +3029,7 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Agents".to_string()),
+            title: Some("Switch agent".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             initial_selected_idx,
@@ -3042,9 +3042,9 @@ impl ChatWidget {
     pub(crate) fn open_new_agent_prompt(&mut self) {
         let app_event_tx = self.app_event_tx.clone();
         let view = CustomPromptView::new(
-            "New agent".to_string(),
-            "Enter a new agent id, then press Enter to send your current draft.".to_string(),
-            Some("Ctrl+N: create a new agent from the current composer draft".to_string()),
+            "Spawn new agent".to_string(),
+            "Enter a new agent id, then press Enter to send your current message.".to_string(),
+            Some("Create a new agent from the current message".to_string()),
             Box::new(move |agent_id| {
                 app_event_tx.send(AppEvent::CreateAgentFromComposer { agent_id });
             }),

@@ -3335,7 +3335,7 @@ fn non_selected_agent_events_buffer_until_switch() {
         .map(|lines| lines_to_single_string(lines))
         .collect();
     assert!(
-        combined.contains("Viewing agent worker_1"),
+        combined.contains("Viewing agent `worker_1`"),
         "missing view header: {combined}"
     );
     assert!(

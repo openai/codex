@@ -1366,7 +1366,7 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
 }
 
 pub(crate) fn new_agent_view_header(agent_id: String) -> PlainHistoryCell {
-    let line: Line<'static> = format!("Viewing agent {agent_id}").cyan().into();
+    let line: Line<'static> = format!("Viewing agent `{agent_id}`").cyan().into();
     PlainHistoryCell { lines: vec![line] }
 }
 
