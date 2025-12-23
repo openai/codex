@@ -90,6 +90,9 @@ impl ModelsManager {
     }
 
     pub(crate) async fn refresh_available_models(&self) -> CoreResult<()> {
+        if self.auth_manager.get_auth_mode() == Some(AuthMode::ApiKey) {
+            return Ok(());
+        }
         let auth = self.auth_manager.auth();
         let api_provider = self.provider.to_api_provider(Some(AuthMode::ChatGPT))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider).await?;
