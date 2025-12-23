@@ -3096,9 +3096,14 @@ impl ChatWidget {
         scrolled: bool,
         selection_active: bool,
         scroll_position: Option<(usize, usize)>,
+        copy_selection_key: crate::key_hint::KeyBinding,
     ) {
-        self.bottom_pane
-            .set_transcript_ui_state(scrolled, selection_active, scroll_position);
+        self.bottom_pane.set_transcript_ui_state(
+            scrolled,
+            selection_active,
+            scroll_position,
+            copy_selection_key,
+        );
     }
 
     /// Forward an `Op` directly to codex.

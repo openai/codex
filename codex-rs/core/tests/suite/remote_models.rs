@@ -17,7 +17,6 @@ use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::openai_models::ClientVersion;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -73,7 +72,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         }],
         shell_type: ConfigShellToolType::UnifiedExec,
         visibility: ModelVisibility::List,
-        minimal_client_version: ClientVersion(0, 1, 0),
         supported_in_api: true,
         priority: 1,
         upgrade: None,
@@ -213,7 +211,6 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         }],
         shell_type: ConfigShellToolType::ShellCommand,
         visibility: ModelVisibility::List,
-        minimal_client_version: ClientVersion(0, 1, 0),
         supported_in_api: true,
         priority: 1,
         upgrade: None,
@@ -478,7 +475,6 @@ fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> 
         }],
         shell_type: ConfigShellToolType::ShellCommand,
         visibility,
-        minimal_client_version: ClientVersion(0, 1, 0),
         supported_in_api: true,
         priority,
         upgrade: None,

@@ -20,6 +20,8 @@ pub use acl::allow_null_device;
 #[cfg(target_os = "windows")]
 pub use acl::ensure_allow_mask_aces;
 #[cfg(target_os = "windows")]
+pub use acl::ensure_allow_mask_aces_with_inheritance;
+#[cfg(target_os = "windows")]
 pub use acl::ensure_allow_write_aces;
 #[cfg(target_os = "windows")]
 pub use acl::fetch_dacl_handle;

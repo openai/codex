@@ -13,7 +13,7 @@ use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
-use crate::exec_policy::load_exec_policy_for_features;
+use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::models_manager::manager::ModelsManager;
@@ -148,6 +148,7 @@ use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
+use codex_otel::otel_manager::OtelManager;
 use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::OtelManager;
 use codex_otel::metrics::MetricsClient;
@@ -243,10 +244,9 @@ impl Codex {
         )
         .await;
 
-        let exec_policy = load_exec_policy_for_features(&config.features, &config.codex_home)
+        let exec_policy = ExecPolicyManager::load(&config.features, &config.config_layer_stack)
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to load execpolicy: {err}")))?;
-        let exec_policy = Arc::new(RwLock::new(exec_policy));
 
         let config = Arc::new(config);
         if config.features.enabled(Feature::RemoteModels)
@@ -268,7 +268,6 @@ impl Codex {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            exec_policy,
             session_source,
         };
 
@@ -280,6 +279,7 @@ impl Codex {
             config.clone(),
             auth_manager.clone(),
             models_manager.clone(),
+            exec_policy,
             tx_event.clone(),
             conversation_history,
             session_source_clone,
@@ -373,7 +373,6 @@ pub(crate) struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
-    pub(crate) exec_policy: Arc<RwLock<ExecPolicy>>,
     pub(crate) truncation_policy: TruncationPolicy,
 }
 
@@ -427,9 +426,6 @@ pub(crate) struct SessionConfiguration {
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
     cwd: PathBuf,
-
-    /// Execpolicy policy, applied only when enabled by feature flag.
-    exec_policy: Arc<RwLock<ExecPolicy>>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -535,7 +531,6 @@ impl Session {
             final_output_json_schema: None,
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
-            exec_policy: session_configuration.exec_policy.clone(),
             truncation_policy: TruncationPolicy::new(
                 per_turn_config.as_ref(),
                 model_family.truncation_policy,
@@ -549,6 +544,7 @@ impl Session {
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
+        exec_policy: ExecPolicyManager,
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
         session_source: SessionSource,
@@ -670,6 +666,7 @@ impl Session {
             rollout: Mutex::new(Some(rollout_recorder)),
             user_shell: Arc::new(default_shell),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            exec_policy,
             auth_manager: Arc::clone(&auth_manager),
             otel_manager,
             models_manager: Arc::clone(&models_manager),
@@ -1029,29 +1026,24 @@ impl Session {
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
         let features = self.features.clone();
-        let (codex_home, current_policy) = {
-            let state = self.state.lock().await;
-            (
-                state
-                    .session_configuration
-                    .original_config_do_not_use
-                    .codex_home
-                    .clone(),
-                state.session_configuration.exec_policy.clone(),
-            )
-        };
+        let codex_home = self
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .original_config_do_not_use
+            .codex_home
+            .clone();
 
         if !features.enabled(Feature::ExecPolicy) {
             error!("attempted to append execpolicy rule while execpolicy feature is disabled");
             return Err(ExecPolicyUpdateError::FeatureDisabled);
         }
 
-        crate::exec_policy::append_execpolicy_amendment_and_update(
-            &codex_home,
-            &current_policy,
-            &amendment.command,
-        )
-        .await?;
+        self.services
+            .exec_policy
+            .append_amendment_and_update(&codex_home, amendment)
+            .await?;
 
         Ok(())
     }
@@ -2158,7 +2150,6 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
-        exec_policy: parent_turn_context.exec_policy.clone(),
         truncation_policy: TruncationPolicy::new(&per_turn_config, model_family.truncation_policy),
     };
 
@@ -2529,6 +2520,11 @@ async fn try_run_turn(
         model: turn_context.client.get_model(),
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
+        base_instructions: turn_context.base_instructions.clone(),
+        user_instructions: turn_context.user_instructions.clone(),
+        developer_instructions: turn_context.developer_instructions.clone(),
+        final_output_json_schema: turn_context.final_output_json_schema.clone(),
+        truncation_policy: Some(turn_context.truncation_policy.into()),
     });
 
     sess.persist_rollout_items(&[rollout_item]).await;
@@ -2752,6 +2748,7 @@ mod tests {
     use crate::function_tool::FunctionCallError;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
+
     use codex_protocol::models::FunctionCallOutputPayload;
 
     use crate::protocol::CompactedItem;
@@ -2846,7 +2843,6 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
         };
 
@@ -2913,7 +2909,6 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
         };
 
@@ -3106,6 +3101,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
+        let exec_policy = ExecPolicyManager::default();
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -3120,7 +3116,6 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
@@ -3146,6 +3141,7 @@ mod tests {
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            exec_policy,
             auth_manager: auth_manager.clone(),
             otel_manager: otel_manager.clone(),
             models_manager,
@@ -3192,6 +3188,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(auth_manager.clone()));
+        let exec_policy = ExecPolicyManager::default();
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
@@ -3206,7 +3203,6 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
-            exec_policy: Arc::new(RwLock::new(ExecPolicy::empty())),
             session_source: SessionSource::Exec,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
@@ -3232,6 +3228,7 @@ mod tests {
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            exec_policy,
             auth_manager: Arc::clone(&auth_manager),
             otel_manager: otel_manager.clone(),
             models_manager,

@@ -7,6 +7,7 @@ Codex configuration gives you fine-grained control over the model, execution env
 - [Feature flags](#feature-flags)
 - [Model selection](#model-selection)
 - [Execution environment](#execution-environment)
+- [Project root detection](#project-root-detection)
 - [MCP integration](#mcp-integration)
 - [Observability and telemetry](#observability-and-telemetry)
 - [Profiles and overrides](#profiles-and-overrides)
@@ -45,7 +46,6 @@ Supported features:
 | `apply_patch_freeform`                |  false  | Beta         | Include the freeform `apply_patch` tool               |
 | `view_image_tool`                     |  true   | Stable       | Include the `view_image` tool                         |
 | `web_search_request`                  |  false  | Stable       | Allow the model to issue web searches                 |
-| `undo`                                |  true   | Experimental | Capture a ghost snapshot each turn to enable undo     |
 | `enable_experimental_windows_sandbox` |  false  | Experimental | Use the Windows restricted-token sandbox              |
 | `tui2`                                |  false  | Experimental | Use the experimental TUI v2 (viewport) implementation |
 | `skills`                              |  false  | Experimental | Enable discovery and injection of skills              |
@@ -415,6 +415,17 @@ set = { PATH = "/usr/bin", MY_FLAG = "1" }
 ```
 
 Currently, `CODEX_SANDBOX_NETWORK_DISABLED=1` is also added to the environment, assuming network is disabled. This is not configurable.
+
+## Project root detection
+
+Codex discovers `.codex/` project layers by walking up from the working directory until it hits a project marker. By default it looks for `.git`. You can override the marker list in user/system/MDM config:
+
+```toml
+# $CODEX_HOME/config.toml
+project_root_markers = [".git", ".hg", ".sl"]
+```
+
+Set `project_root_markers = []` to skip searching parent directories and treat the current working directory as the project root.
 
 ## MCP integration
 
@@ -1000,6 +1011,7 @@ Valid values:
 | `notify`                                         | array<string>                                                     | External program for notifications.                                                                                             |
 | `tui.animations`                                 | boolean                                                           | Enable terminal animations (welcome screen, shimmer, spinner). Defaults to true; set to `false` to disable visual motion.       |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                         |
+| `developer_instructions`                         | string                                                            | The additional developer instructions.                                                                                          |
 | `features.<feature-flag>`                        | boolean                                                           | See [feature flags](#feature-flags) for details                                                                                 |
 | `ghost_snapshot.disable_warnings`                | boolean                                                           | Disable every warnings around ghost snapshot (large files, directory, ...)                                                      |
 | `ghost_snapshot.ignore_large_untracked_files`    | number                                                            | Exclude untracked files larger than this many bytes from ghost snapshots (default: 10 MiB). Set to `0` to disable.              |

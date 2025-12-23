@@ -56,10 +56,10 @@ model_reasoning_summary_format = "none"
 # Instruction Overrides
 ################################################################################
 
-# Additional user instructions appended after AGENTS.md. Default: unset.
+# Additional user instructions inject before AGENTS.md. Default: unset.
 # developer_instructions = ""
 
-# Optional legacy base instructions override (prefer AGENTS.md). Default: unset.
+# (Ignored) Optional legacy base instructions override (prefer AGENTS.md). Default: unset.
 # instructions = ""
 
 # Inline override for the history compaction prompt. Default: unset.
@@ -217,7 +217,6 @@ unified_exec = false
 apply_patch_freeform = false
 view_image_tool = true
 web_search_request = false
-undo = true
 enable_experimental_windows_sandbox = false
 skills = false
 

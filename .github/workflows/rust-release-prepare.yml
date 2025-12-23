@@ -41,7 +41,7 @@ jobs:
           curl --http1.1 --fail --show-error --location "${headers[@]}" "${url}" | jq '.' > codex-rs/core/models.json
 
       - name: Open pull request (if changed)
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           commit-message: "Update models.json"
           title: "Update models.json"
