@@ -155,6 +155,13 @@ pub(crate) fn word_wrap_line<'a, O>(line: &'a Line<'a>, width_or_options: O) -> 
 where
     O: Into<RtOptions<'a>>,
 {
+    let (lines, _joiners) = word_wrap_line_with_joiners(line, width_or_options);
+    lines
+}
+
+fn flatten_line_and_bounds<'a>(
+    line: &'a Line<'a>,
+) -> (String, Vec<(Range<usize>, ratatui::style::Style)>) {
     // Flatten the line and record span byte ranges.
     let mut flat = String::new();
     let mut span_bounds = Vec::new();
@@ -166,6 +173,43 @@ where
         acc += text.len();
         span_bounds.push((start..acc, s.style));
     }
+    (flat, span_bounds)
+}
+
+fn build_wrapped_line_from_range<'a>(
+    indent: Line<'a>,
+    original: &'a Line<'a>,
+    span_bounds: &[(Range<usize>, ratatui::style::Style)],
+    range: &Range<usize>,
+) -> Line<'a> {
+    let mut out = indent.style(original.style);
+    let sliced = slice_line_spans(original, span_bounds, range);
+    let mut spans = out.spans;
+    spans.append(
+        &mut sliced
+            .spans
+            .into_iter()
+            .map(|s| s.patch_style(original.style))
+            .collect(),
+    );
+    out.spans = spans;
+    out
+}
+
+/// Wrap a single line and also return, for each output line, the string that should be inserted
+/// when joining it to the previous output line as a *soft wrap*.
+///
+/// - The first output line always has `None`.
+/// - Continuation lines have `Some(joiner)` where `joiner` is the exact substring (often spaces,
+///   possibly empty) that was skipped at the wrap boundary.
+pub(crate) fn word_wrap_line_with_joiners<'a, O>(
+    line: &'a Line<'a>,
+    width_or_options: O,
+) -> (Vec<Line<'a>>, Vec<Option<String>>)
+where
+    O: Into<RtOptions<'a>>,
+{
+    let (flat, span_bounds) = flatten_line_and_bounds(line);
 
     let rt_opts: RtOptions<'a> = width_or_options.into();
     let opts = Options::new(rt_opts.width)
@@ -176,7 +220,9 @@ where
         .word_splitter(rt_opts.word_splitter);
 
     let mut out: Vec<Line<'a>> = Vec::new();
+    let mut joiners: Vec<Option<String>> = Vec::new();
 
+    // The first output line uses the initial indent and a reduced available width.
     // Compute first line range with reduced width due to initial indent.
     let initial_width_available = opts
         .width
@@ -184,54 +230,100 @@ where
         .max(1);
     let initial_wrapped = wrap_ranges_trim(&flat, opts.clone().width(initial_width_available));
     let Some(first_line_range) = initial_wrapped.first() else {
-        return vec![rt_opts.initial_indent.clone()];
+        out.push(rt_opts.initial_indent.clone());
+        joiners.push(None);
+        return (out, joiners);
     };
 
-    // Build first wrapped line with initial indent.
-    let mut first_line = rt_opts.initial_indent.clone().style(line.style);
-    {
-        let sliced = slice_line_spans(line, &span_bounds, first_line_range);
-        let mut spans = first_line.spans;
-        spans.append(
-            &mut sliced
-                .spans
-                .into_iter()
-                .map(|s| s.patch_style(line.style))
-                .collect(),
-        );
-        first_line.spans = spans;
-        out.push(first_line);
-    }
+    let first_line = build_wrapped_line_from_range(
+        rt_opts.initial_indent.clone(),
+        line,
+        &span_bounds,
+        first_line_range,
+    );
+    out.push(first_line);
+    joiners.push(None);
 
-    // Wrap the remainder using subsequent indent width and map back to original indices.
-    let base = first_line_range.end;
+    // Wrap the remainder using subsequent indent width. We also compute the joiner strings that
+    // were skipped at each wrap boundary so callers can treat these as soft wraps during copy.
+    let mut base = first_line_range.end;
     let skip_leading_spaces = flat[base..].chars().take_while(|c| *c == ' ').count();
-    let base = base + skip_leading_spaces;
+    let joiner_first = flat[base..base.saturating_add(skip_leading_spaces)].to_string();
+    base = base.saturating_add(skip_leading_spaces);
+
     let subsequent_width_available = opts
         .width
         .saturating_sub(rt_opts.subsequent_indent.width())
         .max(1);
-    let remaining_wrapped = wrap_ranges_trim(&flat[base..], opts.width(subsequent_width_available));
-    for r in &remaining_wrapped {
+    let remaining = &flat[base..];
+    let remaining_wrapped = wrap_ranges_trim(remaining, opts.width(subsequent_width_available));
+
+    let mut prev_end = 0usize;
+    for (i, r) in remaining_wrapped.iter().enumerate() {
         if r.is_empty() {
             continue;
         }
-        let mut subsequent_line = rt_opts.subsequent_indent.clone().style(line.style);
+
+        // Each continuation line has `Some(joiner)`. The joiner may be empty (e.g. splitting a
+        // long word), but the distinction from `None` is important: `None` represents a hard break.
+        let joiner = if i == 0 {
+            joiner_first.clone()
+        } else {
+            remaining[prev_end..r.start].to_string()
+        };
+        prev_end = r.end;
+
         let offset_range = (r.start + base)..(r.end + base);
-        let sliced = slice_line_spans(line, &span_bounds, &offset_range);
-        let mut spans = subsequent_line.spans;
-        spans.append(
-            &mut sliced
-                .spans
-                .into_iter()
-                .map(|s| s.patch_style(line.style))
-                .collect(),
+        let subsequent_line = build_wrapped_line_from_range(
+            rt_opts.subsequent_indent.clone(),
+            line,
+            &span_bounds,
+            &offset_range,
         );
-        subsequent_line.spans = spans;
         out.push(subsequent_line);
+        joiners.push(Some(joiner));
     }
 
-    out
+    (out, joiners)
+}
+
+/// Like `word_wrap_lines`, but also returns a parallel vector of soft-wrap joiners.
+///
+/// The joiner is `None` when the line break is a hard break (between input lines), and `Some`
+/// when the line break is a soft wrap continuation produced by the wrapping algorithm.
+#[allow(private_bounds)] // IntoLineInput isn't public, but it doesn't really need to be.
+pub(crate) fn word_wrap_lines_with_joiners<'a, I, O, L>(
+    lines: I,
+    width_or_options: O,
+) -> (Vec<Line<'static>>, Vec<Option<String>>)
+where
+    I: IntoIterator<Item = L>,
+    L: IntoLineInput<'a>,
+    O: Into<RtOptions<'a>>,
+{
+    let base_opts: RtOptions<'a> = width_or_options.into();
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut joiners: Vec<Option<String>> = Vec::new();
+
+    for (idx, line) in lines.into_iter().enumerate() {
+        let line_input = line.into_line_input();
+        let opts = if idx == 0 {
+            base_opts.clone()
+        } else {
+            let mut o = base_opts.clone();
+            let sub = o.subsequent_indent.clone();
+            o = o.initial_indent(sub);
+            o
+        };
+
+        let (wrapped, wrapped_joiners) = word_wrap_line_with_joiners(line_input.as_ref(), opts);
+        for (l, j) in wrapped.into_iter().zip(wrapped_joiners) {
+            out.push(crate::render::line_utils::line_to_static(&l));
+            joiners.push(j);
+        }
+    }
+
+    (out, joiners)
 }
 
 /// Utilities to allow wrapping either borrowed or owned lines.
@@ -550,6 +642,66 @@ mod tests {
         assert_eq!(out[1].spans[0].style.fg, Some(Color::Red));
         assert_eq!(concat_line(&out[0]), "ab");
         assert_eq!(concat_line(&out[1]), "cd");
+    }
+
+    #[test]
+    fn wrap_line_with_joiners_matches_word_wrap_line_output() {
+        let opts = RtOptions::new(8)
+            .initial_indent(Line::from("- "))
+            .subsequent_indent(Line::from("  "));
+        let line = Line::from(vec!["hello ".red(), "world".into()]);
+
+        let out = word_wrap_line(&line, opts.clone());
+        let (with_joiners, joiners) = word_wrap_line_with_joiners(&line, opts);
+
+        assert_eq!(
+            with_joiners.iter().map(concat_line).collect_vec(),
+            out.iter().map(concat_line).collect_vec()
+        );
+        assert_eq!(joiners.len(), with_joiners.len());
+        assert_eq!(
+            joiners.first().cloned().unwrap_or(Some("x".to_string())),
+            None
+        );
+    }
+
+    #[test]
+    fn wrap_line_with_joiners_includes_skipped_spaces() {
+        let line = Line::from("hello   world");
+        let (wrapped, joiners) = word_wrap_line_with_joiners(&line, 8);
+
+        assert_eq!(
+            wrapped.iter().map(concat_line).collect_vec(),
+            vec!["hello", "world"]
+        );
+        assert_eq!(joiners, vec![None, Some("   ".to_string())]);
+    }
+
+    #[test]
+    fn wrap_line_with_joiners_uses_empty_joiner_for_mid_word_split() {
+        let line = Line::from("abcd");
+        let (wrapped, joiners) = word_wrap_line_with_joiners(&line, 2);
+
+        assert_eq!(
+            wrapped.iter().map(concat_line).collect_vec(),
+            vec!["ab", "cd"]
+        );
+        assert_eq!(joiners, vec![None, Some("".to_string())]);
+    }
+
+    #[test]
+    fn wrap_lines_with_joiners_marks_hard_breaks_between_input_lines() {
+        let (wrapped, joiners) =
+            word_wrap_lines_with_joiners([Line::from("hello world"), Line::from("foo bar")], 5);
+
+        assert_eq!(
+            wrapped.iter().map(concat_line).collect_vec(),
+            vec!["hello", "world", "foo", "bar"]
+        );
+        assert_eq!(
+            joiners,
+            vec![None, Some(" ".to_string()), None, Some(" ".to_string())]
+        );
     }
 
     #[test]

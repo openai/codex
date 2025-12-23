@@ -183,13 +183,18 @@ Mouse interaction is a first‑class part of the new design:
     that we use for bullets/prefixes.
 
 - **Copy.**
-  - When the user triggers copy, the TUI reconstructs the same wrapped transcript lines used for
-    on-screen rendering.
-  - It then walks the content-relative selection range (even if the selection extends outside the
-    current viewport) and re-renders each selected visual line into a 1-row offscreen buffer to
-    reconstruct the exact text region the user highlighted (including internal spaces and empty
-    lines, while skipping wide-glyph continuation cells and right-margin padding).
-  - That text is sent to the system clipboard and a status footer indicates success or failure.
+  - When the user triggers copy, the TUI reconstructs the wrapped transcript lines using the same
+    flattening/wrapping rules as the visible view.
+  - It then reconstructs a high‑fidelity clipboard string from the selected logical lines:
+    - Preserves meaningful indentation (especially for code blocks).
+    - Treats soft-wrapped prose as a single logical line by joining wrap continuations instead of
+      inserting hard newlines.
+    - Emits Markdown source markers (e.g. backticks and fences) for copy/paste, even if the UI
+      chooses to render those constructs without showing the literal markers.
+  - Copy operates on the full selection range, even if the selection extends outside the current
+    viewport.
+  - The resulting text is sent to the system clipboard and a status footer indicates success or
+    failure.
 
 Because scrolling, selection, and copy all operate on the same flattened transcript representation,
 they remain consistent even as the viewport resizes or the chat composer grows/shrinks. Owning our
