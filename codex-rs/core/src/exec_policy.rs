@@ -483,6 +483,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn loads_policies_from_multiple_config_layers() {
+        let user_dir = tempdir().expect("create user dir");
+        let project_dir = tempdir().expect("create project dir");
+
+        let user_policy_dir = user_dir.path().join(RULES_DIR_NAME);
+        fs::create_dir_all(&user_policy_dir).expect("create user policy dir");
+        fs::write(
+            user_policy_dir.join("user.rules"),
+            r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+        )
+        .expect("write user policy file");
+
+        let project_policy_dir = project_dir.path().join(RULES_DIR_NAME);
+        fs::create_dir_all(&project_policy_dir).expect("create project policy dir");
+        fs::write(
+            project_policy_dir.join("project.rules"),
+            r#"prefix_rule(pattern=["ls"], decision="prompt")"#,
+        )
+        .expect("write project policy file");
+
+        let user_config_toml =
+            AbsolutePathBuf::from_absolute_path(user_dir.path().join("config.toml"))
+                .expect("absolute user config.toml");
+        let project_dot_codex_folder =
+            AbsolutePathBuf::from_absolute_path(project_dir.path()).expect("absolute project dir");
+        let layers = vec![
+            ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: user_config_toml,
+                },
+                TomlValue::Table(Default::default()),
+            ),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: project_dot_codex_folder,
+                },
+                TomlValue::Table(Default::default()),
+            ),
+        ];
+        let config_stack =
+            ConfigLayerStack::new(layers, ConfigRequirements::default()).expect("ConfigLayerStack");
+
+        let policy = load_exec_policy(&config_stack)
+            .await
+            .expect("policy result");
+
+        assert_eq!(
+            Evaluation {
+                decision: Decision::Forbidden,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: vec!["rm".to_string()],
+                    decision: Decision::Forbidden
+                }],
+            },
+            policy.check_multiple([vec!["rm".to_string()]].iter(), &|_| Decision::Allow)
+        );
+        assert_eq!(
+            Evaluation {
+                decision: Decision::Prompt,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: vec!["ls".to_string()],
+                    decision: Decision::Prompt
+                }],
+            },
+            policy.check_multiple([vec!["ls".to_string()]].iter(), &|_| Decision::Allow)
+        );
+    }
+
+    #[tokio::test]
     async fn evaluates_bash_lc_inner_commands() {
         let policy_src = r#"
 prefix_rule(pattern=["rm"], decision="forbidden")

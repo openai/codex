@@ -77,6 +77,7 @@ mod style;
 mod terminal_palette;
 mod text_formatting;
 mod tooltips;
+mod transcript_selection;
 mod tui;
 mod ui_consts;
 pub mod update_action;
@@ -278,7 +279,10 @@ pub async fn run_main(
 
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
-        .with_target(false)
+        // `with_target(true)` is the default, but we previously disabled it for file output.
+        // Keep it enabled so we can selectively enable targets via `RUST_LOG=...` and then
+        // grep for a specific module/target while troubleshooting.
+        .with_target(true)
         .with_ansi(false)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_filter(env_filter());

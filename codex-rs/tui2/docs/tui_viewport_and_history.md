@@ -183,10 +183,12 @@ Mouse interaction is a first‑class part of the new design:
     that we use for bullets/prefixes.
 
 - **Copy.**
-  - When the user triggers copy, the TUI re‑renders just the transcript region off‑screen using the
-    same wrapping as the visible view.
-  - It then walks the selected lines and columns in that off‑screen buffer to reconstruct the exact
-    text region the user highlighted (including internal spaces and empty lines).
+  - When the user triggers copy, the TUI reconstructs the same wrapped transcript lines used for
+    on-screen rendering.
+  - It then walks the content-relative selection range (even if the selection extends outside the
+    current viewport) and re-renders each selected visual line into a 1-row offscreen buffer to
+    reconstruct the exact text region the user highlighted (including internal spaces and empty
+    lines, while skipping wide-glyph continuation cells and right-margin padding).
   - That text is sent to the system clipboard and a status footer indicates success or failure.
 
 Because scrolling, selection, and copy all operate on the same flattened transcript representation,
@@ -392,8 +394,8 @@ The main app struct (`codex-rs/tui2/src/app.rs`) tracks the transcript and viewp
 - `transcript_cells: Vec<Arc<dyn HistoryCell>>` – the logical history.
 - `transcript_scroll: TranscriptScroll` – whether the viewport is pinned to the bottom or
   anchored at a specific cell/line pair.
-- `transcript_selection: TranscriptSelection` – a selection expressed in screen coordinates over
-  the flattened transcript region.
+- `transcript_selection: TranscriptSelection` – a selection expressed in content-relative
+  coordinates over the flattened, wrapped transcript (line index + column).
 - `transcript_view_top` / `transcript_total_lines` – the current viewport’s top line index and
   total number of wrapped lines for the inline transcript area.
 
@@ -410,8 +412,9 @@ Streaming wrapping details live in `codex-rs/tui2/docs/streaming_wrapping_design
 
 Mouse handling lives in `App::handle_mouse_event`, keyboard scrolling in
 `App::handle_key_event`, selection rendering in `App::apply_transcript_selection`, and copy in
-`App::copy_transcript_selection` plus `codex-rs/tui2/src/clipboard_copy.rs`. Scroll/selection UI
-state is forwarded through `ChatWidget::set_transcript_ui_state`,
+`App::copy_transcript_selection` plus `codex-rs/tui2/src/transcript_selection.rs` and
+`codex-rs/tui2/src/clipboard_copy.rs`. Scroll/selection UI state is forwarded through
+`ChatWidget::set_transcript_ui_state`,
 `BottomPane::set_transcript_ui_state`, and `ChatComposer::footer_props`, with footer text
 assembled in `codex-rs/tui2/src/bottom_pane/footer.rs`.
 
@@ -435,6 +438,8 @@ feedback are already implemented:
   probe data (see `codex-rs/tui2/docs/scroll_input_model.md`).
 - While a selection is active, streaming stops “follow latest output” so the selection remains
   stable, and follow mode resumes after the selection is cleared.
+- Copy operates on the full selection range (including offscreen lines), using the same wrapping as
+  on-screen rendering.
 
 ### 10.2 Roadmap (prioritized)
 
@@ -449,8 +454,6 @@ Vim) behavior as we can while still owning the viewport.
   input (avoid redraw/event-loop backlog that makes scrolling feel “janky”).
 - **Mouse event bounds.** Ignore mouse events outside the transcript region so clicks in the
   composer/footer don’t start or mutate transcript selection state.
-- **Copy includes offscreen lines.** Make copy operate on the full selection range even when part (or
-  all) of the selection is outside the current viewport.
 - **Copy fidelity.** Preserve meaningful indentation (especially code blocks), treat soft-wrapped
   prose as a single logical line when copying, and copy markdown _source_ (including backticks and
   heading markers) even if we render it differently.
