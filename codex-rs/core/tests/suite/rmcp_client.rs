@@ -101,7 +101,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
         })
         .build(&server)
         .await?;
-    let session_model = fixture.session_configured.model.clone();
+    let session_model = fixture.session_configured.model_family.slug.clone();
 
     fixture
         .codex
@@ -238,7 +238,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
         })
         .build(&server)
         .await?;
-    let session_model = fixture.session_configured.model.clone();
+    let session_model = fixture.session_configured.model_family.slug.clone();
 
     fixture
         .codex
@@ -433,7 +433,7 @@ async fn stdio_image_completions_round_trip() -> anyhow::Result<()> {
         })
         .build(&server)
         .await?;
-    let session_model = fixture.session_configured.model.clone();
+    let session_model = fixture.session_configured.model_family.slug.clone();
 
     fixture
         .codex
@@ -576,7 +576,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
         })
         .build(&server)
         .await?;
-    let session_model = fixture.session_configured.model.clone();
+    let session_model = fixture.session_configured.model_family.slug.clone();
 
     fixture
         .codex
@@ -724,7 +724,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
         })
         .build(&server)
         .await?;
-    let session_model = fixture.session_configured.model.clone();
+    let session_model = fixture.session_configured.model_family.slug.clone();
 
     fixture
         .codex
@@ -904,7 +904,7 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
         })
         .build(&server)
         .await?;
-    let session_model = fixture.session_configured.model.clone();
+    let session_model = fixture.session_configured.model_family.slug.clone();
 
     fixture
         .codex

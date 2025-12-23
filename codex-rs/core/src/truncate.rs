@@ -4,89 +4,60 @@
 
 use crate::config::Config;
 use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::openai_models::TruncationMode;
-use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::TruncationPolicy;
 
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TruncationPolicy {
-    Bytes(usize),
-    Tokens(usize),
+/// Create a new `TruncationPolicy` with config overrides applied.
+pub fn new_truncation_policy(config: &Config, truncation_policy: TruncationPolicy) -> TruncationPolicy {
+    let config_token_limit = config.tool_output_token_limit;
+
+    match truncation_policy {
+        TruncationPolicy::Bytes(family_bytes) => {
+            if let Some(token_limit) = config_token_limit {
+                TruncationPolicy::Bytes(approx_bytes_for_tokens(token_limit))
+            } else {
+                TruncationPolicy::Bytes(family_bytes)
+            }
+        }
+        TruncationPolicy::Tokens(family_tokens) => {
+            if let Some(token_limit) = config_token_limit {
+                TruncationPolicy::Tokens(token_limit)
+            } else {
+                TruncationPolicy::Tokens(family_tokens)
+            }
+        }
+    }
 }
 
-impl From<TruncationPolicyConfig> for TruncationPolicy {
-    fn from(config: TruncationPolicyConfig) -> Self {
-        match config.mode {
-            TruncationMode::Bytes => Self::Bytes(config.limit as usize),
-            TruncationMode::Tokens => Self::Tokens(config.limit as usize),
+/// Returns a token budget derived from this policy.
+///
+/// - For `Tokens`, this is the explicit token limit.
+/// - For `Bytes`, this is an approximate token budget using the global
+///   bytes-per-token heuristic.
+pub fn token_budget(policy: &TruncationPolicy) -> usize {
+    match policy {
+        TruncationPolicy::Bytes(bytes) => {
+            usize::try_from(approx_tokens_from_byte_count(*bytes)).unwrap_or(usize::MAX)
         }
+        TruncationPolicy::Tokens(tokens) => *tokens,
     }
 }
 
-impl TruncationPolicy {
-    /// Scale the underlying budget by `multiplier`, rounding up to avoid under-budgeting.
-    pub fn mul(self, multiplier: f64) -> Self {
-        match self {
-            TruncationPolicy::Bytes(bytes) => {
-                TruncationPolicy::Bytes((bytes as f64 * multiplier).ceil() as usize)
-            }
-            TruncationPolicy::Tokens(tokens) => {
-                TruncationPolicy::Tokens((tokens as f64 * multiplier).ceil() as usize)
-            }
-        }
-    }
-
-    pub fn new(config: &Config, truncation_policy: TruncationPolicy) -> Self {
-        let config_token_limit = config.tool_output_token_limit;
-
-        match truncation_policy {
-            TruncationPolicy::Bytes(family_bytes) => {
-                if let Some(token_limit) = config_token_limit {
-                    Self::Bytes(approx_bytes_for_tokens(token_limit))
-                } else {
-                    Self::Bytes(family_bytes)
-                }
-            }
-            TruncationPolicy::Tokens(family_tokens) => {
-                if let Some(token_limit) = config_token_limit {
-                    Self::Tokens(token_limit)
-                } else {
-                    Self::Tokens(family_tokens)
-                }
-            }
-        }
-    }
-
-    /// Returns a token budget derived from this policy.
-    ///
-    /// - For `Tokens`, this is the explicit token limit.
-    /// - For `Bytes`, this is an approximate token budget using the global
-    ///   bytes-per-token heuristic.
-    pub fn token_budget(&self) -> usize {
-        match self {
-            TruncationPolicy::Bytes(bytes) => {
-                usize::try_from(approx_tokens_from_byte_count(*bytes)).unwrap_or(usize::MAX)
-            }
-            TruncationPolicy::Tokens(tokens) => *tokens,
-        }
-    }
-
-    /// Returns a byte budget derived from this policy.
-    ///
-    /// - For `Bytes`, this is the explicit byte limit.
-    /// - For `Tokens`, this is an approximate byte budget using the global
-    ///   bytes-per-token heuristic.
-    pub fn byte_budget(&self) -> usize {
-        match self {
-            TruncationPolicy::Bytes(bytes) => *bytes,
-            TruncationPolicy::Tokens(tokens) => approx_bytes_for_tokens(*tokens),
-        }
+/// Returns a byte budget derived from this policy.
+///
+/// - For `Bytes`, this is the explicit byte limit.
+/// - For `Tokens`, this is an approximate byte budget using the global
+///   bytes-per-token heuristic.
+pub fn byte_budget(policy: &TruncationPolicy) -> usize {
+    match policy {
+        TruncationPolicy::Bytes(bytes) => *bytes,
+        TruncationPolicy::Tokens(tokens) => approx_bytes_for_tokens(*tokens),
     }
 }
 
 pub(crate) fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -> String {
-    if content.len() <= policy.byte_budget() {
+    if content.len() <= byte_budget(&policy) {
         return content.to_string();
     }
     let total_lines = content.lines().count();
@@ -112,8 +83,8 @@ pub(crate) fn truncate_function_output_items_with_policy(
 ) -> Vec<FunctionCallOutputContentItem> {
     let mut out: Vec<FunctionCallOutputContentItem> = Vec::with_capacity(items.len());
     let mut remaining_budget = match policy {
-        TruncationPolicy::Bytes(_) => policy.byte_budget(),
-        TruncationPolicy::Tokens(_) => policy.token_budget(),
+        TruncationPolicy::Bytes(_) => byte_budget(&policy),
+        TruncationPolicy::Tokens(_) => token_budget(&policy),
     };
     let mut omitted_text_items = 0usize;
 
@@ -172,7 +143,7 @@ fn truncate_with_token_budget(s: &str, policy: TruncationPolicy) -> (String, Opt
     if s.is_empty() {
         return (String::new(), None);
     }
-    let max_tokens = policy.token_budget();
+    let max_tokens = token_budget(&policy);
 
     let byte_len = s.len();
     if max_tokens > 0 && byte_len <= approx_bytes_for_tokens(max_tokens) {
@@ -198,7 +169,7 @@ fn truncate_with_byte_estimate(s: &str, policy: TruncationPolicy) -> String {
     }
 
     let total_chars = s.chars().count();
-    let max_bytes = policy.byte_budget();
+    let max_bytes = byte_budget(&policy);
 
     if max_bytes == 0 {
         // No budget to show content; just report that everything was truncated.

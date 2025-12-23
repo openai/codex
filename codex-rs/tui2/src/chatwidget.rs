@@ -13,7 +13,7 @@ use codex_core::config::types::Notifications;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
-use codex_core::models_manager::model_family::ModelFamily;
+use codex_protocol::openai_models::ModelFamily;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -267,7 +267,6 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
-    pub(crate) model_family: ModelFamily,
 }
 
 #[derive(Default)]
@@ -284,7 +283,7 @@ pub(crate) struct ChatWidget {
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
     config: Config,
-    model_family: ModelFamily,
+    model_family: Option<ModelFamily>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     session_header: SessionHeader,
@@ -398,11 +397,13 @@ impl ChatWidget {
         self.conversation_id = Some(event.session_id);
         self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
-        let model_for_header = event.model.clone();
+        let model_family = codex_core::models_manager::model_family::with_config_overrides(
+            event.model_family.clone(),
+            &self.config,
+        );
+        let model_for_header = model_family.get_model_slug().to_string();
+        self.model_family = Some(model_family);
         self.session_header.set_model(&model_for_header);
-        // Now that Codex has selected the actual model, update the model family used for UI.
-        self.app_event_tx
-            .send(AppEvent::UpdateModel(model_for_header.clone()));
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -505,7 +506,11 @@ impl ChatWidget {
     }
 
     fn on_agent_reasoning_final(&mut self) {
-        let reasoning_summary_format = self.get_model_family().reasoning_summary_format;
+        let reasoning_summary_format = self
+            .model_family
+            .as_ref()
+            .map(|mf| mf.reasoning_summary_format.clone())
+            .unwrap_or_default();
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         if !self.full_reasoning_buffer.is_empty() {
@@ -579,7 +584,7 @@ impl ChatWidget {
 
     fn context_remaining_percent(&self, info: &TokenUsageInfo) -> Option<i64> {
         info.model_context_window
-            .or(self.model_family.context_window)
+            .or(self.model_family.as_ref().and_then(|mf| mf.context_window))
             .map(|window| {
                 info.last_token_usage
                     .percent_of_context_window_remaining(window)
@@ -651,7 +656,10 @@ impl ChatWidget {
 
             if high_usage
                 && !self.rate_limit_switch_prompt_hidden()
-                && self.model_family.get_model_slug() != NUDGE_MODEL_SLUG
+                && self
+                    .model_family
+                    .as_ref()
+                    .is_some_and(|mf| mf.get_model_slug() != NUDGE_MODEL_SLUG)
                 && !matches!(
                     self.rate_limit_switch_prompt,
                     RateLimitSwitchPromptState::Shown
@@ -685,7 +693,7 @@ impl ChatWidget {
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
     }
-    pub(crate) fn get_model_family(&self) -> ModelFamily {
+    pub(crate) fn get_model_family(&self) -> Option<ModelFamily> {
         self.model_family.clone()
     }
 
@@ -1285,7 +1293,6 @@ impl ChatWidget {
             models_manager,
             feedback,
             is_first_run,
-            model_family,
         } = common;
         let config = config;
         let mut rng = rand::rng();
@@ -1308,7 +1315,7 @@ impl ChatWidget {
             }),
             active_cell: None,
             config,
-            model_family,
+            model_family: None,
             auth_manager,
             models_manager,
             session_header: SessionHeader::new("Starting...".to_string()),
@@ -1367,9 +1374,12 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             feedback,
-            model_family,
             ..
         } = common;
+        let model_family = codex_core::models_manager::model_family::with_config_overrides(
+            session_configured.model_family.clone(),
+            &config,
+        );
         let model_slug = model_family.get_model_slug().to_string();
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1393,7 +1403,7 @@ impl ChatWidget {
             }),
             active_cell: None,
             config,
-            model_family,
+            model_family: Some(model_family),
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(model_slug),
@@ -1571,7 +1581,7 @@ impl ChatWidget {
                 self.open_review_popup();
             }
             SlashCommand::Model => {
-                if self.conversation_id.is_none() {
+                if self.model_family.is_none() {
                     self.add_info_message(
                         "`/model` is unavailable until startup finishes.".to_string(),
                         None,
@@ -2059,6 +2069,14 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_status_output(&mut self) {
+        let Some(model_family) = self.model_family.as_ref() else {
+            self.add_info_message(
+                "`/status` is unavailable until startup finishes.".to_string(),
+                None,
+            );
+            return;
+        };
+
         let default_usage = TokenUsage::default();
         let (total_usage, context_usage) = if let Some(ti) = &self.token_info {
             (&ti.total_token_usage, Some(&ti.last_token_usage))
@@ -2068,14 +2086,14 @@ impl ChatWidget {
         self.add_to_history(crate::status::new_status_output(
             &self.config,
             self.auth_manager.as_ref(),
-            &self.model_family,
+            model_family,
             total_usage,
             context_usage,
             &self.conversation_id,
             self.rate_limit_snapshot.as_ref(),
             self.plan_type,
             Local::now(),
-            self.model_family.get_model_slug(),
+            model_family.get_model_slug(),
         ));
     }
     fn stop_rate_limit_poller(&mut self) {
@@ -2218,7 +2236,14 @@ impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
-        let current_model = self.model_family.get_model_slug().to_string();
+        let Some(model_family) = self.model_family.as_ref() else {
+            self.add_info_message(
+                "`/model` is unavailable until startup finishes.".to_string(),
+                None,
+            );
+            return;
+        };
+        let current_model = model_family.get_model_slug().to_string();
         let presets: Vec<ModelPreset> =
             // todo(aibrahim): make this async function
             match self.models_manager.try_list_models(&self.config) {
@@ -2326,7 +2351,11 @@ impl ChatWidget {
             return;
         }
 
-        let current_model = self.model_family.get_model_slug().to_string();
+        let current_model = self
+            .model_family
+            .as_ref()
+            .map(|mf| mf.get_model_slug().to_string())
+            .unwrap_or_default();
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {
             let description =
@@ -2457,7 +2486,10 @@ impl ChatWidget {
             .or(Some(default_effort));
 
         let model_slug = preset.model.to_string();
-        let is_current_model = self.model_family.get_model_slug() == preset.model;
+        let is_current_model = self
+            .model_family
+            .as_ref()
+            .is_some_and(|mf| mf.get_model_slug() == preset.model);
         let highlight_choice = if is_current_model {
             self.config.model_reasoning_effort
         } else {
@@ -3018,7 +3050,7 @@ impl ChatWidget {
     /// Set the model in the widget's config copy.
     pub(crate) fn set_model(&mut self, model: &str, model_family: ModelFamily) {
         self.session_header.set_model(model);
-        self.model_family = model_family;
+        self.model_family = Some(model_family);
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {

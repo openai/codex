@@ -531,7 +531,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
         );
     });
     let fixture = builder.build(&server).await?;
-    let session_model = fixture.session_configured.model.clone();
+    let session_model = fixture.session_configured.model_family.slug.clone();
 
     fixture
         .codex

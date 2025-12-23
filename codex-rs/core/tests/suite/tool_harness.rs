@@ -76,7 +76,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
     ]);
     let second_mock = responses::mount_sse_once(&server, second_response).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -142,7 +142,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
     ]);
     let second_mock = responses::mount_sse_once(&server, second_response).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -218,7 +218,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
     ]);
     let second_mock = responses::mount_sse_once(&server, second_response).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -306,7 +306,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
     ]);
     let second_mock = responses::mount_sse_once(&server, second_response).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -402,7 +402,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
     ]);
     let second_mock = responses::mount_sse_once(&server, second_response).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {

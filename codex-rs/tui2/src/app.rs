@@ -412,8 +412,6 @@ impl App {
         ));
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
-        let model_family =
-            codex_core::models_manager::model_family::ModelFamily::placeholder(&config);
         let mut chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -427,7 +425,6 @@ impl App {
                     models_manager: conversation_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model_family: model_family.clone(),
                 };
                 ChatWidget::new(init, conversation_manager.clone())
             }
@@ -453,7 +450,6 @@ impl App {
                     models_manager: conversation_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model_family: model_family.clone(),
                 };
                 ChatWidget::new_from_existing(
                     init,
@@ -1534,11 +1530,6 @@ impl App {
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
-        let model_family = self
-            .server
-            .get_models_manager()
-            .construct_model_family(self.current_model.as_str(), &self.config)
-            .await;
         match event {
             AppEvent::NewSession => {
                 let summary = session_summary(
@@ -1557,10 +1548,9 @@ impl App {
                     models_manager: self.server.get_models_manager(),
                     feedback: self.feedback.clone(),
                     is_first_run: false,
-                    model_family: model_family.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
-                self.current_model = model_family.get_model_slug().to_string();
+                self.current_model.clear();
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
@@ -1607,14 +1597,17 @@ impl App {
                                     models_manager: self.server.get_models_manager(),
                                     feedback: self.feedback.clone(),
                                     is_first_run: false,
-                                    model_family: model_family.clone(),
                                 };
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
                                     resumed.conversation,
                                     resumed.session_configured,
                                 );
-                                self.current_model = model_family.get_model_slug().to_string();
+                                self.current_model = self
+                                    .chat_widget
+                                    .get_model_family()
+                                    .map(|mf| mf.get_model_slug().to_string())
+                                    .unwrap_or_default();
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
@@ -1697,7 +1690,7 @@ impl App {
                 }
 
                 let configured_model = match &event.msg {
-                    EventMsg::SessionConfigured(ev) => Some(ev.model.clone()),
+                    EventMsg::SessionConfigured(ev) => Some(ev.model_family.slug.clone()),
                     _ => None,
                 };
                 if let EventMsg::ListSkillsResponse(response) = &event.msg {
@@ -2280,10 +2273,41 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
+    fn test_model_family(slug: &str) -> codex_protocol::openai_models::ModelFamily {
+        use codex_protocol::openai_models::ConfigShellToolType;
+        use codex_protocol::openai_models::ModelFamily;
+        use codex_protocol::openai_models::ReasoningEffort;
+        use codex_protocol::openai_models::ReasoningSummaryFormat;
+        use codex_protocol::openai_models::TruncationPolicy;
+
+        ModelFamily {
+            slug: slug.to_string(),
+            family: slug.to_string(),
+            needs_special_apply_patch_instructions: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            supports_reasoning_summaries: false,
+            default_reasoning_effort: Some(ReasoningEffort::Medium),
+            reasoning_summary_format: ReasoningSummaryFormat::None,
+            supports_parallel_tool_calls: false,
+            apply_patch_tool_type: None,
+            base_instructions: String::new(),
+            experimental_supported_tools: Vec::new(),
+            effective_context_window_percent: 95,
+            support_verbosity: false,
+            default_verbosity: None,
+            shell_type: ConfigShellToolType::Default,
+            truncation_policy: TruncationPolicy::Bytes(10_000),
+        }
+    }
+
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let current_model = chat_widget.get_model_family().get_model_slug().to_string();
+        let current_model = chat_widget
+            .get_model_family()
+            .map(|mf| mf.get_model_slug().to_string())
+            .unwrap_or_default();
         let server = Arc::new(ConversationManager::with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
@@ -2328,7 +2352,10 @@ mod tests {
     ) {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let current_model = chat_widget.get_model_family().get_model_slug().to_string();
+        let current_model = chat_widget
+            .get_model_family()
+            .map(|mf| mf.get_model_slug().to_string())
+            .unwrap_or_default();
         let server = Arc::new(ConversationManager::with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
@@ -2465,7 +2492,7 @@ mod tests {
         let make_header = |is_first| {
             let event = SessionConfiguredEvent {
                 session_id: ConversationId::new(),
-                model: "gpt-test".to_string(),
+                model_family: test_model_family("gpt-test"),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::ReadOnly,
@@ -2582,7 +2609,7 @@ mod tests {
         let conversation_id = ConversationId::new();
         let event = SessionConfiguredEvent {
             session_id: conversation_id,
-            model: "gpt-test".to_string(),
+            model_family: test_model_family("gpt-test"),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::ReadOnly,

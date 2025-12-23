@@ -194,7 +194,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     let test = harness.test();
     let codex = test.codex.clone();
     let cwd = test.cwd_path().to_path_buf();
-    let session_model = test.session_configured.model.clone();
+    let session_model = test.session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -320,7 +320,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -395,7 +395,7 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -473,7 +473,7 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -563,7 +563,7 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -635,7 +635,7 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -708,7 +708,7 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -834,7 +834,7 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -967,7 +967,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -1124,7 +1124,7 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -1219,7 +1219,7 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -1323,7 +1323,7 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -1448,7 +1448,7 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -1610,7 +1610,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -1684,7 +1684,7 @@ async fn unified_exec_closes_long_running_session_at_turn_end() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -1802,7 +1802,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -1931,7 +1931,7 @@ PY
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -2040,7 +2040,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -2131,7 +2131,7 @@ PY
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -2207,7 +2207,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -2306,7 +2306,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -2396,7 +2396,7 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
     ];
     mount_sse_sequence(&server, responses).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -2524,7 +2524,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     let response_mock =
         mount_sse_sequence(&server, vec![first_response, completion_response]).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {

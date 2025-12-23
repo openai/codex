@@ -72,7 +72,7 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
     ]);
     let mock = responses::mount_sse_once(&server, response).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -163,7 +163,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     ]);
     let mock = responses::mount_sse_once(&server, second_response).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -273,7 +273,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
     ]);
     let mock = responses::mount_sse_once(&server, second_response).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -345,7 +345,7 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
     ]);
     let mock = responses::mount_sse_once(&server, second_response).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -436,7 +436,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
     ]);
     let mock = responses::mount_sse_once(&server, second_response).await;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {
@@ -517,7 +517,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
     let image = ImageBuffer::from_pixel(1024, 512, Rgba([10u8, 20, 30, 255]));
     image.save(&abs_path)?;
 
-    let session_model = session_configured.model.clone();
+    let session_model = session_configured.model_family.slug.clone();
 
     codex
         .submit(Op::UserTurn {

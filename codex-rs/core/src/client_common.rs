@@ -1,9 +1,9 @@
 use crate::client_common::tools::ToolSpec;
 use crate::error::Result;
-use crate::models_manager::model_family::ModelFamily;
 pub use codex_api::common::ResponseEvent;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelFamily;
 use futures::Stream;
 use serde::Deserialize;
 use serde_json::Value;

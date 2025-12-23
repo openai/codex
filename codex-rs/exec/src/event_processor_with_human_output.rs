@@ -140,8 +140,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             VERSION
         );
 
-        let mut entries =
-            create_config_summary_entries(config, session_configured_event.model.as_str());
+        let mut entries = create_config_summary_entries(
+            config,
+            session_configured_event.model_family.slug.as_str(),
+        );
         entries.push((
             "session id",
             session_configured_event.session_id.to_string(),
@@ -494,7 +496,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::SessionConfigured(session_configured_event) => {
                 let SessionConfiguredEvent {
                     session_id: conversation_id,
-                    model,
+                    model_family,
                     ..
                 } = session_configured_event;
 
@@ -505,7 +507,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     conversation_id.to_string().style(self.dimmed)
                 );
 
-                ts_msg!(self, "model: {}", model);
+                ts_msg!(self, "model: {}", model_family.slug);
                 eprintln!();
             }
             EventMsg::PlanUpdate(plan_update_event) => {

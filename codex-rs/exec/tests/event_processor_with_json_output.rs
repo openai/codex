@@ -44,6 +44,11 @@ use codex_exec::exec_events::TurnFailedEvent;
 use codex_exec::exec_events::TurnStartedEvent;
 use codex_exec::exec_events::Usage;
 use codex_exec::exec_events::WebSearchItem;
+use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::ModelFamily;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningSummaryFormat;
+use codex_protocol::openai_models::TruncationPolicy;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -76,7 +81,25 @@ fn session_configured_produces_thread_started_event() {
         "e1",
         EventMsg::SessionConfigured(SessionConfiguredEvent {
             session_id,
-            model: "codex-mini-latest".to_string(),
+            model_family: ModelFamily {
+                slug: "codex-mini-latest".to_string(),
+                family: "codex-mini-latest".to_string(),
+                needs_special_apply_patch_instructions: false,
+                context_window: None,
+                auto_compact_token_limit: None,
+                supports_reasoning_summaries: false,
+                default_reasoning_effort: Some(ReasoningEffort::default()),
+                reasoning_summary_format: ReasoningSummaryFormat::None,
+                supports_parallel_tool_calls: false,
+                apply_patch_tool_type: None,
+                base_instructions: String::new(),
+                experimental_supported_tools: Vec::new(),
+                effective_context_window_percent: 95,
+                support_verbosity: false,
+                default_verbosity: None,
+                shell_type: ConfigShellToolType::Default,
+                truncation_policy: TruncationPolicy::Bytes(10_000),
+            },
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::ReadOnly,

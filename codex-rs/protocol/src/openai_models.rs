@@ -163,6 +163,199 @@ impl TruncationPolicyConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, Copy, PartialEq, Eq, Hash, JsonSchema, TS)]
+pub enum TruncationPolicy {
+    Bytes(usize),
+    Tokens(usize),
+}
+
+impl From<TruncationPolicyConfig> for TruncationPolicy {
+    fn from(config: TruncationPolicyConfig) -> Self {
+        match config.mode {
+            TruncationMode::Bytes => Self::Bytes(config.limit as usize),
+            TruncationMode::Tokens => Self::Tokens(config.limit as usize),
+        }
+    }
+}
+
+impl std::ops::Mul<f64> for TruncationPolicy {
+    type Output = Self;
+
+    /// Scale the underlying budget by `multiplier`, rounding up to avoid under-budgeting.
+    fn mul(self, multiplier: f64) -> Self::Output {
+        match self {
+            TruncationPolicy::Bytes(bytes) => {
+                TruncationPolicy::Bytes((bytes as f64 * multiplier).ceil() as usize)
+            }
+            TruncationPolicy::Tokens(tokens) => {
+                TruncationPolicy::Tokens((tokens as f64 * multiplier).ceil() as usize)
+            }
+        }
+    }
+}
+
+/// A model family is a group of models that share certain characteristics.
+#[derive(Debug, Clone, Deserialize, Serialize, Hash, JsonSchema, TS)]
+pub struct ModelFamily {
+    /// The full model slug used to derive this model family, e.g.
+    /// "gpt-4.1-2025-04-14".
+    pub slug: String,
+
+    /// The model family name, e.g. "gpt-4.1". This string is used when deriving
+    /// default metadata for the family, such as context windows.
+    pub family: String,
+
+    /// True if the model needs additional instructions on how to use the
+    /// "virtual" `apply_patch` CLI.
+    pub needs_special_apply_patch_instructions: bool,
+
+    /// Maximum supported context window, if known.
+    pub context_window: Option<i64>,
+
+    /// Token threshold for automatic compaction if config does not override it.
+    pub auto_compact_token_limit: Option<i64>,
+
+    // Whether the `reasoning` field can be set when making a request to this
+    // model family. Note it has `effort` and `summary` subfields (though
+    // `summary` is optional).
+    pub supports_reasoning_summaries: bool,
+
+    // The reasoning effort to use for this model family when none is explicitly chosen.
+    pub default_reasoning_effort: Option<ReasoningEffort>,
+
+    // Define if we need a special handling of reasoning summary
+    pub reasoning_summary_format: ReasoningSummaryFormat,
+
+    /// Whether this model supports parallel tool calls when using the
+    /// Responses API.
+    pub supports_parallel_tool_calls: bool,
+
+    /// Present if the model performs better when `apply_patch` is provided as
+    /// a tool call instead of just a bash command
+    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
+
+    // Instructions to use for querying the model
+    pub base_instructions: String,
+
+    /// Names of beta tools that should be exposed to this model family.
+    pub experimental_supported_tools: Vec<String>,
+
+    /// Percentage of the context window considered usable for inputs, after
+    /// reserving headroom for system prompts, tool overhead, and model output.
+    /// This is applied when computing the effective context window seen by
+    /// consumers.
+    pub effective_context_window_percent: i64,
+
+    /// If the model family supports setting the verbosity level when using Responses API.
+    pub support_verbosity: bool,
+
+    // The default verbosity level for this model family when using Responses API.
+    pub default_verbosity: Option<Verbosity>,
+
+    /// Preferred shell tool type for this model family when features do not override it.
+    pub shell_type: ConfigShellToolType,
+
+    pub truncation_policy: TruncationPolicy,
+}
+
+impl ModelFamily {
+    /// Convert a `ModelFamily` into the protocol's `ModelInfo` shape for inclusion in events.
+    ///
+    /// This intentionally omits fields that are not needed for session bootstrapping
+    /// (e.g. `priority`, `visibility`, and `base_instructions`).
+    pub fn to_session_configured_model_info(&self) -> ModelInfo {
+        let default_reasoning_level = self.default_reasoning_effort.unwrap_or_default();
+        let truncation_policy = match self.truncation_policy {
+            TruncationPolicy::Bytes(limit) => TruncationPolicyConfig::bytes(limit as i64),
+            TruncationPolicy::Tokens(limit) => TruncationPolicyConfig::tokens(limit as i64),
+        };
+
+        ModelInfo {
+            slug: self.slug.clone(),
+            display_name: self.slug.clone(),
+            description: None,
+            default_reasoning_level,
+            supported_reasoning_levels: vec![ReasoningEffortPreset {
+                effort: default_reasoning_level,
+                description: default_reasoning_level.to_string(),
+            }],
+            shell_type: self.shell_type,
+            visibility: ModelVisibility::None,
+            supported_in_api: true,
+            priority: 0,
+            upgrade: None,
+            base_instructions: None,
+            supports_reasoning_summaries: self.supports_reasoning_summaries,
+            support_verbosity: self.support_verbosity,
+            default_verbosity: self.default_verbosity,
+            apply_patch_tool_type: self.apply_patch_tool_type.clone(),
+            truncation_policy,
+            supports_parallel_tool_calls: self.supports_parallel_tool_calls,
+            context_window: self.context_window,
+            reasoning_summary_format: self.reasoning_summary_format.clone(),
+            experimental_supported_tools: self.experimental_supported_tools.clone(),
+        }
+    }
+
+    pub fn auto_compact_token_limit(&self) -> Option<i64> {
+        self.auto_compact_token_limit
+            .or(self.context_window.map(|cw| (cw * 9) / 10))
+    }
+
+    pub fn get_model_slug(&self) -> &str {
+        &self.slug
+    }
+
+    pub fn with_remote_overrides(mut self, remote_models: Vec<ModelInfo>) -> Self {
+        for model in remote_models {
+            if model.slug == self.slug {
+                self.apply_remote_overrides(model);
+            }
+        }
+        self
+    }
+
+    fn apply_remote_overrides(&mut self, model: ModelInfo) {
+        let ModelInfo {
+            slug: _,
+            display_name: _,
+            description: _,
+            default_reasoning_level,
+            supported_reasoning_levels: _,
+            shell_type,
+            visibility: _,
+            supported_in_api: _,
+            priority: _,
+            upgrade: _,
+            base_instructions,
+            supports_reasoning_summaries,
+            support_verbosity,
+            default_verbosity,
+            apply_patch_tool_type,
+            truncation_policy,
+            supports_parallel_tool_calls,
+            context_window,
+            reasoning_summary_format,
+            experimental_supported_tools,
+        } = model;
+
+        self.default_reasoning_effort = Some(default_reasoning_level);
+        self.shell_type = shell_type;
+        if let Some(base) = base_instructions {
+            self.base_instructions = base;
+        }
+        self.supports_reasoning_summaries = supports_reasoning_summaries;
+        self.support_verbosity = support_verbosity;
+        self.default_verbosity = default_verbosity;
+        self.apply_patch_tool_type = apply_patch_tool_type;
+        self.truncation_policy = truncation_policy.into();
+        self.supports_parallel_tool_calls = supports_parallel_tool_calls;
+        self.context_window = context_window;
+        self.reasoning_summary_format = reasoning_summary_format;
+        self.experimental_supported_tools = experimental_supported_tools;
+    }
+}
+
 /// Semantic version triple encoded as an array in JSON (e.g. [0, 62, 0]).
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 pub struct ClientVersion(pub i32, pub i32, pub i32);
