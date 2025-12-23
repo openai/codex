@@ -111,6 +111,7 @@ jobs:
         working-directory: codex-rs
     env:
       CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.target/${{ matrix.target }}-${{ matrix.profile }}
 
     strategy:
       fail-fast: false
@@ -165,15 +166,6 @@ jobs:
           targets: ${{ matrix.target }}
           components: clippy
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # Cache registry/git and build artifacts for this workspace/target/profile triple.
-          workspaces: |
-            codex-rs
-          shared-key: rust-ci-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}
-          cache-targets: true
-          cache-on-failure: true
-
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Prepare APT cache directories (musl)
         shell: bash
@@ -200,6 +192,35 @@ jobs:
           set -euo pipefail
           sudo apt-get -y update -o Acquire::Retries=3
           sudo apt-get -y install --no-install-recommends musl-tools pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Cache registry/git and build artifacts for this workspace/target/profile triple.
+          workspaces: |
+            codex-rs
+          shared-key: rust-ci-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}
+          cache-targets: true
+          cache-on-failure: true
+
+      - name: Install cargo-chef
+        if: ${{ matrix.profile == 'release' || contains(matrix.target, 'windows') }}
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
+        with:
+          tool: cargo-chef
+          version: 0.1.71
+
+      - name: Pre-warm dependency cache (cargo-chef)
+        if: ${{ matrix.profile == 'release' || contains(matrix.target, 'windows') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RECIPE="${RUNNER_TEMP}/chef-recipe.json"
+          cargo chef prepare --recipe-path "$RECIPE"
+          PROFILE_ARGS="--profile ${{ matrix.profile }}"
+          if [[ "${{ matrix.profile }}" == "release" ]]; then
+            PROFILE_ARGS="--release"
+          fi
+          cargo chef cook --recipe-path "$RECIPE" --target ${{ matrix.target }} $PROFILE_ARGS --all-features
 
       - name: Install cargo-chef
         if: ${{ matrix.profile == 'release' }}
@@ -263,6 +284,7 @@ jobs:
         working-directory: codex-rs
     env:
       CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.target/${{ matrix.target }}-${{ matrix.profile }}
 
     strategy:
       fail-fast: false
@@ -318,6 +340,26 @@ jobs:
           shared-key: rust-ci-tests-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}
           cache-targets: true
           cache-on-failure: true
+
+      - name: Install cargo-chef
+        if: ${{ matrix.profile == 'release' || contains(matrix.target, 'windows') }}
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
+        with:
+          tool: cargo-chef
+          version: 0.1.71
+
+      - name: Pre-warm dependency cache (cargo-chef)
+        if: ${{ matrix.profile == 'release' || contains(matrix.target, 'windows') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RECIPE="${RUNNER_TEMP}/chef-recipe.json"
+          cargo chef prepare --recipe-path "$RECIPE"
+          PROFILE_ARGS="--profile ${{ matrix.profile }}"
+          if [[ "${{ matrix.profile }}" == "release" ]]; then
+            PROFILE_ARGS="--release"
+          fi
+          cargo chef cook --recipe-path "$RECIPE" --target ${{ matrix.target }} $PROFILE_ARGS --all-features
 
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
