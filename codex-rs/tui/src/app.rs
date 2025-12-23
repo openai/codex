@@ -681,6 +681,19 @@ impl App {
                     }
                 }
             }
+            AppEvent::InsertEphemeralHistoryLines(lines) => {
+                if lines.is_empty() {
+                    return Ok(true);
+                }
+                // Ephemeral lines are appended to the inline viewport only and do not
+                // update the persisted transcript_cells.
+                self.has_emitted_history_lines = true;
+                if self.overlay.is_some() {
+                    self.deferred_history_lines.extend(lines);
+                } else {
+                    tui.insert_history_lines(lines);
+                }
+            }
             AppEvent::StartCommitAnimation => {
                 if self
                     .commit_anim_running
@@ -724,6 +737,12 @@ impl App {
                 return Ok(false);
             }
             AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
+            AppEvent::SwitchAgent { agent_id } => {
+                self.chat_widget.switch_to_agent(agent_id);
+            }
+            AppEvent::CreateAgentFromComposer { agent_id } => {
+                self.chat_widget.create_agent_from_composer(agent_id);
+            }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();

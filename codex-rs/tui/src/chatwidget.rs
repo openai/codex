@@ -144,6 +144,7 @@ use codex_file_search::FileMatch;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use mcp_types::RequestId;
 use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
@@ -153,6 +154,116 @@ struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
     source: ExecCommandSource,
+}
+
+struct AgentViewState {
+    active_cell: Option<Box<dyn HistoryCell>>,
+    stream_controller: Option<StreamController>,
+    running_commands: HashMap<String, RunningCommand>,
+    suppressed_exec_calls: HashSet<String>,
+    last_unified_wait: Option<UnifiedExecWaitState>,
+    task_complete_pending: bool,
+    unified_exec_sessions: Vec<UnifiedExecSessionSummary>,
+    interrupts: InterruptManager,
+    reasoning_buffer: String,
+    full_reasoning_buffer: String,
+    current_status_header: String,
+    retry_status_header: Option<String>,
+    token_info: Option<TokenUsageInfo>,
+    rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
+    plan_type: Option<PlanType>,
+    rate_limit_warnings: RateLimitWarningState,
+    rate_limit_switch_prompt: RateLimitSwitchPromptState,
+    is_review_mode: bool,
+    pre_review_token_info: Option<Option<TokenUsageInfo>>,
+    needs_final_message_separator: bool,
+    is_task_running: bool,
+    replay_messages: Vec<ReplayMessage>,
+}
+
+impl AgentViewState {
+    fn empty() -> Self {
+        Self {
+            active_cell: None,
+            stream_controller: None,
+            running_commands: HashMap::new(),
+            suppressed_exec_calls: HashSet::new(),
+            last_unified_wait: None,
+            task_complete_pending: false,
+            unified_exec_sessions: Vec::new(),
+            interrupts: InterruptManager::new(),
+            reasoning_buffer: String::new(),
+            full_reasoning_buffer: String::new(),
+            current_status_header: String::from("Working"),
+            retry_status_header: None,
+            token_info: None,
+            rate_limit_snapshot: None,
+            plan_type: None,
+            rate_limit_warnings: RateLimitWarningState::default(),
+            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+            is_review_mode: false,
+            pre_review_token_info: None,
+            needs_final_message_separator: false,
+            is_task_running: false,
+            replay_messages: Vec::new(),
+        }
+    }
+
+    fn capture_from(widget: &mut ChatWidget) -> Self {
+        Self {
+            active_cell: widget.active_cell.take(),
+            stream_controller: widget.stream_controller.take(),
+            running_commands: std::mem::take(&mut widget.running_commands),
+            suppressed_exec_calls: std::mem::take(&mut widget.suppressed_exec_calls),
+            last_unified_wait: widget.last_unified_wait.take(),
+            task_complete_pending: widget.task_complete_pending,
+            unified_exec_sessions: std::mem::take(&mut widget.unified_exec_sessions),
+            interrupts: std::mem::take(&mut widget.interrupts),
+            reasoning_buffer: std::mem::take(&mut widget.reasoning_buffer),
+            full_reasoning_buffer: std::mem::take(&mut widget.full_reasoning_buffer),
+            current_status_header: std::mem::take(&mut widget.current_status_header),
+            retry_status_header: widget.retry_status_header.take(),
+            token_info: widget.token_info.take(),
+            rate_limit_snapshot: widget.rate_limit_snapshot.take(),
+            plan_type: widget.plan_type.take(),
+            rate_limit_warnings: std::mem::take(&mut widget.rate_limit_warnings),
+            rate_limit_switch_prompt: std::mem::take(&mut widget.rate_limit_switch_prompt),
+            is_review_mode: widget.is_review_mode,
+            pre_review_token_info: widget.pre_review_token_info.take(),
+            needs_final_message_separator: widget.needs_final_message_separator,
+            is_task_running: widget.bottom_pane.is_task_running(),
+            replay_messages: std::mem::take(&mut widget.replay_messages),
+        }
+    }
+
+    fn restore_into(self, widget: &mut ChatWidget) {
+        widget.active_cell = self.active_cell;
+        widget.stream_controller = self.stream_controller;
+        widget.running_commands = self.running_commands;
+        widget.suppressed_exec_calls = self.suppressed_exec_calls;
+        widget.last_unified_wait = self.last_unified_wait;
+        widget.task_complete_pending = self.task_complete_pending;
+        widget.unified_exec_sessions = self.unified_exec_sessions;
+        widget.interrupts = self.interrupts;
+        widget.reasoning_buffer = self.reasoning_buffer;
+        widget.full_reasoning_buffer = self.full_reasoning_buffer;
+        widget.current_status_header = self.current_status_header;
+        widget.retry_status_header = self.retry_status_header;
+        widget.rate_limit_snapshot = self.rate_limit_snapshot;
+        widget.plan_type = self.plan_type;
+        widget.rate_limit_warnings = self.rate_limit_warnings;
+        widget.rate_limit_switch_prompt = self.rate_limit_switch_prompt;
+        widget.is_review_mode = self.is_review_mode;
+        widget.pre_review_token_info = self.pre_review_token_info;
+        widget.needs_final_message_separator = self.needs_final_message_separator;
+        widget.replay_messages = self.replay_messages;
+        widget.bottom_pane.set_task_running(self.is_task_running);
+        widget
+            .bottom_pane
+            .update_status_header(widget.current_status_header.clone());
+        widget.set_token_info(self.token_info);
+        widget.sync_unified_exec_footer();
+    }
 }
 
 struct UnifiedExecSessionSummary {
@@ -302,6 +413,15 @@ enum RateLimitSwitchPromptState {
     Shown,
 }
 
+#[derive(Clone, Debug)]
+enum ReplayMessage {
+    UserPrompt(String),
+    AgentChunk {
+        lines: Vec<Line<'static>>,
+        is_first_line: bool,
+    },
+}
+
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -354,12 +474,21 @@ pub(crate) struct ChatWidget {
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
     // Whether to add a final message separator after the last message
     needs_final_message_separator: bool,
+    // Cached user/agent messages for ephemeral replay when switching agent views.
+    replay_messages: Vec<ReplayMessage>,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
+    selected_agent_id: String,
+    known_agents: Vec<String>,
+    known_agents_set: HashSet<String>,
+    pending_agent_events: HashMap<String, Vec<EventMsg>>,
+    agent_states: HashMap<String, AgentViewState>,
+    approval_agent_ids: HashMap<String, String>,
+    elicitation_agent_ids: HashMap<RequestId, String>,
 }
 
 struct UserMessage {
@@ -1374,6 +1503,7 @@ impl ChatWidget {
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
+        let default_agent_id = DEFAULT_AGENT_ID.as_str().to_string();
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -1424,9 +1554,17 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
+            replay_messages: Vec::new(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
+            selected_agent_id: default_agent_id.clone(),
+            known_agents: vec![default_agent_id.clone()],
+            known_agents_set: HashSet::from([default_agent_id]),
+            pending_agent_events: HashMap::new(),
+            agent_states: HashMap::new(),
+            approval_agent_ids: HashMap::new(),
+            elicitation_agent_ids: HashMap::new(),
         };
 
         widget.prefetch_rate_limits();
@@ -1460,6 +1598,7 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
+        let default_agent_id = DEFAULT_AGENT_ID.as_str().to_string();
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -1510,9 +1649,17 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
+            replay_messages: Vec::new(),
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
+            selected_agent_id: default_agent_id.clone(),
+            known_agents: vec![default_agent_id.clone()],
+            known_agents_set: HashSet::from([default_agent_id]),
+            pending_agent_events: HashMap::new(),
+            agent_states: HashMap::new(),
+            approval_agent_ids: HashMap::new(),
+            elicitation_agent_ids: HashMap::new(),
         };
 
         widget.prefetch_rate_limits();
@@ -1529,6 +1676,29 @@ impl ChatWidget {
                 ..
             } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c') => {
                 self.on_ctrl_c();
+                return;
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'a') => {
+                self.open_agents_popup();
+                return;
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL)
+                && c.eq_ignore_ascii_case(&'n')
+                && !self.bottom_pane.composer_is_empty() =>
+            {
+                // Avoid clobbering the composer's Ctrl+N history navigation when the
+                // composer is empty. When there's a draft, Ctrl+N is "new agent".
+                self.open_new_agent_prompt();
                 return;
             }
             KeyEvent {
@@ -1788,6 +1958,19 @@ impl ChatWidget {
         }
     }
 
+    fn insert_history_cell_without_flushing(&mut self, cell: Box<dyn HistoryCell>) {
+        if !cell.display_lines(u16::MAX).is_empty() {
+            self.needs_final_message_separator = true;
+        }
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+    }
+
+    fn insert_agent_view_header(&mut self, agent_id: &str) {
+        self.insert_history_cell_without_flushing(Box::new(history_cell::new_agent_view_header(
+            agent_id.to_string(),
+        )));
+    }
+
     fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
         self.add_boxed_history(Box::new(cell));
     }
@@ -1797,6 +1980,22 @@ impl ChatWidget {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_cell();
             self.needs_final_message_separator = true;
+        }
+        if let Some(user) = cell
+            .as_any()
+            .downcast_ref::<history_cell::UserHistoryCell>()
+        {
+            self.replay_messages
+                .push(ReplayMessage::UserPrompt(user.message.clone()));
+        } else if let Some(agent) = cell
+            .as_any()
+            .downcast_ref::<history_cell::AgentMessageCell>()
+        {
+            let (lines, is_first_line) = agent.replay_snapshot();
+            self.replay_messages.push(ReplayMessage::AgentChunk {
+                lines,
+                is_first_line,
+            });
         }
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
@@ -1854,19 +2053,11 @@ impl ChatWidget {
             }
         }
 
-        self.codex_op_tx
-            .send(Op::UserInput { items })
-            .unwrap_or_else(|e| {
-                tracing::error!("failed to send message: {e}");
-            });
+        self.submit_op(Op::UserInput { items });
 
         // Persist the text to cross-session message history.
         if !text.is_empty() {
-            self.codex_op_tx
-                .send(Op::AddToHistory { text: text.clone() })
-                .unwrap_or_else(|e| {
-                    tracing::error!("failed to send AddHistory op: {e}");
-                });
+            self.submit_op(Op::AddToHistory { text: text.clone() });
         }
 
         // Only show the text portion in conversation history.
@@ -1893,22 +2084,29 @@ impl ChatWidget {
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg, agent_id } = event;
-        if !self.should_handle_agent_event(agent_id.as_deref(), &msg) {
+        if self.should_handle_event_globally(&msg) {
+            self.dispatch_event_msg(Some(id), msg, false);
             return;
         }
-        self.dispatch_event_msg(Some(id), msg, false);
-    }
 
-    fn should_handle_agent_event(&self, agent_id: Option<&str>, msg: &EventMsg) -> bool {
-        let agent_id = agent_id.unwrap_or(&DEFAULT_AGENT_ID);
-        if agent_id == *DEFAULT_AGENT_ID {
-            return true;
+        let resolved_agent_id = agent_id.unwrap_or_else(|| DEFAULT_AGENT_ID.as_str().to_string());
+        self.register_agent(&resolved_agent_id);
+
+        if self.is_approval_event(&msg) {
+            self.track_approval_agent(&msg, &id, &resolved_agent_id);
+            self.dispatch_event_msg(Some(id), msg, false);
+            return;
         }
 
-        matches!(
-            msg,
-            EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_)
-        )
+        if resolved_agent_id == self.selected_agent_id {
+            self.dispatch_event_msg(Some(id), msg, false);
+            return;
+        }
+
+        self.pending_agent_events
+            .entry(resolved_agent_id)
+            .or_default()
+            .push(msg);
     }
 
     /// Dispatch a protocol `EventMsg` to the appropriate handler.
@@ -2095,6 +2293,50 @@ impl ChatWidget {
 
     fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
+    }
+
+    fn register_agent(&mut self, agent_id: &str) {
+        if self.known_agents_set.insert(agent_id.to_string()) {
+            self.known_agents.push(agent_id.to_string());
+        }
+    }
+
+    fn should_handle_event_globally(&self, msg: &EventMsg) -> bool {
+        matches!(
+            msg,
+            EventMsg::SessionConfigured(_)
+                | EventMsg::ListCustomPromptsResponse(_)
+                | EventMsg::ListSkillsResponse(_)
+                | EventMsg::SkillsUpdateAvailable
+                | EventMsg::McpStartupUpdate(_)
+                | EventMsg::McpStartupComplete(_)
+                | EventMsg::ShutdownComplete
+        )
+    }
+
+    fn is_approval_event(&self, msg: &EventMsg) -> bool {
+        matches!(
+            msg,
+            EventMsg::ExecApprovalRequest(_)
+                | EventMsg::ApplyPatchApprovalRequest(_)
+                | EventMsg::ElicitationRequest(_)
+        )
+    }
+
+    fn track_approval_agent(&mut self, msg: &EventMsg, id: &str, agent_id: &str) {
+        match msg {
+            EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_) => {
+                if !id.is_empty() {
+                    self.approval_agent_ids
+                        .insert(id.to_string(), agent_id.to_string());
+                }
+            }
+            EventMsg::ElicitationRequest(ElicitationRequestEvent { id: request_id, .. }) => {
+                self.elicitation_agent_ids
+                    .insert(request_id.clone(), agent_id.to_string());
+            }
+            _ => {}
+        }
     }
 
     fn notify(&mut self, notification: Notification) {
@@ -2761,6 +3003,160 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
+    pub(crate) fn open_agents_popup(&mut self) {
+        let mut items: Vec<SelectionItem> = Vec::new();
+        let mut initial_selected_idx = None;
+        for (idx, agent_id) in self.known_agents.iter().enumerate() {
+            let is_current = agent_id == &self.selected_agent_id;
+            if is_current {
+                initial_selected_idx = Some(idx);
+            }
+            let agent_id_for_action = agent_id.clone();
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::SwitchAgent {
+                    agent_id: agent_id_for_action.clone(),
+                });
+            })];
+            items.push(SelectionItem {
+                name: agent_id.clone(),
+                description: Some("View messages and send input to this agent.".to_string()),
+                is_current,
+                is_default: agent_id == DEFAULT_AGENT_ID.as_str(),
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Agents".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx,
+            header: Box::new(()),
+            ..Default::default()
+        });
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_new_agent_prompt(&mut self) {
+        let app_event_tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "New agent".to_string(),
+            "Enter a new agent id, then press Enter to send your current draft.".to_string(),
+            Some("Ctrl+N: create a new agent from the current composer draft".to_string()),
+            Box::new(move |agent_id| {
+                app_event_tx.send(AppEvent::CreateAgentFromComposer { agent_id });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn create_agent_from_composer(&mut self, agent_id: String) {
+        let agent_id = agent_id.trim().to_string();
+        if agent_id.is_empty() {
+            self.add_to_history(history_cell::new_info_event(
+                "Agent id cannot be empty.".to_string(),
+                None,
+            ));
+            return;
+        }
+
+        self.switch_to_agent(agent_id);
+
+        // Reuse the composer's normal submission pipeline (trim/expansion/etc.)
+        // by simulating an Enter press.
+        match self
+            .bottom_pane
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        {
+            InputResult::Submitted(text) => {
+                let user_message = UserMessage {
+                    text,
+                    image_paths: self.bottom_pane.take_recent_submission_images(),
+                };
+                self.queue_user_message(user_message);
+            }
+            InputResult::Command(cmd) => {
+                self.dispatch_command(cmd);
+            }
+            InputResult::None => {}
+        }
+    }
+
+    pub(crate) fn switch_to_agent(&mut self, agent_id: String) {
+        if agent_id == self.selected_agent_id {
+            return;
+        }
+        self.register_agent(&agent_id);
+        let previous_agent = self.selected_agent_id.clone();
+        let previous_state = AgentViewState::capture_from(self);
+        self.agent_states.insert(previous_agent, previous_state);
+        self.bottom_pane.set_task_running(false);
+        self.selected_agent_id = agent_id.clone();
+        let next_state = self
+            .agent_states
+            .remove(&agent_id)
+            .unwrap_or_else(AgentViewState::empty);
+        next_state.restore_into(self);
+        self.insert_agent_view_header(&agent_id);
+        self.replay_user_and_agent_messages();
+        if let Some(pending) = self.pending_agent_events.remove(&agent_id) {
+            for msg in pending {
+                self.dispatch_event_msg(None, msg, false);
+            }
+        }
+        self.request_redraw();
+    }
+
+    fn replay_user_and_agent_messages(&mut self) {
+        if self.replay_messages.is_empty() {
+            return;
+        }
+        let width = self
+            .last_rendered_width
+            .get()
+            .and_then(|w| u16::try_from(w).ok())
+            .unwrap_or(u16::MAX);
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let mut has_emitted = false;
+        for replay in &self.replay_messages {
+            let (cell, is_stream_continuation): (Box<dyn HistoryCell>, bool) = match replay {
+                ReplayMessage::UserPrompt(message) => (
+                    Box::new(history_cell::new_user_prompt(message.clone())),
+                    false,
+                ),
+                ReplayMessage::AgentChunk {
+                    lines,
+                    is_first_line,
+                } => (
+                    Box::new(history_cell::AgentMessageCell::new(
+                        lines.clone(),
+                        *is_first_line,
+                    )),
+                    !*is_first_line,
+                ),
+            };
+            let mut display = cell.display_lines(width);
+            if display.is_empty() {
+                continue;
+            }
+            if !is_stream_continuation {
+                if has_emitted {
+                    out.push(Line::from(""));
+                } else {
+                    has_emitted = true;
+                }
+            }
+            out.append(&mut display);
+        }
+        if !out.is_empty() {
+            self.app_event_tx
+                .send(AppEvent::InsertEphemeralHistoryLines(out));
+        }
+    }
+
     fn approval_preset_actions(
         approval: AskForApproval,
         sandbox: SandboxPolicy,
@@ -3216,10 +3612,69 @@ impl ChatWidget {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
     /// Forward an `Op` directly to codex.
-    pub(crate) fn submit_op(&self, op: Op) {
+    fn wrap_for_agent(&self, agent_id: String, op: Op) -> Op {
+        if agent_id == DEFAULT_AGENT_ID.as_str() {
+            op
+        } else {
+            Op::ForAgent {
+                agent_id,
+                op: Box::new(op),
+            }
+        }
+    }
+
+    fn route_op_for_agent(&mut self, op: Op) -> Op {
+        match op {
+            Op::ForAgent { agent_id, op } => {
+                self.register_agent(&agent_id);
+                Op::ForAgent { agent_id, op }
+            }
+            Op::ExecApproval { id, decision } => {
+                let agent_id = self
+                    .approval_agent_ids
+                    .remove(&id)
+                    .unwrap_or_else(|| self.selected_agent_id.clone());
+                self.register_agent(&agent_id);
+                self.wrap_for_agent(agent_id, Op::ExecApproval { id, decision })
+            }
+            Op::PatchApproval { id, decision } => {
+                let agent_id = self
+                    .approval_agent_ids
+                    .remove(&id)
+                    .unwrap_or_else(|| self.selected_agent_id.clone());
+                self.register_agent(&agent_id);
+                self.wrap_for_agent(agent_id, Op::PatchApproval { id, decision })
+            }
+            Op::ResolveElicitation {
+                server_name,
+                request_id,
+                decision,
+            } => {
+                let agent_id = self
+                    .elicitation_agent_ids
+                    .remove(&request_id)
+                    .unwrap_or_else(|| self.selected_agent_id.clone());
+                self.register_agent(&agent_id);
+                let op = Op::ResolveElicitation {
+                    server_name,
+                    request_id,
+                    decision,
+                };
+                self.wrap_for_agent(agent_id, op)
+            }
+            op => {
+                let agent_id = self.selected_agent_id.clone();
+                self.register_agent(&agent_id);
+                self.wrap_for_agent(agent_id, op)
+            }
+        }
+    }
+
+    pub(crate) fn submit_op(&mut self, op: Op) {
         // Record outbound operation for session replay fidelity.
-        crate::session_log::log_outbound_op(&op);
-        if let Err(e) = self.codex_op_tx.send(op) {
+        let routed = self.route_op_for_agent(op);
+        crate::session_log::log_outbound_op(&routed);
+        if let Err(e) = self.codex_op_tx.send(routed) {
             tracing::error!("failed to submit op: {e}");
         }
     }

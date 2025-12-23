@@ -243,6 +243,10 @@ impl AgentMessageCell {
             is_first_line,
         }
     }
+
+    pub(crate) fn replay_snapshot(&self) -> (Vec<Line<'static>>, bool) {
+        (self.lines.clone(), self.is_first_line)
+    }
 }
 
 impl HistoryCell for AgentMessageCell {
@@ -1359,6 +1363,11 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
     }
     let lines: Vec<Line<'static>> = vec![line.into()];
     PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_agent_view_header(agent_id: String) -> PlainHistoryCell {
+    let line: Line<'static> = format!("Viewing agent {agent_id}").cyan().into();
+    PlainHistoryCell { lines: vec![line] }
 }
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
