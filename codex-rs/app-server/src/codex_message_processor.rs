@@ -1597,7 +1597,9 @@ impl CodexMessageProcessor {
                 history
                     .into_iter()
                     .map(|item| RolloutLine {
-                        timestamp: String::new(),
+                        timestamp: Utc::now()
+                            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                            .to_string(),
                         agent_id: None,
                         item: RolloutItem::ResponseItem(item),
                     })
@@ -2311,7 +2313,9 @@ impl CodexMessageProcessor {
                     history
                         .into_iter()
                         .map(|item| RolloutLine {
-                            timestamp: String::new(),
+                            timestamp: Utc::now()
+                                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                                .to_string(),
                             agent_id: None,
                             item: RolloutItem::ResponseItem(item),
                         })
