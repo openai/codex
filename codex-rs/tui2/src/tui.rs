@@ -380,8 +380,17 @@ impl Tui {
             let area = Rect::new(0, 0, size.width, height.min(size.height));
             if area != terminal.viewport_area {
                 // TODO(nornagon): probably this could be collapsed with the clear + set_viewport_area above.
-                terminal.clear()?;
-                terminal.set_viewport_area(area);
+                if terminal.viewport_area.is_empty() {
+                    // On the first draw the viewport is empty, so `Terminal::clear()` is a no-op.
+                    // If we don't clear after sizing the viewport, diff-based rendering may skip
+                    // writing spaces (because "space" == "space" in the buffers) and stale terminal
+                    // contents can leak through as random characters between words.
+                    terminal.set_viewport_area(area);
+                    terminal.clear()?;
+                } else {
+                    terminal.clear()?;
+                    terminal.set_viewport_area(area);
+                }
             }
 
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
