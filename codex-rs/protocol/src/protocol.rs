@@ -1344,6 +1344,17 @@ pub enum TruncationPolicy {
     Tokens(usize),
 }
 
+// Allow core to pass model-family truncation policies (defined in openai_models)
+// into the TurnContext payload (defined in protocol) via `.into()`.
+impl From<crate::openai_models::TruncationPolicy> for TruncationPolicy {
+    fn from(value: crate::openai_models::TruncationPolicy) -> Self {
+        match value {
+            crate::openai_models::TruncationPolicy::Bytes(bytes) => Self::Bytes(bytes),
+            crate::openai_models::TruncationPolicy::Tokens(tokens) => Self::Tokens(tokens),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 pub struct RolloutLine {
     pub timestamp: String,
