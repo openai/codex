@@ -234,6 +234,10 @@ fn build_otlp_metric_exporter(
 ) -> Result<opentelemetry_otlp::MetricExporter> {
     match exporter {
         OtelExporter::None => Err(MetricsError::ExporterDisabled),
+        OtelExporter::Statsig => build_otlp_metric_exporter(
+            crate::config::resolve_exporter(&OtelExporter::Statsig),
+            temporality,
+        ),
         OtelExporter::OtlpGrpc {
             endpoint,
             headers,

@@ -2,6 +2,7 @@ use crate::config::OtelExporter;
 use crate::config::OtelHttpProtocol;
 use crate::config::OtelSettings;
 use crate::metrics::MetricsClient;
+use crate::metrics::MetricsConfig;
 use opentelemetry::Context;
 use opentelemetry::KeyValue;
 use opentelemetry::context::ContextGuard;
@@ -47,6 +48,7 @@ thread_local! {
     static TRACEPARENT_GUARD: RefCell<Option<ContextGuard>> = const { RefCell::new(None) };
 }
 
+// TODO(jif) move OtelProvider out of `traces/`
 pub struct OtelProvider {
     pub logger: Option<SdkLoggerProvider>,
     pub tracer_provider: Option<SdkTracerProvider>,
@@ -71,11 +73,19 @@ impl OtelProvider {
         let log_enabled = !matches!(settings.exporter, OtelExporter::None);
         let trace_enabled = !matches!(settings.trace_exporter, OtelExporter::None);
 
-        let metrics = settings
-            .metrics
-            .clone()
-            .map(MetricsClient::new)
-            .transpose()?;
+
+
+        let metric_exporter = crate::config::resolve_exporter(&settings.metrics_exporter);
+        let metrics = if matches!(metric_exporter, OtelExporter::None) {
+            None
+        } else {
+            Some(MetricsClient::new(MetricsConfig::otlp(
+                settings.environment.clone(),
+                settings.service_name.clone(),
+                settings.service_version.clone(),
+                metric_exporter,
+            ))?)
+        };
 
         if let Some(metrics) = metrics.as_ref() {
             crate::metrics::install_global(metrics.clone());
@@ -229,8 +239,9 @@ fn build_logger(
 ) -> Result<SdkLoggerProvider, Box<dyn Error>> {
     let mut builder = SdkLoggerProvider::builder().with_resource(resource.clone());
 
-    match exporter {
+    match crate::config::resolve_exporter(exporter) {
         OtelExporter::None => return Ok(builder.build()),
+        OtelExporter::Statsig => unreachable!("statsig exporter should be resolved"),
         OtelExporter::OtlpGrpc {
             endpoint,
             headers,
@@ -238,14 +249,14 @@ fn build_logger(
         } => {
             debug!("Using OTLP Grpc exporter: {endpoint}");
 
-            let header_map = crate::otlp::build_header_map(headers);
+            let header_map = crate::otlp::build_header_map(&headers);
 
             let base_tls_config = ClientTlsConfig::new()
                 .with_enabled_roots()
                 .assume_http2(true);
 
             let tls_config = match tls.as_ref() {
-                Some(tls) => crate::otlp::build_grpc_tls_config(endpoint, base_tls_config, tls)?,
+                Some(tls) => crate::otlp::build_grpc_tls_config(&endpoint, base_tls_config, tls)?,
                 None => base_tls_config,
             };
 
@@ -275,7 +286,7 @@ fn build_logger(
                 .with_http()
                 .with_endpoint(endpoint)
                 .with_protocol(protocol)
-                .with_headers(headers.clone());
+                .with_headers(headers);
 
             if let Some(tls) = tls.as_ref() {
                 let client = crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_LOGS_TIMEOUT)?;
@@ -295,8 +306,9 @@ fn build_tracer_provider(
     resource: &Resource,
     exporter: &OtelExporter,
 ) -> Result<SdkTracerProvider, Box<dyn Error>> {
-    let span_exporter = match exporter {
+    let span_exporter = match crate::config::resolve_exporter(exporter) {
         OtelExporter::None => return Ok(SdkTracerProvider::builder().build()),
+        OtelExporter::Statsig => unreachable!("statsig exporter should be resolved"),
         OtelExporter::OtlpGrpc {
             endpoint,
             headers,
@@ -304,14 +316,14 @@ fn build_tracer_provider(
         } => {
             debug!("Using OTLP Grpc exporter for traces: {endpoint}");
 
-            let header_map = crate::otlp::build_header_map(headers);
+            let header_map = crate::otlp::build_header_map(&headers);
 
             let base_tls_config = ClientTlsConfig::new()
                 .with_enabled_roots()
                 .assume_http2(true);
 
             let tls_config = match tls.as_ref() {
-                Some(tls) => crate::otlp::build_grpc_tls_config(endpoint, base_tls_config, tls)?,
+                Some(tls) => crate::otlp::build_grpc_tls_config(&endpoint, base_tls_config, tls)?,
                 None => base_tls_config,
             };
 
@@ -339,7 +351,7 @@ fn build_tracer_provider(
                 .with_http()
                 .with_endpoint(endpoint)
                 .with_protocol(protocol)
-                .with_headers(headers.clone());
+                .with_headers(headers);
 
             if let Some(tls) = tls.as_ref() {
                 let client =

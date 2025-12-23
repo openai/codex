@@ -36,7 +36,7 @@ let settings = OtelSettings {
         protocol: OtelHttpProtocol::Binary,
         tls: None,
     },
-    metrics: None,
+    metrics_exporter: OtelExporter::None,
 };
 
 if let Some(provider) = OtelProvider::from(&settings)? {
@@ -77,6 +77,9 @@ Modes:
 - OTLP: exports metrics via the OpenTelemetry OTLP exporter (HTTP or gRPC).
 - In-memory: records via `opentelemetry_sdk::metrics::InMemoryMetricExporter` for tests/assertions; call `shutdown()` to flush.
 
+`codex-otel` also provides `OtelExporter::Statsig`, a shorthand for exporting OTLP/HTTP JSON metrics
+to Statsig using Codex-internal defaults.
+
 Statsig ingestion (OTLP/HTTP JSON) example:
 
 ```rust
@@ -99,20 +102,6 @@ let metrics = MetricsClient::new(MetricsConfig::otlp(
 
 metrics.counter("codex.session_started", 1, &[("source", "tui")])?;
 metrics.histogram("codex.request_latency", 83, &[("route", "chat")])?;
-```
-
-When built with the `codex-otel/statsig-default-metrics-exporter` feature you can also use the
-crate-provided defaults (client key + `ab.chatgpt.com`) instead of wiring the header yourself:
-
-```rust
-use codex_otel::config::statsig_default_metrics_exporter;
-
-let metrics = MetricsClient::new(MetricsConfig::otlp(
-    "dev",
-    "codex-cli",
-    env!("CARGO_PKG_VERSION"),
-    statsig_default_metrics_exporter(),
-))?;
 ```
 
 In-memory (tests):

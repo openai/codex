@@ -91,9 +91,7 @@ which = { workspace = true }
 wildmatch = { workspace = true }
 
 [features]
-default = ["statsig-default-metrics-exporter"]
 deterministic_process_ids = []
-statsig-default-metrics-exporter = ["codex-otel/statsig-default-metrics-exporter"]
 test-support = []
 
 
@@ -125,7 +123,7 @@ assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-core = { path = ".", default-features = false, features = ["deterministic_process_ids"] }
-codex-otel = { workspace = true }
+codex-otel = { workspace = true, features = ["disable-default-metrics-exporter"] }
 core_test_support = { workspace = true }
 ctor = { workspace = true }
 escargot = { workspace = true }

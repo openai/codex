@@ -297,6 +297,7 @@ pub struct OtelTlsConfig {
 #[serde(rename_all = "kebab-case")]
 pub enum OtelExporterKind {
     None,
+    Statsig,
     OtlpHttp {
         endpoint: String,
         #[serde(default)]
@@ -330,6 +331,8 @@ pub struct OtelConfigToml {
     pub trace_exporter: Option<OtelExporterKind>,
 
     /// Optional metrics exporter
+    ///
+    /// Defaults to `statsig` outside of tests.
     pub metrics_exporter: Option<OtelExporterKind>,
 }
 

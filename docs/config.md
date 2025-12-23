@@ -550,7 +550,7 @@ tool-approval decisions, and the result of every tool invocation. Export is
 environment = "staging"   # defaults to "dev"
 exporter = "none"          # defaults to "none"; set to otlp-http or otlp-grpc to send events
 trace_exporter = "none"    # defaults to `exporter`; set to otlp-http or otlp-grpc to send spans
-metrics_exporter = "none"  # defaults to "none"; set to otlp-http or otlp-grpc to send metrics
+metrics_exporter = "none"  # defaults to "statsig"; set to otlp-http or otlp-grpc to send metrics to custom otel services
 log_user_prompt = false    # defaults to false; redact prompt text unless explicitly enabled
 ```
 
@@ -677,11 +677,11 @@ If you have a legacy Statsig client key + custom ingest host, wire those credent
 
 ```toml
 [otel.metrics_exporter."otlp-http"]
-endpoint = "https://ab.chatgpt.com"
+endpoint = "https://api.statsig.com/otlp"
 protocol = "json"
 
 [otel.metrics_exporter."otlp-http".headers]
-"statsig-api-key" = "client-MkRuleRQBd6qakfnDYqJVR9JuXcY57Ljly3vi5JVUIO"
+"x-api-key" = "123"
 ```
 
 If the exporter is `none` nothing is written anywhere; otherwise you must run or point to your
