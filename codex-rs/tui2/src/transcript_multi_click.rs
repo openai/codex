@@ -109,9 +109,19 @@ impl TranscriptMultiClick {
         selection: &TranscriptSelection,
         point: Option<TranscriptSelectionPoint>,
     ) {
-        if let (Some(anchor), Some(point)) = (selection.anchor, point)
-            && point != anchor
-        {
+        let (Some(anchor), Some(point)) = (selection.anchor, point) else {
+            return;
+        };
+
+        // Some terminals emit `Drag` events for very small cursor motion while
+        // the button is held down (e.g. trackpad “jitter” during a click).
+        // Resetting the click sequence on *any* drag makes double/quad clicks
+        // hard to trigger, so we only treat it as a drag gesture once the
+        // cursor has meaningfully moved away from the anchor.
+        let moved_to_other_wrapped_line = point.line_index != anchor.line_index;
+        let moved_far_enough_horizontally =
+            point.column.abs_diff(anchor.column) > ClickTracker::MAX_COLUMN_DISTANCE;
+        if moved_to_other_wrapped_line || moved_far_enough_horizontally {
             self.tracker.reset();
         }
     }
@@ -178,10 +188,10 @@ struct Click {
 
 impl ClickTracker {
     /// Maximum time gap between clicks to be considered part of a sequence.
-    const MAX_DELAY: Duration = Duration::from_millis(500);
+    const MAX_DELAY: Duration = Duration::from_millis(650);
     /// Maximum horizontal motion (in transcript *content* columns) to be
     /// considered "the same click target" for multi-click grouping.
-    const MAX_COLUMN_DISTANCE: u16 = 2;
+    const MAX_COLUMN_DISTANCE: u16 = 4;
 
     /// Reset click history so the next click begins a new sequence.
     fn reset(&mut self) {
@@ -193,7 +203,8 @@ impl ClickTracker {
     /// Clicks are grouped when:
     /// - they occur close in time (`MAX_DELAY`), and
     /// - they target the same transcript wrapped line, and
-    /// - they occur at nearly the same content column (`MAX_COLUMN_DISTANCE`)
+    /// - they occur at nearly the same content column (`MAX_COLUMN_DISTANCE`),
+    ///   with increasing tolerance for later clicks in the sequence
     ///
     /// The returned count saturates at `u8::MAX` (we only care about the
     /// `>= 4` bucket).
@@ -202,7 +213,7 @@ impl ClickTracker {
         if let Some(prev) = self.last_click
             && now.duration_since(prev.at) <= Self::MAX_DELAY
             && prev.point.line_index == point.line_index
-            && prev.point.column.abs_diff(point.column) <= Self::MAX_COLUMN_DISTANCE
+            && prev.point.column.abs_diff(point.column) <= max_column_distance(prev.click_count)
         {
             click_count = prev.click_count.saturating_add(1);
         }
@@ -214,6 +225,20 @@ impl ClickTracker {
         });
 
         click_count
+    }
+}
+
+/// Column-distance tolerance for continuing an existing click sequence.
+///
+/// We intentionally loosen grouping after the selection has expanded: once the
+/// user is on the “whole line” or “paragraph” step, requiring a near-identical
+/// column makes quad-clicks hard to trigger because the user can naturally
+/// click elsewhere on the already-highlighted line.
+fn max_column_distance(prev_click_count: u8) -> u16 {
+    match prev_click_count {
+        0 | 1 => ClickTracker::MAX_COLUMN_DISTANCE,
+        2 => ClickTracker::MAX_COLUMN_DISTANCE.saturating_mul(2),
+        _ => u16::MAX,
     }
 }
 
@@ -687,11 +712,13 @@ mod tests {
             Some((1, 0, max_content_col))
         );
 
+        // The final click can land elsewhere on the highlighted line; we still
+        // want to treat it as continuing the multi-click sequence.
         multi.on_mouse_down_at(
             &mut selection,
             &cells,
             width,
-            Some(point),
+            Some(TranscriptSelectionPoint::new(point.line_index, 10)),
             t0 + Duration::from_millis(30),
         );
         assert_eq!(
@@ -754,11 +781,11 @@ mod tests {
             &mut selection,
             &cells,
             width,
-            Some(TranscriptSelectionPoint::new(0, 3)),
+            Some(TranscriptSelectionPoint::new(0, 10)),
             t0 + Duration::from_millis(10),
         );
 
-        assert_eq!(selection.anchor, Some(TranscriptSelectionPoint::new(0, 3)));
+        assert_eq!(selection.anchor, Some(TranscriptSelectionPoint::new(0, 10)));
         assert_eq!(selection.head, None);
     }
 
@@ -854,6 +881,36 @@ mod tests {
         );
         assert_eq!(selection.anchor, Some(point));
         assert_eq!(selection.head, None);
+    }
+
+    #[test]
+    fn small_drag_jitter_does_not_reset_multi_click_sequence() {
+        let cells: Vec<Arc<dyn HistoryCell>> =
+            vec![Arc::new(StaticCell::new(vec![Line::from("› hello world")]))];
+        let width = 40;
+
+        let mut multi = TranscriptMultiClick::default();
+        let t0 = Instant::now();
+        let point = TranscriptSelectionPoint::new(0, 1);
+        let mut selection = TranscriptSelection::default();
+
+        multi.on_mouse_down_at(&mut selection, &cells, width, Some(point), t0);
+        multi.on_mouse_drag(&selection, Some(TranscriptSelectionPoint::new(0, 2)));
+
+        multi.on_mouse_down_at(
+            &mut selection,
+            &cells,
+            width,
+            Some(point),
+            t0 + Duration::from_millis(10),
+        );
+        assert_eq!(
+            selection
+                .anchor
+                .zip(selection.head)
+                .map(|(a, h)| (a.column, h.column)),
+            Some((0, 4))
+        );
     }
 
     #[test]
