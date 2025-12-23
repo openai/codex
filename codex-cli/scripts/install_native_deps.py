@@ -367,7 +367,6 @@ def _fetch_single_rg(
         download_path = tmp_dir / archive_filename
         print(
             f"  downloading ripgrep for {target} ({platform_key}) from {url}",
-            file=sys.stderr,
             flush=True,
         )
         try:
