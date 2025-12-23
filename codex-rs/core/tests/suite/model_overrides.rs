@@ -19,7 +19,7 @@ async fn override_turn_context_does_not_persist_when_config_exists() {
         .await
         .expect("seed config.toml");
 
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model = Some("gpt-4o".to_string());
 
     let conversation_manager = ConversationManager::with_models_provider(
@@ -62,7 +62,7 @@ async fn override_turn_context_does_not_create_config_file() {
         "test setup should start without config"
     );
 
-    let config = load_default_config_for_test(&codex_home);
+    let config = load_default_config_for_test(&codex_home).await;
 
     let conversation_manager = ConversationManager::with_models_provider(
         CodexAuth::from_api_key("Test API Key"),

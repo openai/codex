@@ -22,6 +22,8 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::PathBuf;
 use tokio::fs;
+use tokio::time::Duration;
+use tokio::time::sleep;
 
 #[derive(Debug)]
 struct SnapshotRun {
@@ -333,6 +335,7 @@ async fn shell_snapshot_deleted_after_shutdown_with_skills() -> Result<()> {
 
     drop(codex);
     drop(harness);
+    sleep(Duration::from_millis(150)).await;
 
     assert_eq!(
         snapshot_path.exists(),

@@ -386,9 +386,14 @@ impl BottomPane {
         scrolled: bool,
         selection_active: bool,
         scroll_position: Option<(usize, usize)>,
+        copy_selection_key: crate::key_hint::KeyBinding,
     ) {
-        self.composer
-            .set_transcript_ui_state(scrolled, selection_active, scroll_position);
+        self.composer.set_transcript_ui_state(
+            scrolled,
+            selection_active,
+            scroll_position,
+            copy_selection_key,
+        );
         self.request_redraw();
     }
 

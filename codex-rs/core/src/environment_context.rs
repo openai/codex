@@ -1,10 +1,6 @@
-use codex_utils_absolute_path::AbsolutePathBuf;
-use serde::Deserialize;
-use serde::Serialize;
-use strum_macros::Display as DeriveDisplay;
-
 use crate::codex::TurnContext;
 use crate::protocol::AskForApproval;
+use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::shell::Shell;
 use codex_protocol::config_types::SandboxMode;
@@ -12,15 +8,11 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use serde::Deserialize;
+use serde::Serialize;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, DeriveDisplay)]
-#[serde(rename_all = "kebab-case")]
-#[strum(serialize_all = "kebab-case")]
-pub enum NetworkAccess {
-    Restricted,
-    Enabled,
-}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "environment_context", rename_all = "snake_case")]
 pub(crate) struct EnvironmentContext {
@@ -45,12 +37,14 @@ impl EnvironmentContext {
             sandbox_mode: match sandbox_policy {
                 Some(SandboxPolicy::DangerFullAccess) => Some(SandboxMode::DangerFullAccess),
                 Some(SandboxPolicy::ReadOnly) => Some(SandboxMode::ReadOnly),
+                Some(SandboxPolicy::ExternalSandbox { .. }) => Some(SandboxMode::DangerFullAccess),
                 Some(SandboxPolicy::WorkspaceWrite { .. }) => Some(SandboxMode::WorkspaceWrite),
                 None => None,
             },
             network_access: match sandbox_policy {
                 Some(SandboxPolicy::DangerFullAccess) => Some(NetworkAccess::Enabled),
                 Some(SandboxPolicy::ReadOnly) => Some(NetworkAccess::Restricted),
+                Some(SandboxPolicy::ExternalSandbox { network_access }) => Some(network_access),
                 Some(SandboxPolicy::WorkspaceWrite { network_access, .. }) => {
                     if network_access {
                         Some(NetworkAccess::Enabled)
@@ -265,6 +259,48 @@ mod tests {
         let expected = r#"<environment_context>
   <approval_policy>never</approval_policy>
   <sandbox_mode>read-only</sandbox_mode>
+  <network_access>restricted</network_access>
+  <shell>bash</shell>
+</environment_context>"#;
+
+        assert_eq!(context.serialize_to_xml(), expected);
+    }
+
+    #[test]
+    fn serialize_external_sandbox_environment_context() {
+        let context = EnvironmentContext::new(
+            None,
+            Some(AskForApproval::OnRequest),
+            Some(SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Enabled,
+            }),
+            fake_shell(),
+        );
+
+        let expected = r#"<environment_context>
+  <approval_policy>on-request</approval_policy>
+  <sandbox_mode>danger-full-access</sandbox_mode>
+  <network_access>enabled</network_access>
+  <shell>bash</shell>
+</environment_context>"#;
+
+        assert_eq!(context.serialize_to_xml(), expected);
+    }
+
+    #[test]
+    fn serialize_external_sandbox_with_restricted_network_environment_context() {
+        let context = EnvironmentContext::new(
+            None,
+            Some(AskForApproval::OnRequest),
+            Some(SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Restricted,
+            }),
+            fake_shell(),
+        );
+
+        let expected = r#"<environment_context>
+  <approval_policy>on-request</approval_policy>
+  <sandbox_mode>danger-full-access</sandbox_mode>
   <network_access>restricted</network_access>
   <shell>bash</shell>
 </environment_context>"#;

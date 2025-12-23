@@ -8,13 +8,14 @@ use std::time::Duration;
 use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
+use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
-use codex_core::openai_models::model_family::ModelFamily;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::models_manager::manager::ModelsManager;
+use codex_core::models_manager::model_family::ModelFamily;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -422,6 +423,14 @@ enum ReplayMessage {
     },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ExternalEditorState {
+    #[default]
+    Closed,
+    Requested,
+    Active,
+}
+
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -482,6 +491,7 @@ pub(crate) struct ChatWidget {
     feedback: codex_feedback::CodexFeedback,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
+    external_editor_state: ExternalEditorState,
     selected_agent_id: String,
     known_agents: Vec<String>,
     known_agents_set: HashSet<String>,
@@ -688,6 +698,7 @@ impl ChatWidget {
     fn on_task_complete(&mut self, last_agent_message: Option<String>) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
+        self.flush_wait_cell();
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
@@ -1010,10 +1021,54 @@ impl ChatWidget {
             .iter()
             .find(|session| session.key == ev.process_id)
             .map(|session| session.command_display.clone());
-        self.add_to_history(history_cell::new_unified_exec_interaction(
-            command_display,
-            ev.stdin,
-        ));
+        if ev.stdin.is_empty() {
+            // Empty stdin means we are still waiting on background output; keep a live shimmer cell.
+            if let Some(wait_cell) = self.active_cell.as_mut().and_then(|cell| {
+                cell.as_any_mut()
+                    .downcast_mut::<history_cell::UnifiedExecWaitCell>()
+            }) && wait_cell.matches(command_display.as_deref())
+            {
+                // Same session still waiting; update command display if it shows up late.
+                wait_cell.update_command_display(command_display);
+                self.request_redraw();
+                return;
+            }
+            let has_non_wait_active = matches!(
+                self.active_cell.as_ref(),
+                Some(active)
+                    if active
+                        .as_any()
+                        .downcast_ref::<history_cell::UnifiedExecWaitCell>()
+                        .is_none()
+            );
+            if has_non_wait_active {
+                // Do not preempt non-wait active cells with a wait entry.
+                return;
+            }
+            self.flush_wait_cell();
+            self.active_cell = Some(Box::new(history_cell::new_unified_exec_wait_live(
+                command_display,
+                self.config.animations,
+            )));
+            self.request_redraw();
+        } else {
+            if let Some(wait_cell) = self.active_cell.as_ref().and_then(|cell| {
+                cell.as_any()
+                    .downcast_ref::<history_cell::UnifiedExecWaitCell>()
+            }) {
+                // Convert the live wait cell into a static "(waited)" entry before logging stdin.
+                let waited_command = wait_cell.command_display().or(command_display.clone());
+                self.active_cell = None;
+                self.add_to_history(history_cell::new_unified_exec_interaction(
+                    waited_command,
+                    String::new(),
+                ));
+            }
+            self.add_to_history(history_cell::new_unified_exec_interaction(
+                command_display,
+                ev.stdin,
+            ));
+        }
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
@@ -1107,10 +1162,7 @@ impl ChatWidget {
 
     fn on_web_search_end(&mut self, ev: WebSearchEndEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_web_search_call(format!(
-            "Searched: {}",
-            ev.query
-        )));
+        self.add_to_history(history_cell::new_web_search_call(ev.query));
     }
 
     fn on_get_history_entry_response(
@@ -1558,6 +1610,7 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
+            external_editor_state: ExternalEditorState::Closed,
             selected_agent_id: default_agent_id.clone(),
             known_agents: vec![default_agent_id.clone()],
             known_agents_set: HashSet::from([default_agent_id]),
@@ -1653,6 +1706,7 @@ impl ChatWidget {
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
+            external_editor_state: ExternalEditorState::Closed,
             selected_agent_id: default_agent_id.clone(),
             known_agents: vec![default_agent_id.clone()],
             known_agents_set: HashSet::from([default_agent_id]),
@@ -1781,6 +1835,31 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn composer_text_with_pending(&self) -> String {
+        self.bottom_pane.composer_text_with_pending()
+    }
+
+    pub(crate) fn apply_external_edit(&mut self, text: String) {
+        self.bottom_pane.apply_external_edit(text);
+        self.request_redraw();
+    }
+
+    pub(crate) fn external_editor_state(&self) -> ExternalEditorState {
+        self.external_editor_state
+    }
+
+    pub(crate) fn set_external_editor_state(&mut self, state: ExternalEditorState) {
+        self.external_editor_state = state;
+    }
+
+    pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        self.bottom_pane.set_footer_hint_override(items);
+    }
+
+    pub(crate) fn can_launch_external_editor(&self) -> bool {
+        self.bottom_pane.can_launch_external_editor()
+    }
+
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -1845,9 +1924,9 @@ impl ChatWidget {
                 }
                 self.request_exit();
             }
-            SlashCommand::Undo => {
-                self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
-            }
+            // SlashCommand::Undo => {
+            //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
+            // }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
                 let tx = self.app_event_tx.clone();
@@ -1873,6 +1952,9 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 self.add_status_output();
+            }
+            SlashCommand::Ps => {
+                self.add_ps_output();
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -1952,6 +2034,7 @@ impl ChatWidget {
     }
 
     fn flush_active_cell(&mut self) {
+        self.flush_wait_cell();
         if let Some(active) = self.active_cell.take() {
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
@@ -1971,7 +2054,28 @@ impl ChatWidget {
         )));
     }
 
-    fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
+    // Only flush a live wait cell here; other active cells must finalize via their end events.
+    fn flush_wait_cell(&mut self) {
+        // Wait cells are transient: convert them into "(waited)" history entries if present.
+        // Leave non-wait active cells intact so their end events can finalize them.
+        let Some(active) = self.active_cell.take() else {
+            return;
+        };
+        let Some(wait_cell) = active
+            .as_any()
+            .downcast_ref::<history_cell::UnifiedExecWaitCell>()
+        else {
+            self.active_cell = Some(active);
+            return;
+        };
+        self.needs_final_message_separator = true;
+        let cell =
+            history_cell::new_unified_exec_interaction(wait_cell.command_display(), String::new());
+        self.app_event_tx
+            .send(AppEvent::InsertHistoryCell(Box::new(cell)));
+    }
+
+    pub(crate) fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
         self.add_boxed_history(Box::new(cell));
     }
 
@@ -2416,6 +2520,16 @@ impl ChatWidget {
             self.model_family.get_model_slug(),
         ));
     }
+
+    pub(crate) fn add_ps_output(&mut self) {
+        let sessions = self
+            .unified_exec_sessions
+            .iter()
+            .map(|session| session.command_display.clone())
+            .collect();
+        self.add_to_history(history_cell::new_unified_exec_sessions_output(sessions));
+    }
+
     fn stop_rate_limit_poller(&mut self) {
         if let Some(handle) = self.rate_limit_poller.take() {
             handle.abort();
@@ -2907,12 +3021,12 @@ impl ChatWidget {
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
         let current_approval = self.config.approval_policy.value();
-        let current_sandbox = self.config.sandbox_policy.clone();
+        let current_sandbox = self.config.sandbox_policy.get();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
         for preset in presets.into_iter() {
             let is_current =
-                Self::preset_matches_current(current_approval, &current_sandbox, &preset);
+                Self::preset_matches_current(current_approval, current_sandbox, &preset);
             let name = preset.label.to_string();
             let description = Some(preset.description.to_string());
             let disabled_reason = match self.config.approval_policy.can_set(&preset.approval) {
@@ -2989,10 +3103,11 @@ impl ChatWidget {
         let features: Vec<BetaFeatureItem> = FEATURES
             .iter()
             .filter_map(|spec| {
+                let name = spec.stage.beta_menu_name()?;
                 let description = spec.stage.beta_menu_description()?;
                 Some(BetaFeatureItem {
                     feature: spec.id,
-                    name: feature_label_from_key(spec.key),
+                    name: name.to_string(),
                     description: description.to_string(),
                     enabled: self.config.features.enabled(spec.id),
                 })
@@ -3214,7 +3329,7 @@ impl ChatWidget {
             self.config.codex_home.as_path(),
             cwd.as_path(),
             &env_map,
-            &self.config.sandbox_policy,
+            self.config.sandbox_policy.get(),
             Some(self.config.codex_home.as_path()),
         ) {
             Ok(_) => None,
@@ -3313,7 +3428,7 @@ impl ChatWidget {
         let mode_label = preset
             .as_ref()
             .map(|p| describe_policy(&p.sandbox))
-            .unwrap_or_else(|| describe_policy(&self.config.sandbox_policy));
+            .unwrap_or_else(|| describe_policy(self.config.sandbox_policy.get()));
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -3486,17 +3601,19 @@ impl ChatWidget {
     }
 
     /// Set the sandbox policy in the widget's config copy.
-    pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) {
+    pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
         #[cfg(target_os = "windows")]
-        let should_clear_downgrade = !matches!(policy, SandboxPolicy::ReadOnly)
+        let should_clear_downgrade = !matches!(&policy, SandboxPolicy::ReadOnly)
             || codex_core::get_platform_sandbox().is_some();
 
-        self.config.sandbox_policy = policy;
+        self.config.sandbox_policy.set(policy)?;
 
         #[cfg(target_os = "windows")]
         if should_clear_downgrade {
             self.config.forced_auto_mode_downgraded_on_windows = false;
         }
+
+        Ok(())
     }
 
     pub(crate) fn set_feature_enabled(&mut self, feature: Feature, enabled: bool) {
@@ -3899,23 +4016,6 @@ impl ChatWidget {
     }
 }
 
-fn feature_label_from_key(key: &str) -> String {
-    let mut out = String::with_capacity(key.len());
-    let mut capitalize = true;
-    for ch in key.chars() {
-        if ch == '_' || ch == '-' {
-            out.push(' ');
-            capitalize = true;
-        } else if capitalize {
-            out.push(ch.to_ascii_uppercase());
-            capitalize = false;
-        } else {
-            out.push(ch);
-        }
-    }
-    out
-}
-
 impl Drop for ChatWidget {
     fn drop(&mut self) {
         self.stop_rate_limit_poller();
@@ -4112,6 +4212,7 @@ fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMe
                 .map(|skill| SkillMetadata {
                     name: skill.name.clone(),
                     description: skill.description.clone(),
+                    short_description: skill.short_description.clone(),
                     path: skill.path.clone(),
                     scope: skill.scope,
                 })

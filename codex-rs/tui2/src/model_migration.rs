@@ -355,7 +355,7 @@ mod tests {
                 "gpt-5.1-codex-mini",
                 "gpt-5.1-codex-max",
                 "gpt-5.1-codex-max".to_string(),
-                Some("Latest Codex-optimized flagship for deep and fast reasoning.".to_string()),
+                Some("Codex-optimized flagship for deep and fast reasoning.".to_string()),
                 true,
             ),
         );
@@ -405,7 +405,7 @@ mod tests {
                 "gpt-5-codex",
                 "gpt-5.1-codex-max",
                 "gpt-5.1-codex-max".to_string(),
-                Some("Latest Codex-optimized flagship for deep and fast reasoning.".to_string()),
+                Some("Codex-optimized flagship for deep and fast reasoning.".to_string()),
                 false,
             ),
         );
