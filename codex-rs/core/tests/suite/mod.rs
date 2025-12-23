@@ -37,6 +37,8 @@ mod list_models;
 mod live_cli;
 mod model_overrides;
 mod model_tools;
+#[cfg(not(target_os = "windows"))]
+mod models_etag_responses;
 mod otel;
 mod prompt_caching;
 mod quota_exceeded;
