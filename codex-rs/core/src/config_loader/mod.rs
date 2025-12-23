@@ -33,6 +33,12 @@ pub use state::LoaderOverrides;
 
 /// On Unix systems, load requirements from this file path, if present.
 const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/codex/requirements.toml";
+
+/// On Unix systems, load default settings from this file path, if present.
+/// Note that /etc/codex/ is treated as a "config folder," so subfolders such
+/// as skills/ and rules/ will also be honored.
+pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
+
 const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 
 /// To build up the set of admin-enforced constraints, we build up from multiple
@@ -72,7 +78,7 @@ pub async fn load_config_layers_state(
 ) -> io::Result<ConfigLayerStack> {
     let mut config_requirements_toml = ConfigRequirementsToml::default();
 
-    // TODO(mbolin): Support an entry in MDM for config requirements and use it
+    // TODO(gt): Support an entry in MDM for config requirements and use it
     // with `config_requirements_toml.merge_unset_fields(...)`, if present.
 
     // Honor /etc/codex/requirements.toml.
@@ -95,57 +101,45 @@ pub async fn load_config_layers_state(
 
     let mut layers = Vec::<ConfigLayerEntry>::new();
 
-    // TODO(mbolin): Honor managed preferences (macOS only).
-    // TODO(mbolin): Honor /etc/codex/config.toml.
+    // TODO(gt): Honor managed preferences (macOS only).
+
+    // Include an entry for the "system" config folder, loading its config.toml,
+    // if it exists.
+    let system_config_toml_file = if cfg!(unix) {
+        Some(AbsolutePathBuf::from_absolute_path(
+            SYSTEM_CONFIG_TOML_FILE_UNIX,
+        )?)
+    } else {
+        // TODO(gt): Determine the path to load on Windows.
+        None
+    };
+    if let Some(system_config_toml_file) = system_config_toml_file {
+        let system_layer =
+            load_config_toml_for_required_layer(&system_config_toml_file, |config_toml| {
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::System {
+                        file: system_config_toml_file.clone(),
+                    },
+                    config_toml,
+                )
+            })
+            .await?;
+        layers.push(system_layer);
+    }
 
     // Add a layer for $CODEX_HOME/config.toml if it exists. Note if the file
     // exists, but is malformed, then this error should be propagated to the
     // user.
     let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home)?;
-    let user_layer = match tokio::fs::read_to_string(&user_file).await {
-        Ok(contents) => {
-            let user_config: TomlValue = toml::from_str(&contents).map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "Error parsing user config file {}: {e}",
-                        user_file.as_path().display(),
-                    ),
-                )
-            })?;
-            let user_config_parent = user_file.as_path().parent().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "User config file {} has no parent directory",
-                        user_file.as_path().display()
-                    ),
-                )
-            })?;
-            let user_config =
-                resolve_relative_paths_in_config_toml(user_config, user_config_parent)?;
-            ConfigLayerEntry::new(ConfigLayerSource::User { file: user_file }, user_config)
-        }
-        Err(e) => {
-            if e.kind() == io::ErrorKind::NotFound {
-                // If there is no config.toml file, record an empty entry
-                // for this user layer, as this may still have subfolders
-                // that are significant in the overall ConfigLayerStack.
-                ConfigLayerEntry::new(
-                    ConfigLayerSource::User { file: user_file },
-                    TomlValue::Table(toml::map::Map::new()),
-                )
-            } else {
-                return Err(io::Error::new(
-                    e.kind(),
-                    format!(
-                        "Failed to read user config file {}: {e}",
-                        user_file.as_path().display(),
-                    ),
-                ));
-            }
-        }
-    };
+    let user_layer = load_config_toml_for_required_layer(&user_file, |config_toml| {
+        ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: user_file.clone(),
+            },
+            config_toml,
+        )
+    })
+    .await?;
     layers.push(user_layer);
 
     if let Some(cwd) = cwd {
@@ -204,6 +198,52 @@ pub async fn load_config_layers_state(
     }
 
     ConfigLayerStack::new(layers, config_requirements_toml.try_into()?)
+}
+
+/// Attempts to load a config.toml file from `config_toml`.
+/// - If the file exists and is valid TOML, passes the parsed `toml::Value` to
+///   `create_entry` and returns the resulting layer entry.
+/// - If the file does not exist, uses an empty `Table` with `create_entry` and
+///   returns the resulting layer entry.
+/// - If there is an error reading the file or parsing the TOML, returns an
+///   error.
+async fn load_config_toml_for_required_layer(
+    config_toml: impl AsRef<Path>,
+    create_entry: impl FnOnce(TomlValue) -> ConfigLayerEntry,
+) -> io::Result<ConfigLayerEntry> {
+    let toml_file = config_toml.as_ref();
+    let toml_value = match tokio::fs::read_to_string(toml_file).await {
+        Ok(contents) => {
+            let config: TomlValue = toml::from_str(&contents).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Error parsing config file {}: {e}", toml_file.display()),
+                )
+            })?;
+            let config_parent = toml_file.parent().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Config file {} has no parent directory",
+                        toml_file.display()
+                    ),
+                )
+            })?;
+            resolve_relative_paths_in_config_toml(config, config_parent)
+        }
+        Err(e) => {
+            if e.kind() == io::ErrorKind::NotFound {
+                Ok(TomlValue::Table(toml::map::Map::new()))
+            } else {
+                Err(io::Error::new(
+                    e.kind(),
+                    format!("Failed to read config file {}: {e}", toml_file.display()),
+                ))
+            }
+        }
+    }?;
+
+    Ok(create_entry(toml_value))
 }
 
 /// If available, apply requirements from `/etc/codex/requirements.toml` to
