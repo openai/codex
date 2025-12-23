@@ -809,74 +809,77 @@ impl Session {
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
-        let is_resumed = matches!(conversation_history, InitialHistory::Resumed(_));
-        let is_forked = matches!(conversation_history, InitialHistory::Forked(_));
+        #[derive(Clone, Copy)]
+        enum SeedMode {
+            Resumed,
+            Forked,
+        }
 
-        match conversation_history {
+        let (mode, rollout_lines) = match conversation_history {
             InitialHistory::New => {
                 let agent = self.ensure_agent(&DEFAULT_AGENT_ID, false).await;
                 self.seed_new_agent_history(agent).await;
+                return;
             }
-            InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
-                let mut items_by_agent: HashMap<AgentId, Vec<RolloutItem>> = HashMap::new();
-                for line in conversation_history.get_rollout_lines() {
-                    let agent_id = line
-                        .agent_id
-                        .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string());
-                    items_by_agent.entry(agent_id).or_default().push(line.item);
-                }
+            InitialHistory::Resumed(resumed) => (SeedMode::Resumed, resumed.history),
+            InitialHistory::Forked(lines) => (SeedMode::Forked, lines),
+        };
 
-                for (agent_id, rollout_items) in items_by_agent {
-                    let _agent = self.ensure_agent(&agent_id, false).await;
-                    let turn_context = self
-                        .new_default_turn_for_agent_with_sub_id(
-                            &agent_id,
-                            self.next_internal_sub_id(&agent_id),
-                        )
-                        .await;
+        let mut items_by_agent: HashMap<AgentId, Vec<RolloutItem>> = HashMap::new();
+        for line in rollout_lines {
+            let agent_id = line
+                .agent_id
+                .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string());
+            items_by_agent.entry(agent_id).or_default().push(line.item);
+        }
 
-                    if is_resumed
-                        && let Some(prev) = rollout_items.iter().rev().find_map(|it| {
-                            if let RolloutItem::TurnContext(ctx) = it {
-                                Some(ctx.model.as_str())
-                            } else {
-                                None
-                            }
-                        })
-                    {
-                        let curr = turn_context.client.get_model();
-                        if prev != curr {
-                            warn!(
-                                "resuming session with different model: previous={prev}, current={curr}"
-                            );
-                            self.send_event(
-                                &turn_context,
-                                EventMsg::Warning(WarningEvent {
-                                    message: format!(
-                                        "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
+        for (agent_id, rollout_items) in items_by_agent {
+            let _agent = self.ensure_agent(&agent_id, false).await;
+            let turn_context = self
+                .new_default_turn_for_agent_with_sub_id(
+                    &agent_id,
+                    self.next_internal_sub_id(&agent_id),
+                )
+                .await;
+
+            if matches!(mode, SeedMode::Resumed)
+                && let Some(prev) = rollout_items.iter().rev().find_map(|it| {
+                    if let RolloutItem::TurnContext(ctx) = it {
+                        Some(ctx.model.as_str())
+                    } else {
+                        None
+                    }
+                })
+            {
+                let curr = turn_context.client.get_model();
+                if prev != curr {
+                    warn!("resuming session with different model: previous={prev}, current={curr}");
+                    self.send_event(
+                        &turn_context,
+                        EventMsg::Warning(WarningEvent {
+                            message: format!(
+                                "This session was recorded with model `{prev}` but is resuming with `{curr}`. \
                          Consider switching back to `{prev}` as it may affect Codex performance."
-                                    ),
-                                }),
-                            )
-                                .await;
-                        }
-                    }
-
-                    let reconstructed_history =
-                        self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
-                    if !reconstructed_history.is_empty() {
-                        self.record_into_history(&reconstructed_history, &turn_context)
-                            .await;
-                    }
-
-                    if is_forked && !rollout_items.is_empty() {
-                        self.persist_rollout_items(&agent_id, &rollout_items).await;
-                    }
+                            ),
+                        }),
+                    )
+                    .await;
                 }
+            }
 
-                self.flush_rollout().await;
+            let reconstructed_history =
+                self.reconstruct_history_from_rollout(&turn_context, &rollout_items);
+            if !reconstructed_history.is_empty() {
+                self.record_into_history(&reconstructed_history, &turn_context)
+                    .await;
+            }
+
+            if matches!(mode, SeedMode::Forked) && !rollout_items.is_empty() {
+                self.persist_rollout_items(&agent_id, &rollout_items).await;
             }
         }
+
+        self.flush_rollout().await;
     }
 
     pub(crate) async fn update_settings(
