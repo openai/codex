@@ -2838,6 +2838,7 @@ impl ChatWidget {
                 summary: None,
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
+            tx.send(AppEvent::PersistAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
         })]
     }

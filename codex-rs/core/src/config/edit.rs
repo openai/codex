@@ -643,6 +643,14 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn set_approval_policy(mut self, policy: crate::protocol::AskForApproval) -> Self {
+        self.edits.push(ConfigEdit::SetPath {
+            segments: vec!["approval_policy".to_string()],
+            value: value(policy.to_string()),
+        });
+        self
+    }
+
     pub fn set_project_trust_level<P: Into<PathBuf>>(
         mut self,
         project_path: P,
