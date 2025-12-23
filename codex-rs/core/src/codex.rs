@@ -148,7 +148,6 @@ use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_async_utils::OrCancelExt;
-use codex_otel::otel_manager::OtelManager;
 use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::OtelManager;
 use codex_otel::metrics::MetricsClient;
