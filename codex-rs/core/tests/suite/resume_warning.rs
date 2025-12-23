@@ -28,6 +28,11 @@ fn resume_history(
         model: previous_model.to_string(),
         effort: config.model_reasoning_effort,
         summary: config.model_reasoning_summary,
+        base_instructions: None,
+        user_instructions: None,
+        developer_instructions: None,
+        final_output_json_schema: None,
+        truncation_policy: None,
     };
 
     InitialHistory::Resumed(ResumedHistory {

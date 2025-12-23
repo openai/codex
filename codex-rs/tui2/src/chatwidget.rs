@@ -377,15 +377,22 @@ impl ChatWidget {
         }
     }
 
-    fn set_status_header(&mut self, header: String) {
+    /// Update the status indicator header and details.
+    ///
+    /// Passing `None` clears any existing details.
+    fn set_status(&mut self, header: String, details: Option<String>) {
         self.current_status_header = header.clone();
-        self.bottom_pane.update_status_header(header);
+        self.bottom_pane.update_status(header, details);
+    }
+
+    /// Convenience wrapper around [`Self::set_status`];
+    /// updates the status indicator header and clears any existing details.
+    fn set_status_header(&mut self, header: String) {
+        self.set_status(header, None);
     }
 
     fn restore_retry_status_header_if_present(&mut self) {
-        if let Some(header) = self.retry_status_header.take()
-            && self.current_status_header != header
-        {
+        if let Some(header) = self.retry_status_header.take() {
             self.set_status_header(header);
         }
     }
@@ -3096,9 +3103,14 @@ impl ChatWidget {
         scrolled: bool,
         selection_active: bool,
         scroll_position: Option<(usize, usize)>,
+        copy_selection_key: crate::key_hint::KeyBinding,
     ) {
-        self.bottom_pane
-            .set_transcript_ui_state(scrolled, selection_active, scroll_position);
+        self.bottom_pane.set_transcript_ui_state(
+            scrolled,
+            selection_active,
+            scroll_position,
+            copy_selection_key,
+        );
     }
 
     /// Forward an `Op` directly to codex.

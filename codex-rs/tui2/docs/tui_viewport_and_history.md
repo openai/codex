@@ -183,13 +183,18 @@ Mouse interaction is a first‑class part of the new design:
     that we use for bullets/prefixes.
 
 - **Copy.**
-  - When the user triggers copy, the TUI reconstructs the same wrapped transcript lines used for
-    on-screen rendering.
-  - It then walks the content-relative selection range (even if the selection extends outside the
-    current viewport) and re-renders each selected visual line into a 1-row offscreen buffer to
-    reconstruct the exact text region the user highlighted (including internal spaces and empty
-    lines, while skipping wide-glyph continuation cells and right-margin padding).
-  - That text is sent to the system clipboard and a status footer indicates success or failure.
+  - When the user triggers copy, the TUI reconstructs the wrapped transcript lines using the same
+    flattening/wrapping rules as the visible view.
+  - It then reconstructs a high‑fidelity clipboard string from the selected logical lines:
+    - Preserves meaningful indentation (especially for code blocks).
+    - Treats soft-wrapped prose as a single logical line by joining wrap continuations instead of
+      inserting hard newlines.
+    - Emits Markdown source markers (e.g. backticks and fences) for copy/paste, even if the UI
+      chooses to render those constructs without showing the literal markers.
+  - Copy operates on the full selection range, even if the selection extends outside the current
+    viewport.
+  - The resulting text is sent to the system clipboard and a status footer indicates success or
+    failure.
 
 Because scrolling, selection, and copy all operate on the same flattened transcript representation,
 they remain consistent even as the viewport resizes or the chat composer grows/shrinks. Owning our
@@ -440,6 +445,8 @@ feedback are already implemented:
   stable, and follow mode resumes after the selection is cleared.
 - Copy operates on the full selection range (including offscreen lines), using the same wrapping as
   on-screen rendering.
+- Copy selection uses `Ctrl+Shift+C` (VS Code uses `Ctrl+Y` because `Ctrl+Shift+C` is unavailable in
+  the terminal) and shows an on-screen “copy” affordance near the selection.
 
 ### 10.2 Roadmap (prioritized)
 
@@ -462,9 +469,6 @@ Vim) behavior as we can while still owning the viewport.
 
 - **Streaming wrapping polish.** Ensure all streaming paths use display-time wrapping only, and add
   tests that cover resizing after streaming has started.
-- **Copy shortcut and discoverability.** Switch copy from `Ctrl+Y` to `Ctrl+Shift+C`, and add an
-  on-screen copy affordance (e.g. a small button near the selection) that also displays the
-  shortcut.
 - **Selection semantics.** Define and implement selection behavior across multi-step output (and
   whether step boundaries should be copy boundaries), while continuing to exclude the left gutter
   from copied text.
@@ -532,9 +536,9 @@ explicit discussion before we commit to further UI changes.
 
 - **Selection affordances.**
 
-  - Today, the primary hint that selection is active is the reversed text and the “Ctrl+Y copy
-    selection” footer text. Do we want an explicit “Selecting… (Esc to cancel)” status while a drag
-    is in progress, or would that be redundant/clutter for most users?
+  - Today, the primary hint that selection is active is the reversed text plus the on-screen “copy”
+    affordance (`Ctrl+Shift+C`) and the footer hint. Do we want an explicit “Selecting… (Esc to
+    cancel)” status while a drag is in progress, or would that be redundant/clutter for most users?
 
 - **Suspend banners in scrollback.**
 
