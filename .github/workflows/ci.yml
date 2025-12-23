@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    name: Build and Test
+    name: Build
     runs-on: macos-latest
 
     steps:
@@ -24,17 +24,8 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build and test roff-kotlin
-        working-directory: roff-kotlin
-        run: ./gradlew allTests --no-configuration-cache
-
-      - name: Build and test cansi-kotlin
-        working-directory: cansi-kotlin
-        run: ./gradlew allTests --no-configuration-cache
-
-      - name: Build and test anstyle-kotlin
-        working-directory: anstyle-kotlin
-        run: ./gradlew allTests --no-configuration-cache
+      - name: Build
+        run: ./gradlew build --no-configuration-cache
 
   # Linux build verification (native targets)
   build-linux:
@@ -54,14 +45,5 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build roff-kotlin (Linux)
-        working-directory: roff-kotlin
-        run: ./gradlew linuxX64Test --no-configuration-cache
-
-      - name: Build cansi-kotlin (Linux)
-        working-directory: cansi-kotlin
-        run: ./gradlew linuxX64Test --no-configuration-cache
-
-      - name: Build anstyle-kotlin (Linux)
-        working-directory: anstyle-kotlin
-        run: ./gradlew linuxX64Test --no-configuration-cache
+      - name: Build (Linux)
+        run: ./gradlew build --no-configuration-cache
