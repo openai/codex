@@ -1099,7 +1099,6 @@ impl Session {
             .original_config_do_not_use
             .codex_home
             .clone();
-        let current_policy = session_configuration.exec_policy.clone();
 
         if !features.enabled(Feature::ExecPolicy) {
             error!("attempted to append execpolicy rule while execpolicy feature is disabled");
@@ -3073,7 +3072,7 @@ mod tests {
     use tokio::sync::RwLock;
 
     #[tokio::test]
-    fn reconstruct_history_matches_live_compactions() {
+    async fn reconstruct_history_matches_live_compactions() {
         let (session, turn_context) = make_session_and_context().await;
         let (rollout_lines, expected) = sample_rollout(&session, &turn_context);
         let rollout_items = rollout_lines
@@ -3099,7 +3098,7 @@ mod tests {
             }))
             .await;
 
-        let actual = session.state.lock().await.clone_history(&DEFAULT_AGENT_ID).get_history();
+        let actual = session.clone_history(&DEFAULT_AGENT_ID).await.get_history();
         assert_eq!(expected, actual);
     }
 
@@ -3112,7 +3111,7 @@ mod tests {
             .record_initial_history(InitialHistory::Forked(rollout_items))
             .await;
 
-        let actual = session.state.lock().await.clone_history(&DEFAULT_AGENT_ID).get_history();
+        let actual = session.clone_history(&DEFAULT_AGENT_ID).await.get_history();
         assert_eq!(expected, actual);
     }
 
