@@ -4,7 +4,6 @@ use codex_api::provider::Provider;
 use codex_api::provider::RetryConfig;
 use codex_api::provider::WireApi;
 use codex_client::ReqwestTransport;
-use codex_protocol::openai_models::ClientVersion;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
@@ -75,7 +74,6 @@ async fn models_client_hits_models_endpoint() {
             ],
             shell_type: ConfigShellToolType::ShellCommand,
             visibility: ModelVisibility::List,
-            minimal_client_version: ClientVersion(0, 1, 0),
             supported_in_api: true,
             priority: 1,
             upgrade: None,

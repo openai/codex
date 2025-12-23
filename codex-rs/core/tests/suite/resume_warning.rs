@@ -4,7 +4,6 @@ use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
-use codex_core::built_in_model_providers;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InitialHistory;
 use codex_core::protocol::ResumedHistory;
@@ -25,10 +24,15 @@ fn resume_history(
     let turn_ctx = TurnContextItem {
         cwd: config.cwd.clone(),
         approval_policy: config.approval_policy.value(),
-        sandbox_policy: config.sandbox_policy.clone(),
+        sandbox_policy: config.sandbox_policy.get().clone(),
         model: previous_model.to_string(),
         effort: config.model_reasoning_effort,
         summary: config.model_reasoning_summary,
+        base_instructions: None,
+        user_instructions: None,
+        developer_instructions: None,
+        final_output_json_schema: None,
+        truncation_policy: None,
     };
 
     InitialHistory::Resumed(ResumedHistory {
@@ -42,7 +46,7 @@ fn resume_history(
 async fn emits_warning_when_resumed_model_differs() {
     // Arrange a config with a current model and a prior rollout recorded under a different model.
     let home = TempDir::new().expect("tempdir");
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model = Some("current-model".to_string());
     // Ensure cwd is absolute (the helper sets it to the temp dir already).
     assert!(config.cwd.is_absolute());

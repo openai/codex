@@ -56,10 +56,10 @@ model_reasoning_summary_format = "none"
 # Instruction Overrides
 ################################################################################
 
-# Additional user instructions appended after AGENTS.md. Default: unset.
+# Additional user instructions inject before AGENTS.md. Default: unset.
 # developer_instructions = ""
 
-# Optional legacy base instructions override (prefer AGENTS.md). Default: unset.
+# (Ignored) Optional legacy base instructions override (prefer AGENTS.md). Default: unset.
 # instructions = ""
 
 # Inline override for the history compaction prompt. Default: unset.
@@ -106,8 +106,8 @@ exclude_slash_tmp = false
 [shell_environment_policy]
 # inherit: all (default) | core | none
 inherit = "all"
-# Skip default excludes for names containing KEY/TOKEN (case-insensitive). Default: false
-ignore_default_excludes = false
+# Skip default excludes for names containing KEY/SECRET/TOKEN (case-insensitive). Default: true
+ignore_default_excludes = true
 # Case-insensitive glob patterns to remove (e.g., "AWS_*", "AZURE_*"). Default: []
 exclude = []
 # Explicit key/value overrides (always win). Default: {}
@@ -214,11 +214,9 @@ view_image = true
 [features]
 # Leave this table empty to accept defaults. Set explicit booleans to opt in/out.
 unified_exec = false
-rmcp_client = false
 apply_patch_freeform = false
 view_image_tool = true
 web_search_request = false
-ghost_commit = false
 enable_experimental_windows_sandbox = false
 skills = false
 

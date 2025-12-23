@@ -282,7 +282,7 @@ impl CodexMessageProcessor {
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
-        Config::load_with_cli_overrides(self.cli_overrides.clone(), ConfigOverrides::default())
+        Config::load_with_cli_overrides(self.cli_overrides.clone())
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -1186,10 +1186,22 @@ impl CodexMessageProcessor {
             arg0: None,
         };
 
-        let effective_policy = params
-            .sandbox_policy
-            .map(|policy| policy.to_core())
-            .unwrap_or_else(|| self.config.sandbox_policy.clone());
+        let requested_policy = params.sandbox_policy.map(|policy| policy.to_core());
+        let effective_policy = match requested_policy {
+            Some(policy) => match self.config.sandbox_policy.can_set(&policy) {
+                Ok(()) => policy,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid sandbox policy: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            },
+            None => self.config.sandbox_policy.get().clone(),
+        };
 
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
@@ -1980,16 +1992,6 @@ impl CodexMessageProcessor {
             }
         };
 
-        if !config.features.enabled(Feature::RmcpClient) {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: "OAuth login is only supported when [features].rmcp_client is true in config.toml".to_string(),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
-        }
-
         let McpServerOauthLoginParams {
             name,
             scopes,
@@ -2640,36 +2642,27 @@ impl CodexMessageProcessor {
     }
 
     async fn skills_list(&self, request_id: RequestId, params: SkillsListParams) {
-        let SkillsListParams { cwds } = params;
+        let SkillsListParams { cwds, force_reload } = params;
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.clone()]
         } else {
             cwds
         };
 
-        let data = if self.config.features.enabled(Feature::Skills) {
-            let skills_manager = self.conversation_manager.skills_manager();
-            cwds.into_iter()
-                .map(|cwd| {
-                    let outcome = skills_manager.skills_for_cwd(&cwd);
-                    let errors = errors_to_info(&outcome.errors);
-                    let skills = skills_to_info(&outcome.skills);
-                    codex_app_server_protocol::SkillsListEntry {
-                        cwd,
-                        skills,
-                        errors,
-                    }
-                })
-                .collect()
-        } else {
-            cwds.into_iter()
-                .map(|cwd| codex_app_server_protocol::SkillsListEntry {
+        let skills_manager = self.conversation_manager.skills_manager();
+        let data = cwds
+            .into_iter()
+            .map(|cwd| {
+                let outcome = skills_manager.skills_for_cwd_with_options(&cwd, force_reload);
+                let errors = errors_to_info(&outcome.errors);
+                let skills = skills_to_info(&outcome.skills);
+                codex_app_server_protocol::SkillsListEntry {
                     cwd,
-                    skills: Vec::new(),
-                    errors: Vec::new(),
-                })
-                .collect()
-        };
+                    skills,
+                    errors,
+                }
+            })
+            .collect();
         self.outgoing
             .send_response(request_id, SkillsListResponse { data })
             .await;
@@ -3328,6 +3321,7 @@ fn skills_to_info(
         .map(|skill| codex_app_server_protocol::SkillMetadata {
             name: skill.name.clone(),
             description: skill.description.clone(),
+            short_description: skill.short_description.clone(),
             path: skill.path.clone(),
             scope: skill.scope.into(),
         })
@@ -3348,7 +3342,7 @@ fn errors_to_info(
 
 async fn derive_config_from_params(
     overrides: ConfigOverrides,
-    cli_overrides: Option<std::collections::HashMap<String, serde_json::Value>>,
+    cli_overrides: Option<HashMap<String, serde_json::Value>>,
 ) -> std::io::Result<Config> {
     let cli_overrides = cli_overrides
         .unwrap_or_default()
@@ -3356,7 +3350,7 @@ async fn derive_config_from_params(
         .map(|(k, v)| (k, json_to_toml(v)))
         .collect();
 
-    Config::load_with_cli_overrides(cli_overrides, overrides).await
+    Config::load_with_cli_overrides_and_harness_overrides(cli_overrides, overrides).await
 }
 
 async fn read_summary_from_rollout(

@@ -8,6 +8,30 @@ use crate::shell::detect_shell_type;
 
 const POWERSHELL_FLAGS: &[&str] = &["-nologo", "-noprofile", "-command", "-c"];
 
+/// Prefixed command for powershell shell calls to force UTF-8 console output.
+pub(crate) const UTF8_OUTPUT_PREFIX: &str =
+    "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\n";
+
+pub(crate) fn prefix_powershell_script_with_utf8(command: &[String]) -> Vec<String> {
+    let Some((_, script)) = extract_powershell_command(command) else {
+        return command.to_vec();
+    };
+
+    let trimmed = script.trim_start();
+    let script = if trimmed.starts_with(UTF8_OUTPUT_PREFIX) {
+        script.to_string()
+    } else {
+        format!("{UTF8_OUTPUT_PREFIX}{script}")
+    };
+
+    let mut command: Vec<String> = command[..(command.len() - 1)]
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
+    command.push(script);
+    command
+}
+
 /// Extract the PowerShell script body from an invocation such as:
 ///
 /// - ["pwsh", "-NoProfile", "-Command", "Get-ChildItem -Recurse | Select-String foo"]
@@ -22,7 +46,10 @@ pub fn extract_powershell_command(command: &[String]) -> Option<(&str, &str)> {
     }
 
     let shell = &command[0];
-    if detect_shell_type(&PathBuf::from(shell)) != Some(ShellType::PowerShell) {
+    if !matches!(
+        detect_shell_type(&PathBuf::from(shell)),
+        Some(ShellType::PowerShell)
+    ) {
         return None;
     }
 
@@ -36,7 +63,7 @@ pub fn extract_powershell_command(command: &[String]) -> Option<(&str, &str)> {
         }
         if flag.eq_ignore_ascii_case("-Command") || flag.eq_ignore_ascii_case("-c") {
             let script = &command[i + 1];
-            return Some((shell, script.as_str()));
+            return Some((shell, script));
         }
         i += 1;
     }

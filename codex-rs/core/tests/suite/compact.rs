@@ -137,7 +137,7 @@ async fn summarize_context_three_requests_and_instructions() {
     // Build config pointing to the mock server and spawn Codex.
     let model_provider = non_openai_model_provider(&server);
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
@@ -331,7 +331,7 @@ async fn manual_compact_uses_custom_prompt() {
 
     let model_provider = non_openai_model_provider(&server);
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     config.compact_prompt = Some(custom_prompt.to_string());
 
@@ -411,7 +411,7 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
 
     let model_provider = non_openai_model_provider(&server);
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
 
@@ -589,7 +589,36 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         .body_json::<serde_json::Value>()
         .unwrap();
     let input = body.get("input").and_then(|v| v.as_array()).unwrap();
-    let environment_message = input[0]["content"][0]["text"].as_str().unwrap();
+
+    fn normalize_inputs(values: &[serde_json::Value]) -> Vec<serde_json::Value> {
+        values
+            .iter()
+            .filter(|value| {
+                if value
+                    .get("type")
+                    .and_then(|ty| ty.as_str())
+                    .is_some_and(|ty| ty == "function_call_output")
+                {
+                    return false;
+                }
+
+                let text = value
+                    .get("content")
+                    .and_then(|content| content.as_array())
+                    .and_then(|content| content.first())
+                    .and_then(|item| item.get("text"))
+                    .and_then(|text| text.as_str());
+
+                // Ignore the cached UI prefix (project docs + skills) since it is not relevant to
+                // compaction behavior and can change as bundled skills evolve.
+                !text.is_some_and(|text| text.starts_with("# AGENTS.md instructions for "))
+            })
+            .cloned()
+            .collect()
+    }
+
+    let initial_input = normalize_inputs(input);
+    let environment_message = initial_input[0]["content"][0]["text"].as_str().unwrap();
 
     // test 1: after compaction, we should have one environment message, one user message, and one user message with summary prefix
     let compaction_indices = [2, 4, 6];
@@ -603,6 +632,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
             .body_json::<serde_json::Value>()
             .unwrap();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
+        let input = normalize_inputs(input);
         assert_eq!(input.len(), 3);
         let environment_message = input[0]["content"][0]["text"].as_str().unwrap();
         let user_message_received = input[1]["content"][0]["text"].as_str().unwrap();
@@ -962,20 +992,6 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     ]
     ]);
 
-    // ignore local shell calls output because it differs from OS to another and it's out of the scope of this test.
-    fn normalize_inputs(values: &[serde_json::Value]) -> Vec<serde_json::Value> {
-        values
-            .iter()
-            .filter(|value| {
-                value
-                    .get("type")
-                    .and_then(|ty| ty.as_str())
-                    .is_none_or(|ty| ty != "function_call_output")
-            })
-            .cloned()
-            .collect()
-    }
-
     for (i, request) in requests_payloads.iter().enumerate() {
         let body = request.body_json::<serde_json::Value>().unwrap();
         let input = body.get("input").and_then(|v| v.as_array()).unwrap();
@@ -1046,7 +1062,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
@@ -1269,7 +1285,7 @@ async fn auto_compact_persists_rollout_entries() {
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
@@ -1381,7 +1397,7 @@ async fn manual_compact_retries_after_context_window_error() {
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
@@ -1514,7 +1530,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     let codex = ConversationManager::with_models_provider(
@@ -1717,7 +1733,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200);
@@ -1828,7 +1844,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     let model_provider = non_openai_model_provider(&server);
 
     let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
+    let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
     set_test_compact_prompt(&mut config);
     config.model_context_window = Some(context_window);

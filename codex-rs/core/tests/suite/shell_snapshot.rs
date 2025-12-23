@@ -22,6 +22,8 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::PathBuf;
 use tokio::fs;
+use tokio::time::Duration;
+use tokio::time::sleep;
 
 #[derive(Debug)]
 struct SnapshotRun {
@@ -311,10 +313,9 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
 
 #[cfg_attr(target_os = "windows", ignore)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_snapshot_deleted_after_shutdown_with_skills_enabled() -> Result<()> {
+async fn shell_snapshot_deleted_after_shutdown_with_skills() -> Result<()> {
     let builder = test_codex().with_config(|config| {
         config.features.enable(Feature::ShellSnapshot);
-        config.features.enable(Feature::Skills);
     });
     let harness = TestCodexHarness::with_builder(builder).await?;
     let home = harness.test().home.clone();
@@ -334,6 +335,7 @@ async fn shell_snapshot_deleted_after_shutdown_with_skills_enabled() -> Result<(
 
     drop(codex);
     drop(harness);
+    sleep(Duration::from_millis(150)).await;
 
     assert_eq!(
         snapshot_path.exists(),

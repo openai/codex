@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Context as _;
 use anyhow::Result;
 use codex_core::MCP_SANDBOX_STATE_CAPABILITY;
-use codex_core::MCP_SANDBOX_STATE_NOTIFICATION;
+use codex_core::MCP_SANDBOX_STATE_METHOD;
 use codex_core::SandboxState;
 use codex_core::protocol::SandboxPolicy;
 use codex_execpolicy::Policy;
@@ -15,6 +15,8 @@ use rmcp::ServerHandler;
 use rmcp::ServiceExt;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::CustomRequest;
+use rmcp::model::CustomResult;
 use rmcp::model::*;
 use rmcp::schemars;
 use rmcp::service::RequestContext;
@@ -23,8 +25,8 @@ use rmcp::tool;
 use rmcp::tool_handler;
 use rmcp::tool_router;
 use rmcp::transport::stdio;
+use serde_json::json;
 use tokio::sync::RwLock;
-use tracing::debug;
 
 use crate::posix::escalate_server::EscalateServer;
 use crate::posix::escalate_server::{self};
@@ -146,6 +148,13 @@ impl ExecTool {
     }
 }
 
+#[derive(Default)]
+pub struct CodexSandboxStateUpdateMethod;
+
+impl rmcp::model::ConstString for CodexSandboxStateUpdateMethod {
+    const VALUE: &'static str = MCP_SANDBOX_STATE_METHOD;
+}
+
 #[tool_handler]
 impl ServerHandler for ExecTool {
     fn get_info(&self) -> ServerInfo {
@@ -181,29 +190,33 @@ impl ServerHandler for ExecTool {
         Ok(self.get_info())
     }
 
-    async fn on_custom_notification(
+    async fn on_custom_request(
         &self,
-        notification: rmcp::model::CustomClientNotification,
-        _context: rmcp::service::NotificationContext<rmcp::RoleServer>,
-    ) {
-        let rmcp::model::CustomClientNotification { method, params, .. } = notification;
-        if method == MCP_SANDBOX_STATE_NOTIFICATION
-            && let Some(params) = params
-        {
-            match serde_json::from_value::<SandboxState>(params) {
-                Ok(sandbox_state) => {
-                    debug!(
-                        ?sandbox_state.sandbox_policy,
-                        "received sandbox state notification"
-                    );
-                    let mut state = self.sandbox_state.write().await;
-                    *state = Some(sandbox_state);
-                }
-                Err(err) => {
-                    tracing::warn!(?err, "failed to deserialize sandbox state notification");
-                }
-            }
+        request: CustomRequest,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<CustomResult, McpError> {
+        let CustomRequest { method, params, .. } = request;
+        if method != MCP_SANDBOX_STATE_METHOD {
+            return Err(McpError::method_not_found::<CodexSandboxStateUpdateMethod>());
         }
+
+        let Some(params) = params else {
+            return Err(McpError::invalid_params(
+                "missing params for sandbox state request".to_string(),
+                None,
+            ));
+        };
+
+        let Ok(sandbox_state) = serde_json::from_value::<SandboxState>(params.clone()) else {
+            return Err(McpError::invalid_params(
+                "failed to deserialize sandbox state".to_string(),
+                Some(params),
+            ));
+        };
+
+        *self.sandbox_state.write().await = Some(sandbox_state);
+
+        Ok(CustomResult::new(json!({})))
     }
 }
 

@@ -27,18 +27,12 @@ fn write_skill(home: &Path, name: &str, description: &str, body: &str) -> std::p
     path
 }
 
-fn write_public_skill(
-    home: &Path,
-    name: &str,
-    description: &str,
-    body: &str,
-) -> std::path::PathBuf {
-    let skill_dir = home.join("skills").join(".public").join(name);
-    fs::create_dir_all(&skill_dir).unwrap();
-    let contents = format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n");
-    let path = skill_dir.join("SKILL.md");
-    fs::write(&path, contents).unwrap();
-    path
+fn system_skill_md_path(home: impl AsRef<Path>, name: &str) -> std::path::PathBuf {
+    home.as_ref()
+        .join("skills")
+        .join(".system")
+        .join(name)
+        .join("SKILL.md")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -48,8 +42,8 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
     let server = start_mock_server().await;
     let skill_body = "skill body";
     let mut builder = test_codex()
-        .with_config(|cfg| {
-            cfg.features.enable(Feature::Skills);
+        .with_config(|config| {
+            config.features.enable(Feature::Skills);
         })
         .with_pre_build_hook(|home| {
             write_skill(home, "demo", "demo skill", skill_body);
@@ -118,8 +112,8 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex()
-        .with_config(|cfg| {
-            cfg.features.enable(Feature::Skills);
+        .with_config(|config| {
+            config.features.enable(Feature::Skills);
         })
         .with_pre_build_hook(|home| {
             let skill_dir = home.join("skills").join("broken");
@@ -169,18 +163,36 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_skills_includes_public_cache_entries() -> Result<()> {
+async fn list_skills_includes_system_cache_entries() -> Result<()> {
     skip_if_no_network!(Ok(()));
+
+    const SYSTEM_SKILL_NAME: &str = "skill-creator";
 
     let server = start_mock_server().await;
     let mut builder = test_codex()
-        .with_config(|cfg| {
-            cfg.features.enable(Feature::Skills);
+        .with_config(|config| {
+            config.features.enable(Feature::Skills);
         })
         .with_pre_build_hook(|home| {
-            write_public_skill(home, "public-demo", "public skill", "public body");
+            let system_skill_path = system_skill_md_path(home, SYSTEM_SKILL_NAME);
+            assert!(
+                !system_skill_path.exists(),
+                "expected embedded system skills not yet installed, but {system_skill_path:?} exists"
+            );
         });
     let test = builder.build(&server).await?;
+
+    let system_skill_path = system_skill_md_path(test.codex_home_path(), SYSTEM_SKILL_NAME);
+    assert!(
+        system_skill_path.exists(),
+        "expected embedded system skills installed to {system_skill_path:?}"
+    );
+    let system_skill_contents = fs::read_to_string(&system_skill_path)?;
+    let expected_name_line = format!("name: {SYSTEM_SKILL_NAME}");
+    assert!(
+        system_skill_contents.contains(&expected_name_line),
+        "expected embedded system skill file, got:\n{system_skill_contents}"
+    );
 
     test.codex
         .submit(Op::ListSkills {
@@ -205,12 +217,13 @@ async fn list_skills_includes_public_cache_entries() -> Result<()> {
 
     let skill = skills
         .iter()
-        .find(|skill| skill.name == "public-demo")
-        .expect("expected public skill to be present");
-    assert_eq!(skill.scope, codex_protocol::protocol::SkillScope::Public);
+        .find(|skill| skill.name == SYSTEM_SKILL_NAME)
+        .expect("expected system skill to be present");
+    assert_eq!(skill.scope, codex_protocol::protocol::SkillScope::System);
     let path_str = skill.path.to_string_lossy().replace('\\', "/");
+    let expected_path_suffix = format!("/skills/.system/{SYSTEM_SKILL_NAME}/SKILL.md");
     assert!(
-        path_str.ends_with("/skills/.public/public-demo/SKILL.md"),
+        path_str.ends_with(&expected_path_suffix),
         "unexpected skill path: {path_str}"
     );
 

@@ -694,7 +694,6 @@ mod tests {
     use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
-    use tokio::runtime::Builder;
     use toml::Value as TomlValue;
 
     #[test]
@@ -1455,22 +1454,16 @@ model_reasoning_effort = "high"
         assert_eq!(contents, initial_expected);
     }
 
-    #[test]
-    fn blocking_set_asynchronous_helpers_available() {
-        let rt = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+    #[tokio::test]
+    async fn blocking_set_asynchronous_helpers_available() {
         let tmp = tempdir().expect("tmpdir");
         let codex_home = tmp.path().to_path_buf();
 
-        rt.block_on(async {
-            ConfigEditsBuilder::new(&codex_home)
-                .set_hide_full_access_warning(true)
-                .apply()
-                .await
-                .expect("persist");
-        });
+        ConfigEditsBuilder::new(&codex_home)
+            .set_hide_full_access_warning(true)
+            .apply()
+            .await
+            .expect("persist");
 
         let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         let notice = toml::from_str::<TomlValue>(&raw)

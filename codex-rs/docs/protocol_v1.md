@@ -77,7 +77,6 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
   - `EventMsg::Warning` – A non-fatal warning that the client should surface to the user
   - `EventMsg::TurnComplete` – Contains a `response_id` bookmark for last `response_id` executed by the task. This can be used to continue the task at a later point in time, perhaps with additional user input.
   - `EventMsg::ListSkillsResponse` – Response payload with per-cwd skill entries (`cwd`, `skills`, `errors`)
-  - `EventMsg::SkillsUpdateAvailable` – Notification that skills may have changed and clients may want to reload
 
 The `response_id` returned from each task matches the OpenAI `response_id` stored in the API's `/responses` endpoint. It can be stored and used in future `Sessions` to resume threads of work.
 

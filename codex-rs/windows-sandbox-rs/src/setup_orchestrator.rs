@@ -52,7 +52,10 @@ pub fn run_setup_refresh(
     codex_home: &Path,
 ) -> Result<()> {
     // Skip in danger-full-access.
-    if matches!(policy, SandboxPolicy::DangerFullAccess) {
+    if matches!(
+        policy,
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+    ) {
         return Ok(());
     }
     let (read_roots, write_roots) = build_payload_roots(
@@ -77,10 +80,6 @@ pub fn run_setup_refresh(
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
     let exe = find_setup_exe();
-    log_note(
-        &format!("setup refresh: invoking {}", exe.display()),
-        Some(&sandbox_dir(codex_home)),
-    );
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
@@ -195,6 +194,11 @@ fn canonical_existing(paths: &[PathBuf]) -> Vec<PathBuf> {
 
 pub(crate) fn gather_read_roots(command_cwd: &Path, policy: &SandboxPolicy) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.to_path_buf());
+        }
+    }
     for p in [
         PathBuf::from(r"C:\Windows"),
         PathBuf::from(r"C:\Program Files"),

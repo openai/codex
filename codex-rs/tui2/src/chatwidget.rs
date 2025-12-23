@@ -8,11 +8,12 @@ use std::time::Duration;
 use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
+use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
-use codex_core::openai_models::model_family::ModelFamily;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::models_manager::manager::ModelsManager;
+use codex_core::models_manager::model_family::ModelFamily;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -376,15 +377,22 @@ impl ChatWidget {
         }
     }
 
-    fn set_status_header(&mut self, header: String) {
+    /// Update the status indicator header and details.
+    ///
+    /// Passing `None` clears any existing details.
+    fn set_status(&mut self, header: String, details: Option<String>) {
         self.current_status_header = header.clone();
-        self.bottom_pane.update_status_header(header);
+        self.bottom_pane.update_status(header, details);
+    }
+
+    /// Convenience wrapper around [`Self::set_status`];
+    /// updates the status indicator header and clears any existing details.
+    fn set_status_header(&mut self, header: String) {
+        self.set_status(header, None);
     }
 
     fn restore_retry_status_header_if_present(&mut self) {
-        if let Some(header) = self.retry_status_header.take()
-            && self.current_status_header != header
-        {
+        if let Some(header) = self.retry_status_header.take() {
             self.set_status_header(header);
         }
     }
@@ -891,10 +899,7 @@ impl ChatWidget {
 
     fn on_web_search_end(&mut self, ev: WebSearchEndEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_web_search_call(format!(
-            "Searched: {}",
-            ev.query
-        )));
+        self.add_to_history(history_cell::new_web_search_call(ev.query));
     }
 
     fn on_get_history_entry_response(
@@ -1583,9 +1588,9 @@ impl ChatWidget {
                 }
                 self.request_exit();
             }
-            SlashCommand::Undo => {
-                self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
-            }
+            // SlashCommand::Undo => {
+            //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
+            // }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
                 let tx = self.app_event_tx.clone();
@@ -2100,7 +2105,7 @@ impl ChatWidget {
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let models = self.models_manager.try_list_models().ok()?;
+        let models = self.models_manager.try_list_models(&self.config).ok()?;
         models
             .iter()
             .find(|preset| preset.model == NUDGE_MODEL_SLUG)
@@ -2209,7 +2214,7 @@ impl ChatWidget {
         let current_model = self.model_family.get_model_slug().to_string();
         let presets: Vec<ModelPreset> =
             // todo(aibrahim): make this async function
-            match self.models_manager.try_list_models() {
+            match self.models_manager.try_list_models(&self.config) {
                 Ok(models) => models,
                 Err(_) => {
                     self.add_info_message(
@@ -2557,12 +2562,12 @@ impl ChatWidget {
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
         let current_approval = self.config.approval_policy.value();
-        let current_sandbox = self.config.sandbox_policy.clone();
+        let current_sandbox = self.config.sandbox_policy.get();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
         for preset in presets.into_iter() {
             let is_current =
-                Self::preset_matches_current(current_approval, &current_sandbox, &preset);
+                Self::preset_matches_current(current_approval, current_sandbox, &preset);
             let name = preset.label.to_string();
             let description_text = preset.description;
             let description = Some(description_text.to_string());
@@ -2688,7 +2693,7 @@ impl ChatWidget {
             self.config.codex_home.as_path(),
             cwd.as_path(),
             &env_map,
-            &self.config.sandbox_policy,
+            self.config.sandbox_policy.get(),
             Some(self.config.codex_home.as_path()),
         ) {
             Ok(_) => None,
@@ -2787,7 +2792,7 @@ impl ChatWidget {
         let mode_label = preset
             .as_ref()
             .map(|p| describe_policy(&p.sandbox))
-            .unwrap_or_else(|| describe_policy(&self.config.sandbox_policy));
+            .unwrap_or_else(|| describe_policy(self.config.sandbox_policy.get()));
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -2960,17 +2965,19 @@ impl ChatWidget {
     }
 
     /// Set the sandbox policy in the widget's config copy.
-    pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) {
+    pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
         #[cfg(target_os = "windows")]
-        let should_clear_downgrade = !matches!(policy, SandboxPolicy::ReadOnly)
+        let should_clear_downgrade = !matches!(&policy, SandboxPolicy::ReadOnly)
             || codex_core::get_platform_sandbox().is_some();
 
-        self.config.sandbox_policy = policy;
+        self.config.sandbox_policy.set(policy)?;
 
         #[cfg(target_os = "windows")]
         if should_clear_downgrade {
             self.config.forced_auto_mode_downgraded_on_windows = false;
         }
+
+        Ok(())
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
@@ -3096,9 +3103,14 @@ impl ChatWidget {
         scrolled: bool,
         selection_active: bool,
         scroll_position: Option<(usize, usize)>,
+        copy_selection_key: crate::key_hint::KeyBinding,
     ) {
-        self.bottom_pane
-            .set_transcript_ui_state(scrolled, selection_active, scroll_position);
+        self.bottom_pane.set_transcript_ui_state(
+            scrolled,
+            selection_active,
+            scroll_position,
+            copy_selection_key,
+        );
     }
 
     /// Forward an `Op` directly to codex.
@@ -3542,6 +3554,7 @@ fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMe
                 .map(|skill| SkillMetadata {
                     name: skill.name.clone(),
                     description: skill.description.clone(),
+                    short_description: skill.short_description.clone(),
                     path: skill.path.clone(),
                     scope: skill.scope,
                 })
