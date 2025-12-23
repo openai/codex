@@ -157,9 +157,14 @@ impl ModelsManager {
         }
         OPENAI_DEFAULT_API_MODEL.to_string()
     }
-
-    pub async fn get_etag(&self) -> Option<String> {
-        self.etag.read().await.clone()
+    pub async fn handle_new_models_etag(&self, etag: String) {
+        let current_etag = self.get_etag().await;
+        if current_etag.as_deref() == Some(etag.as_str()) {
+            return;
+        }
+        if let Err(err) = self.refresh_available_models().await {
+            error!("failed to refresh available models: {err}");
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -171,6 +176,10 @@ impl ModelsManager {
     /// Offline helper that builds a `ModelFamily` without consulting remote state.
     pub fn construct_model_family_offline(model: &str, config: &Config) -> ModelFamily {
         Self::find_family_for_model(model).with_config_overrides(config)
+    }
+
+    async fn get_etag(&self) -> Option<String> {
+        self.etag.read().await.clone()
     }
 
     /// Replace the cached remote models and rebuild the derived presets list.

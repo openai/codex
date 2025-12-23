@@ -137,17 +137,6 @@ async fn run_compact_task_inner(
             Err(e) => {
                 if retries < max_retries {
                     retries += 1;
-                    if matches!(e, CodexErr::ModelsCatalogChanged) {
-                        if let Err(err) = sess
-                            .services
-                            .models_manager
-                            .refresh_available_models()
-                            .await
-                        {
-                            error!("failed to refresh available models: {err}");
-                        }
-                        continue;
-                    }
                     let delay = backoff(retries);
                     sess.notify_stream_error(
                         turn_context.as_ref(),

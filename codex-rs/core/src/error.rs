@@ -148,9 +148,6 @@ pub enum CodexErr {
     #[error("{0}")]
     RefreshTokenFailed(RefreshTokenFailedError),
 
-    #[error("Models catalog has changed. Please refresh your models list.")]
-    ModelsCatalogChanged,
-
     #[error("Fatal error: {0}")]
     Fatal(String),
 
@@ -458,9 +455,9 @@ impl CodexErr {
             CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::InternalServerError
             | CodexErr::InternalAgentDied => CodexErrorInfo::InternalServerError,
-            CodexErr::UnsupportedOperation(_)
-            | CodexErr::ConversationNotFound(_)
-            | CodexErr::ModelsCatalogChanged => CodexErrorInfo::BadRequest,
+            CodexErr::UnsupportedOperation(_) | CodexErr::ConversationNotFound(_) => {
+                CodexErrorInfo::BadRequest
+            }
             CodexErr::Sandbox(_) => CodexErrorInfo::SandboxError,
             _ => CodexErrorInfo::Other,
         }

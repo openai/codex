@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
-use crate::models_manager::manager::ModelsManager;
 use codex_api::AggregateStreamExt;
 use codex_api::ChatClient as ApiChatClient;
 use codex_api::CompactClient as ApiCompactClient;
@@ -59,7 +58,6 @@ pub struct ModelClient {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
     model_family: ModelFamily,
-    models_manager: Arc<ModelsManager>,
     otel_manager: OtelManager,
     provider: ModelProviderInfo,
     conversation_id: ConversationId,
@@ -80,7 +78,6 @@ impl ModelClient {
         summary: ReasoningSummaryConfig,
         conversation_id: ConversationId,
         session_source: SessionSource,
-        models_manager: Arc<ModelsManager>,
     ) -> Self {
         Self {
             config,
@@ -92,7 +89,6 @@ impl ModelClient {
             effort,
             summary,
             session_source,
-            models_manager,
         }
     }
 
@@ -266,10 +262,7 @@ impl ModelClient {
                 store_override: None,
                 conversation_id: Some(conversation_id.clone()),
                 session_source: Some(session_source.clone()),
-                extra_headers: beta_feature_headers(
-                    &self.config,
-                    self.models_manager.get_etag().await,
-                ),
+                extra_headers: beta_feature_headers(&self.config),
             };
 
             let stream_result = client
@@ -405,7 +398,7 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
     }
 }
 
-fn beta_feature_headers(config: &Config, etag: Option<String>) -> ApiHeaderMap {
+fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
     let enabled = FEATURES
         .iter()
         .filter_map(|spec| {
@@ -422,11 +415,6 @@ fn beta_feature_headers(config: &Config, etag: Option<String>) -> ApiHeaderMap {
         && let Ok(header_value) = HeaderValue::from_str(value.as_str())
     {
         headers.insert("x-codex-beta-features", header_value);
-    }
-    if let Some(etag) = etag
-        && let Ok(header_value) = HeaderValue::from_str(&etag)
-    {
-        headers.insert("X-If-Models-Match", header_value);
     }
     headers
 }

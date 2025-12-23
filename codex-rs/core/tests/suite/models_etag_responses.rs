@@ -18,55 +18,15 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_response;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
-use tokio::time::Duration;
-use wiremock::Match;
 use wiremock::MockServer;
-use wiremock::Request;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::header;
-
-#[derive(Clone)]
-struct ToolOutputWithEtagMatcher {
-    expected_etag: &'static str,
-    call_id: &'static str,
-}
-
-impl Match for ToolOutputWithEtagMatcher {
-    fn matches(&self, request: &Request) -> bool {
-        let header_matches = request
-            .headers
-            .get("x-if-models-match")
-            .and_then(|v| v.to_str().ok())
-            == Some(self.expected_etag);
-
-        let body = String::from_utf8_lossy(&request.body);
-        header_matches && body.contains("\"function_call_output\"") && body.contains(self.call_id)
-    }
-}
-
-async fn wait_for_task_complete_without_errors(codex: &codex_core::CodexConversation) {
-    loop {
-        // Allow a bit more time to accommodate tool execution + retries.
-        let ev = tokio::time::timeout(Duration::from_secs(10), codex.next_event())
-            .await
-            .expect("timeout waiting for event")
-            .expect("stream ended unexpectedly");
-
-        if matches!(ev.msg, EventMsg::Error(_)) {
-            panic!("unexpected error event: {:?}", ev.msg);
-        }
-
-        if matches!(ev.msg, EventMsg::TaskComplete(_)) {
-            break;
-        }
-    }
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn refresh_models_etag_on_412_and_retry_tool_output_request() -> Result<()> {
+async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     const ETAG_1: &str = "\"models-etag-1\"";
@@ -102,7 +62,7 @@ async fn refresh_models_etag_on_412_and_retry_tool_output_request() -> Result<()
     assert_eq!(spawn_models_mock.requests().len(), 1);
     assert_eq!(spawn_models_mock.single_request_path(), "/v1/models");
 
-    // 2) If a /responses follow-up is rejected with 412, Codex refreshes /models to get a new tag.
+    // 2) If the server sends a different X-Models-Etag on /responses, Codex refreshes /models.
     let refresh_models_mock = responses::mount_models_once_with_etag(
         &server,
         ModelsResponse { models: Vec::new() },
@@ -111,46 +71,28 @@ async fn refresh_models_etag_on_412_and_retry_tool_output_request() -> Result<()
     .await;
 
     // First /responses request (user message) succeeds and returns a tool call.
-    let first_response = sse(vec![
+    // It also includes a mismatched X-Models-Etag, which should trigger a /models refresh.
+    let first_response_body = sse(vec![
         ev_response_created("resp-1"),
         ev_local_shell_call(CALL_ID, "completed", vec!["/bin/echo", "etag ok"]),
         ev_completed("resp-1"),
     ]);
-    let user_turn_mock = responses::mount_sse_once_match(
+    let user_turn_mock = responses::mount_response_once(
         &server,
-        header("X-If-Models-Match", ETAG_1),
-        first_response,
+        sse_response(first_response_body).insert_header("X-Models-Etag", ETAG_2),
     )
     .await;
 
-    // Second /responses request (tool output) is rejected with 412 due to stale models catalog.
-    let precondition_failed_mock = responses::mount_response_once_match(
-        &server,
-        ToolOutputWithEtagMatcher {
-            expected_etag: ETAG_1,
-            call_id: CALL_ID,
-        },
-        ResponseTemplate::new(412)
-            .insert_header("content-type", "application/json")
-            .set_body_string(
-                r#"{"error":{"message":"models changed","type":"precondition_failed"}}"#,
-            ),
-    )
-    .await;
-
-    // Third /responses request retries the same tool output and now includes the new ETag.
-    let completion_response = sse(vec![
+    // Second /responses request (tool output) includes the same X-Models-Etag; Codex should not
+    // refetch /models again after it has already refreshed the catalog.
+    let completion_response_body = sse(vec![
         ev_response_created("resp-2"),
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    let retried_tool_output_mock = responses::mount_sse_once_match(
+    let tool_output_mock = responses::mount_response_once(
         &server,
-        ToolOutputWithEtagMatcher {
-            expected_etag: ETAG_2,
-            call_id: CALL_ID,
-        },
-        completion_response,
+        sse_response(completion_response_body).insert_header("X-Models-Etag", ETAG_2),
     )
     .await;
 
@@ -169,24 +111,13 @@ async fn refresh_models_etag_on_412_and_retry_tool_output_request() -> Result<()
         })
         .await?;
 
-    wait_for_task_complete_without_errors(&codex).await;
+    let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    // Assert initial /responses includes ETag from spawn /models call.
+    // Assert /responses requests no longer send the conditional models header.
     let user_req = user_turn_mock.single_request();
-    assert_eq!(
-        user_req.header("X-If-Models-Match"),
-        Some(ETAG_1.to_string())
-    );
+    assert_eq!(user_req.header("X-If-Models-Match"), None);
 
-    // Assert the tool output request was rejected with 412 and used the old ETag.
-    let failed_req = precondition_failed_mock.single_request();
-    assert_eq!(
-        failed_req.header("X-If-Models-Match"),
-        Some(ETAG_1.to_string())
-    );
-    let _ = failed_req.function_call_output(CALL_ID);
-
-    // Assert /models was refreshed exactly once after the 412.
+    // Assert /models was refreshed exactly once after the X-Models-Etag mismatch.
     assert_eq!(refresh_models_mock.requests().len(), 1);
     assert_eq!(refresh_models_mock.single_request_path(), "/v1/models");
     let refresh_req = refresh_models_mock
@@ -203,13 +134,11 @@ async fn refresh_models_etag_on_412_and_retry_tool_output_request() -> Result<()
         "expected /models refresh to include client_version query param"
     );
 
-    // Assert the retried tool output /responses request used the new ETag.
-    let retried_req = retried_tool_output_mock.single_request();
-    assert_eq!(
-        retried_req.header("X-If-Models-Match"),
-        Some(ETAG_2.to_string())
-    );
-    let _ = retried_req.function_call_output(CALL_ID);
+    // Assert the tool output /responses request succeeded and did not trigger another /models fetch.
+    let tool_req = tool_output_mock.single_request();
+    assert_eq!(tool_req.header("X-If-Models-Match"), None);
+    let _ = tool_req.function_call_output(CALL_ID);
+    assert_eq!(refresh_models_mock.requests().len(), 1);
 
     Ok(())
 }

@@ -10,7 +10,6 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
-use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::otel_manager::OtelManager;
 use codex_protocol::ConversationId;
@@ -93,11 +92,6 @@ async fn responses_stream_includes_subagent_header_on_review() {
         summary,
         conversation_id,
         session_source,
-        Arc::new(ModelsManager::new(Arc::new(AuthManager::new(
-            config.codex_home.clone(),
-            false,
-            AuthCredentialsStoreMode::File,
-        )))),
     );
 
     let mut prompt = Prompt::default();
@@ -193,11 +187,6 @@ async fn responses_stream_includes_subagent_header_on_other() {
         summary,
         conversation_id,
         session_source,
-        Arc::new(ModelsManager::new(Arc::new(AuthManager::new(
-            config.codex_home.clone(),
-            false,
-            AuthCredentialsStoreMode::File,
-        )))),
     );
 
     let mut prompt = Prompt::default();
@@ -292,11 +281,6 @@ async fn responses_respects_model_family_overrides_from_config() {
         summary,
         conversation_id,
         session_source,
-        Arc::new(ModelsManager::new(Arc::new(AuthManager::new(
-            config.codex_home.clone(),
-            false,
-            AuthCredentialsStoreMode::File,
-        )))),
     );
 
     let mut prompt = Prompt::default();
