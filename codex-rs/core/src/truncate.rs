@@ -9,7 +9,10 @@ use codex_protocol::openai_models::TruncationPolicy;
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 
 /// Create a new `TruncationPolicy` with config overrides applied.
-pub fn new_truncation_policy(config: &Config, truncation_policy: TruncationPolicy) -> TruncationPolicy {
+pub fn new_truncation_policy(
+    config: &Config,
+    truncation_policy: TruncationPolicy,
+) -> TruncationPolicy {
     let config_token_limit = config.tool_output_token_limit;
 
     match truncation_policy {

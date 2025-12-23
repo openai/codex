@@ -22,9 +22,9 @@ use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
-use codex_protocol::openai_models::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::formatted_truncate_text;
+use codex_protocol::openai_models::TruncationPolicy;
 
 use super::CommandTranscript;
 use super::ExecCommandRequest;

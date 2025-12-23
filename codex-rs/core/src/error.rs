@@ -1,7 +1,6 @@
 use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
-use codex_protocol::openai_models::TruncationPolicy;
 use crate::truncate::truncate_text;
 use chrono::DateTime;
 use chrono::Datelike;
@@ -9,6 +8,7 @@ use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
 use codex_protocol::ConversationId;
+use codex_protocol::openai_models::TruncationPolicy;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
