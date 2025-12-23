@@ -1341,6 +1341,7 @@ pub struct TurnContextItem {
 pub struct RolloutLine {
     pub timestamp: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub agent_id: Option<AgentId>,
     #[serde(flatten)]
     pub item: RolloutItem,
