@@ -250,7 +250,7 @@ impl TestCodex {
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
     ) -> Result<()> {
-        let session_model = self.session_configured.model.clone();
+        let session_model = self.session_configured.model_family.slug.clone();
         self.codex
             .submit(Op::UserTurn {
                 items: vec![UserInput::Text {

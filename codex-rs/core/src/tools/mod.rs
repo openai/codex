@@ -10,7 +10,7 @@ pub mod sandboxing;
 pub mod spec;
 
 use crate::exec::ExecToolCallOutput;
-use crate::truncate::TruncationPolicy;
+use codex_protocol::openai_models::TruncationPolicy;
 use crate::truncate::formatted_truncate_text;
 use crate::truncate::truncate_text;
 pub use router::ToolRouter;

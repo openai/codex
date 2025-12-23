@@ -97,6 +97,34 @@ fn snapshot(percent: f64) -> RateLimitSnapshot {
     }
 }
 
+fn test_model_family(slug: &str) -> ModelFamily {
+    use codex_protocol::openai_models::ConfigShellToolType;
+    use codex_protocol::openai_models::ModelFamily;
+    use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::openai_models::ReasoningSummaryFormat;
+    use codex_protocol::openai_models::TruncationPolicy;
+
+    ModelFamily {
+        slug: slug.to_string(),
+        family: slug.to_string(),
+        needs_special_apply_patch_instructions: false,
+        context_window: None,
+        auto_compact_token_limit: None,
+        supports_reasoning_summaries: false,
+        default_reasoning_effort: Some(ReasoningEffort::default()),
+        reasoning_summary_format: ReasoningSummaryFormat::None,
+        supports_parallel_tool_calls: false,
+        apply_patch_tool_type: None,
+        base_instructions: String::new(),
+        experimental_supported_tools: Vec::new(),
+        effective_context_window_percent: 95,
+        support_verbosity: false,
+        default_verbosity: None,
+        shell_type: ConfigShellToolType::Default,
+        truncation_policy: TruncationPolicy::Bytes(10_000),
+    }
+}
+
 #[tokio::test]
 async fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
@@ -105,7 +133,7 @@ async fn resumed_initial_messages_render_history() {
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
-        model: "test-model".to_string(),
+        model_family: test_model_family("test-model"),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,
         sandbox_policy: SandboxPolicy::ReadOnly,
@@ -312,8 +340,6 @@ async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config().await;
-    let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
-    let model_family = ModelsManager::construct_model_family_offline(&resolved_model, &cfg);
     let conversation_manager = Arc::new(ConversationManager::with_models_provider(
         CodexAuth::from_api_key("test"),
         cfg.model_provider.clone(),
@@ -330,7 +356,6 @@ async fn helpers_are_available_and_do_not_panic() {
         models_manager: conversation_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
-        model_family,
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -372,7 +397,10 @@ async fn make_chatwidget_manual(
         bottom_pane: bottom,
         active_cell: None,
         config: cfg.clone(),
-        model_family: ModelsManager::construct_model_family_offline(&resolved_model, &cfg),
+        model_family: Some(ModelsManager::construct_model_family_offline(
+            &resolved_model,
+            &cfg,
+        )),
         auth_manager: auth_manager.clone(),
         models_manager: Arc::new(ModelsManager::new(auth_manager)),
         session_header: SessionHeader::new(resolved_model.clone()),
@@ -1031,7 +1059,7 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
         id: "configured".into(),
         msg: EventMsg::SessionConfigured(codex_core::protocol::SessionConfiguredEvent {
             session_id: conversation_id,
-            model: "test-model".to_string(),
+            model_family: test_model_family("test-model"),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::ReadOnly,

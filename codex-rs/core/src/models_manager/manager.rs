@@ -25,7 +25,7 @@ use crate::default_client::build_reqwest_client;
 use crate::error::Result as CoreResult;
 use crate::features::Feature;
 use crate::model_provider_info::ModelProviderInfo;
-use crate::models_manager::model_family::ModelFamily;
+use codex_protocol::openai_models::ModelFamily;
 use crate::models_manager::model_presets::builtin_model_presets;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
@@ -149,9 +149,11 @@ impl ModelsManager {
 
     /// Look up the requested model family while applying remote metadata overrides.
     pub async fn construct_model_family(&self, model: &str, config: &Config) -> ModelFamily {
-        Self::find_family_for_model(model)
-            .with_remote_overrides(self.remote_models(config).await)
-            .with_config_overrides(config)
+        crate::models_manager::model_family::with_config_overrides(
+            Self::find_family_for_model(model)
+                .with_remote_overrides(self.remote_models(config).await),
+            config,
+        )
     }
 
     pub async fn get_model(&self, model: &Option<String>, config: &Config) -> String {
@@ -185,7 +187,10 @@ impl ModelsManager {
     #[cfg(any(test, feature = "test-support"))]
     /// Offline helper that builds a `ModelFamily` without consulting remote state.
     pub fn construct_model_family_offline(model: &str, config: &Config) -> ModelFamily {
-        Self::find_family_for_model(model).with_config_overrides(config)
+        crate::models_manager::model_family::with_config_overrides(
+            Self::find_family_for_model(model),
+            config,
+        )
     }
 
     /// Replace the cached remote models and rebuild the derived presets list.

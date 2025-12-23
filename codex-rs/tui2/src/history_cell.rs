@@ -626,13 +626,14 @@ pub(crate) fn new_session_info(
     is_first_event: bool,
 ) -> SessionInfoCell {
     let SessionConfiguredEvent {
-        model,
+        model_family,
         reasoning_effort,
         ..
     } = event;
+    let used_model = model_family.slug;
     // Header box rendered as history (so it appears at the very top)
     let header = SessionHeaderHistoryCell::new(
-        model.clone(),
+        used_model.clone(),
         reasoning_effort,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
@@ -680,11 +681,11 @@ pub(crate) fn new_session_info(
         {
             parts.push(Box::new(tooltips));
         }
-        if requested_model != model {
+        if requested_model != used_model {
             let lines = vec![
                 "model changed:".magenta().bold().into(),
                 format!("requested: {requested_model}").into(),
-                format!("used: {model}").into(),
+                format!("used: {used_model}").into(),
             ];
             parts.push(Box::new(PlainHistoryCell { lines }));
         }

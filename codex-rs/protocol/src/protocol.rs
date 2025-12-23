@@ -19,6 +19,7 @@ use crate::message_history::HistoryEntry;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::num_format::format_with_separators;
+use crate::openai_models::ModelFamily;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
@@ -1770,8 +1771,8 @@ pub struct SessionConfiguredEvent {
     /// Name left as session_id instead of conversation_id for backwards compatibility.
     pub session_id: ConversationId,
 
-    /// Tell the client what model is being queried.
-    pub model: String,
+    /// Model metadata for the model family that Codex selected for this session.
+    pub model_family: ModelFamily,
 
     pub model_provider_id: String,
 
@@ -1929,11 +1930,30 @@ mod tests {
     fn serialize_event() -> Result<()> {
         let conversation_id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
         let rollout_file = NamedTempFile::new()?;
+        let model_family = crate::openai_models::ModelFamily {
+            slug: "codex-mini-latest".to_string(),
+            family: "codex-mini-latest".to_string(),
+            needs_special_apply_patch_instructions: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            supports_reasoning_summaries: false,
+            default_reasoning_effort: Some(crate::openai_models::ReasoningEffort::Medium),
+            reasoning_summary_format: crate::openai_models::ReasoningSummaryFormat::None,
+            supports_parallel_tool_calls: false,
+            apply_patch_tool_type: None,
+            base_instructions: "".to_string(),
+            experimental_supported_tools: Vec::new(),
+            effective_context_window_percent: 95,
+            support_verbosity: false,
+            default_verbosity: None,
+            shell_type: crate::openai_models::ConfigShellToolType::Default,
+            truncation_policy: crate::openai_models::TruncationPolicy::Bytes(10_000),
+        };
         let event = Event {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
-                model: "codex-mini-latest".to_string(),
+                model_family: model_family.clone(),
                 model_provider_id: "openai".to_string(),
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::ReadOnly,
@@ -1951,7 +1971,7 @@ mod tests {
             "msg": {
                 "type": "session_configured",
                 "session_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
-                "model": "codex-mini-latest",
+                "model_family": serde_json::to_value(model_family)?,
                 "model_provider_id": "openai",
                 "approval_policy": "never",
                 "sandbox_policy": {

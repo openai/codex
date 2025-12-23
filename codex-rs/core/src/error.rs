@@ -1,7 +1,7 @@
 use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
-use crate::truncate::TruncationPolicy;
+use codex_protocol::openai_models::TruncationPolicy;
 use crate::truncate::truncate_text;
 use chrono::DateTime;
 use chrono::Datelike;

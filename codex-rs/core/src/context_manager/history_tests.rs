@@ -1,6 +1,5 @@
 use super::*;
 use crate::truncate;
-use crate::truncate::TruncationPolicy;
 use codex_git::GhostCommit;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -9,6 +8,7 @@ use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::openai_models::TruncationPolicy;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 

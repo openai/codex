@@ -1,12 +1,12 @@
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelFamily;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningSummaryFormat;
+use codex_protocol::openai_models::TruncationPolicy;
 
 use crate::config::Config;
-use crate::truncate::TruncationPolicy;
 
 /// The `instructions` field in the payload sent to a model should always start
 /// with this content.
@@ -19,174 +19,20 @@ const GPT_5_1_CODEX_MAX_INSTRUCTIONS: &str = include_str!("../../gpt-5.1-codex-m
 const GPT_5_2_CODEX_INSTRUCTIONS: &str = include_str!("../../gpt-5.2-codex_prompt.md");
 pub(crate) const CONTEXT_WINDOW_272K: i64 = 272_000;
 
-/// A model family is a group of models that share certain characteristics.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ModelFamily {
-    /// The full model slug used to derive this model family, e.g.
-    /// "gpt-4.1-2025-04-14".
-    pub slug: String,
-
-    /// The model family name, e.g. "gpt-4.1". This string is used when deriving
-    /// default metadata for the family, such as context windows.
-    pub family: String,
-
-    /// True if the model needs additional instructions on how to use the
-    /// "virtual" `apply_patch` CLI.
-    pub needs_special_apply_patch_instructions: bool,
-
-    /// Maximum supported context window, if known.
-    pub context_window: Option<i64>,
-
-    /// Token threshold for automatic compaction if config does not override it.
-    auto_compact_token_limit: Option<i64>,
-
-    // Whether the `reasoning` field can be set when making a request to this
-    // model family. Note it has `effort` and `summary` subfields (though
-    // `summary` is optional).
-    pub supports_reasoning_summaries: bool,
-
-    // The reasoning effort to use for this model family when none is explicitly chosen.
-    pub default_reasoning_effort: Option<ReasoningEffort>,
-
-    // Define if we need a special handling of reasoning summary
-    pub reasoning_summary_format: ReasoningSummaryFormat,
-
-    /// Whether this model supports parallel tool calls when using the
-    /// Responses API.
-    pub supports_parallel_tool_calls: bool,
-
-    /// Present if the model performs better when `apply_patch` is provided as
-    /// a tool call instead of just a bash command
-    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
-
-    // Instructions to use for querying the model
-    pub base_instructions: String,
-
-    /// Names of beta tools that should be exposed to this model family.
-    pub experimental_supported_tools: Vec<String>,
-
-    /// Percentage of the context window considered usable for inputs, after
-    /// reserving headroom for system prompts, tool overhead, and model output.
-    /// This is applied when computing the effective context window seen by
-    /// consumers.
-    pub effective_context_window_percent: i64,
-
-    /// If the model family supports setting the verbosity level when using Responses API.
-    pub support_verbosity: bool,
-
-    // The default verbosity level for this model family when using Responses API.
-    pub default_verbosity: Option<Verbosity>,
-
-    /// Preferred shell tool type for this model family when features do not override it.
-    pub shell_type: ConfigShellToolType,
-
-    pub truncation_policy: TruncationPolicy,
-}
-
-impl ModelFamily {
-    /// Placeholder model family for UI startup before Codex has selected the real model.
-    ///
-    /// This must not be treated as an actual model slug; it only exists to allow
-    /// consumers (e.g. the TUI) to render while the session is still starting.
-    pub fn placeholder(config: &Config) -> Self {
-        let mf = Self {
-            slug: String::new(),
-            family: "unknown".to_string(),
-            needs_special_apply_patch_instructions: false,
-            context_window: None,
-            auto_compact_token_limit: None,
-            supports_reasoning_summaries: false,
-            default_reasoning_effort: None,
-            reasoning_summary_format: ReasoningSummaryFormat::None,
-            supports_parallel_tool_calls: false,
-            apply_patch_tool_type: None,
-            base_instructions: BASE_INSTRUCTIONS.to_string(),
-            experimental_supported_tools: Vec::new(),
-            effective_context_window_percent: 95,
-            support_verbosity: false,
-            default_verbosity: None,
-            shell_type: ConfigShellToolType::Default,
-            truncation_policy: TruncationPolicy::Bytes(10_000),
-        };
-        mf.with_config_overrides(config)
+pub fn with_config_overrides(mut mf: ModelFamily, config: &Config) -> ModelFamily {
+    if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries {
+        mf.supports_reasoning_summaries = supports_reasoning_summaries;
     }
-
-    pub(super) fn with_config_overrides(mut self, config: &Config) -> Self {
-        if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries {
-            self.supports_reasoning_summaries = supports_reasoning_summaries;
-        }
-        if let Some(reasoning_summary_format) = config.model_reasoning_summary_format.as_ref() {
-            self.reasoning_summary_format = reasoning_summary_format.clone();
-        }
-        if let Some(context_window) = config.model_context_window {
-            self.context_window = Some(context_window);
-        }
-        if let Some(auto_compact_token_limit) = config.model_auto_compact_token_limit {
-            self.auto_compact_token_limit = Some(auto_compact_token_limit);
-        }
-        self
+    if let Some(reasoning_summary_format) = config.model_reasoning_summary_format.as_ref() {
+        mf.reasoning_summary_format = reasoning_summary_format.clone();
     }
-    pub(super) fn with_remote_overrides(mut self, remote_models: Vec<ModelInfo>) -> Self {
-        for model in remote_models {
-            if model.slug == self.slug {
-                self.apply_remote_overrides(model);
-            }
-        }
-        self
+    if let Some(context_window) = config.model_context_window {
+        mf.context_window = Some(context_window);
     }
-
-    fn apply_remote_overrides(&mut self, model: ModelInfo) {
-        let ModelInfo {
-            slug: _,
-            display_name: _,
-            description: _,
-            default_reasoning_level,
-            supported_reasoning_levels: _,
-            shell_type,
-            visibility: _,
-            supported_in_api: _,
-            priority: _,
-            upgrade: _,
-            base_instructions,
-            supports_reasoning_summaries,
-            support_verbosity,
-            default_verbosity,
-            apply_patch_tool_type,
-            truncation_policy,
-            supports_parallel_tool_calls,
-            context_window,
-            reasoning_summary_format,
-            experimental_supported_tools,
-        } = model;
-
-        self.default_reasoning_effort = Some(default_reasoning_level);
-        self.shell_type = shell_type;
-        if let Some(base) = base_instructions {
-            self.base_instructions = base;
-        }
-        self.supports_reasoning_summaries = supports_reasoning_summaries;
-        self.support_verbosity = support_verbosity;
-        self.default_verbosity = default_verbosity;
-        self.apply_patch_tool_type = apply_patch_tool_type;
-        self.truncation_policy = truncation_policy.into();
-        self.supports_parallel_tool_calls = supports_parallel_tool_calls;
-        self.context_window = context_window;
-        self.reasoning_summary_format = reasoning_summary_format;
-        self.experimental_supported_tools = experimental_supported_tools;
+    if let Some(auto_compact_token_limit) = config.model_auto_compact_token_limit {
+        mf.auto_compact_token_limit = Some(auto_compact_token_limit);
     }
-
-    pub fn auto_compact_token_limit(&self) -> Option<i64> {
-        self.auto_compact_token_limit
-            .or(self.context_window.map(Self::default_auto_compact_limit))
-    }
-
-    const fn default_auto_compact_limit(context_window: i64) -> i64 {
-        (context_window * 9) / 10
-    }
-
-    pub fn get_model_slug(&self) -> &str {
-        &self.slug
-    }
+    mf
 }
 
 macro_rules! model_family {
@@ -460,6 +306,7 @@ fn derive_default_model_family(model: &str) -> ModelFamily {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::openai_models::ModelInfo;
     use codex_protocol::openai_models::ModelVisibility;
     use codex_protocol::openai_models::ReasoningEffortPreset;
     use codex_protocol::openai_models::TruncationPolicyConfig;

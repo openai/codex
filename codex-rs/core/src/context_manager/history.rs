@@ -1,6 +1,6 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
-use crate::truncate::TruncationPolicy;
+use codex_protocol::openai_models::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count;
 use crate::truncate::truncate_function_output_items_with_policy;
@@ -225,7 +225,7 @@ impl ContextManager {
     }
 
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
-        let policy_with_serialization_budget = policy.mul(1.2);
+        let policy_with_serialization_budget = policy * 1.2;
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
                 let truncated =

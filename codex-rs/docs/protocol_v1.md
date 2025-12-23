@@ -173,3 +173,17 @@ sequenceDiagram
     task2->>user: Event::TurnCompleted
     task2->>-user: Event::TaskCompleted
 ```
+
+## Key Events
+
+### SessionConfigured
+
+`Event::SessionConfigured` is emitted once after `Op::ConfigureSession`.
+
+Notable fields:
+- `session_id`: the backend-assigned session identifier (historically named `session_id` for
+  backwards compatibility).
+- `model_family`: model metadata for the model family selected for the session. This matches the
+  `/models` payload shape; the selected model slug is `model_family.slug`.
+- `approval_policy`, `sandbox_policy`, `cwd`: the effective execution and sandbox settings for the
+  session.

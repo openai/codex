@@ -32,7 +32,7 @@ use serde_json::json;
 use tokio::sync::oneshot;
 
 async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
-    let session_model = test.session_configured.model.clone();
+    let session_model = test.session_configured.model_family.slug.clone();
 
     test.codex
         .submit(Op::UserTurn {
@@ -345,7 +345,7 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
         .build_with_streaming_server(&streaming_server)
         .await?;
 
-    let session_model = test.session_configured.model.clone();
+    let session_model = test.session_configured.model_family.slug.clone();
     test.codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {

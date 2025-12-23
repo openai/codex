@@ -486,7 +486,7 @@ async fn submit_turn(
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
 ) -> Result<()> {
-    let session_model = test.session_configured.model.clone();
+    let session_model = test.session_configured.model_family.slug.clone();
 
     test.codex
         .submit(Op::UserTurn {

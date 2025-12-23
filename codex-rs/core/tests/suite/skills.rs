@@ -63,7 +63,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
     )
     .await;
 
-    let session_model = test.session_configured.model.clone();
+    let session_model = test.session_configured.model_family.slug.clone();
     test.codex
         .submit(Op::UserTurn {
             items: vec![

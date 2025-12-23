@@ -64,7 +64,7 @@ async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
     let test = harness.test();
     let codex = test.codex.clone();
     let codex_home = test.home.path().to_path_buf();
-    let session_model = test.session_configured.model.clone();
+    let session_model = test.session_configured.model_family.slug.clone();
     let cwd = test.cwd_path().to_path_buf();
 
     codex
@@ -140,7 +140,7 @@ async fn run_shell_command_snapshot(command: &str) -> Result<SnapshotRun> {
     let test = harness.test();
     let codex = test.codex.clone();
     let codex_home = test.home.path().to_path_buf();
-    let session_model = test.session_configured.model.clone();
+    let session_model = test.session_configured.model_family.slug.clone();
     let cwd = test.cwd_path().to_path_buf();
 
     codex
@@ -279,7 +279,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     ];
     mount_sse_sequence(harness.server(), responses).await;
 
-    let model = test.session_configured.model.clone();
+    let model = test.session_configured.model_family.slug.clone();
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {

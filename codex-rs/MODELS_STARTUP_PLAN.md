@@ -29,16 +29,17 @@ Acceptance:
 
 ---
 
-## Step 2 - Core: Provide a placeholder `ModelFamily` for UI startup
+## Step 2 - Protocol: SessionConfigured includes the selected model family metadata
 
-- [x] Add a public placeholder constructor in `core/src/models_manager/model_family.rs`
-      (e.g. `ModelFamily::placeholder(&Config) -> ModelFamily`).
-  - Must not claim a real model slug; it is only used for pre-session rendering.
-  - Uses safe defaults (no reasoning summaries, no parallel tool calls, etc),
-    then applies config overrides.
+- [x] Change `SessionConfiguredEvent` to carry `model_family` metadata (not a plain model string).
+  - Implemented as `codex_protocol::openai_models::ModelFamily` (a type alias of `ModelInfo`,
+    matching the `/models` payload shape).
+  - Consumers derive the model slug from `event.model_family.slug`.
 
 Acceptance:
-- TUI can construct a `ModelFamily` without resolving a real model slug.
+- UIs can render the selected model name (and gate features) without making additional `/models`
+  calls after startup completes.
+  - No placeholder model family exists or is required.
 
 ---
 
@@ -52,7 +53,7 @@ Files:
   - Do not call `ModelsManager::get_model(...).await` during startup.
   - Do not call `ModelsManager::list_models(...).await` during startup.
   - Do not run the existing model migration prompt at startup.
-- [x] Construct `ChatWidget` immediately using the placeholder `ModelFamily`.
+- [x] Construct `ChatWidget` immediately with `model_family: None` (no placeholder).
 
 Acceptance:
 - The TUI event loop begins immediately (frame scheduled before any `/models` IO).
@@ -70,11 +71,9 @@ Files:
 - `tui/src/chatwidget.rs`
 - `tui2/src/chatwidget.rs`
 
-- [x] Stop mutating `config.model` in `ChatWidget::new` based on the
-      (placeholder) `ModelFamily`.
-  - Start session header with a non-model value like `"Starting..."`.
-  - Once `SessionConfigured` arrives, update header from `event.model` (already
-    happens in `on_session_configured`).
+- [x] Keep any model-family-dependent behavior gated until `SessionConfigured`.
+  - No placeholder: `ChatWidget` stores `model_family: Option<ModelFamily>`.
+  - Once `SessionConfigured` arrives, hydrate `model_family` from `event.model_family`.
 - [x] Gate turn submission:
   - While not configured, pressing Enter enqueues into the existing
     `queued_user_messages` queue and updates the queued display.
@@ -89,6 +88,8 @@ Files:
 - [x] Gate `/model`:
   - While not configured, show an info message explaining `/model` is disabled
     until startup completes.
+- [x] Gate other model-family-dependent flows (e.g. popups/status helpers) so they
+      early-return instead of assuming a model family exists.
 
 Acceptance:
 - Users can type immediately.
@@ -120,10 +121,7 @@ Acceptance:
 ## Step 6 - Formatting, lint, and tests
 
 - [x] Run `just fmt` (required after Rust changes).
-- [x] Run `just fix -p codex-core` (core changes).
-  - Note: in this environment, `just fix` needs to run outside the sandbox
-    (`clippy --fix` uses a TCP listener to manage locking).
-- [x] Run `just fix -p codex-tui` / `just fix -p codex-tui2` (if those crates changed).
+- [ ] Ask before running `just fix -p codex-core` / `just fix -p codex-tui` / `just fix -p codex-tui2`.
 - [x] Run targeted tests:
   - `cargo test -p codex-core`
   - `cargo test -p codex-tui`

@@ -297,7 +297,7 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
     let call_id = "apply-move-no-change";
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
-    let model = test.session_configured.model.clone();
+    let model = test.session_configured.model_family.slug.clone();
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
@@ -883,7 +883,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
     ];
     mount_sse_sequence(harness.server(), bodies).await;
 
-    let model = test.session_configured.model.clone();
+    let model = test.session_configured.model_family.slug.clone();
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
@@ -960,7 +960,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
     ];
     mount_sse_sequence(harness.server(), bodies).await;
 
-    let model = test.session_configured.model.clone();
+    let model = test.session_configured.model_family.slug.clone();
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
@@ -1107,7 +1107,7 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
     let patch = format!("*** Begin Patch\n*** Add File: {file}\n+hello\n*** End Patch\n");
     mount_apply_patch(&harness, call_id, patch.as_str(), "ok", model_output).await;
 
-    let model = test.session_configured.model.clone();
+    let model = test.session_configured.model_family.slug.clone();
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
@@ -1167,7 +1167,7 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
     let patch = "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n-old\n+new\n*** End Patch";
     mount_apply_patch(&harness, call_id, patch, "ok", model_output).await;
 
-    let model = test.session_configured.model.clone();
+    let model = test.session_configured.model_family.slug.clone();
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
@@ -1235,7 +1235,7 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
     ]);
     mount_sse_sequence(harness.server(), vec![s1, s2, s3]).await;
 
-    let model = test.session_configured.model.clone();
+    let model = test.session_configured.model_family.slug.clone();
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
@@ -1303,7 +1303,7 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
     ];
     mount_sse_sequence(harness.server(), responses).await;
 
-    let model = test.session_configured.model.clone();
+    let model = test.session_configured.model_family.slug.clone();
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {

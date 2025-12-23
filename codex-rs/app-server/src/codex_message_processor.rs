@@ -1300,7 +1300,7 @@ impl CodexMessageProcessor {
                 } = conversation_id;
                 let response = NewConversationResponse {
                     conversation_id,
-                    model: session_configured.model,
+                    model: session_configured.model_family.slug,
                     reasoning_effort: session_configured.reasoning_effort,
                     rollout_path: session_configured.rollout_path,
                 };
@@ -1374,7 +1374,7 @@ impl CodexMessageProcessor {
                 };
 
                 let SessionConfiguredEvent {
-                    model,
+                    model_family,
                     model_provider_id,
                     cwd,
                     approval_policy,
@@ -1383,7 +1383,7 @@ impl CodexMessageProcessor {
                 } = session_configured;
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
-                    model,
+                    model: model_family.slug,
                     model_provider: model_provider_id,
                     cwd,
                     approval_policy: approval_policy.into(),
@@ -1717,7 +1717,7 @@ impl CodexMessageProcessor {
 
                 let response = ThreadResumeResponse {
                     thread,
-                    model: session_configured.model,
+                    model: session_configured.model_family.slug,
                     model_provider: session_configured.model_provider_id,
                     cwd: session_configured.cwd,
                     approval_policy: session_configured.approval_policy.into(),
@@ -2330,7 +2330,7 @@ impl CodexMessageProcessor {
                     .send_server_notification(ServerNotification::SessionConfigured(
                         SessionConfiguredNotification {
                             session_id: session_configured.session_id,
-                            model: session_configured.model.clone(),
+                            model: session_configured.model_family.slug.clone(),
                             reasoning_effort: session_configured.reasoning_effort,
                             history_log_id: session_configured.history_log_id,
                             history_entry_count: session_configured.history_entry_count,
@@ -2346,7 +2346,7 @@ impl CodexMessageProcessor {
                 // Reply with conversation id + model and initial messages (when present)
                 let response = ResumeConversationResponse {
                     conversation_id,
-                    model: session_configured.model.clone(),
+                    model: session_configured.model_family.slug.clone(),
                     initial_messages,
                     rollout_path: session_configured.rollout_path.clone(),
                 };

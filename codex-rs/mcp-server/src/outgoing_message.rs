@@ -239,12 +239,38 @@ mod tests {
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ConversationId;
+    use codex_protocol::openai_models::ConfigShellToolType;
+    use codex_protocol::openai_models::ModelFamily;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::openai_models::ReasoningSummaryFormat;
+    use codex_protocol::openai_models::TruncationPolicy;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::NamedTempFile;
 
     use super::*;
+
+    fn test_model_family(slug: &str) -> ModelFamily {
+        ModelFamily {
+            slug: slug.to_string(),
+            family: slug.to_string(),
+            needs_special_apply_patch_instructions: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            supports_reasoning_summaries: false,
+            default_reasoning_effort: Some(ReasoningEffort::default()),
+            reasoning_summary_format: ReasoningSummaryFormat::None,
+            supports_parallel_tool_calls: false,
+            apply_patch_tool_type: None,
+            base_instructions: String::new(),
+            experimental_supported_tools: Vec::new(),
+            effective_context_window_percent: 95,
+            support_verbosity: false,
+            default_verbosity: None,
+            shell_type: ConfigShellToolType::Default,
+            truncation_policy: TruncationPolicy::Bytes(10_000),
+        }
+    }
 
     #[tokio::test]
     async fn test_send_event_as_notification() -> Result<()> {
@@ -257,7 +283,7 @@ mod tests {
             id: "1".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
-                model: "gpt-4o".to_string(),
+                model_family: test_model_family("gpt-4o"),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::ReadOnly,
@@ -296,7 +322,7 @@ mod tests {
         let rollout_file = NamedTempFile::new()?;
         let session_configured_event = SessionConfiguredEvent {
             session_id: conversation_id,
-            model: "gpt-4o".to_string(),
+            model_family: test_model_family("gpt-4o"),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::ReadOnly,
@@ -332,7 +358,7 @@ mod tests {
             "msg": {
                 "type": "session_configured",
                 "session_id": session_configured_event.session_id,
-                "model": "gpt-4o",
+                "model_family": serde_json::to_value(&session_configured_event.model_family)?,
                 "model_provider_id": "test-provider",
                 "approval_policy": "never",
                 "sandbox_policy": {

@@ -103,7 +103,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     let compact_body = compact_request.body_json();
     assert_eq!(
         compact_body.get("model").and_then(|v| v.as_str()),
-        Some(harness.test().session_configured.model.as_str())
+        Some(harness.test().session_configured.model_family.slug.as_str())
     );
     let compact_body_text = compact_body.to_string();
     assert!(
