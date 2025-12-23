@@ -65,14 +65,14 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
-mod sandbox_users;
 mod read_acl_mutex;
-use sandbox_users::provision_sandbox_users;
-use sandbox_users::resolve_sid;
-use sandbox_users::resolve_sandbox_users_group_sid;
-use sandbox_users::sid_bytes_to_psid;
+mod sandbox_users;
 use read_acl_mutex::acquire_read_acl_mutex;
 use read_acl_mutex::read_acl_mutex_exists;
+use sandbox_users::provision_sandbox_users;
+use sandbox_users::resolve_sandbox_users_group_sid;
+use sandbox_users::resolve_sid;
+use sandbox_users::sid_bytes_to_psid;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Payload {
