@@ -9,10 +9,10 @@ use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use crate::metrics::validation::validate_tags;
 use opentelemetry::KeyValue;
+use opentelemetry::metrics::Counter;
 use opentelemetry::metrics::Histogram;
 use opentelemetry::metrics::Meter;
 use opentelemetry::metrics::MeterProvider as _;
-use opentelemetry::metrics::UpDownCounter;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_METRICS_TIMEOUT;
 use opentelemetry_otlp::Protocol;
 use opentelemetry_otlp::WithExportConfig;
@@ -37,7 +37,7 @@ const METER_NAME: &str = "codex";
 struct MetricsClientInner {
     meter_provider: SdkMeterProvider,
     meter: Meter,
-    counters: Mutex<HashMap<String, UpDownCounter<i64>>>,
+    counters: Mutex<HashMap<String, Counter<u64>>>,
     histograms: Mutex<HashMap<String, Histogram<f64>>>,
     default_tags: BTreeMap<String, String>,
 }
@@ -45,6 +45,12 @@ struct MetricsClientInner {
 impl MetricsClientInner {
     fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) -> Result<()> {
         validate_metric_name(name)?;
+        if inc < 0 {
+            return Err(MetricsError::NegativeCounterIncrement {
+                name: name.to_string(),
+                inc,
+            });
+        }
         let attributes = self.attributes(tags)?;
 
         let mut counters = self
@@ -53,8 +59,8 @@ impl MetricsClientInner {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let counter = counters
             .entry(name.to_string())
-            .or_insert_with(|| self.meter.i64_up_down_counter(name.to_string()).build());
-        counter.add(inc, &attributes);
+            .or_insert_with(|| self.meter.u64_counter(name.to_string()).build());
+        counter.add(inc as u64, &attributes);
         Ok(())
     }
 

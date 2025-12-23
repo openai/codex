@@ -73,3 +73,15 @@ fn counter_rejects_invalid_metric_name() -> Result<()> {
     metrics.shutdown()?;
     Ok(())
 }
+
+#[test]
+fn counter_rejects_negative_increment() -> Result<()> {
+    let metrics = build_in_memory_client()?;
+    let err = metrics.counter("codex.turns", -1, &[]).unwrap_err();
+    assert!(matches!(
+        err,
+        MetricsError::NegativeCounterIncrement { name, inc } if name == "codex.turns" && inc == -1
+    ));
+    metrics.shutdown()?;
+    Ok(())
+}

@@ -23,7 +23,7 @@ pub(crate) fn resolve_exporter(exporter: &OtelExporter) -> OtelExporter {
                 protocol: OtelHttpProtocol::Json,
                 tls: None,
             }
-        },
+        }
         _ => exporter.clone(),
     }
 }

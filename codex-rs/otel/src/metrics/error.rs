@@ -17,6 +17,9 @@ pub enum MetricsError {
     #[error("metrics exporter is disabled")]
     ExporterDisabled,
 
+    #[error("counter increment must be non-negative for {name}: {inc}")]
+    NegativeCounterIncrement { name: String, inc: i64 },
+
     #[error("failed to build OTLP metrics exporter")]
     ExporterBuild {
         #[source]
