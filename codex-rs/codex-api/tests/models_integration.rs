@@ -10,7 +10,6 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
-use codex_protocol::openai_models::ReasoningSummaryFormat;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use http::HeaderMap;
 use http::Method;
@@ -85,7 +84,6 @@ async fn models_client_hits_models_endpoint() {
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             supports_parallel_tool_calls: false,
             context_window: None,
-            reasoning_summary_format: ReasoningSummaryFormat::None,
             experimental_supported_tools: Vec::new(),
         }],
         etag: String::new(),
