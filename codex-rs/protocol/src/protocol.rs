@@ -494,7 +494,7 @@ impl SandboxPolicy {
 }
 
 /// Event Queue Entry - events from agent
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct Event {
     /// Submission `id` that this event is correlated with.
     pub id: String,
