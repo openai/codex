@@ -339,21 +339,6 @@ jobs:
           cache-targets: true
           cache-on-failure: true
 
-      - name: Install cargo-chef
-        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
-        with:
-          tool: cargo-chef
-          version: 0.1.71
-
-      - name: Pre-warm dependency cache (cargo-chef)
-        shell: bash
-        run: |
-          set -euo pipefail
-          RECIPE="${RUNNER_TEMP}/chef-recipe.json"
-          cargo chef prepare --recipe-path "$RECIPE"
-          PROFILE_ARGS="--profile ci-test"
-          cargo chef cook --recipe-path "$RECIPE" --target ${{ matrix.target }} $PROFILE_ARGS --all-features
-
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: nextest
