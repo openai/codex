@@ -7,17 +7,14 @@ use crossterm::Command;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Color as CColor;
-use crossterm::style::Colors;
 use crossterm::style::Print;
 use crossterm::style::SetAttribute;
 use crossterm::style::SetBackgroundColor;
-use crossterm::style::SetColors;
 use crossterm::style::SetForegroundColor;
 use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
 use ratatui::layout::Size;
 use ratatui::prelude::Backend;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -94,31 +91,19 @@ where
 
     for line in wrapped {
         queue!(writer, Print("\r\n"))?;
-        queue!(
-            writer,
-            SetColors(Colors::new(
-                line.style
-                    .fg
-                    .map(std::convert::Into::into)
-                    .unwrap_or(CColor::Reset),
-                line.style
-                    .bg
-                    .map(std::convert::Into::into)
-                    .unwrap_or(CColor::Reset)
-            ))
-        )?;
+        let fg = line
+            .style
+            .fg
+            .map(std::convert::Into::into)
+            .unwrap_or(CColor::Reset);
+        let bg = line
+            .style
+            .bg
+            .map(std::convert::Into::into)
+            .unwrap_or(CColor::Reset);
+        queue!(writer, SetForegroundColor(fg), SetBackgroundColor(bg))?;
         queue!(writer, Clear(ClearType::UntilNewLine))?;
-        // Merge line-level style into each span so that ANSI colors reflect
-        // line styles (e.g., blockquotes with green fg).
-        let merged_spans: Vec<Span> = line
-            .spans
-            .iter()
-            .map(|s| Span {
-                style: s.style.patch(line.style),
-                content: s.content.clone(),
-            })
-            .collect();
-        write_spans(writer, merged_spans.iter())?;
+        write_spans(writer, line.spans.iter())?;
     }
 
     queue!(writer, ResetScrollRegion)?;
@@ -245,8 +230,8 @@ pub(crate) fn write_spans<'a, I>(mut writer: &mut impl Write, content: I) -> io:
 where
     I: IntoIterator<Item = &'a Span<'a>>,
 {
-    let mut fg = Color::Reset;
-    let mut bg = Color::Reset;
+    let mut fg = CColor::Reset;
+    let mut bg = CColor::Reset;
     let mut last_modifier = Modifier::empty();
     for span in content {
         let mut modifier = Modifier::empty();
@@ -260,12 +245,21 @@ where
             diff.queue(&mut writer)?;
             last_modifier = modifier;
         }
-        let next_fg = span.style.fg.unwrap_or(Color::Reset);
-        let next_bg = span.style.bg.unwrap_or(Color::Reset);
+        let next_fg = span
+            .style
+            .fg
+            .map(std::convert::Into::into)
+            .unwrap_or(CColor::Reset);
+        let next_bg = span
+            .style
+            .bg
+            .map(std::convert::Into::into)
+            .unwrap_or(CColor::Reset);
         if next_fg != fg || next_bg != bg {
             queue!(
                 writer,
-                SetColors(Colors::new(next_fg.into(), next_bg.into()))
+                SetForegroundColor(next_fg),
+                SetBackgroundColor(next_bg)
             )?;
             fg = next_fg;
             bg = next_bg;
@@ -289,6 +283,27 @@ mod tests {
     use crate::test_backend::VT100Backend;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
+    use ratatui::style::Stylize;
+
+    #[test]
+    fn vt100_parses_crossterm_colors_directly() {
+        let width: u16 = 10;
+        let height: u16 = 3;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+
+        queue!(
+            term.backend_mut(),
+            SetForegroundColor(CColor::Green),
+            Print("X"),
+            SetForegroundColor(CColor::Reset),
+        )
+        .expect("queue");
+
+        let cell = term.backend().vt100().screen().cell(0, 0).expect("cell");
+        assert_eq!(cell.contents(), "X");
+        assert_ne!(cell.fgcolor(), vt100::Color::Default);
+    }
 
     #[test]
     fn writes_bold_then_regular_spans() {
@@ -330,8 +345,8 @@ mod tests {
         term.set_viewport_area(viewport);
 
         // Build a blockquote-like line: apply line-level green style and prefix "> "
-        let mut line: Line<'static> = Line::from(vec!["> ".into(), "Hello world".into()]);
-        line = line.style(Color::Green);
+        let line: Line<'static> =
+            Line::from(vec!["> ".into(), "Hello world".into()]).fg(Color::Green);
         insert_history_lines(&mut term, vec![line])
             .expect("Failed to insert history lines in test");
 
@@ -369,7 +384,7 @@ mod tests {
             "> ".into(),
             "This is a long quoted line that should wrap".into(),
         ]);
-        line = line.style(Color::Green);
+        line = line.fg(Color::Green);
 
         insert_history_lines(&mut term, vec![line])
             .expect("Failed to insert history lines in test");
