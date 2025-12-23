@@ -50,6 +50,25 @@ impl ConfigLayerEntry {
             config: serde_json::to_value(&self.config).unwrap_or(JsonValue::Null),
         }
     }
+
+    // Get the `.codex/` folder associated with this config layer, if any.
+    pub fn config_folder(&self) -> Option<AbsolutePathBuf> {
+        match &self.name {
+            ConfigLayerSource::Mdm { .. } => None,
+            ConfigLayerSource::System { .. } => None,
+            ConfigLayerSource::User { file } => file.parent(),
+            ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder.clone()),
+            ConfigLayerSource::SessionFlags => None,
+            ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => None,
+            ConfigLayerSource::LegacyManagedConfigTomlFromMdm => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigLayerStackOrdering {
+    LowestPrecedenceFirst,
+    HighestPrecedenceFirst,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -156,7 +175,16 @@ impl ConfigLayerStack {
     /// Returns the highest-precedence to lowest-precedence layers, so
     /// `ConfigLayerSource::SessionFlags` would be first, if present.
     pub fn layers_high_to_low(&self) -> Vec<&ConfigLayerEntry> {
-        self.layers.iter().rev().collect()
+        self.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst)
+    }
+
+    /// Returns the highest-precedence to lowest-precedence layers, so
+    /// `ConfigLayerSource::SessionFlags` would be first, if present.
+    pub fn get_layers(&self, ordering: ConfigLayerStackOrdering) -> Vec<&ConfigLayerEntry> {
+        match ordering {
+            ConfigLayerStackOrdering::HighestPrecedenceFirst => self.layers.iter().rev().collect(),
+            ConfigLayerStackOrdering::LowestPrecedenceFirst => self.layers.iter().collect(),
+        }
     }
 }
 
