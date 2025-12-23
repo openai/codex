@@ -25,9 +25,18 @@ type ModelState = {
 
 type ChatBlock =
   | { id: string; type: "user"; text: string }
-  | { id: string; type: "assistant"; text: string }
+  | { id: string; type: "assistant"; text: string; streaming?: boolean }
   | { id: string; type: "divider"; text: string }
   | { id: string; type: "note"; text: string }
+  | {
+      id: string;
+      type: "image";
+      title: string;
+      src: string;
+      alt: string;
+      caption: string | null;
+      role: "user" | "assistant" | "tool" | "system";
+    }
   | { id: string; type: "info"; title: string; text: string }
   | { id: string; type: "webSearch"; query: string; status: string }
   | {
@@ -43,6 +52,7 @@ type ChatBlock =
       title: string;
       status: string;
       command: string;
+      hideCommandText?: boolean;
       actionsText?: string | null;
       cwd: string | null;
       exitCode: number | null;
@@ -81,6 +91,8 @@ type ChatViewState = {
   };
   sessions: Session[];
   activeSession: Session | null;
+  unreadSessionIds: string[];
+  runningSessionIds: string[];
   blocks: ChatBlock[];
   latestDiff: string | null;
   sending: boolean;
@@ -139,7 +151,13 @@ function main(): void {
   const statusTextEl = mustGet("statusText");
   const logEl = mustGet("log");
   const approvalsEl = mustGet("approvals");
+  const composerEl = mustGet("composer");
+  const inputRowEl = mustGet("inputRow");
   const inputEl = mustGet<HTMLTextAreaElement>("input");
+  const imageInput = mustGet<HTMLInputElement>("imageInput");
+  const attachBtn = mustGet<HTMLButtonElement>("attach");
+  const attachmentsEl = mustGet("attachments");
+  const returnToBottomBtn = mustGet<HTMLButtonElement>("returnToBottom");
   const sendBtn = mustGet<HTMLButtonElement>("send");
   const diffBtn = mustGet<HTMLButtonElement>("diff");
   const newBtn = mustGet<HTMLButtonElement>("new");
@@ -155,18 +173,21 @@ function main(): void {
   modelBarEl.appendChild(modelSelect);
   modelBarEl.appendChild(reasoningSelect);
 
-  const populateSelect = (
-    el: HTMLSelectElement,
-    options: string[],
-    value: string | null | undefined,
-  ): void => {
-    const v = (value && value.trim()) || "default";
-    const opts = options.includes(v) ? options : [v, ...options];
-    el.innerHTML = "";
-    for (const opt of opts) {
-      const o = document.createElement("option");
-      o.value = opt;
-      o.textContent = opt === "default" ? "default (CLI config)" : opt;
+	  const populateSelect = (
+	    el: HTMLSelectElement,
+	    options: string[],
+	    value: string | null | undefined,
+	  ): void => {
+	    const v = (value && value.trim()) || "default";
+	    const opts = options.includes(v) ? options : [v, ...options];
+	    const sig = v + "\n" + opts.join("\n");
+	    if (el.dataset.sig === sig) return;
+	    el.dataset.sig = sig;
+	    el.innerHTML = "";
+	    for (const opt of opts) {
+	      const o = document.createElement("option");
+	      o.value = opt;
+	      o.textContent = opt === "default" ? "default (CLI config)" : opt;
       if (opt === v) o.selected = true;
       el.appendChild(o);
     }
@@ -184,6 +205,90 @@ function main(): void {
   modelSelect.addEventListener("change", sendModelState);
   reasoningSelect.addEventListener("change", sendModelState);
   const suggestEl = mustGet("suggest");
+  type PendingImage = { id: string; name: string; url: string };
+
+  type PersistedWebviewState = {
+    detailsState?: Record<string, boolean>;
+    composerDrafts?: Record<
+      string,
+      { text: string; selectionStart: number; selectionEnd: number }
+    >;
+  };
+
+  let persistedWebviewState: PersistedWebviewState =
+    (vscode.getState() as PersistedWebviewState | undefined) || {};
+
+  const updatePersistedWebviewState = (
+    patch: Partial<PersistedWebviewState>,
+  ): void => {
+    persistedWebviewState = { ...persistedWebviewState, ...patch };
+    vscode.setState(persistedWebviewState);
+  };
+
+  // Composer state is per session so drafts/attachments don't leak across tabs.
+  type ComposerState = {
+    text: string;
+    selectionStart: number;
+    selectionEnd: number;
+    pendingImages: PendingImage[];
+  };
+
+  const NO_SESSION_KEY = "__no_session__";
+  const composerBySessionKey = new Map<string, ComposerState>();
+  let activeComposerKey = NO_SESSION_KEY;
+  let pendingImages: PendingImage[] = [];
+
+  const composerKeyForSessionId = (sessionId: string | null): string =>
+    sessionId ?? NO_SESSION_KEY;
+
+  const ensureComposerState = (key: string): ComposerState => {
+    const existing = composerBySessionKey.get(key);
+    if (existing) return existing;
+    const next: ComposerState = {
+      text: "",
+      selectionStart: 0,
+      selectionEnd: 0,
+      pendingImages: [],
+    };
+    composerBySessionKey.set(key, next);
+    return next;
+  };
+
+  const saveComposerState = (): void => {
+    const st = ensureComposerState(activeComposerKey);
+    st.text = inputEl.value;
+    st.selectionStart = inputEl.selectionStart ?? inputEl.value.length;
+    st.selectionEnd = inputEl.selectionEnd ?? inputEl.value.length;
+    st.pendingImages = pendingImages;
+
+    const drafts = { ...(persistedWebviewState.composerDrafts ?? {}) };
+    drafts[activeComposerKey] = {
+      text: st.text,
+      selectionStart: st.selectionStart,
+      selectionEnd: st.selectionEnd,
+    };
+    updatePersistedWebviewState({ composerDrafts: drafts });
+  };
+
+  const restoreComposerState = (
+    sessionId: string | null,
+    opts?: { updateSuggestions?: boolean },
+  ): void => {
+    activeComposerKey = composerKeyForSessionId(sessionId);
+    const st = ensureComposerState(activeComposerKey);
+    pendingImages = st.pendingImages;
+    inputEl.value = st.text;
+    autosizeInput();
+    try {
+      const start = Math.max(0, Math.min(st.selectionStart, inputEl.value.length));
+      const end = Math.max(0, Math.min(st.selectionEnd, inputEl.value.length));
+      inputEl.setSelectionRange(start, end);
+    } catch {
+      // ignore
+    }
+    renderAttachments();
+    if (opts?.updateSuggestions ?? true) updateSuggestions();
+  };
 
   // Chat auto-scroll:
   // - While the user is near the bottom, new content keeps the log pinned to the bottom.
@@ -196,6 +301,20 @@ function main(): void {
     );
   };
 
+  const positionReturnToBottomBtn = (): void => {
+    const composerHeight = composerEl.clientHeight;
+    const inputRowTop = (inputRowEl as HTMLElement).offsetTop;
+    const bottomToInputRowTop = Math.max(0, composerHeight - inputRowTop);
+    const gapPx = 6;
+    returnToBottomBtn.style.bottom = `${bottomToInputRowTop + gapPx}px`;
+  };
+
+  const updateReturnToBottomVisibility = (): void => {
+    const show = !isLogNearBottom();
+    returnToBottomBtn.style.display = show ? "inline-flex" : "none";
+    if (show) positionReturnToBottomBtn();
+  };
+
   const MAX_INPUT_HEIGHT_PX = 200;
   const MIN_INPUT_HEIGHT_PX = 30;
   function autosizeInput(): void {
@@ -204,10 +323,43 @@ function main(): void {
     inputEl.style.height = `${Math.max(MIN_INPUT_HEIGHT_PX, nextHeight)}px`;
     inputEl.style.overflowY =
       inputEl.scrollHeight > MAX_INPUT_HEIGHT_PX ? "auto" : "hidden";
+    updateReturnToBottomVisibility();
   }
+
+  // Restore persisted drafts (text + selection only; images are kept in-memory only).
+  const initialDrafts = persistedWebviewState.composerDrafts ?? {};
+  for (const [k, v] of Object.entries(initialDrafts)) {
+    if (!v || typeof v !== "object") continue;
+    const anyV = v as any;
+    const text = typeof anyV.text === "string" ? anyV.text : "";
+    const selectionStart =
+      typeof anyV.selectionStart === "number" ? anyV.selectionStart : 0;
+    const selectionEnd =
+      typeof anyV.selectionEnd === "number" ? anyV.selectionEnd : 0;
+    const st = ensureComposerState(k);
+    st.text = text;
+    st.selectionStart = selectionStart;
+    st.selectionEnd = selectionEnd;
+  }
+
+  // Initialize composer state for "no session selected".
+  restoreComposerState(null, { updateSuggestions: false });
   logEl.addEventListener("scroll", () => {
     stickLogToBottom = isLogNearBottom();
+    updateReturnToBottomVisibility();
   });
+  updateReturnToBottomVisibility();
+
+  returnToBottomBtn.addEventListener("click", () => {
+    logEl.scrollTop = logEl.scrollHeight;
+    stickLogToBottom = true;
+    updateReturnToBottomVisibility();
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") saveComposerState();
+  });
+  window.addEventListener("pagehide", () => saveComposerState());
 
 
   const getSessionDisplayTitle = (
@@ -243,6 +395,8 @@ function main(): void {
   };
 
   let receivedState = false;
+  let pendingState: ChatViewState | null = null;
+  let renderScheduled = false;
   function showWebviewError(err: unknown): void {
     const anyErr = err as { message?: unknown; stack?: unknown } | null;
     const msg = String(anyErr && anyErr.message ? anyErr.message : err);
@@ -266,33 +420,79 @@ function main(): void {
     showWebviewError((e as PromiseRejectionEvent).reason),
   );
 
-  let state: ChatViewState = {
-    sessions: [],
-    activeSession: null,
-    blocks: [],
-    latestDiff: null,
-    sending: false,
-    statusText: null,
-    modelState: null,
-    approvals: [],
-    customPrompts: [],
+  let hoveredAutoFileLink: HTMLElement | null = null;
+
+  const setAutoFileLinkHoverState = (
+    next: HTMLElement | null,
+    modPressed: boolean,
+  ): void => {
+    if (hoveredAutoFileLink === next) {
+      hoveredAutoFileLink?.classList.toggle("modHover", modPressed);
+      return;
+    }
+    if (hoveredAutoFileLink) hoveredAutoFileLink.classList.remove("modHover");
+    hoveredAutoFileLink = next;
+    hoveredAutoFileLink?.classList.toggle("modHover", modPressed);
   };
+
+  window.addEventListener("mousemove", (e) => {
+    const t = e.target as HTMLElement | null;
+    const next = t
+      ? (t.closest(".autoFileLink[data-open-file]") as HTMLElement | null)
+      : null;
+    setAutoFileLinkHoverState(next, Boolean(e.ctrlKey || e.metaKey));
+  });
+  window.addEventListener("keydown", (e) => {
+    if (!hoveredAutoFileLink) return;
+    hoveredAutoFileLink.classList.toggle("modHover", Boolean(e.ctrlKey || e.metaKey));
+  });
+  window.addEventListener("keyup", (e) => {
+    if (!hoveredAutoFileLink) return;
+    hoveredAutoFileLink.classList.toggle("modHover", Boolean(e.ctrlKey || e.metaKey));
+  });
+  window.addEventListener("blur", () => setAutoFileLinkHoverState(null, false));
+
+	  let state: ChatViewState = {
+	    sessions: [],
+	    activeSession: null,
+	    unreadSessionIds: [],
+	    runningSessionIds: [],
+	    blocks: [],
+	    latestDiff: null,
+	    sending: false,
+	    statusText: null,
+	    modelState: null,
+	    approvals: [],
+	    customPrompts: [],
+	  };
+
+  // Global keybinds (not only when the input is focused).
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if ((e as KeyboardEvent).key !== "Escape") return;
+      if (!state.sending) return;
+      e.preventDefault();
+      stopCurrentTurn();
+    },
+    true,
+  );
 
   let domSessionId: string | null = null;
   const blockElByKey = new Map<string, HTMLElement>();
+  let tabsSig: string | null = null;
+  const tabElBySessionId = new Map<string, HTMLDivElement>();
 
   const inputHistory: string[] = [];
   let historyIndex: number | null = null;
   let draftBeforeHistory = "";
   let isComposing = false;
 
-  let detailsState =
-    (((vscode.getState() as { detailsState?: unknown } | undefined) || {})
-      .detailsState as Record<string, boolean> | undefined) || {};
+  let detailsState = persistedWebviewState.detailsState ?? {};
 
   function saveDetailsState(key: string, open: boolean): void {
     detailsState[key] = open;
-    vscode.setState({ detailsState });
+    updatePersistedWebviewState({ detailsState });
   }
 
   const baseSlashSuggestions: SuggestItem[] = [];
@@ -396,6 +596,40 @@ function main(): void {
     const e = document.createElement(tag);
     if (className) e.className = className;
     return e;
+  }
+
+  function sessionBlockIdForKey(key: string): string | null {
+    if (key.startsWith("b:")) return key.slice(2) || null;
+    const prefixes = [
+      "command:",
+      "fileChange:",
+      "reasoning:",
+      "mcp:",
+      "webSearch:",
+      "image:",
+      "plan:",
+      "error:",
+      "sys:",
+    ];
+    for (const p of prefixes) {
+      if (!key.startsWith(p)) continue;
+      const rest = key.slice(p.length);
+      const id = rest.split(":")[0] || "";
+      return id || null;
+    }
+    return null;
+  }
+
+  function pruneStaleSessionBlockEls(blockIds: Set<string>): void {
+    for (const [k, el] of blockElByKey.entries()) {
+      if (k.startsWith("global:")) continue;
+      const id = sessionBlockIdForKey(k);
+      if (!id) continue;
+      if (blockIds.has(id)) continue;
+      if (el.parentElement) el.parentElement.removeChild(el);
+      blockElByKey.delete(k);
+      delete detailsState[k];
+    }
   }
 
   function truncateCommand(cmd: string, max: number): string {
@@ -636,6 +870,84 @@ function main(): void {
     if (el.dataset.src === text) return;
     el.dataset.src = text;
     el.innerHTML = md.render(text);
+    delete (el.dataset as any).fileLinks;
+    linkifyFilePaths(el);
+  }
+
+  function linkifyFilePaths(root: HTMLElement): void {
+    // Avoid double-processing the same subtree.
+    if (root.dataset.fileLinks === "1") return;
+    root.dataset.fileLinks = "1";
+
+    const tokenRe =
+      /(?:\.?\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?/g;
+
+    const normalizeToken = (raw: string): string => {
+      let t = raw.trim();
+      while (t.length > 0 && /[),.;:!?]/.test(t[t.length - 1] || "")) {
+        t = t.slice(0, -1);
+      }
+      return t;
+    };
+
+    for (const code of Array.from(root.querySelectorAll("code"))) {
+      const el = code as HTMLElement;
+      if (el.dataset.openFile) continue;
+      const raw = (el.textContent || "").trim();
+      if (!raw || /\s/.test(raw)) continue;
+      const m = raw.match(tokenRe);
+      if (!m || m.length !== 1 || m[0] !== raw) continue;
+      const normalized = normalizeToken(raw);
+      if (!normalized) continue;
+      el.dataset.openFile = normalized;
+      el.title = "Ctrl/Cmd+Click to open";
+      el.classList.add("autoFileLink");
+    }
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const textNodes: Text[] = [];
+    for (;;) {
+      const n = walker.nextNode();
+      if (!n) break;
+      const parent = (n as Text).parentElement;
+      if (!parent) continue;
+      if (parent.closest("a,[data-open-file]")) continue;
+      textNodes.push(n as Text);
+    }
+
+    for (const node of textNodes) {
+      const rawText = node.nodeValue || "";
+      tokenRe.lastIndex = 0;
+      let m: RegExpExecArray | null = null;
+      let lastIdx = 0;
+      const frag = document.createDocumentFragment();
+
+      while ((m = tokenRe.exec(rawText))) {
+        const start = m.index;
+        const end = start + m[0].length;
+        const before = rawText.slice(lastIdx, start);
+        if (before) frag.appendChild(document.createTextNode(before));
+
+        const normalized = normalizeToken(m[0]);
+        if (normalized) {
+          const sp = document.createElement("span");
+          sp.className = "autoFileLink";
+          sp.dataset.openFile = normalized;
+          sp.title = "Ctrl/Cmd+Click to open";
+          sp.textContent = m[0];
+          frag.appendChild(sp);
+        } else {
+          frag.appendChild(document.createTextNode(m[0]));
+        }
+
+        lastIdx = end;
+      }
+
+      if (lastIdx === 0) continue;
+      const tail = rawText.slice(lastIdx);
+      if (tail) frag.appendChild(document.createTextNode(tail));
+      node.parentNode?.replaceChild(frag, node);
+    }
   }
 
   function ensureMeta(parent: HTMLElement, key: string): HTMLDivElement {
@@ -725,8 +1037,8 @@ function main(): void {
         const label = it.label.toLowerCase();
         const altLabel = label.startsWith("/prompts:")
           ? ("/" + label.slice("/prompts:".length))
-          : label.startsWith("@agents:")
-            ? label.slice("@agents:".length)
+          : label.startsWith("@")
+            ? label.slice(1)
           : label;
         const useAlt = !q.includes("prompts:");
         const hay = useAlt ? altLabel : label;
@@ -797,7 +1109,6 @@ function main(): void {
               detail: "",
               kind: "agent" as const,
             }));
-            // Prefer agents over file paths.
             items = items.concat(agentItems);
           } else {
             if (agentIndexRequestedForSessionId !== state.activeSession.id) {
@@ -833,6 +1144,7 @@ function main(): void {
               detail: "",
               kind: "file" as const,
             }));
+            // Prefer agents (above), then directories, then files.
             items = items.concat(dirItems, fileItems);
           } else {
             scheduleFileSearch(state.activeSession.id, query);
@@ -922,16 +1234,41 @@ function main(): void {
     inputEl.value = next;
     const newCursor = activeReplace.from + it.insert.length;
     inputEl.setSelectionRange(newCursor, newCursor);
+    saveComposerState();
 
-    // Close suggest UI after accepting; subsequent Enter should send.
-    suggestItems = [];
-    activeReplace = null;
-    renderSuggest();
+    // If a directory is selected, keep the suggest UI open to allow drilling down.
+    const keepOpen =
+      it.kind === "dir" ||
+      (it.insert.startsWith("@") && it.insert.endsWith("/"));
+
+    if (!keepOpen) {
+      // Close suggest UI after accepting; subsequent Enter should send.
+      suggestItems = [];
+      activeReplace = null;
+      renderSuggest();
+      return;
+    }
+
+    autosizeInput();
+    updateSuggestions();
+  }
+
+  function scheduleRender(): void {
+    if (renderScheduled) return;
+    renderScheduled = true;
+    requestAnimationFrame(() => {
+      renderScheduled = false;
+      if (!pendingState) return;
+      render(pendingState);
+      pendingState = null;
+      autosizeInput();
+    });
   }
 
   function render(s: ChatViewState): void {
     state = s;
     const shouldAutoScroll = stickLogToBottom && isLogNearBottom();
+    let forceScrollToBottom = false;
     titleEl.textContent = s.activeSession
       ? getSessionDisplayTitle(
           s.activeSession,
@@ -980,6 +1317,7 @@ function main(): void {
     sendBtn.title = s.sending ? "Stop (Esc)" : "Send (Enter)";
     statusBtn.disabled = !s.activeSession || s.sending;
     resumeBtn.disabled = s.sending;
+    attachBtn.disabled = !s.activeSession;
     const variant = s.capabilities?.cliVariant ?? "unknown";
     settingsBtn.disabled = false;
     settingsBtn.title =
@@ -992,32 +1330,78 @@ function main(): void {
     // Sending is still guarded by sendBtn.disabled and sendCurrentInput().
     inputEl.disabled = false;
 
-    tabsEl.innerHTML = "";
-    (s.sessions || []).forEach((sess, idx) => {
-      const div = el(
-        "div",
-        "tab" +
-          (s.activeSession && sess.id === s.activeSession.id ? " active" : ""),
-      );
-      const dt = getSessionDisplayTitle(sess, idx);
-      div.textContent = dt.label;
-      div.title = dt.tooltip;
-      div.addEventListener("click", () =>
-        vscode.postMessage({ type: "selectSession", sessionId: sess.id }),
-      );
-      div.addEventListener("contextmenu", (e) => {
-        e.preventDefault();
-        vscode.postMessage({ type: "sessionMenu", sessionId: sess.id });
-      });
-      tabsEl.appendChild(div);
-    });
+    const sessionsList = s.sessions || [];
+    const unread = new Set<string>(s.unreadSessionIds || []);
+    const running = new Set<string>(s.runningSessionIds || []);
+    const activeId = s.activeSession ? s.activeSession.id : null;
 
-    if (domSessionId !== (s.activeSession ? s.activeSession.id : null)) {
-      domSessionId = s.activeSession ? s.activeSession.id : null;
+    const nextTabsSig = sessionsList
+      .map((sess, idx) => {
+        const isUnread = unread.has(sess.id);
+        const isRunning = running.has(sess.id);
+        const isActive = activeId === sess.id;
+        const dt = getSessionDisplayTitle(sess, idx);
+        return [
+          sess.id,
+          dt.label,
+          dt.tooltip,
+          isActive ? "a" : "",
+          isRunning ? "r" : "",
+          isUnread ? "u" : "",
+        ].join("\t");
+      })
+      .join("\n");
+
+    if (tabsSig !== nextTabsSig) {
+      tabsSig = nextTabsSig;
+      const frag = document.createDocumentFragment();
+      const wanted = new Set<string>();
+      sessionsList.forEach((sess, idx) => {
+        wanted.add(sess.id);
+        const isUnread = unread.has(sess.id);
+        const isRunning = running.has(sess.id);
+        const isActive = activeId === sess.id;
+        const dt = getSessionDisplayTitle(sess, idx);
+
+        const existing = tabElBySessionId.get(sess.id);
+        const div = existing ?? (document.createElement("div") as HTMLDivElement);
+        if (!existing) {
+          tabElBySessionId.set(sess.id, div);
+          div.addEventListener("click", () =>
+            vscode.postMessage({ type: "selectSession", sessionId: sess.id }),
+          );
+          div.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            vscode.postMessage({ type: "sessionMenu", sessionId: sess.id });
+          });
+        }
+        div.className =
+          "tab" +
+          (isActive ? " active" : "") +
+          (isRunning ? " running" : isUnread ? " unread" : "");
+        if (div.textContent !== dt.label) div.textContent = dt.label;
+        if (div.title !== dt.tooltip) div.title = dt.tooltip;
+        frag.appendChild(div);
+      });
+      for (const [id, div] of tabElBySessionId.entries()) {
+        if (wanted.has(id)) continue;
+        if (div.parentElement) div.parentElement.removeChild(div);
+        tabElBySessionId.delete(id);
+      }
+      tabsEl.replaceChildren(frag);
+    }
+
+    const nextSessionId = s.activeSession ? s.activeSession.id : null;
+    if (domSessionId !== nextSessionId) {
+      // Persist the previous session's draft before switching.
+      saveComposerState();
+      domSessionId = nextSessionId;
+      restoreComposerState(domSessionId);
       blockElByKey.clear();
       logEl.replaceChildren();
       // New session / fresh log should start pinned.
       stickLogToBottom = true;
+      forceScrollToBottom = true;
     }
 
     approvalsEl.innerHTML = "";
@@ -1162,6 +1546,57 @@ function main(): void {
         continue;
       }
 
+      if (block.type === "image") {
+        const key = "b:" + block.id;
+        const div = ensureDiv(
+          key,
+          "msg imageBlock imageBlock-" + String(block.role || "system"),
+        );
+        const titleEl =
+          (div.querySelector(
+            'div[data-k="title"]',
+          ) as HTMLDivElement | null) ??
+          (() => {
+            const t = document.createElement("div");
+            t.dataset.k = "title";
+            t.className = "imageTitle";
+            div.appendChild(t);
+            return t;
+          })();
+        if (titleEl.textContent !== block.title) titleEl.textContent = block.title;
+
+        const img =
+          (div.querySelector(
+            'img[data-k="image"]',
+          ) as HTMLImageElement | null) ??
+          (() => {
+            const i = document.createElement("img");
+            i.dataset.k = "image";
+            i.className = "imageContent";
+            i.loading = "lazy";
+            div.appendChild(i);
+            return i;
+          })();
+        if (img.src !== block.src) img.src = block.src;
+        img.alt = block.alt || "image";
+
+        const captionText = (block.caption || "").trim();
+        const captionEl =
+          (div.querySelector(
+            'div[data-k="caption"]',
+          ) as HTMLDivElement | null) ??
+          (() => {
+            const c = document.createElement("div");
+            c.dataset.k = "caption";
+            c.className = "imageCaption";
+            div.appendChild(c);
+            return c;
+          })();
+        captionEl.textContent = captionText;
+        captionEl.style.display = captionText ? "" : "none";
+        continue;
+      }
+
       if (block.type === "webSearch") {
         const q = String(block.query || "");
         const summaryQ = truncateOneLine(q, 120);
@@ -1192,16 +1627,33 @@ function main(): void {
           key,
           "msg " + (block.type === "user" ? "user" : "assistant"),
         );
-        const pre = div.querySelector(`pre[data-k="body"]`);
-        if (pre) pre.remove();
-        const mdEl = ensureMd(div, "body");
-        renderMarkdownInto(mdEl, block.text);
+        if (block.type === "assistant" && block.streaming) {
+          const mdEl = div.querySelector(`div.md[data-k="body"]`);
+          if (mdEl) mdEl.remove();
+          const pre = ensurePre(div, "body");
+          if (pre.textContent !== block.text) pre.textContent = block.text;
+        } else {
+          const pre = div.querySelector(`pre[data-k="body"]`);
+          if (pre) pre.remove();
+          const mdEl = ensureMd(div, "body");
+          renderMarkdownInto(mdEl, block.text);
+        }
         continue;
       }
 
       if (block.type === "reasoning") {
         const summary = (block.summaryParts || []).filter(Boolean).join("");
         const raw = (block.rawParts || []).filter(Boolean).join("");
+        if (!summary && !raw) {
+          const id = "reasoning:" + block.id;
+          for (const [k, el] of blockElByKey.entries()) {
+            if (k !== id && !k.startsWith(id + ":")) continue;
+            if (el.parentElement) el.parentElement.removeChild(el);
+            blockElByKey.delete(k);
+            delete detailsState[k];
+          }
+          continue;
+        }
 
         const id = "reasoning:" + block.id;
         const det = ensureDetails(
@@ -1232,6 +1684,21 @@ function main(): void {
 
       if (block.type === "command") {
         const id = "command:" + block.id;
+        if (
+          block.hideCommandText &&
+          !block.output &&
+          (!block.terminalStdin || block.terminalStdin.length === 0) &&
+          !block.actionsText &&
+          !block.cwd &&
+          block.exitCode === null &&
+          block.durationMs === null
+        ) {
+          const existing = blockElByKey.get(id);
+          if (existing?.parentElement) existing.parentElement.removeChild(existing);
+          blockElByKey.delete(id);
+          delete detailsState[id];
+          continue;
+        }
         const displayCmd = block.command
           ? stripShellWrapper(block.command)
           : "";
@@ -1240,11 +1707,13 @@ function main(): void {
             ? truncateCommand(displayCmd, 120)
             : "";
         const actionsPreview = (block.actionsText || "").trim().split("\n")[0];
-        const summaryText = cmdPreview
-          ? `Command: ${cmdPreview}`
-          : actionsPreview
-            ? `Command: ${actionsPreview}`
-            : block.title || "Command";
+        const summaryText = block.hideCommandText
+          ? (block.title || "Command") + " (hidden)"
+          : cmdPreview
+            ? `Command: ${cmdPreview}`
+            : actionsPreview
+              ? `Command: ${actionsPreview}`
+              : block.title || "Command";
         const det = ensureDetails(id, "tool command", false, summaryText, id);
         setStatusIcon(det, block.status);
 
@@ -1254,7 +1723,7 @@ function main(): void {
               ':scope > span[data-k="summaryText"]',
             ) as HTMLSpanElement | null)
           : null;
-        if (sumTxt && block.command) {
+        if (sumTxt && block.command && !block.hideCommandText) {
           const raw = String(block.command || "");
           const stripped = String(displayCmd || "");
           sumTxt.title = raw !== stripped ? raw : "";
@@ -1268,8 +1737,9 @@ function main(): void {
           block.cwd ? "cwd=" + block.cwd : null,
         ].filter(Boolean);
         const pre = ensurePre(det, "body");
-        const next =
-          (displayCmd ? "$ " + displayCmd + "\n" : "") + (block.output || "");
+        const next = block.hideCommandText
+          ? block.output || "[command hidden]"
+          : (displayCmd ? "$ " + displayCmd + "\n" : "") + (block.output || "");
         if (pre.textContent !== next) pre.textContent = next;
         if (block.terminalStdin && block.terminalStdin.length > 0) {
           const stdinId = id + ":stdin";
@@ -1455,10 +1925,14 @@ function main(): void {
       void _exhaustive;
     }
 
+    pruneStaleSessionBlockEls(new Set((s.blocks || []).map((b) => b.id)));
     updateSuggestions();
+    updateReturnToBottomVisibility();
 
-    if (shouldAutoScroll) {
+    if (forceScrollToBottom || shouldAutoScroll) {
       logEl.scrollTop = logEl.scrollHeight;
+      stickLogToBottom = true;
+      updateReturnToBottomVisibility();
     }
   }
 
@@ -1467,8 +1941,18 @@ function sendCurrentInput(): void {
     if (state.sending) return;
     const text = inputEl.value;
     const trimmed = text.trim();
-    if (!trimmed) return;
-    vscode.postMessage({ type: "send", text });
+    if (!trimmed && pendingImages.length === 0) return;
+    if (pendingImages.length > 0) {
+      vscode.postMessage({
+        type: "sendWithImages",
+        text,
+        images: pendingImages.map((img) => ({ name: img.name, url: img.url })),
+      });
+      pendingImages.splice(0, pendingImages.length);
+      renderAttachments();
+    } else {
+      vscode.postMessage({ type: "send", text });
+    }
 
     // Keep a simple history for navigating with Up/Down.
     const last = inputHistory.at(-1);
@@ -1480,6 +1964,79 @@ function sendCurrentInput(): void {
     inputEl.setSelectionRange(0, 0);
     autosizeInput();
     updateSuggestions();
+    saveComposerState();
+  }
+
+  function renderAttachments(): void {
+    attachmentsEl.innerHTML = "";
+    if (pendingImages.length === 0) {
+      attachmentsEl.style.display = "none";
+      saveComposerState();
+      return;
+    }
+    attachmentsEl.style.display = "flex";
+    for (const img of pendingImages) {
+      const chip = document.createElement("div");
+      chip.className = "attachmentChip";
+      const thumb = document.createElement("img");
+      thumb.className = "attachmentThumb";
+      thumb.src = img.url;
+      thumb.alt = img.name || "image";
+      thumb.loading = "lazy";
+      const name = document.createElement("span");
+      name.className = "attachmentName";
+      name.textContent = img.name;
+      const remove = document.createElement("span");
+      remove.className = "attachmentRemove";
+      remove.textContent = "×";
+      remove.title = "Remove";
+      remove.addEventListener("click", () => {
+        const idx = pendingImages.findIndex((p) => p.id === img.id);
+        if (idx >= 0) pendingImages.splice(idx, 1);
+        renderAttachments();
+      });
+      chip.appendChild(thumb);
+      chip.appendChild(name);
+      chip.appendChild(remove);
+      attachmentsEl.appendChild(chip);
+    }
+    saveComposerState();
+  }
+
+  function readFileAsDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error("File read failed"));
+      reader.onload = () => {
+        if (typeof reader.result === "string") resolve(reader.result);
+        else reject(new Error("Unexpected file read result"));
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function fileExtFromMime(mime: string): string {
+    const m = String(mime || "").toLowerCase();
+    if (m === "image/png") return "png";
+    if (m === "image/jpeg") return "jpg";
+    if (m === "image/gif") return "gif";
+    if (m === "image/webp") return "webp";
+    if (m === "image/bmp") return "bmp";
+    if (m === "image/svg+xml") return "svg";
+    if (m === "image/tiff") return "tiff";
+    return "png";
+  }
+
+  async function attachImageFile(file: File, fallbackBaseName: string): Promise<void> {
+    const url = await readFileAsDataUrl(file);
+    const ext = fileExtFromMime(file.type);
+    const rawName = String((file as any).name || "").trim();
+    const name = rawName ? rawName : `${fallbackBaseName}.${ext}`;
+    pendingImages.push({
+      id: `${Date.now()}:${Math.random().toString(16).slice(2)}`,
+      name,
+      url,
+    });
   }
 
   function stopCurrentTurn(): void {
@@ -1491,8 +2048,47 @@ function sendCurrentInput(): void {
   sendBtn.addEventListener("click", () =>
     state.sending ? stopCurrentTurn() : sendCurrentInput(),
   );
+
+  // Only stop from Esc when the input itself is focused.
+  // (Do not bind a global Esc handler; that would conflict with VS Code keybindings.)
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      const ke = e as KeyboardEvent;
+      if (ke.key !== "Escape") return;
+      if (!state.sending) return;
+      if (document.activeElement !== inputEl) return;
+      e.preventDefault();
+      e.stopPropagation();
+      stopCurrentTurn();
+    },
+    true,
+  );
+
+  attachBtn.addEventListener("click", () => imageInput.click());
+  imageInput.addEventListener("change", async () => {
+    const files = Array.from(imageInput.files ?? []);
+    imageInput.value = "";
+    if (files.length === 0) return;
+    for (const file of files) {
+      try {
+        const url = await readFileAsDataUrl(file);
+        pendingImages.push({
+          id: `${Date.now()}:${Math.random().toString(16).slice(2)}`,
+          name: file.name || "image",
+          url,
+        });
+      } catch (err) {
+        vscode.postMessage({
+          type: "uiError",
+          message: `Failed to read image ${file.name || ""}: ${String(err)}`,
+        });
+      }
+    }
+    renderAttachments();
+  });
   newBtn.addEventListener("click", () =>
-    vscode.postMessage({ type: "newSession" }),
+    vscode.postMessage({ type: "newSessionPickFolder" }),
   );
   resumeBtn.addEventListener("click", () =>
     vscode.postMessage({ type: "resumeFromHistory" }),
@@ -1509,7 +2105,37 @@ function sendCurrentInput(): void {
 
   inputEl.addEventListener("input", () => updateSuggestions());
   inputEl.addEventListener("input", () => autosizeInput());
-  inputEl.addEventListener("click", () => updateSuggestions());
+  inputEl.addEventListener("input", () => saveComposerState());
+  inputEl.addEventListener("paste", async (e) => {
+    try {
+      const dt = e.clipboardData;
+      if (!dt) return;
+      const items = Array.from(dt.items || []);
+      const imageItems = items.filter(
+        (it) => it.kind === "file" && String(it.type || "").startsWith("image/"),
+      );
+      if (imageItems.length === 0) return;
+      if (!state.activeSession) return;
+
+      for (let i = 0; i < imageItems.length; i++) {
+        const it = imageItems[i]!;
+        const file = it.getAsFile();
+        if (!file) continue;
+        const base = `pasted-image-${Date.now()}-${i + 1}`;
+        await attachImageFile(file, base);
+      }
+      renderAttachments();
+    } catch (err) {
+      vscode.postMessage({
+        type: "uiError",
+        message: `Failed to paste image: ${String(err)}`,
+      });
+    }
+  });
+  inputEl.addEventListener("click", () => {
+    updateSuggestions();
+    saveComposerState();
+  });
   inputEl.addEventListener("keyup", (e) => {
     const key = (e as KeyboardEvent).key;
     if ((key === "ArrowDown" || key === "ArrowUp") && suggestItems.length > 0) return;
@@ -1631,8 +2257,9 @@ function sendCurrentInput(): void {
     };
     if (anyMsg.type === "state") {
       receivedState = true;
-      render(anyMsg.state as ChatViewState);
-      autosizeInput();
+      state = anyMsg.state as ChatViewState;
+      pendingState = state;
+      scheduleRender();
       return;
     }
     if (anyMsg.type === "fileSearchResult") {
@@ -1749,7 +2376,53 @@ function sendCurrentInput(): void {
   }
 
   function rankDirPrefixes(paths: string[], query: string): string[] {
-    const q = query.toLowerCase();
+    const qRaw = query.replace(/\\/g, "/");
+    const q = qRaw.toLowerCase();
+
+    // When the query includes a '/', treat it as a path prefix and suggest the
+    // next directory segment under that base. This enables drill-down after
+    // selecting a directory (e.g. "@src/" -> "@src/foo/").
+    if (qRaw.includes("/")) {
+      const lastSlash = qRaw.lastIndexOf("/");
+      const base = qRaw.endsWith("/") ? qRaw : qRaw.slice(0, lastSlash + 1);
+      const leaf = qRaw.endsWith("/") ? "" : qRaw.slice(lastSlash + 1);
+      const leafLower = leaf.toLowerCase();
+
+      const dirs = new Set<string>();
+      for (const p of paths) {
+        if (!p.startsWith(base)) continue;
+        const rest = p.slice(base.length);
+        const seg = rest.split("/", 1)[0] || "";
+        if (!seg) continue;
+        if (leafLower && !seg.toLowerCase().startsWith(leafLower)) continue;
+        // Only suggest directories when there is deeper content.
+        if (!rest.includes("/")) continue;
+        dirs.add(base + seg + "/");
+      }
+      return [...dirs]
+        .map((p) => {
+          const pl = p.toLowerCase();
+          const depth = (p.match(/\//g) || []).length;
+          const score =
+            leafLower && pl.startsWith(q)
+              ? 0
+              : leafLower && pl.includes("/" + leafLower)
+                ? 1
+                : 2;
+          return { p, score, depth, len: p.length };
+        })
+        .sort(
+          (a, b) =>
+            a.score - b.score ||
+            a.depth - b.depth ||
+            a.len - b.len ||
+            a.p.localeCompare(b.p),
+        )
+        .slice(0, 30)
+        .map((x) => x.p);
+    }
+
+    // No slash: suggest directories derived from matches (parent dir of each file).
     const dirs = new Set<string>();
     for (const p of paths) {
       const idx = p.lastIndexOf("/");
@@ -1757,11 +2430,12 @@ function sendCurrentInput(): void {
       const dir = p.slice(0, idx + 1);
       if (dir) dirs.add(dir);
     }
+
     return [...dirs]
       .map((p) => {
         const pl = p.toLowerCase();
         const depth = (p.match(/\//g) || []).length;
-        const score = pl.startsWith(q) ? 0 : pl.includes("/" + q) ? 1 : 2;
+        const score = q ? (pl.startsWith(q) ? 0 : pl.includes("/" + q) ? 1 : 2) : 0;
         return { p, score, depth, len: p.length };
       })
       .sort(
@@ -1771,7 +2445,7 @@ function sendCurrentInput(): void {
           a.len - b.len ||
           a.p.localeCompare(b.p),
       )
-      .slice(0, 20)
+      .slice(0, 30)
       .map((x) => x.p);
   }
 

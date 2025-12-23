@@ -1,6 +1,6 @@
 {
   "name": "codex-ui-vscode-extension",
-  "version": "0.1.6",
+  "version": "0.1.8",
   "displayName": "Codex UI",
   "publisher": "harukary7518",
   "description": "Use Codex CLI (app-server) inside VS Code: sessions, chat, tools, diffs.",
@@ -21,6 +21,8 @@
     "onCommand:codexMine.newSession",
     "onCommand:codexMine.sendMessage",
     "onCommand:codexMine.openSession",
+    "onCommand:codexMine.openSessionPanel",
+    "onCommand:codexMine.clearRuntimeCache",
     "onCommand:codexMine.openLatestDiff",
     "onCommand:codexMine.selectSession",
     "onCommand:codexMine.renameSession",
@@ -54,6 +56,14 @@
       {
         "command": "codexMine.openSession",
         "title": "Codex UI: Open Session"
+      },
+      {
+        "command": "codexMine.openSessionPanel",
+        "title": "Codex UI: Open Session (Editor Tab)"
+      },
+      {
+        "command": "codexMine.clearRuntimeCache",
+        "title": "Codex UI: Clear Runtime Cache (Workspace)"
       },
       {
         "command": "codexMine.openLatestDiff",

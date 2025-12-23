@@ -28,6 +28,8 @@ import type { GetAccountResponse } from "../generated/v2/GetAccountResponse";
 import type { ApprovalDecision } from "../generated/v2/ApprovalDecision";
 import type { CommandExecutionRequestApprovalResponse } from "../generated/v2/CommandExecutionRequestApprovalResponse";
 import type { FileChangeRequestApprovalResponse } from "../generated/v2/FileChangeRequestApprovalResponse";
+import type { FuzzyFileSearchParams } from "../generated/FuzzyFileSearchParams";
+import type { FuzzyFileSearchResponse } from "../generated/FuzzyFileSearchResponse";
 import type { ApplyPatchApprovalResponse } from "../generated/ApplyPatchApprovalResponse";
 import type { ExecCommandApprovalResponse } from "../generated/ExecCommandApprovalResponse";
 import type { ReviewDecision } from "../generated/ReviewDecision";
@@ -207,6 +209,15 @@ export class BackendProcess implements vscode.Disposable {
     return this.rpc.request<GetAccountRateLimitsResponse>({
       method: "account/rateLimits/read",
       params: undefined,
+    });
+  }
+
+  public async fuzzyFileSearch(
+    params: FuzzyFileSearchParams,
+  ): Promise<FuzzyFileSearchResponse> {
+    return this.rpc.request<FuzzyFileSearchResponse>({
+      method: "fuzzyFileSearch",
+      params,
     });
   }
 

@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
@@ -6,9 +7,18 @@ import { listAgentsFromDisk } from "../agents_disk";
 
 export type ChatBlock =
   | { id: string; type: "user"; text: string }
-  | { id: string; type: "assistant"; text: string }
+  | { id: string; type: "assistant"; text: string; streaming?: boolean }
   | { id: string; type: "divider"; text: string }
   | { id: string; type: "note"; text: string }
+  | {
+      id: string;
+      type: "image";
+      title: string;
+      src: string;
+      alt: string;
+      caption: string | null;
+      role: "user" | "assistant" | "tool" | "system";
+    }
   | { id: string; type: "info"; title: string; text: string }
   | { id: string; type: "webSearch"; query: string; status: string }
   | {
@@ -24,6 +34,7 @@ export type ChatBlock =
       title: string;
       status: string;
       command: string;
+      hideCommandText?: boolean;
       actionsText?: string | null;
       cwd: string | null;
       exitCode: number | null;
@@ -68,6 +79,8 @@ export type ChatViewState = {
   globalBlocks?: ChatBlock[];
   sessions: Session[];
   activeSession: Session | null;
+  unreadSessionIds: string[];
+  runningSessionIds: string[];
   blocks: ChatBlock[];
   latestDiff: string | null;
   sending: boolean;
@@ -124,6 +137,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "codexMine.chatView";
 
   private view: vscode.WebviewView | null = null;
+  private readonly fileSearchCancellationTokenBySessionId = new Map<string, string>();
 
   public insertIntoInput(text: string): void {
     this.view?.webview.postMessage({ type: "insertText", text });
@@ -132,8 +146,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly getState: () => ChatViewState,
-    private readonly onSend: (text: string) => Promise<void>,
+    private readonly onSend: (
+      text: string,
+      images?: Array<{ name: string; url: string }>,
+    ) => Promise<void>,
+    private readonly onFileSearch: (
+      sessionId: string,
+      query: string,
+      cancellationToken: string,
+    ) => Promise<string[]>,
     private readonly onOpenLatestDiff: () => Promise<void>,
+    private readonly onUiError: (message: string) => void,
   ) {}
 
   public reveal(): void {
@@ -173,7 +196,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (type === "send") {
       const text = anyMsg["text"];
       if (typeof text !== "string") return;
-      await this.onSend(text);
+      await this.onSend(text, []);
+      return;
+    }
+
+    if (type === "sendWithImages") {
+      const text = anyMsg["text"];
+      const images = anyMsg["images"];
+      if (typeof text !== "string") return;
+      if (!Array.isArray(images)) return;
+      const normalized = images
+        .filter(
+          (img) =>
+            typeof img === "object" &&
+            img !== null &&
+            typeof (img as any).url === "string",
+        )
+        .map((img) => ({
+          name: typeof (img as any).name === "string" ? (img as any).name : "",
+          url: (img as any).url as string,
+        }));
+      await this.onSend(text, normalized);
+      return;
+    }
+
+    if (type === "uiError") {
+      const message = anyMsg["message"];
+      if (typeof message !== "string") return;
+      this.onUiError(message);
       return;
     }
 
@@ -210,7 +260,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     if (type === "newSession") {
-      await vscode.commands.executeCommand("codexMine.newSession");
+      const st = this.getState();
+      const active = st.activeSession;
+      if (active) {
+        await vscode.commands.executeCommand("codexMine.newSession", {
+          workspaceFolderUri: active.workspaceFolderUri,
+        });
+      } else {
+        await vscode.commands.executeCommand("codexMine.newSession");
+      }
+      return;
+    }
+
+    if (type === "newSessionPickFolder") {
+      await vscode.commands.executeCommand("codexMine.newSession", {
+        forcePickFolder: true,
+      });
       return;
     }
 
@@ -316,6 +381,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       try {
+        let stat: vscode.FileStat | null = null;
+        try {
+          stat = await vscode.workspace.fs.stat(uri);
+        } catch {
+          stat = null;
+        }
+        if (!stat || stat.type !== vscode.FileType.File) {
+          void vscode.window.showInformationMessage("No matching result");
+          return;
+        }
         const doc = await vscode.workspace.openTextDocument(uri);
         const editor = await vscode.window.showTextDocument(doc, {
           preview: true,
@@ -329,9 +404,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           editor.revealRange(new vscode.Range(pos, pos));
         }
       } catch (err) {
-        void vscode.window.showErrorMessage(
-          `Failed to open file: ${uri.fsPath} (${String(err)})`,
-        );
+        void vscode.window.showInformationMessage("No matching result");
       }
       return;
     }
@@ -383,27 +456,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      const include = buildFileSearchIncludeGlob(norm);
-      const pattern = new vscode.RelativePattern(folder, include);
-      const uris = await vscode.workspace.findFiles(
-        pattern,
-        "**/{.git,node_modules}/**",
-        500,
-      );
-      const folderFsPath = folder.uri.fsPath;
-      const paths = uris
-        .map((u) =>
-          path.relative(folderFsPath, u.fsPath).split(path.sep).join("/"),
-        )
-        .filter(
-          (p) => typeof p === "string" && p.length > 0 && !p.startsWith("../"),
-        );
-      this.view?.webview.postMessage({
-        type: "fileSearchResult",
-        sessionId,
-        query,
-        paths,
-      });
+      const cancellationToken =
+        this.fileSearchCancellationTokenBySessionId.get(sessionId) ??
+        crypto.randomUUID();
+      this.fileSearchCancellationTokenBySessionId.set(sessionId, cancellationToken);
+
+      let paths: string[] = [];
+      try {
+        paths = await this.onFileSearch(sessionId, norm, cancellationToken);
+      } catch (err) {
+        console.error("[codex-mine] file search failed:", err);
+        paths = [];
+      }
+
+      this.view?.webview.postMessage({ type: "fileSearchResult", sessionId, query, paths });
       return;
     }
 
@@ -452,14 +518,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
   private postState(): void {
     if (!this.view) return;
-    this.view.webview.postMessage({ type: "state", state: this.getState() });
+    void this.view.webview
+      .postMessage({ type: "state", state: this.getState() })
+      .then(undefined, (err) => {
+        this.onUiError(`Failed to post state to webview: ${String(err)}`);
+      });
   }
 
   private renderHtml(webview: vscode.Webview): string {
-    const nonce = String(Date.now());
+    // CSP nonce must match the CSP nonce grammar (base64 charset).
+    // NOTE: UUID contains '-' which is not valid for CSP nonces and will block scripts.
+    const nonce = crypto.randomBytes(16).toString("base64");
     const csp = [
       "default-src 'none'",
-      "img-src " + webview.cspSource,
+      "img-src " + webview.cspSource + " data:",
       "style-src 'unsafe-inline'",
       `script-src ${webview.cspSource} 'nonce-${nonce}'`,
     ].join("; ");
@@ -496,9 +568,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         --cm-editor-font-size: var(--vscode-editor-font-size, var(--cm-font-size));
         --cm-editor-font-weight: var(--vscode-editor-font-weight, var(--cm-font-weight));
         --cm-line-height: 1.55;
+        --cm-chat-image-max-height: 360px;
       }
 
-      body { font-family: var(--cm-font-family); font-size: var(--cm-font-size); font-weight: var(--cm-font-weight); line-height: var(--cm-line-height); -webkit-font-smoothing: antialiased; margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; }
+      body { font-family: var(--cm-font-family); font-size: var(--cm-font-size); font-weight: var(--cm-font-weight); line-height: var(--cm-line-height); -webkit-font-smoothing: antialiased; margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; overflow-x: hidden; }
       .top { padding: 10px 12px; border-bottom: 1px solid rgba(127,127,127,0.3); display: flex; flex-direction: column; gap: 8px; }
       .topRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
       .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -519,7 +592,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .tabs { display: flex; gap: 6px; overflow: auto; padding-bottom: 2px; }
       .tab { padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(127,127,127,0.35); cursor: pointer; white-space: nowrap; user-select: none; }
       .tab.active { border-color: rgba(0, 120, 212, 0.9); }
-      .log { flex: 1; overflow: auto; padding: 12px; }
+      .tab.unread { background: rgba(255, 185, 0, 0.14); }
+      .tab.running { background: rgba(0, 120, 212, 0.12); }
+      .log { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px; }
       .approvals { padding: 12px; border-bottom: 1px solid rgba(127,127,127,0.25); display: flex; flex-direction: column; gap: 10px; }
       .approval { border: 1px solid rgba(127,127,127,0.25); border-radius: 10px; padding: 10px 12px; background: rgba(255, 120, 0, 0.10); }
       .approvalTitle { font-weight: 600; margin-bottom: 6px; }
@@ -536,6 +611,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .tool.webSearch { background: rgba(0, 180, 255, 0.10); border-color: rgba(0, 180, 255, 0.22); }
       .reasoning { background: rgba(0, 169, 110, 0.12); }
       .divider { background: rgba(255, 185, 0, 0.06); border-style: dashed; }
+      .imageBlock { display: flex; flex-direction: column; gap: 8px; }
+      .imageBlock-user { background: rgba(255,255,255,0.035); border-color: rgba(0, 120, 212, 0.35); }
+      .imageBlock-assistant { background: rgba(0,0,0,0.06); }
+      .imageBlock-tool { background: rgba(0, 200, 170, 0.08); }
+      .imageBlock-system { background: rgba(255, 185, 0, 0.12); }
+      .imageTitle { font-weight: 600; font-size: 12px; opacity: 0.8; }
+      .imageCaption { font-size: 12px; opacity: 0.7; word-break: break-word; }
+      .imageContent { width: 100%; max-width: 100%; height: auto; max-height: var(--cm-chat-image-max-height); object-fit: contain; border-radius: 8px; border: 1px solid rgba(127,127,127,0.25); background: rgba(0,0,0,0.02); }
       details { border-radius: 10px; border: 1px solid rgba(127,127,127,0.25); padding: 4px 12px; margin: 5px 0; }
       details.notice { background: rgba(127,127,127,0.04); }
       details.notice.info { background: rgba(255,255,255,0.06); }
@@ -585,9 +668,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .md pre { background: rgba(127,127,127,0.10); padding: 10px 12px; border-radius: 8px; overflow-x: auto; }
       .md a { color: var(--vscode-textLink-foreground, rgba(0,120,212,0.9)); text-decoration: underline; }
       .md a:hover { color: var(--vscode-textLink-activeForeground, rgba(0,120,212,1)); }
-      .composer { border-top: 1px solid rgba(127,127,127,0.3); padding: 10px 12px; display: flex; gap: 8px; position: relative; }
+      .composer { border-top: 1px solid rgba(127,127,127,0.3); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; position: relative; }
+      .returnToBottomBtn { position: absolute; left: 50%; transform: translateX(-50%); border: 1px solid rgba(127,127,127,0.35); border-radius: 999px; padding: 4px 10px; background: rgba(127,127,127,0.08); color: inherit; opacity: 0.45; cursor: pointer; font-size: 12px; display: none; align-items: center; justify-content: center; z-index: 30; }
+      .returnToBottomBtn:hover { opacity: 0.9; background: rgba(127,127,127,0.14); }
+      .inputRow { display: flex; gap: 8px; align-items: flex-end; }
       textarea { flex: 1; resize: none; box-sizing: border-box; border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); padding: 6px 10px; background: transparent; color: inherit; font-family: var(--cm-editor-font-family); font-size: var(--cm-editor-font-size); font-weight: var(--cm-editor-font-weight); line-height: 1.2; overflow-y: hidden; min-height: 30px; max-height: 200px; }
       .suggest { position: absolute; left: 12px; right: 12px; bottom: calc(100% + 8px); border: 1px solid var(--vscode-editorSuggestWidget-border, rgba(127,127,127,0.35)); border-radius: 10px; background: var(--vscode-editorSuggestWidget-background, rgba(30,30,30,0.95)); color: var(--vscode-editorSuggestWidget-foreground, inherit); max-height: 160px; overflow: auto; display: none; z-index: 20; box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
+      button.iconBtn.attachBtn::before { content: "📎"; font-size: 14px; }
+      .attachments { display: none; flex-wrap: wrap; gap: 8px; }
+      .attachmentChip { border: 1px solid rgba(127,127,127,0.35); border-radius: 10px; padding: 6px 8px; font-size: 12px; display: inline-flex; gap: 8px; align-items: center; max-width: 320px; }
+      .attachmentThumb { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; border: 1px solid rgba(127,127,127,0.25); background: rgba(0,0,0,0.02); flex: 0 0 auto; }
+      .attachmentName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.9; }
+      .attachmentRemove { cursor: pointer; opacity: 0.7; }
       .suggestItem { padding: 8px 10px; cursor: pointer; display: flex; justify-content: space-between; gap: 10px; }
       .suggestItem:hover { background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.06)); }
       .suggestItem.active { background: var(--vscode-list-activeSelectionBackground, rgba(0,120,212,0.25)); }
@@ -596,6 +688,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .fileRow { margin: 2px 0; }
       .fileLink { color: var(--vscode-textLink-foreground, rgba(0,120,212,0.9)); text-decoration: underline; cursor: pointer; font-family: var(--cm-editor-font-family); font-size: var(--cm-editor-font-size); }
       .fileLink:hover { color: var(--vscode-textLink-activeForeground, rgba(0,120,212,1)); }
+      .autoFileLink { color: inherit; text-decoration: none; cursor: text; }
+      .autoFileLink.modHover { color: var(--vscode-textLink-foreground, rgba(0,120,212,0.9)); text-decoration: underline; cursor: pointer; }
+      .autoFileLink.modHover:hover { color: var(--vscode-textLink-activeForeground, rgba(0,120,212,1)); }
       .fileDiff { margin-top: 8px; }
     </style>
   </head>
@@ -615,19 +710,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     </div>
     <div id="approvals" class="approvals" style="display:none"></div>
     <div id="log" class="log"></div>
-    <div class="composer">
-      <textarea id="input" rows="1" placeholder="Type a message (Enter to send / Shift+Enter for newline)"></textarea>
-      <button id="send" class="iconBtn" data-mode="send" aria-label="Send" title="Send (Esc: stop)"></button>
+    <div id="composer" class="composer">
+      <div id="attachments" class="attachments"></div>
+      <button id="returnToBottom" class="returnToBottomBtn" title="Scroll to bottom">Return to Bottom</button>
+      <div id="inputRow" class="inputRow">
+        <input id="imageInput" type="file" accept="image/*" multiple style="display:none" />
+        <button id="attach" class="iconBtn attachBtn" aria-label="Attach image" title="Attach image"></button>
+        <textarea id="input" rows="1" placeholder="Type a message (Enter to send / Shift+Enter for newline)"></textarea>
+        <button id="send" class="iconBtn" data-mode="send" aria-label="Send" title="Send (Esc: stop)"></button>
+      </div>
       <div id="suggest" class="suggest"></div>
     </div>
 	    <div class="footerBar">
 	      <div id="modelBar" class="modelBar"></div>
 	      <div id="statusText" class="footerStatus" style="display:none"></div>
 	    </div>
-	    <script src="${markdownItUri}"></script>
-	    <script nonce="${nonce}" src="${clientScriptUri}"></script>
-	  </body>
-	</html>`;
+		    <script nonce="${nonce}" src="${markdownItUri}"></script>
+		    <script nonce="${nonce}" src="${clientScriptUri}"></script>
+		  </body>
+		</html>`;
   }
 }
 
@@ -645,11 +746,25 @@ function buildFileSearchIncludeGlob(query: string): string {
   // literal substring hint by escaping special characters.
   const q = escapeGlobLiteral(query);
 
-  // If the user typed "docs/" we should match files under any ".../docs/..." subtree.
+  // If the user typed a trailing '/', treat it as a workspace-relative directory
+  // prefix so the user can drill down after selecting a directory (e.g. "src/").
   if (query.endsWith("/")) {
-    const trimmed = q.replace(/\/+$/, "");
+    const rawTrimmed = query.replace(/\/+$/, "");
+    const trimmed = escapeGlobLiteral(rawTrimmed);
     if (!trimmed) return "**/*";
-    return `**/*${trimmed}/**`;
+    return `${trimmed}/**`;
+  }
+
+  // If the user already includes a '/', treat it as a workspace-relative prefix
+  // to keep navigation predictable and enable directory drill-down.
+  if (query.includes("/")) {
+    const lastSlash = query.lastIndexOf("/");
+    const baseRaw = query.slice(0, lastSlash + 1);
+    const leafRaw = query.slice(lastSlash + 1);
+    const base = escapeGlobLiteral(baseRaw);
+    const leaf = escapeGlobLiteral(leafRaw);
+    if (!leafRaw) return `${base}**`;
+    return `${base}**/*${leaf}*`;
   }
 
   return `**/*${q}*`;

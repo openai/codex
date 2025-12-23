@@ -9,6 +9,8 @@ import * as vscode from "vscode";
 import { BackendManager } from "./backend/manager";
 import { listAgentsFromDisk } from "./agents_disk";
 import type { AnyServerNotification } from "./backend/types";
+import type { ContentBlock } from "./generated/ContentBlock";
+import type { ImageContent } from "./generated/ImageContent";
 import type { CommandAction } from "./generated/v2/CommandAction";
 import type { Model } from "./generated/v2/Model";
 import type { RateLimitSnapshot } from "./generated/v2/RateLimitSnapshot";
@@ -27,6 +29,7 @@ import {
   type ChatViewState,
 } from "./ui/chat_view";
 import { DiffDocumentProvider, makeDiffUri } from "./ui/diff_provider";
+import { SessionPanelManager } from "./ui/session_panel_manager";
 import { SessionTreeDataProvider } from "./ui/session_tree";
 
 let backendManager: BackendManager | null = null;
@@ -34,18 +37,22 @@ let sessions: SessionStore | null = null;
 let sessionTree: SessionTreeDataProvider | null = null;
 let diffProvider: DiffDocumentProvider | null = null;
 let chatView: ChatViewProvider | null = null;
+let sessionPanels: SessionPanelManager | null = null;
 let activeSessionId: string | null = null;
+let selectSessionRequestSeq = 0;
 let extensionContext: vscode.ExtensionContext | null = null;
 let outputChannel: vscode.OutputChannel | null = null;
 
 const HIDDEN_TAB_SESSIONS_KEY = "codexMine.hiddenTabSessions.v1";
 const hiddenTabSessionIds = new Set<string>();
+const unreadSessionIds = new Set<string>();
 const mcpStatusByServer = new Map<string, string>();
 const cliVariantByBackendKey = new Map<
   string,
   "unknown" | "codex" | "codex-mine"
 >();
 const defaultTitleRe = /^(.*)\s+\([0-9a-f]{8}\)$/i;
+type UiImageInput = { name: string; url: string };
 
 type CustomPromptSummary = {
   name: string;
@@ -61,9 +68,11 @@ type SessionRuntime = {
   statusText: string | null;
   tokenUsage: ThreadTokenUsage | null;
   sending: boolean;
+  streamingAssistantItemIds: Set<string>;
   activeTurnId: string | null;
   lastTurnStartedAtMs: number | null;
   lastTurnCompletedAtMs: number | null;
+  v2NotificationsSeen: boolean;
   blockIndexById: Map<string, number>;
   legacyPatchTargetByCallId: Map<string, string>;
   legacyWebSearchTargetByCallId: Map<string, string>;
@@ -92,6 +101,7 @@ let sessionModelState: {
 type ModelState = typeof sessionModelState;
 const pendingModelFetchByBackend = new Map<string, Promise<void>>();
 const PROMPTS_CMD_PREFIX = "prompts";
+const loggedAgentScanErrors = new Set<string>();
 
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
@@ -99,6 +109,9 @@ export function activate(context: vscode.ExtensionContext): void {
   outputChannel = output;
   output.appendLine(`[debug] extensionPath=${context.extensionPath}`);
   void loadInitialModelState(output);
+
+  sessionPanels = new SessionPanelManager(context);
+  context.subscriptions.push(sessionPanels);
 
   sessions = new SessionStore();
   loadSessions(context, sessions);
@@ -166,7 +179,7 @@ export function activate(context: vscode.ExtensionContext): void {
   chatView = new ChatViewProvider(
     context,
     () => buildChatState(),
-    async (text) => {
+    async (text, images = []) => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       if (!sessions) throw new Error("sessions is not initialized");
 
@@ -178,15 +191,36 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
-      const slashHandled = await handleSlashCommand(context, session, text);
-      if (slashHandled) return;
+      const trimmed = text.trim();
+      if (trimmed.startsWith("/") && images.length > 0) {
+        void vscode.window.showErrorMessage(
+          "Slash commands do not support images yet.",
+        );
+        return;
+      }
+      if (trimmed.startsWith("/")) {
+        const slashHandled = await handleSlashCommand(context, session, text);
+        if (slashHandled) return;
+      }
 
       const expanded = await expandMentions(session, text);
       if (!expanded.ok) {
         void vscode.window.showErrorMessage(expanded.error);
         return;
       }
-      await sendUserText(session, expanded.text);
+      await sendUserInput(session, expanded.text, images);
+    },
+    async (sessionId, query, cancellationToken) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      if (!sessions) throw new Error("sessions is not initialized");
+      const session = sessions.getById(sessionId);
+      if (!session) throw new Error(`Session not found: ${sessionId}`);
+      const res = await backendManager.fuzzyFileSearchForSession(
+        session,
+        query,
+        cancellationToken,
+      );
+      return res.files.map((f) => String(f.path || "").replace(/\\\\/g, "/"));
     },
     async () => {
       if (!sessions) throw new Error("sessions is not initialized");
@@ -200,6 +234,21 @@ export function activate(context: vscode.ExtensionContext): void {
       await vscode.commands.executeCommand("codexMine.openLatestDiff", {
         sessionId: session.id,
       });
+    },
+    (message) => {
+      void vscode.window.showErrorMessage(message);
+      const session = activeSessionId
+        ? sessions?.getById(activeSessionId)
+        : null;
+      if (!session) return;
+      upsertBlock(session.id, {
+        id: newLocalId("error"),
+        type: "error",
+        title: "UI Error",
+        text: message,
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
     },
   );
   context.subscriptions.push(
@@ -223,10 +272,75 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexMine.newSession", async () => {
+    vscode.commands.registerCommand("codexMine.clearRuntimeCache", async () => {
+      if (!extensionContext) throw new Error("extensionContext is not set");
+      if (!sessions) throw new Error("sessions is not initialized");
+
+      // Clear persisted cache.
+      persistedRuntimeCache = {};
+      dirtyRuntimeSessionIds.clear();
+      persistRuntimeTimer = null;
+      await extensionContext.workspaceState.update(RUNTIMES_KEY, persistedRuntimeCache);
+
+      // Clear in-memory runtimes for existing sessions.
+      for (const s of sessions.listAll()) {
+        const rt = ensureRuntime(s.id);
+        rt.blocks = [];
+        rt.latestDiff = null;
+        rt.statusText = null;
+        rt.lastTurnStartedAtMs = null;
+        rt.lastTurnCompletedAtMs = null;
+        rt.sending = false;
+        rt.blockIndexById.clear();
+        rt.legacyPatchTargetByCallId.clear();
+        rt.legacyWebSearchTargetByCallId.clear();
+        rt.pendingApprovals.clear();
+        rt.approvalResolvers.clear();
+      }
+
+      unreadSessionIds.clear();
+      chatView?.refresh();
+
+      void vscode.window.showInformationMessage(
+        "Cleared Codex UI runtime cache for this workspace. Reload the window if the Chat view is still blank.",
+      );
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexMine.newSession", async (args?: unknown) => {
       if (!backendManager) throw new Error("backendManager is not initialized");
 
-      const folder = await pickWorkspaceFolder();
+      const folderFromArgs = ((): vscode.WorkspaceFolder | null => {
+        if (typeof args !== "object" || args === null) return null;
+        const anyArgs = args as Record<string, unknown>;
+        const forcePickFolder = anyArgs["forcePickFolder"];
+        if (typeof forcePickFolder === "boolean" && forcePickFolder) {
+          return null;
+        }
+        const uriRaw = anyArgs["workspaceFolderUri"];
+        if (typeof uriRaw !== "string" || !uriRaw) return null;
+        try {
+          const uri = vscode.Uri.parse(uriRaw);
+          return vscode.workspace.getWorkspaceFolder(uri) ?? null;
+        } catch {
+          return null;
+        }
+      })();
+
+      const folder =
+        folderFromArgs ??
+        (typeof args === "object" &&
+        args !== null &&
+        (args as Record<string, unknown>)["forcePickFolder"] === true
+          ? null
+          : (() => {
+              if (!sessions) return null;
+              const active = activeSessionId ? sessions.getById(activeSessionId) : null;
+              if (!active) return null;
+              return resolveWorkspaceFolderForSession(active);
+            })()) ??
+        (await pickWorkspaceFolder());
       if (!folder) return;
 
       await ensureBackendMatchesConfiguredCli(folder, "newSession");
@@ -680,6 +794,7 @@ export function activate(context: vscode.ExtensionContext): void {
         const picked = await vscode.window.showQuickPick(
           [
             { label: "Rename", action: "rename" as const },
+            { label: "Open in Editor Tab", action: "openPanel" as const },
             { label: "Close Tab (Hide)", action: "hide" as const },
           ],
           { title: session.title },
@@ -688,6 +803,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
         if (picked.action === "rename") {
           await vscode.commands.executeCommand("codexMine.renameSession", {
+            sessionId: session.id,
+          });
+          return;
+        }
+
+        if (picked.action === "openPanel") {
+          await vscode.commands.executeCommand("codexMine.openSessionPanel", {
             sessionId: session.id,
           });
           return;
@@ -749,6 +871,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
         runtimeBySessionId.delete(session.id);
         hiddenTabSessionIds.delete(session.id);
+        unreadSessionIds.delete(session.id);
         saveHiddenTabSessions(extensionContext);
 
         if (activeSessionId === session.id) {
@@ -821,6 +944,33 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
+      "codexMine.openSessionPanel",
+      async (args?: unknown) => {
+        if (!backendManager)
+          throw new Error("backendManager is not initialized");
+        if (!sessions) throw new Error("sessions is not initialized");
+        if (!sessionPanels)
+          throw new Error("sessionPanels is not initialized");
+
+        const session = parseSessionArg(args, sessions);
+        if (!session) {
+          void vscode.window.showErrorMessage("Session not found.");
+          return;
+        }
+
+        const res = await backendManager.resumeSession(session);
+        void ensureModelsFetched(session);
+        hydrateRuntimeFromThread(session.id, res.thread);
+        setActiveSession(session.id);
+
+        const rt = ensureRuntime(session.id);
+        sessionPanels.open(session, { blocks: rt.blocks, latestDiff: rt.latestDiff });
+      },
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
       "codexMine.openLatestDiff",
       async (args?: unknown) => {
         if (!backendManager)
@@ -857,19 +1007,49 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!sessions) throw new Error("sessions is not initialized");
 
         const session = parseSessionArg(args, sessions);
-      if (!session) {
-        void vscode.window.showErrorMessage("Session not found.");
-        return;
-      }
+        if (!session) {
+          void vscode.window.showErrorMessage("Session not found.");
+          return;
+        }
 
-      const res = await backendManager.resumeSession(
-        session,
-      );
-      void ensureModelsFetched(session);
-      hydrateRuntimeFromThread(session.id, res.thread);
-      setActiveSession(session.id);
-      await showCodexMineViewContainer();
-    },
+        const requestSeq = ++selectSessionRequestSeq;
+        const prevActiveSessionId = activeSessionId;
+
+        // Make tab switching feel immediate: update the active session in the UI
+        // before waiting on any backend I/O. Avoid marking as read until we confirm
+        // the session is actually opened.
+        setActiveSession(session.id, { markRead: false });
+        void showCodexMineViewContainer();
+
+        try {
+          const res = await backendManager.resumeSession(session);
+          if (requestSeq !== selectSessionRequestSeq) return;
+
+          void ensureModelsFetched(session);
+          hydrateRuntimeFromThread(session.id, res.thread);
+          setActiveSession(session.id);
+          await showCodexMineViewContainer();
+        } catch (err) {
+          if (requestSeq !== selectSessionRequestSeq) return;
+
+          outputChannel?.appendLine(
+            `[selectSession] Failed sessionId=${session.id}: ${
+              err instanceof Error ? err.stack ?? err.message : String(err)
+            }`,
+          );
+
+          if (prevActiveSessionId) {
+            setActiveSession(prevActiveSessionId);
+          } else {
+            activeSessionId = null;
+            chatView?.refresh();
+          }
+
+          void vscode.window.showErrorMessage(
+            "Failed to open session. See 'Codex UI' output for details.",
+          );
+        }
+      },
     ),
   );
 
@@ -902,7 +1082,8 @@ export function activate(context: vscode.ExtensionContext): void {
         });
         if (next === undefined) return;
 
-        sessions.rename(active.id, next.trim());
+        const renamed = sessions.rename(active.id, next.trim());
+        if (renamed) sessionPanels?.updateTitle(renamed.id, renamed.title);
         saveSessions(context, sessions);
         sessionTree?.refresh();
         chatView?.refresh();
@@ -949,6 +1130,7 @@ export function deactivate(): void {
   sessionTree = null;
   diffProvider = null;
   chatView = null;
+  sessionPanels = null;
   outputChannel = null;
   runtimeBySessionId.clear();
   activeSessionId = null;
@@ -1166,15 +1348,42 @@ function expandCustomPromptIfAny(
 }
 
 async function sendUserText(session: Session, text: string): Promise<void> {
+  await sendUserInput(session, text, []);
+}
+
+async function sendUserInput(
+  session: Session,
+  text: string,
+  images: UiImageInput[],
+): Promise<void> {
   if (!backendManager) throw new Error("backendManager is not initialized");
   const rt = ensureRuntime(session.id);
   rt.sending = true;
-  upsertBlock(session.id, { id: newLocalId("user"), type: "user", text });
+  const trimmed = text.trim();
+  if (trimmed) {
+    upsertBlock(session.id, { id: newLocalId("user"), type: "user", text });
+    sessionPanels?.addUserMessage(session.id, text);
+  }
+  if (images.length > 0) {
+    const names = images
+      .map((img) => String(img.name || "").trim())
+      .filter((name) => name.length > 0);
+    const label =
+      names.length > 0
+        ? `Attached ${images.length} image(s): ${names.join(", ")}`
+        : `Attached ${images.length} image(s)`;
+    upsertBlock(session.id, { id: newLocalId("user-images"), type: "note", text: label });
+  }
   chatView?.refresh();
   schedulePersistRuntime(session.id);
 
   try {
-    await backendManager.sendMessageWithModel(session, text, getSessionModelState());
+    await backendManager.sendMessageWithModelAndImages(
+      session,
+      text,
+      images.map((img) => img.url),
+      getSessionModelState(),
+    );
   } catch (err) {
     rt.sending = false;
     upsertBlock(session.id, {
@@ -1220,7 +1429,9 @@ async function handleSlashCommand(
   }
 
   if (cmd === "new") {
-    await vscode.commands.executeCommand("codexMine.newSession");
+    await vscode.commands.executeCommand("codexMine.newSession", {
+      workspaceFolderUri: session.workspaceFolderUri,
+    });
     return true;
   }
   if (cmd === "resume") {
@@ -1398,6 +1609,27 @@ async function expandMentions(
     };
   }
 
+  const cliVariant = cliVariantByBackendKey.get(session.backendKey) ?? "unknown";
+  const allowAgents = cliVariant === "codex-mine";
+  const agentNamesLower = new Set<string>();
+  if (allowAgents) {
+    const { agents, errors, gitRoot } = await listAgentsFromDisk(folder.uri.fsPath);
+    if (errors.length > 0) {
+      const header = `[agents] scanned cwd=${folder.uri.fsPath} gitRoot=${gitRoot ?? "(none)"}`;
+      if (!loggedAgentScanErrors.has(header)) {
+        loggedAgentScanErrors.add(header);
+        outputChannel?.appendLine(header);
+      }
+      for (const e of errors) {
+        const line = `[agents] ${e}`;
+        if (loggedAgentScanErrors.has(line)) continue;
+        loggedAgentScanErrors.add(line);
+        outputChannel?.appendLine(line);
+      }
+    }
+    for (const a of agents) agentNamesLower.add(a.name.toLowerCase());
+  }
+
   const unique = new Set<string>();
   for (const m of matches) {
     const raw = m[2];
@@ -1405,6 +1637,9 @@ async function expandMentions(
     if (raw === "selection") continue;
 
     const withoutFrag = raw.includes("#") ? (raw.split("#")[0] ?? "") : raw;
+    if (allowAgents && agentNamesLower.has(withoutFrag.toLowerCase())) {
+      continue;
+    }
     const rel = withoutFrag.toLowerCase().startsWith("file:")
       ? withoutFrag.slice("file:".length)
       : withoutFrag;
@@ -1423,10 +1658,12 @@ async function expandMentions(
     const uri = vscode.Uri.joinPath(folder.uri, rel);
     try {
       const stat = await vscode.workspace.fs.stat(uri);
-      if ((stat.type & vscode.FileType.File) === 0) {
+      const isFile = (stat.type & vscode.FileType.File) !== 0;
+      const isDir = (stat.type & vscode.FileType.Directory) !== 0;
+      if (!isFile && !isDir) {
         return {
           ok: false,
-          error: `@ mentions only support files: ${rel}`,
+          error: `@ mentions only support files or directories: ${rel}`,
         };
       }
     } catch (err) {
@@ -1502,13 +1739,36 @@ function formatCommandActions(actions: CommandAction[]): string | null {
   return text ? text : null;
 }
 
+function shouldHideCommandText(
+  command: string,
+  actions: CommandAction[],
+): boolean {
+  const hasKnownAction = actions.some((a) => a.type !== "unknown");
+  if (hasKnownAction) return false;
+  return looksOpaqueCommandToken(command);
+}
+
+function looksOpaqueCommandToken(command: string): boolean {
+  const t = command.trim();
+  if (t.length < 40) return false;
+  if (/\s/.test(t)) return false;
+  // Likely base64 or similar opaque token (do not decode).
+  if (!/^[A-Za-z0-9+/=]+$/.test(t)) return false;
+  return true;
+}
+
 async function showCodexMineViewContainer(): Promise<void> {
   await vscode.commands.executeCommand("workbench.view.extension.codexMine");
 }
 
-function setActiveSession(sessionId: string): void {
+function setActiveSession(
+  sessionId: string,
+  opts?: { markRead?: boolean },
+): void {
+  const markRead = opts?.markRead ?? true;
   activeSessionId = sessionId;
   ensureRuntime(sessionId);
+  if (markRead) unreadSessionIds.delete(sessionId);
   // If a hidden tab session is selected (e.g. via Sessions tree), show it again.
   if (hiddenTabSessionIds.delete(sessionId)) {
     if (extensionContext) saveHiddenTabSessions(extensionContext);
@@ -1516,6 +1776,12 @@ function setActiveSession(sessionId: string): void {
   const s = sessions ? sessions.getById(sessionId) : null;
   if (s) void ensureModelsFetched(s);
   chatView?.refresh();
+}
+
+function markUnreadSession(sessionId: string): void {
+  if (activeSessionId === sessionId) return;
+  if (unreadSessionIds.has(sessionId)) return;
+  unreadSessionIds.add(sessionId);
 }
 
 function loadHiddenTabSessions(context: vscode.ExtensionContext): void {
@@ -1861,9 +2127,11 @@ function ensureRuntime(sessionId: string): SessionRuntime {
     statusText: null,
     tokenUsage: null,
     sending: false,
+    streamingAssistantItemIds: new Set(),
     activeTurnId: null,
     lastTurnStartedAtMs: null,
     lastTurnCompletedAtMs: null,
+    v2NotificationsSeen: false,
     blockIndexById: new Map(),
     legacyPatchTargetByCallId: new Map(),
     legacyWebSearchTargetByCallId: new Map(),
@@ -1940,6 +2208,8 @@ function buildChatState(): ChatViewState {
       capabilities: capsForBackendKey(null),
       sessions: [],
       activeSession: null,
+      unreadSessionIds: [],
+      runningSessionIds: [],
       blocks: [],
       latestDiff: null,
       sending: false,
@@ -1953,6 +2223,9 @@ function buildChatState(): ChatViewState {
   const tabSessionsRaw = sessions
     .listAll()
     .filter((s) => !hiddenTabSessionIds.has(s.id));
+  const runningSessionIds = tabSessionsRaw
+    .map((s) => (ensureRuntime(s.id).sending ? s.id : null))
+    .filter((v): v is string => typeof v === "string");
   const activeRaw = activeSessionId ? sessions.getById(activeSessionId) : null;
   if (!activeRaw)
     return {
@@ -1960,6 +2233,8 @@ function buildChatState(): ChatViewState {
       capabilities: capsForBackendKey(null),
       sessions: tabSessionsRaw,
       activeSession: null,
+      unreadSessionIds: [...unreadSessionIds],
+      runningSessionIds,
       blocks: [],
       latestDiff: null,
       sending: false,
@@ -1986,6 +2261,8 @@ function buildChatState(): ChatViewState {
     capabilities: capsForBackendKey(activeRaw.backendKey),
     sessions: tabSessionsRaw,
     activeSession: activeRaw,
+    unreadSessionIds: [...unreadSessionIds],
+    runningSessionIds,
     blocks: rt.blocks,
     latestDiff: rt.latestDiff,
     sending: rt.sending,
@@ -2017,6 +2294,10 @@ function applyServerNotification(
   n: AnyServerNotification,
 ): void {
   const rt = ensureRuntime(sessionId);
+  if (!n.method.startsWith("codex/event/")) {
+    if (!rt.v2NotificationsSeen) purgeLegacyToolBlocks(rt);
+    rt.v2NotificationsSeen = true;
+  }
   schedulePersistRuntime(sessionId);
   switch (n.method) {
     case "rawResponseItem/completed":
@@ -2060,29 +2341,45 @@ function applyServerNotification(
       rt.activeTurnId = String((n as any).params?.turn?.id ?? "") || null;
       chatView?.refresh();
       return;
-    case "turn/completed":
-      rt.sending = false;
-      rt.lastTurnCompletedAtMs = Date.now();
-      rt.activeTurnId = null;
-      chatView?.refresh();
-      return;
+	    case "turn/completed":
+	      rt.sending = false;
+	      rt.lastTurnCompletedAtMs = Date.now();
+	      rt.activeTurnId = null;
+	      for (const id of rt.streamingAssistantItemIds) {
+	        const idx = rt.blockIndexById.get(id);
+	        if (idx === undefined) continue;
+	        const b = rt.blocks[idx];
+	        if (b && b.type === "assistant") (b as any).streaming = false;
+	      }
+	      rt.streamingAssistantItemIds.clear();
+	      markUnreadSession(sessionId);
+	      sessionPanels?.markTurnCompleted(sessionId);
+	      chatView?.refresh();
+	      return;
     case "thread/tokenUsage/updated":
       rt.tokenUsage = (n as any).params.tokenUsage as ThreadTokenUsage;
       rt.statusText = formatTokenUsageStatus(rt.tokenUsage);
       chatView?.refresh();
       return;
-    case "item/agentMessage/delta": {
-      const id = (n as any).params.itemId as string;
-      const block = getOrCreateBlock(rt, id, () => ({
-        id,
-        type: "assistant",
-        text: "",
-      }));
-      if (block.type === "assistant")
-        block.text += (n as any).params.delta as string;
-      chatView?.refresh();
-      return;
-    }
+		    case "item/agentMessage/delta": {
+		      const id = (n as any).params.itemId as string;
+		      const block = getOrCreateBlock(rt, id, () => ({
+		        id,
+		        type: "assistant",
+		        text: "",
+		        streaming: true,
+		      }));
+		      const delta = (n as any).params.delta as string;
+		      if (block.type === "assistant") {
+		        block.text += delta;
+		        (block as any).streaming = true;
+		      }
+		      rt.streamingAssistantItemIds.add(id);
+		      markUnreadSession(sessionId);
+		      sessionPanels?.appendAssistantDelta(sessionId, delta);
+		      chatView?.refresh();
+		      return;
+		    }
     case "item/reasoning/summaryTextDelta": {
       const id = (n as any).params.itemId as string;
       const block = getOrCreateBlock(rt, id, () => ({
@@ -2143,6 +2440,7 @@ function applyServerNotification(
         title: "Command",
         status: "inProgress",
         command: "",
+        hideCommandText: false,
         cwd: null,
         exitCode: null,
         durationMs: null,
@@ -2162,6 +2460,7 @@ function applyServerNotification(
         title: "Command",
         status: "inProgress",
         command: "",
+        hideCommandText: false,
         cwd: null,
         exitCode: null,
         durationMs: null,
@@ -2223,18 +2522,19 @@ function applyServerNotification(
       chatView?.refresh();
       return;
     }
-    case "turn/diff/updated": {
-      rt.latestDiff = (n as any).params.diff as string;
-      // Mark existing fileChange blocks as having a diff.
-      for (const b of rt.blocks) {
-        if (b.type === "fileChange") {
-          b.hasDiff = true;
-          b.diffs = diffsForFiles(b.files, rt.latestDiff);
-        }
-      }
-      chatView?.refresh();
-      return;
-    }
+	    case "turn/diff/updated": {
+	      rt.latestDiff = (n as any).params.diff as string;
+	      // Mark existing fileChange blocks as having a diff.
+	      for (const b of rt.blocks) {
+	        if (b.type === "fileChange") {
+	          b.hasDiff = true;
+	          b.diffs = diffsForFiles(b.files, rt.latestDiff);
+	        }
+	      }
+	      sessionPanels?.setLatestDiff(sessionId, rt.latestDiff);
+	      chatView?.refresh();
+	      return;
+	    }
     case "error": {
       upsertBlock(sessionId, {
         id: newLocalId("error"),
@@ -2307,6 +2607,7 @@ function applyItemLifecycle(
         title: "Command",
         status: item.status,
         command: item.command,
+        hideCommandText: shouldHideCommandText(item.command, item.commandActions),
         actionsText: formatCommandActions(item.commandActions),
         cwd: item.cwd ?? null,
         exitCode: item.exitCode,
@@ -2317,6 +2618,10 @@ function applyItemLifecycle(
       if (block.type === "command") {
         block.status = item.status;
         block.command = item.command;
+        block.hideCommandText = shouldHideCommandText(
+          item.command,
+          item.commandActions,
+        );
         block.actionsText = formatCommandActions(item.commandActions);
         block.cwd = item.cwd ?? null;
         block.exitCode = item.exitCode;
@@ -2376,6 +2681,16 @@ function applyItemLifecycle(
         if (completed && item.error)
           block.detail += `\nerror: ${JSON.stringify(item.error)}\n`;
       }
+      if (completed && item.result?.content) {
+        appendMcpImageBlocks(
+          rt,
+          sessionId,
+          item.id,
+          item.server,
+          item.tool,
+          item.result.content,
+        );
+      }
       break;
     }
     case "webSearch": {
@@ -2413,12 +2728,7 @@ function applyItemLifecycle(
       break;
     }
     case "imageView": {
-      upsertBlock(rt, {
-        id: item.id,
-        type: "system",
-        title: `Image view (${statusText})`,
-        text: item.path,
-      });
+      void upsertImageViewBlock(rt, sessionId, item.id, item.path, statusText);
       break;
     }
     case "enteredReviewMode": {
@@ -2437,6 +2747,24 @@ function applyItemLifecycle(
         title: `Exited review mode (${statusText})`,
         text: item.review,
       });
+      break;
+    }
+    case "agentMessage": {
+      const id = item.id;
+      const block = getOrCreateBlock(rt, id, () => ({
+        id,
+        type: "assistant",
+        text: "",
+        streaming: !completed,
+      }));
+      if (block.type === "assistant") {
+        if (completed && typeof (item as any).text === "string") {
+          block.text = String((item as any).text);
+        }
+        (block as any).streaming = !completed;
+      }
+      if (completed) rt.streamingAssistantItemIds.delete(id);
+      else rt.streamingAssistantItemIds.add(id);
       break;
     }
     default:
@@ -2477,6 +2805,31 @@ function getOrCreateBlock(
   return rt.blocks[idx]!;
 }
 
+function rebuildBlockIndex(rt: SessionRuntime): void {
+  rt.blockIndexById.clear();
+  for (let i = 0; i < rt.blocks.length; i++) {
+    const b = rt.blocks[i];
+    if (!b) continue;
+    rt.blockIndexById.set(b.id, i);
+  }
+}
+
+function purgeLegacyToolBlocks(rt: SessionRuntime): void {
+  const before = rt.blocks.length;
+  rt.blocks = rt.blocks.filter((b) => {
+    const id = String(b?.id ?? "");
+    if (!id) return true;
+    if (id.startsWith("legacyCmd:")) return false;
+    if (id.startsWith("legacyPatch:")) return false;
+    if (id.startsWith("legacyWebSearch:")) return false;
+    return true;
+  });
+  if (rt.blocks.length === before) return;
+  rebuildBlockIndex(rt);
+  rt.legacyPatchTargetByCallId.clear();
+  rt.legacyWebSearchTargetByCallId.clear();
+}
+
 function newLocalId(prefix: string): string {
   return `${prefix}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
 }
@@ -2504,15 +2857,128 @@ function deprecationNoticeId(summary: string, details: string): string {
 function formatTokenUsageStatus(tokenUsage: ThreadTokenUsage): string {
   const { total, modelContextWindow } = tokenUsage;
   if (modelContextWindow !== null && modelContextWindow > 0) {
-    const used = total.totalTokens;
-    const remaining = Math.max(0, modelContextWindow - used);
-    const remainingPct = Math.max(
-      0,
-      Math.min(100, Math.round((remaining / modelContextWindow) * 100)),
-    );
-    return `remaining=${remainingPct}% (${formatK(remaining)}/${formatK(modelContextWindow)})`;
+    // Mirror the TUI logic: compute remaining percentage from the last usage snapshot,
+    // which reflects the latest context size, rather than the cumulative thread total.
+    const BASELINE_TOKENS = 12000;
+    const usedInContext = tokenUsage.last.totalTokens;
+    const remainingTokens = Math.max(0, modelContextWindow - usedInContext);
+
+    const remainingPct = (() => {
+      if (modelContextWindow <= BASELINE_TOKENS) return 0;
+      const effectiveWindow = modelContextWindow - BASELINE_TOKENS;
+      const used = Math.max(0, usedInContext - BASELINE_TOKENS);
+      const remaining = Math.max(0, effectiveWindow - used);
+      return Math.max(
+        0,
+        Math.min(100, Math.round((remaining / effectiveWindow) * 100)),
+      );
+    })();
+
+    return `remaining=${remainingPct}% (${formatK(remainingTokens)}/${formatK(modelContextWindow)})`;
   }
   return `tokens used=${formatK(total.totalTokens)}`;
+}
+
+function isImageContent(block: ContentBlock): block is ImageContent {
+  return (
+    typeof (block as ImageContent).data === "string" &&
+    typeof (block as ImageContent).mimeType === "string"
+  );
+}
+
+function imageMimeFromPath(filePath: string): string | null {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".bmp":
+      return "image/bmp";
+    case ".svg":
+      return "image/svg+xml";
+    case ".tif":
+    case ".tiff":
+      return "image/tiff";
+    default:
+      return null;
+  }
+}
+
+async function loadLocalImageDataUrl(
+  filePath: string,
+): Promise<{ url: string; mimeType: string } | { error: string }> {
+  const mimeType = imageMimeFromPath(filePath);
+  if (!mimeType) {
+    return { error: `Unsupported image extension: ${filePath}` };
+  }
+  try {
+    const data = await fs.readFile(filePath);
+    const base64 = data.toString("base64");
+    return { url: `data:${mimeType};base64,${base64}`, mimeType };
+  } catch (err) {
+    return { error: `Failed to read image ${filePath}: ${String(err)}` };
+  }
+}
+
+function appendMcpImageBlocks(
+  rt: SessionRuntime,
+  sessionId: string,
+  itemId: string,
+  server: string,
+  tool: string,
+  content: ContentBlock[],
+): void {
+  const images = content.filter(isImageContent);
+  if (images.length === 0) return;
+  images.forEach((img, index) => {
+    const src = `data:${img.mimeType};base64,${img.data}`;
+    upsertBlock(rt, {
+      id: `mcp-image:${itemId}:${index}`,
+      type: "image",
+      title: `MCP image (${server}.${tool})`,
+      src,
+      alt: `mcp-image-${index + 1}`,
+      caption: img.mimeType || null,
+      role: "tool",
+    });
+  });
+  schedulePersistRuntime(sessionId);
+}
+
+async function upsertImageViewBlock(
+  rt: SessionRuntime,
+  sessionId: string,
+  itemId: string,
+  imagePath: string,
+  statusText: string,
+): Promise<void> {
+  const result = await loadLocalImageDataUrl(imagePath);
+  if ("error" in result) {
+    upsertBlock(rt, {
+      id: `imageView:${itemId}`,
+      type: "error",
+      title: `Image view (${statusText})`,
+      text: result.error,
+    });
+  } else {
+    upsertBlock(rt, {
+      id: `imageView:${itemId}`,
+      type: "image",
+      title: `Image view (${statusText})`,
+      src: result.url,
+      alt: path.basename(imagePath) || "image",
+      caption: imagePath,
+      role: "system",
+    });
+  }
+  chatView?.refresh();
+  schedulePersistRuntime(sessionId);
 }
 
 function computeWorkedSeconds(rt: SessionRuntime): number | null {
@@ -2834,9 +3300,17 @@ function applyGlobalCodexEvent(method: string, params: unknown): void {
   const p = params as any;
   const msg = p?.msg as any;
   const type = typeof msg?.type === "string" ? msg.type : null;
+
+  // A-policy: show only a minimal allowlist of legacy (codex/event/*) events.
+  // Everything else is handled by v2 notifications and would otherwise duplicate UI.
+  if (type !== "token_count" && type !== "mcp_startup_complete" && type !== "mcp_startup_update") {
+    return;
+  }
+
   if (type === "token_count") {
-    const info =
-      msg.info?.total_token_usage ?? msg.info?.last_token_usage ?? null;
+    const totalUsage = msg.info?.total_token_usage ?? null;
+    const lastUsage = msg.info?.last_token_usage ?? null;
+    const info = lastUsage ?? totalUsage ?? null;
     const ctx =
       msg.info?.model_context_window ?? msg.model_context_window ?? null;
     if (info) {
@@ -2898,36 +3372,6 @@ function applyGlobalCodexEvent(method: string, params: unknown): void {
     updateThreadStartedBlocks();
     return;
   }
-
-  if (type === "turn_aborted") {
-    // Prefer v2 turn lifecycle events; don't spam global "Other events (debug)" on interrupts.
-    return;
-  }
-
-  // Ignore noisy per-token / per-item legacy events.
-  if (
-    type === "task_started" ||
-    type === "task_complete" ||
-    type === "item_started" ||
-    type === "item_completed" ||
-    type === "user_message" ||
-    type === "agent_message" ||
-    type === "agent_message_delta" ||
-    type === "agent_message_content_delta" ||
-    type === "agent_message" ||
-    type === "token_count" ||
-    type === "agent_reasoning" ||
-    type === "agent_reasoning_delta" ||
-    type === "agent_reasoning_raw_content" ||
-    type === "agent_reasoning_raw_content_delta" ||
-    type === "agent_reasoning_section_break" ||
-    type === "reasoning_content_delta" ||
-    type === "reasoning_raw_content_delta"
-  ) {
-    return;
-  }
-
-  appendUnhandledGlobalEvent(`Legacy event: ${method}`, params);
 }
 
 function applyCodexEvent(
@@ -2941,6 +3385,18 @@ function applyCodexEvent(
   const type = typeof msg?.type === "string" ? msg.type : null;
   if (!type) {
     appendUnhandledEvent(rt, `Legacy event: ${method}`, params);
+    return;
+  }
+
+  // A-policy: show only a minimal allowlist of legacy (codex/event/*) events.
+  // Everything else is handled by v2 notifications and would otherwise duplicate UI.
+  if (
+    type !== "token_count" &&
+    type !== "turn_aborted" &&
+    type !== "mcp_startup_complete" &&
+    type !== "mcp_startup_update" &&
+    type !== "list_custom_prompts_response"
+  ) {
     return;
   }
 
@@ -2984,127 +3440,10 @@ function applyCodexEvent(
     return;
   }
 
-  const workspaceFolderFsPath = (() => {
-    const s = sessions?.getById(sessionId) ?? null;
-    if (!s) return null;
-    try {
-      return vscode.Uri.parse(s.workspaceFolderUri).fsPath;
-    } catch {
-      return null;
-    }
-  })();
-
-  if (type === "exec_command_begin") {
-    const callId = String(msg.call_id ?? "");
-    if (!callId) return;
-    const id = `legacyCmd:${callId}`;
-    const command = Array.isArray(msg.command)
-      ? msg.command.map(String).join(" ")
-      : String(msg.command ?? "");
-    const cwd = typeof msg.cwd === "string" ? msg.cwd : null;
-    const block = getOrCreateBlock(rt, id, () => ({
-      id,
-      type: "command",
-      title: "Command",
-      status: "inProgress",
-      command,
-      cwd,
-      exitCode: null,
-      durationMs: null,
-      terminalStdin: [],
-      output: "",
-    }));
-    if (block.type === "command") {
-      block.status = "inProgress";
-      if (command) block.command = command;
-      block.cwd = cwd;
-    }
-    return;
-  }
-
-  if (type === "exec_command_output_delta") {
-    const callId = String(msg.call_id ?? "");
-    if (!callId) return;
-    const id = `legacyCmd:${callId}`;
-    const block = getOrCreateBlock(rt, id, () => ({
-      id,
-      type: "command",
-      title: "Command",
-      status: "inProgress",
-      command: "",
-      cwd: null,
-      exitCode: null,
-      durationMs: null,
-      terminalStdin: [],
-      output: "",
-    }));
-    if (block.type === "command") block.output += String(msg.chunk ?? "");
-    return;
-  }
-
-  if (type === "terminal_interaction") {
-    const callId = String(msg.call_id ?? "");
-    if (!callId) return;
-    const id = `legacyCmd:${callId}`;
-    const block = getOrCreateBlock(rt, id, () => ({
-      id,
-      type: "command",
-      title: "Command",
-      status: "inProgress",
-      command: "",
-      cwd: null,
-      exitCode: null,
-      durationMs: null,
-      terminalStdin: [],
-      output: "",
-    }));
-    if (block.type === "command")
-      block.terminalStdin.push(String(msg.stdin ?? ""));
-    return;
-  }
-
-  if (type === "exec_command_end") {
-    const callId = String(msg.call_id ?? "");
-    if (!callId) return;
-    const id = `legacyCmd:${callId}`;
-    const command = Array.isArray(msg.command)
-      ? msg.command.map(String).join(" ")
-      : String(msg.command ?? "");
-    const cwd = typeof msg.cwd === "string" ? msg.cwd : null;
-    const exitCode = typeof msg.exit_code === "number" ? msg.exit_code : null;
-    const durationMs =
-      typeof msg.duration_ms === "number"
-        ? msg.duration_ms
-        : typeof msg.duration === "number"
-          ? msg.duration
-          : null;
-    const output = String(msg.aggregated_output ?? msg.formatted_output ?? "");
-    const block = getOrCreateBlock(rt, id, () => ({
-      id,
-      type: "command",
-      title: "Command",
-      status: "completed",
-      command,
-      cwd,
-      exitCode,
-      durationMs,
-      terminalStdin: [],
-      output,
-    }));
-    if (block.type === "command") {
-      block.status = "completed";
-      if (command) block.command = command;
-      block.cwd = cwd;
-      block.exitCode = exitCode;
-      block.durationMs = durationMs;
-      if (output) block.output = output;
-    }
-    return;
-  }
-
   if (type === "token_count") {
-    const info =
-      msg.info?.total_token_usage ?? msg.info?.last_token_usage ?? null;
+    const totalUsage = msg.info?.total_token_usage ?? null;
+    const lastUsage = msg.info?.last_token_usage ?? null;
+    const info = lastUsage ?? totalUsage ?? null;
     const ctx =
       msg.info?.model_context_window ?? msg.model_context_window ?? null;
     if (info) {
@@ -3150,144 +3489,6 @@ function applyCodexEvent(
     });
     return;
   }
-
-  if (type === "web_search_begin" || type === "web_search_end") {
-    const callId = String(msg.call_id ?? "");
-    if (!callId) return;
-    const query = typeof msg.query === "string" ? msg.query : "";
-    if (!query) return;
-    const targetId =
-      rt.legacyWebSearchTargetByCallId.get(callId) ??
-      findRecentWebSearchBlockIdByQuery(rt, query) ??
-      `legacyWebSearch:${callId}`;
-    rt.legacyWebSearchTargetByCallId.set(callId, targetId);
-    upsertBlock(rt, {
-      id: targetId,
-      type: "webSearch",
-      query,
-      status: type === "web_search_begin" ? "inProgress" : "completed",
-    });
-    return;
-  }
-
-  if (type === "patch_apply_begin") {
-    const callId = String(msg.call_id ?? "");
-    if (!callId) return;
-    const changes = (msg.changes ?? {}) as Record<string, unknown>;
-    const files = Object.keys(changes).map((p) =>
-      formatPathForSession(p, workspaceFolderFsPath),
-    );
-    const targetId =
-      rt.legacyPatchTargetByCallId.get(callId) ??
-      findRecentFileChangeBlockIdByFiles(rt, files) ??
-      `legacyPatch:${callId}`;
-    rt.legacyPatchTargetByCallId.set(callId, targetId);
-
-    const block = getOrCreateBlock(rt, targetId, () => ({
-      id: targetId,
-      type: "fileChange",
-      title: "Changes",
-      status: "inProgress",
-      files,
-      detail: "",
-      hasDiff: rt.latestDiff != null,
-      diffs: diffsForFiles(files, rt.latestDiff),
-    }));
-    if (block.type === "fileChange") {
-      block.status = "inProgress";
-      block.files = files;
-      block.hasDiff = rt.latestDiff != null;
-      block.diffs = diffsForFiles(files, rt.latestDiff);
-      const auto = msg.auto_approved === true ? "auto_approved=true" : null;
-      const turnId = typeof msg.turn_id === "string" ? msg.turn_id : null;
-      const lines = [
-        "Applying patch…",
-        auto,
-        turnId ? `turn_id=${turnId}` : null,
-      ]
-        .filter(Boolean)
-        .join("\n");
-      block.detail = lines;
-    }
-    return;
-  }
-
-  if (type === "patch_apply_end") {
-    const callId = String(msg.call_id ?? "");
-    if (!callId) return;
-    const success = msg.success === true;
-    const stdout = typeof msg.stdout === "string" ? msg.stdout : "";
-    const stderr = typeof msg.stderr === "string" ? msg.stderr : "";
-    const changes = (msg.changes ?? {}) as Record<string, unknown>;
-    const files = Object.keys(changes).map((p) =>
-      formatPathForSession(p, workspaceFolderFsPath),
-    );
-    const targetId =
-      rt.legacyPatchTargetByCallId.get(callId) ??
-      findRecentFileChangeBlockIdByFiles(rt, files) ??
-      `legacyPatch:${callId}`;
-    rt.legacyPatchTargetByCallId.set(callId, targetId);
-
-    const block = getOrCreateBlock(rt, targetId, () => ({
-      id: targetId,
-      type: "fileChange",
-      title: "Changes",
-      status: success ? "completed" : "failed",
-      files,
-      detail: "",
-      hasDiff: rt.latestDiff != null,
-      diffs: diffsForFiles(files, rt.latestDiff),
-    }));
-    if (block.type === "fileChange") {
-      block.status = success ? "completed" : "failed";
-      block.files = files;
-      block.hasDiff = rt.latestDiff != null;
-      block.diffs = diffsForFiles(files, rt.latestDiff);
-      const lines: string[] = [];
-      if (stdout.trim()) lines.push(stdout.trimEnd());
-      if (stderr.trim()) lines.push(stderr.trimEnd());
-      block.detail = lines.join("\n\n");
-    }
-    return;
-  }
-
-  if (type === "turn_diff") {
-    const diff = typeof msg.unified_diff === "string" ? msg.unified_diff : "";
-    if (!diff) return;
-    if (rt.latestDiff === diff) return; // de-dupe noisy repeats
-    rt.latestDiff = diff;
-    for (const b of rt.blocks) {
-      if (b.type === "fileChange") {
-        b.hasDiff = true;
-        b.diffs = diffsForFiles(b.files, rt.latestDiff);
-      }
-    }
-    return;
-  }
-
-  // Ignore noisy duplicates; the v2 notifications cover these.
-  if (
-    type === "plan_update" ||
-    type === "task_started" ||
-    type === "task_complete" ||
-    type === "item_started" ||
-    type === "item_completed" ||
-    type === "user_message" ||
-    type === "agent_message" ||
-    type === "agent_message_delta" ||
-    type === "agent_message_content_delta" ||
-    type === "agent_reasoning" ||
-    type === "agent_reasoning_delta" ||
-    type === "agent_reasoning_raw_content" ||
-    type === "agent_reasoning_raw_content_delta" ||
-    type === "agent_reasoning_section_break" ||
-    type === "reasoning_content_delta" ||
-    type === "reasoning_raw_content_delta"
-  ) {
-    return;
-  }
-
-  appendUnhandledEvent(rt, `Legacy event: ${method}`, params);
 }
 
 function formatPlanStatus(status: string): string {
@@ -3468,7 +3669,12 @@ function hydrateRuntimeFromThread(sessionId: string, thread: Thread): void {
       }
       if (item.type === "agentMessage") {
         if (item.text)
-          upsertBlock(rt, { id: item.id, type: "assistant", text: item.text });
+          upsertBlock(rt, {
+            id: item.id,
+            type: "assistant",
+            text: item.text,
+            streaming: false,
+          });
       }
     }
   }
@@ -3597,7 +3803,14 @@ function loadRuntimes(
 
 function restoreRuntime(sessionId: string, persisted: PersistedRuntime): void {
   const rt = ensureRuntime(sessionId);
-  rt.blocks = Array.isArray(persisted.blocks) ? persisted.blocks : [];
+  rt.blocks = (Array.isArray(persisted.blocks) ? persisted.blocks : []).filter(
+    (b) => !(typeof b === "object" && b !== null && (b as any).type === "image"),
+  );
+  for (const b of rt.blocks) {
+    if (b && typeof b === "object" && (b as any).type === "assistant") {
+      delete (b as any).streaming;
+    }
+  }
   rt.latestDiff = persisted.latestDiff ?? null;
   rt.statusText = persisted.statusText ?? null;
   rt.lastTurnStartedAtMs = persisted.lastTurnStartedAtMs ?? null;
@@ -3634,7 +3847,7 @@ function schedulePersistRuntime(sessionId: string): void {
       // Only persist for sessions that still exist.
       if (!sessions.getById(id)) continue;
       persistedRuntimeCache[id] = {
-        blocks: rt.blocks,
+        blocks: rt.blocks.filter((b) => b.type !== "image"),
         latestDiff: rt.latestDiff,
         statusText: rt.statusText,
         lastTurnStartedAtMs: rt.lastTurnStartedAtMs,

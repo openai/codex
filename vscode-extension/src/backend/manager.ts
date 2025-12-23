@@ -18,6 +18,7 @@ import type { GetAccountRateLimitsResponse } from "../generated/v2/GetAccountRat
 import type { SkillsListEntry } from "../generated/v2/SkillsListEntry";
 import type { Thread } from "../generated/v2/Thread";
 import type { AnyServerNotification } from "./types";
+import type { FuzzyFileSearchResponse } from "../generated/FuzzyFileSearchResponse";
 
 type ModelSettings = { model: string | null; provider: string | null; reasoning: string | null };
 
@@ -226,6 +227,30 @@ export class BackendManager implements vscode.Disposable {
     return res.data ?? [];
   }
 
+  public async fuzzyFileSearchForSession(
+    session: Session,
+    query: string,
+    cancellationToken: string,
+  ): Promise<FuzzyFileSearchResponse> {
+    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
+    if (!folder) {
+      throw new Error(
+        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
+      );
+    }
+
+    await this.startForWorkspaceFolder(folder);
+    const proc = this.processes.get(session.backendKey);
+    if (!proc)
+      throw new Error("Backend is not running for this workspace folder");
+
+    return proc.fuzzyFileSearch({
+      query,
+      roots: [folder.uri.fsPath],
+      cancellationToken,
+    });
+  }
+
   public async listModelsForSession(session: Session): Promise<Model[]> {
     const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
     if (!folder) {
@@ -374,40 +399,22 @@ export class BackendManager implements vscode.Disposable {
   }
 
   public async sendMessage(session: Session, text: string): Promise<void> {
-    const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
-    if (!folder) {
-      throw new Error(
-        `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
-      );
-    }
-
-    const proc = this.processes.get(session.backendKey);
-    if (!proc)
-      throw new Error("Backend is not running for this workspace folder");
-
-    const input: UserInput[] = [{ type: "text", text }];
-    const effort = this.toReasoningEffort(null);
-    const params: TurnStartParams = {
-      threadId: session.threadId,
-      input,
-      cwd: null,
-      approvalPolicy: null,
-      sandboxPolicy: null,
-      model: null,
-      effort,
-      summary: null,
-    };
-
-    this.output.appendLine(`\n>> (${session.title}) ${text}`);
-    this.output.append(`<< (${session.title}) `);
-    const turn = await proc.turnStart(params);
-    this.streamState.set(session.threadId, { activeTurnId: turn.turn.id });
+    await this.sendMessageWithModelAndImages(session, text, [], null);
   }
 
   public async sendMessageWithModel(
     session: Session,
     text: string,
     modelSettings: ModelSettings | undefined,
+  ): Promise<void> {
+    await this.sendMessageWithModelAndImages(session, text, [], modelSettings);
+  }
+
+  public async sendMessageWithModelAndImages(
+    session: Session,
+    text: string,
+    images: string[],
+    modelSettings: ModelSettings | null | undefined,
   ): Promise<void> {
     const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
     if (!folder) {
@@ -420,7 +427,15 @@ export class BackendManager implements vscode.Disposable {
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
 
-    const input: UserInput[] = [{ type: "text", text }];
+    const input: UserInput[] = [];
+    if (text.trim()) input.push({ type: "text", text });
+    for (const url of images) {
+      if (typeof url !== "string" || url.trim() === "") continue;
+      input.push({ type: "image", url });
+    }
+    if (input.length === 0) {
+      throw new Error("Message must include text or images");
+    }
     const effort = this.toReasoningEffort(modelSettings?.reasoning ?? null);
     const params: TurnStartParams = {
       threadId: session.threadId,
@@ -433,7 +448,9 @@ export class BackendManager implements vscode.Disposable {
       summary: null,
     };
 
-    this.output.appendLine(`\n>> (${session.title}) ${text}`);
+    const imageSuffix =
+      images.length > 0 ? ` [images=${images.length}]` : "";
+    this.output.appendLine(`\n>> (${session.title}) ${text}${imageSuffix}`);
     this.output.append(`<< (${session.title}) `);
     const turn = await proc.turnStart(params);
     this.streamState.set(session.threadId, { activeTurnId: turn.turn.id });

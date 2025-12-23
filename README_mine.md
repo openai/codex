@@ -25,7 +25,7 @@
 - 「どの upstream に基づくか」を一目で分かるようにするためで、機能差分を示す独自番号は `mine.*` で刻む。  
 - crates.io には publish しない前提のローカル版想定。
 
-### repo-local `.codex/` 運用（#1, #6, #8, #9）
+### repo-local `.codex/` 運用
 
 git repo 内では、repo-local の `.codex/` を優先して読み込むものがある。
 （`config.toml` の正確なレイヤ順は `codex-rs/core/src/config_loader/README.md` を参照）
@@ -38,7 +38,7 @@ git repo 内では、repo-local の `.codex/` を優先して読み込むもの�
 | `skills` | `repo/.codex/skills/` / `$CODEX_HOME/skills/` | **repo-local からの読み込みに対応済み**。git repo 内では `cwd` から repo root までの間で最初に見つかった `.codex/skills` を優先し、次に `$CODEX_HOME/skills`（→ system → admin）。 | 追加/編集/削除（`SKILL.md`） | 同名 skill は repo が優先で dedupe。 |
 | `agents`（subagents） | `<git root>/.codex/agents/` / `$CODEX_HOME/agents/` | `<git root>/.codex/agents` → `$CODEX_HOME/agents` の順。 | 追加/編集/削除（`<name>.md`） | skills と違い、subagents は「最寄り `.codex`」探索はしない。 |
 
-### subagents（#6, #9）
+### subagents
 
 - `@name <prompt>` 形式の指示を解釈してサブエージェント実行を補助（`.codex/agents` / `$CODEX_HOME/agents` から定義を探索）
 - `run_subagent` 実行時に **親ターンのキャンセルが伝搬**（Ctrl+C / TurnAborted 等でサブエージェントも止まる）

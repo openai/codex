@@ -2,6 +2,31 @@
 
 この拡張はまだ初期段階です。互換性が壊れる変更が入る可能性があります。
 
+## 0.1.8
+
+- Ctrl/Cmd+Hover 時のみファイルパスをリンク風表示（押しているだけでは表示しない）
+- 実行中の停止（Esc）が入力欄フォーカス時に確実に効くよう修正
+
+## 0.1.7
+
+※このバージョンには、以前から実装されていたが CHANGELOG 未記載だった項目の追記も含む。
+
+- legacy (`codex/event/*`) の表示を最小許可リストに限定し、Command/Changes 等の重複表示を抑制
+  - 許可: `token_count`, `mcp_startup_update`, `mcp_startup_complete`, `turn_aborted`, `list_custom_prompts_response`
+- UI: ブロックが de-dupe/削除された時に、Webview 側の残骸 DOM を掃除して重複表示を防止
+- セッションをエディタタブで開けるようにした（Session Panel / `Open Session (Editor Tab)`）
+- セッションメニュー追加（タブ切替/非表示/クローズ など）
+- Runtime cache をワークスペース単位でクリアするコマンドを追加（`Clear Runtime Cache (Workspace)`）
+- 承認（Approval）要求をチャット上にカード表示し、Accept/Decline/Cancel と「Accept (For Session)」を操作できるようにした
+- `Status` で account / rate limits 等の状態を表示できるようにした
+- 空のまま完了した `Reasoning` を表示しない（ノイズ削減）
+- `Return to Bottom` を追加（スクロールがBottomにない時のみ表示・タブ切替時は自動でBottomへ）
+- 実行中でも画像の添付/ペーストをできるようにした（次の入力に備えて溜められる）
+- チャット履歴内のファイルパスを Ctrl/Cmd+Click で開けるようにした（見つからない場合は `No matching result`）
+  - Ctrl/Cmd+Hover でリンク風の見た目になる
+- Webview が隠れたり再生成されても、入力途中のテキストを保持するようにした（下書き保持）
+- 不要な横スクロールが出ないように調整（Webview内の横方向スクロールを抑制）
+
 ## 0.1.6
 
 - 入力欄の `@` 補完に `@agents:{name}` を追加（codex-mine実行時のみ）。ファイル候補より先に表示する
