@@ -329,12 +329,12 @@ name = "app_test_support"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert_cmd",
  "base64",
  "chrono",
  "codex-app-server-protocol",
  "codex-core",
  "codex-protocol",
+ "codex-utils-cargo-bin",
  "core_test_support",
  "serde",
  "serde_json",
@@ -993,7 +993,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "app_test_support",
- "assert_cmd",
  "base64",
  "chrono",
  "codex-app-server-protocol",
@@ -1064,6 +1063,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "assert_matches",
+ "codex-utils-cargo-bin",
  "pretty_assertions",
  "similar",
  "tempfile",
@@ -1161,6 +1161,7 @@ dependencies = [
  "codex-tui",
  "codex-tui2",
  "codex-utils-absolute-path",
+ "codex-utils-cargo-bin",
  "codex-windows-sandbox",
  "ctor 0.5.0",
  "libc",
@@ -1285,6 +1286,7 @@ dependencies = [
  "codex-protocol",
  "codex-rmcp-client",
  "codex-utils-absolute-path",
+ "codex-utils-cargo-bin",
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-string",
@@ -1360,6 +1362,7 @@ dependencies = [
  "codex-core",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-cargo-bin",
  "core_test_support",
  "libc",
  "mcp-types",
@@ -1385,11 +1388,11 @@ name = "codex-exec-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert_cmd",
  "async-trait",
  "clap",
  "codex-core",
  "codex-execpolicy",
+ "codex-utils-cargo-bin",
  "exec_server_test_support",
  "libc",
  "maplit",
@@ -1548,7 +1551,6 @@ name = "codex-mcp-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert_cmd",
  "codex-arg0",
  "codex-common",
  "codex-core",
@@ -1672,8 +1674,8 @@ dependencies = [
  "axum",
  "codex-keyring-store",
  "codex-protocol",
+ "codex-utils-cargo-bin",
  "dirs",
- "escargot",
  "futures",
  "keyring",
  "mcp-types",
@@ -1700,6 +1702,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "codex-utils-cargo-bin",
  "pretty_assertions",
  "tempfile",
  "uds_windows",
@@ -1864,6 +1867,14 @@ dependencies = [
  "lru 0.16.2",
  "sha1",
  "tokio",
+]
+
+[[package]]
+name = "codex-utils-cargo-bin"
+version = "0.0.0"
+dependencies = [
+ "assert_cmd",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -2069,6 +2080,7 @@ dependencies = [
  "codex-core",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-cargo-bin",
  "notify",
  "pretty_assertions",
  "regex-lite",
@@ -2788,8 +2800,8 @@ name = "exec_server_test_support"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert_cmd",
  "codex-core",
+ "codex-utils-cargo-bin",
  "rmcp",
  "serde_json",
  "tokio",
@@ -4157,9 +4169,9 @@ name = "mcp_test_support"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert_cmd",
  "codex-core",
  "codex-mcp-server",
+ "codex-utils-cargo-bin",
  "core_test_support",
  "mcp-types",
  "os_info",
