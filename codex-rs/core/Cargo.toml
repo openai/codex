@@ -123,6 +123,7 @@ assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-core = { path = ".", features = ["deterministic_process_ids"] }
+codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 ctor = { workspace = true }
 escargot = { workspace = true }

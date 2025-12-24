@@ -15,6 +15,7 @@ chrono = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-core = { workspace = true, features = ["test-support"] }
 codex-protocol = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = [
