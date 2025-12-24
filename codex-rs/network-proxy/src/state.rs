@@ -86,6 +86,8 @@ impl AppState {
     }
 
     pub async fn current_cfg(&self) -> Result<Config> {
+        // Callers treat `AppState` as a live view of policy. We reload-on-demand so edits to
+        // `config.toml` (including Codex-managed writes) take effect without a restart.
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
         Ok(guard.config.clone())
@@ -106,6 +108,8 @@ impl AppState {
         let blocked = guard.blocked.clone();
         match build_config_state().await {
             Ok(mut new_state) => {
+                // Policy changes are operationally sensitive; logging diffs makes changes traceable
+                // without needing to dump full config blobs (which can include unrelated settings).
                 log_policy_changes(&previous_cfg, &new_state.config);
                 new_state.blocked = blocked;
                 *guard = new_state;
@@ -124,6 +128,10 @@ impl AppState {
     pub async fn host_blocked(&self, host: &str) -> Result<(bool, String)> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
+        // Decision order matters:
+        //  1) explicit deny always wins
+        //  2) local/loopback is opt-in (defense-in-depth)
+        //  3) allowlist is enforced when configured
         if guard.deny_set.is_match(host) {
             return Ok((true, "denied".to_string()));
         }
@@ -223,6 +231,8 @@ impl AppState {
 }
 
 async fn build_config_state() -> Result<ConfigState> {
+    // Load config through `codex-core` so we inherit the same layer ordering and semantics as the
+    // rest of Codex (system/managed layers, user layers, session flags, etc.).
     let codex_cfg = ConfigBuilder::default()
         .build()
         .await
@@ -230,13 +240,19 @@ async fn build_config_state() -> Result<ConfigState> {
 
     let cfg_path = codex_cfg.codex_home.join(CONFIG_TOML_FILE);
 
+    // Deserialize from the merged effective config, rather than parsing config.toml ourselves.
+    // This avoids a second parser/merger implementation (and the drift that comes with it).
     let merged_toml = codex_cfg.config_layer_stack.effective_config();
     let mut config: Config = merged_toml
         .try_into()
         .context("failed to deserialize network proxy config")?;
 
+    // Security boundary: user-controlled layers must not be able to widen restrictions set by
+    // trusted/managed layers (e.g., MDM). Enforce this before building runtime state.
     enforce_trusted_constraints(&codex_cfg.config_layer_stack, &config)?;
 
+    // Permit relative MITM paths for ergonomics; resolve them relative to the directory containing
+    // `config.toml` so the config is relocatable.
     resolve_mitm_paths(&mut config, &cfg_path);
     let mtime = cfg_path.metadata().and_then(|m| m.modified()).ok();
     let deny_set = compile_globset(&config.network_proxy.policy.denied_domains)?;
@@ -324,6 +340,8 @@ fn network_proxy_constraints_from_trusted_layers(
     for layer in layers
         .get_layers(codex_core::config_loader::ConfigLayerStackOrdering::LowestPrecedenceFirst)
     {
+        // Only trusted layers contribute constraints. User-controlled layers can narrow policy but
+        // must never widen beyond what managed config allows.
         if is_user_controlled_layer(&layer.name) {
             continue;
         }
@@ -506,6 +524,8 @@ fn compile_globset(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     let mut seen = HashSet::new();
     for pattern in patterns {
+        // Operator ergonomics: `*.example.com` usually intends to include both `a.example.com` and
+        // the apex `example.com`. We expand that here so policy matches expectation.
         let mut expanded = Vec::with_capacity(2);
         expanded.push(pattern.as_str());
         if let Some(apex) = pattern.strip_prefix("*.") {

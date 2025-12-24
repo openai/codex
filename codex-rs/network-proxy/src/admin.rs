@@ -23,6 +23,8 @@ type ContextState = Arc<AppState>;
 type AdminContext = RamaContext<ContextState>;
 
 pub async fn run_admin_api(state: Arc<AppState>, addr: SocketAddr) -> Result<()> {
+    // Debug-only admin API (health/config/patterns/blocked + mode/reload). Policy is config-driven
+    // and constraint-enforced; this endpoint should not become a second policy/approval plane.
     let listener = TcpListener::build_with_state(state)
         .bind(addr)
         .await

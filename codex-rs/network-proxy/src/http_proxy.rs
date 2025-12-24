@@ -129,6 +129,8 @@ async fn http_connect_accept(
     };
 
     if mode == NetworkMode::Limited && mitm_state.is_none() {
+        // Limited mode is designed to be read-only. Without MITM, a CONNECT tunnel would hide the
+        // inner HTTP method/headers from the proxy, effectively bypassing method policy.
         let _ = app_state
             .record_blocked(BlockedRequest::new(
                 host.clone(),
@@ -214,6 +216,9 @@ async fn http_plain_proxy(mut ctx: ProxyContext, req: Request) -> Result<Respons
     };
 
     if let Some(socket_path) = req
+        // `x-unix-socket` is an escape hatch for talking to local daemons. We keep it tightly
+        // scoped: macOS-only + explicit allowlist, to avoid turning the proxy into a general local
+        // capability-escalation mechanism.
         .headers()
         .get("x-unix-socket")
         .and_then(|v| v.to_str().ok())

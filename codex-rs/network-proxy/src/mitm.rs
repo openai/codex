@@ -63,6 +63,9 @@ pub struct MitmState {
 
 impl MitmState {
     pub fn new(cfg: &MitmConfig) -> Result<Self> {
+        // MITM exists to make limited-mode HTTPS enforceable: once CONNECT is established, plain
+        // proxying would lose visibility into the inner HTTP request. We generate/load a local CA
+        // and issue per-host leaf certs so we can terminate TLS and apply policy.
         let (ca_cert_pem, ca_key_pem) = load_or_create_ca(cfg)?;
         let ca_key = KeyPair::from_pem(&ca_key_pem).context("failed to parse CA key")?;
         let issuer: Issuer<'static, KeyPair> =
@@ -71,6 +74,7 @@ impl MitmState {
         let tls_config = rama::tls::rustls::client::TlsConnectorData::new_http_auto()
             .context("create upstream TLS config")?;
         let upstream = rama::http::client::EasyHttpWebClient::builder()
+            // Use a direct transport connector (no upstream proxy) to avoid proxy loops.
             .with_default_transport_connector()
             .without_tls_proxy_support()
             .without_proxy_support()
@@ -449,6 +453,7 @@ fn load_or_create_ca(cfg: &MitmConfig) -> Result<(String, String)> {
     }
 
     let (cert_pem, key_pem) = generate_ca()?;
+    // The CA key is a high-value secret. Ensure it is not world-readable. The cert can be.
     write_private_file(cert_path, cert_pem.as_bytes(), 0o644)?;
     write_private_file(key_path, key_pem.as_bytes(), 0o600)?;
     let cert_path = cert_path.display();
