@@ -96,16 +96,21 @@ pub fn create_apply_patch_sse_response(
 }
 
 pub fn create_exec_command_sse_response(call_id: &str) -> anyhow::Result<String> {
-    let (cmd, args) = if cfg!(windows) {
-        ("cmd.exe", vec!["/d", "/c", "echo hi"])
+    let cmd = if cfg!(windows) {
+        // Keep this as a plain string: our exec tool ultimately runs the string
+        // via a shell anyway, and joining args naively loses quoting.
+        "cmd.exe /d /c echo hi".to_string()
     } else {
-        ("/bin/sh", vec!["-c", "echo hi"])
+        // Keep the command simple and shell-native so it's stable under Buck2's
+        // sandboxing / symlink trees.
+        "echo hi".to_string()
     };
-    let command = std::iter::once(cmd.to_string())
-        .chain(args.into_iter().map(str::to_string))
-        .collect::<Vec<_>>();
     let tool_call_arguments = serde_json::to_string(&json!({
-        "cmd": command.join(" "),
+        "cmd": cmd,
+        // Force a non-login shell for determinism: under Buck2 test runners,
+        // login shells can pick up environment/profile differences that make
+        // this simple command flaky.
+        "login": false,
         "yield_time_ms": 500
     }))?;
     let tool_call = json!({
