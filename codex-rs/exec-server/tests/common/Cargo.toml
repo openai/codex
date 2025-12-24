@@ -8,9 +8,9 @@ license.workspace = true
 path = "lib.rs"
 
 [dependencies]
-assert_cmd = { workspace = true }
 anyhow = { workspace = true }
 codex-core = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 rmcp = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
