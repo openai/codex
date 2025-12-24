@@ -10,6 +10,7 @@ use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::history_truncation;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -17,11 +18,8 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use crate::skills::SkillsManager;
 use codex_protocol::ConversationId;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::InitialHistory;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -234,7 +232,16 @@ impl ConversationManager {
     ) -> CodexResult<NewConversation> {
         // Compute the prefix up to the cut point.
         let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let history = truncate_before_nth_user_message(history, nth_user_message);
+        let rollout_items = history.get_rollout_items();
+        let truncated = history_truncation::truncate_rollout_before_nth_user_message_from_start(
+            &rollout_items,
+            nth_user_message,
+        );
+        let history = if truncated.is_empty() {
+            InitialHistory::New
+        } else {
+            InitialHistory::Forked(truncated)
+        };
 
         // Spawn a new conversation with the computed initial history.
         let auth_manager = self.auth_manager.clone();
@@ -260,152 +267,5 @@ impl ConversationManager {
 
     pub fn get_models_manager(&self) -> Arc<ModelsManager> {
         self.models_manager.clone()
-    }
-}
-
-/// Return a prefix of `items` obtained by cutting strictly before the nth user message
-/// (0-based) and all items that follow it.
-fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> InitialHistory {
-    // Work directly on rollout items, and cut the vector at the nth user message input.
-    let items: Vec<RolloutItem> = history.get_rollout_items();
-
-    // Find indices of user message inputs in rollout order.
-    let mut user_positions: Vec<usize> = Vec::new();
-    for (idx, item) in items.iter().enumerate() {
-        if let RolloutItem::ResponseItem(item @ ResponseItem::Message { .. }) = item
-            && matches!(
-                crate::event_mapping::parse_turn_item(item),
-                Some(TurnItem::UserMessage(_))
-            )
-        {
-            user_positions.push(idx);
-        }
-    }
-
-    // If fewer than or equal to n user messages exist, treat as empty (out of range).
-    if user_positions.len() <= n {
-        return InitialHistory::New;
-    }
-
-    // Cut strictly before the nth user message (do not keep the nth itself).
-    let cut_idx = user_positions[n];
-    let rolled: Vec<RolloutItem> = items.into_iter().take(cut_idx).collect();
-
-    if rolled.is_empty() {
-        InitialHistory::New
-    } else {
-        InitialHistory::Forked(rolled)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::codex::make_session_and_context;
-    use assert_matches::assert_matches;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ReasoningItemReasoningSummary;
-    use codex_protocol::models::ResponseItem;
-    use pretty_assertions::assert_eq;
-
-    fn user_msg(text: &str) -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: text.to_string(),
-            }],
-        }
-    }
-    fn assistant_msg(text: &str) -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: text.to_string(),
-            }],
-        }
-    }
-
-    #[test]
-    fn drops_from_last_user_only() {
-        let items = [
-            user_msg("u1"),
-            assistant_msg("a1"),
-            assistant_msg("a2"),
-            user_msg("u2"),
-            assistant_msg("a3"),
-            ResponseItem::Reasoning {
-                id: "r1".to_string(),
-                summary: vec![ReasoningItemReasoningSummary::SummaryText {
-                    text: "s".to_string(),
-                }],
-                content: None,
-                encrypted_content: None,
-            },
-            ResponseItem::FunctionCall {
-                id: None,
-                name: "tool".to_string(),
-                arguments: "{}".to_string(),
-                call_id: "c1".to_string(),
-            },
-            assistant_msg("a4"),
-        ];
-
-        // Wrap as InitialHistory::Forked with response items only.
-        let initial: Vec<RolloutItem> = items
-            .iter()
-            .cloned()
-            .map(RolloutItem::ResponseItem)
-            .collect();
-        let truncated = truncate_before_nth_user_message(InitialHistory::Forked(initial), 1);
-        let got_items = truncated.get_rollout_items();
-        let expected_items = vec![
-            RolloutItem::ResponseItem(items[0].clone()),
-            RolloutItem::ResponseItem(items[1].clone()),
-            RolloutItem::ResponseItem(items[2].clone()),
-        ];
-        assert_eq!(
-            serde_json::to_value(&got_items).unwrap(),
-            serde_json::to_value(&expected_items).unwrap()
-        );
-
-        let initial2: Vec<RolloutItem> = items
-            .iter()
-            .cloned()
-            .map(RolloutItem::ResponseItem)
-            .collect();
-        let truncated2 = truncate_before_nth_user_message(InitialHistory::Forked(initial2), 2);
-        assert_matches!(truncated2, InitialHistory::New);
-    }
-
-    #[tokio::test]
-    async fn ignores_session_prefix_messages_when_truncating() {
-        let (session, turn_context) = make_session_and_context().await;
-        let mut items = session.build_initial_context(&turn_context);
-        items.push(user_msg("feature request"));
-        items.push(assistant_msg("ack"));
-        items.push(user_msg("second question"));
-        items.push(assistant_msg("answer"));
-
-        let rollout_items: Vec<RolloutItem> = items
-            .iter()
-            .cloned()
-            .map(RolloutItem::ResponseItem)
-            .collect();
-
-        let truncated = truncate_before_nth_user_message(InitialHistory::Forked(rollout_items), 1);
-        let got_items = truncated.get_rollout_items();
-
-        let expected: Vec<RolloutItem> = vec![
-            RolloutItem::ResponseItem(items[0].clone()),
-            RolloutItem::ResponseItem(items[1].clone()),
-            RolloutItem::ResponseItem(items[2].clone()),
-        ];
-
-        assert_eq!(
-            serde_json::to_value(&got_items).unwrap(),
-            serde_json::to_value(&expected).unwrap()
-        );
     }
 }
