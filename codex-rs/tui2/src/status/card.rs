@@ -7,7 +7,6 @@ use chrono::DateTime;
 use chrono::Local;
 use codex_common::create_config_summary_entries;
 use codex_core::config::Config;
-use codex_core::models_manager::model_family::ModelFamily;
 use codex_core::protocol::NetworkAccess;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
@@ -40,18 +39,10 @@ use crate::wrapping::word_wrap_lines;
 use codex_core::AuthManager;
 
 #[derive(Debug, Clone)]
-struct StatusContextWindowData {
-    percent_remaining: i64,
-    tokens_in_context: i64,
-    window: i64,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct StatusTokenUsageData {
     total: i64,
     input: i64,
     output: i64,
-    context_window: Option<StatusContextWindowData>,
 }
 
 #[derive(Debug)]
@@ -72,9 +63,7 @@ struct StatusHistoryCell {
 pub(crate) fn new_status_output(
     config: &Config,
     auth_manager: &AuthManager,
-    model_family: &ModelFamily,
     total_usage: &TokenUsage,
-    context_usage: Option<&TokenUsage>,
     session_id: &Option<ConversationId>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
     plan_type: Option<PlanType>,
@@ -85,9 +74,7 @@ pub(crate) fn new_status_output(
     let card = StatusHistoryCell::new(
         config,
         auth_manager,
-        model_family,
         total_usage,
-        context_usage,
         session_id,
         rate_limits,
         plan_type,
@@ -103,9 +90,7 @@ impl StatusHistoryCell {
     fn new(
         config: &Config,
         auth_manager: &AuthManager,
-        model_family: &ModelFamily,
         total_usage: &TokenUsage,
-        context_usage: Option<&TokenUsage>,
         session_id: &Option<ConversationId>,
         rate_limits: Option<&RateLimitSnapshotDisplay>,
         plan_type: Option<PlanType>,
@@ -134,19 +119,11 @@ impl StatusHistoryCell {
         let agents_summary = compose_agents_summary(config);
         let account = compose_account_display(auth_manager, plan_type);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
-        let context_window = model_family.context_window.and_then(|window| {
-            context_usage.map(|usage| StatusContextWindowData {
-                percent_remaining: usage.percent_of_context_window_remaining(window),
-                tokens_in_context: usage.tokens_in_context_window(),
-                window,
-            })
-        });
 
         let token_usage = StatusTokenUsageData {
             total: total_usage.blended_total(),
             input: total_usage.non_cached_input(),
             output: total_usage.output_tokens,
-            context_window,
         };
         let rate_limits = compose_rate_limit_data(rate_limits, now);
 
@@ -180,22 +157,6 @@ impl StatusHistoryCell {
             Span::from(" output").dim(),
             Span::from(")").dim(),
         ]
-    }
-
-    fn context_window_spans(&self) -> Option<Vec<Span<'static>>> {
-        let context = self.token_usage.context_window.as_ref()?;
-        let percent = context.percent_remaining;
-        let used_fmt = format_tokens_compact(context.tokens_in_context);
-        let window_fmt = format_tokens_compact(context.window);
-
-        Some(vec![
-            Span::from(format!("{percent}% left")),
-            Span::from(" (").dim(),
-            Span::from(used_fmt).dim(),
-            Span::from(" used / ").dim(),
-            Span::from(window_fmt).dim(),
-            Span::from(")").dim(),
-        ])
     }
 
     fn rate_limit_lines(
@@ -345,9 +306,6 @@ impl HistoryCell for StatusHistoryCell {
             push_label(&mut labels, &mut seen, "Session");
         }
         push_label(&mut labels, &mut seen, "Token usage");
-        if self.token_usage.context_window.is_some() {
-            push_label(&mut labels, &mut seen, "Context window");
-        }
         self.collect_rate_limit_labels(&mut seen, &mut labels);
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
@@ -397,10 +355,6 @@ impl HistoryCell for StatusHistoryCell {
         // Hide token usage only for ChatGPT subscribers
         if !matches!(self.account, Some(StatusAccountDisplay::ChatGpt { .. })) {
             lines.push(formatter.line("Token usage", self.token_usage_spans()));
-        }
-
-        if let Some(spans) = self.context_window_spans() {
-            lines.push(formatter.line("Context window", spans));
         }
 
         lines.extend(self.rate_limit_lines(available_inner_width, &formatter));

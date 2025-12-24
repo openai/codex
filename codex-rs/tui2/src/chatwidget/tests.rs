@@ -311,7 +311,6 @@ async fn helpers_are_available_and_do_not_panic() {
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config().await;
     let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
-    let model_family = ModelsManager::construct_model_family_offline(&resolved_model, &cfg);
     let conversation_manager = Arc::new(ConversationManager::with_models_provider(
         CodexAuth::from_api_key("test"),
         cfg.model_provider.clone(),
@@ -328,7 +327,7 @@ async fn helpers_are_available_and_do_not_panic() {
         models_manager: conversation_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
-        model_family,
+        model: resolved_model,
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -369,11 +368,11 @@ async fn make_chatwidget_manual(
         codex_op_tx: op_tx,
         bottom_pane: bottom,
         active_cell: None,
-        config: cfg.clone(),
-        model_family: ModelsManager::construct_model_family_offline(&resolved_model, &cfg),
+        config: cfg,
+        model: resolved_model.clone(),
         auth_manager: auth_manager.clone(),
         models_manager: Arc::new(ModelsManager::new(auth_manager)),
-        session_header: SessionHeader::new(resolved_model.clone()),
+        session_header: SessionHeader::new(resolved_model),
         initial_user_message: None,
         token_info: None,
         rate_limit_snapshot: None,
