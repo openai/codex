@@ -616,9 +616,7 @@ pub fn build_login_http_client() -> io::Result<reqwest::Client> {
     build_login_http_client_with_env(&ProcessEnv)
 }
 
-pub(crate) fn build_login_http_client_with_env(
-    env_source: &dyn EnvSource,
-) -> io::Result<reqwest::Client> {
+fn build_login_http_client_with_env(env_source: &dyn EnvSource) -> io::Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder();
 
     if let Some(path) = login_ca_certificate_path(env_source) {
