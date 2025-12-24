@@ -1,0 +1,30 @@
+[cells]
+  root = .
+  toolchains = codex-rs/toolchains
+  prelude = prelude
+  none = none
+
+[cell_aliases]
+  # Buck2 prelude expects some common aliases to exist in some environments.
+  config = prelude
+  ovr_config = prelude
+  fbcode = none
+  fbsource = none
+  fbcode_macros = none
+  buck = none
+
+# Use the Buck2 prelude bundled with the buck2 binary.
+[external_cells]
+  prelude = bundled
+
+[parser]
+    target_platform_detector_spec = target://...->prelude//platforms:default
+
+[codex]
+    # Local-only knob used by codex-rs/buck2 to approximate Cargo profiles.
+    # Override on the command line with:
+    #   ./scripts/buck2 build -c codex.rust_profile=release //codex-rs/cli:codex
+    rust_profile = dev
+
+[build]
+  execution_platforms = prelude//platforms:default
