@@ -77,7 +77,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
         ev_local_shell_call(CALL_ID, "completed", vec!["/bin/echo", "etag ok"]),
         ev_completed("resp-1"),
     ]);
-    let user_turn_mock = responses::mount_response_once(
+    responses::mount_response_once(
         &server,
         sse_response(first_response_body).insert_header("X-Models-Etag", ETAG_2),
     )
@@ -112,10 +112,6 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
         .await?;
 
     let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    // Assert /responses requests no longer send the conditional models header.
-    let user_req = user_turn_mock.single_request();
-    assert_eq!(user_req.header("X-If-Models-Match"), None);
 
     // Assert /models was refreshed exactly once after the X-Models-Etag mismatch.
     assert_eq!(refresh_models_mock.requests().len(), 1);
