@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""
+Generate Reindeer fixups for third-party crates.
+
+Reindeer requires an explicit decision for each crate with a build script:
+either run it or ignore it. For most third-party crates we run build scripts.
+
+We intentionally do not generate `extra_srcs` fixups here:
+  - Reindeer validates fixup globs against its chosen crate source directory,
+    and with vendoring enabled this can be a filtered view of the package that
+    does not include top-level docs/fixtures (README, tests data, etc).
+  - Instead, we include common non-Rust sources via the `codex_rust_*` wrapper
+    macros in `codex-rs/buck2/reindeer_macros.bzl` using Buck `glob(...)`.
+
+This script is checked in; its outputs are not.
+
+The generated fixups live under `codex-rs/third-party/fixups/` and are
+intentionally gitignored for now (see the repo root `.gitignore`, which ignores
+`codex-rs/third-party/`). This script is designed to be re-run and will
+overwrite any existing generated fixups.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+from typing import Any
+
+
+CODEX_RS_ROOT = pathlib.Path(__file__).resolve().parents[1]
+THIRD_PARTY_DIR = CODEX_RS_ROOT / "third-party"
+VENDOR_DIR = THIRD_PARTY_DIR / "vendor"
+FIXUPS_DIR = THIRD_PARTY_DIR / "fixups"
+
+
+def cargo_metadata() -> dict[str, Any]:
+    out = subprocess.check_output(
+        ["cargo", "metadata", "--format-version=1", "--locked"],
+        cwd=CODEX_RS_ROOT,
+        text=True,
+    )
+    return json.loads(out)
+
+
+def reindeer_reachable_package_ids(meta: dict[str, Any]) -> set[str]:
+    """
+    Approximate the set of packages Reindeer cares about for `buckify`.
+
+    Reindeer buckifies dependencies of workspace members, but it does not need
+    deps that are only reachable through `dev` edges (tests/benches/examples).
+    """
+
+    resolve = meta.get("resolve") or {}
+    nodes = resolve.get("nodes") or []
+    by_id: dict[str, Any] = {n["id"]: n for n in nodes}
+
+    roots = list(meta.get("workspace_members") or [])
+    reachable: set[str] = set()
+    stack = list(roots)
+    while stack:
+        pkg_id = stack.pop()
+        if pkg_id in reachable:
+            continue
+        reachable.add(pkg_id)
+
+        node = by_id.get(pkg_id)
+        if not node:
+            continue
+
+        for dep in node.get("deps") or []:
+            kinds = dep.get("dep_kinds") or []
+            if kinds and all(k.get("kind") == "dev" for k in kinds):
+                continue
+            stack.append(dep["pkg"])
+
+    return reachable
+
+
+def vendored_links_value(name: str, version: str) -> str | None:
+    """
+    If the vendored crate declares `links = "..."` in its Cargo.toml, return it.
+
+    Cargo provides this to build scripts via the CARGO_MANIFEST_LINKS env var.
+    Some build scripts rely on it (e.g. ring).
+    """
+
+    cargo_toml = VENDOR_DIR / f"{name}-{version}" / "Cargo.toml"
+    if not cargo_toml.exists():
+        return None
+
+    text = cargo_toml.read_text(encoding="utf-8", errors="replace")
+
+    # Very small parser: search within the [package] section first, then fall back.
+    pkg_idx = text.find("[package]")
+    if pkg_idx != -1:
+        rest = text[pkg_idx:]
+        next_table = rest.find("\n[", 1)
+        pkg_block = rest if next_table == -1 else rest[:next_table]
+        m = re.search(r'(?m)^\s*links\s*=\s*"([^"]+)"\s*$', pkg_block)
+        if m:
+            return m.group(1)
+
+    m = re.search(r'(?m)^\s*links\s*=\s*"([^"]+)"\s*$', text)
+    if m:
+        return m.group(1)
+    return None
+
+
+def openssl_cfgs() -> list[str] | None:
+    """
+    Determine the OpenSSL cfgs that the `openssl` crate expects, based on the
+    system OpenSSL version.
+
+    Under Cargo, openssl-sys emits a `cargo:version_number=...` metadata line
+    and Cargo converts it into DEP_OPENSSL_VERSION_NUMBER for dependents.
+    Buck's buildscript runner does not currently propagate those DEP_* env vars,
+    so we approximate the same cfgs here for Buck builds.
+    """
+
+    def pkg_config_modversion() -> str | None:
+        try:
+            out = subprocess.check_output(
+                ["pkg-config", "--modversion", "openssl"],
+                cwd=CODEX_RS_ROOT,
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            return None
+        v = out.strip()
+        return v if v else None
+
+    def parse_openssl_version(v: str) -> tuple[int, int, int, str | None] | None:
+        """
+        Parse versions like:
+        - 3.0.13
+        - 1.1.1w
+        - 1.1.0h
+        """
+
+        m = re.match(r"^(\d+)\.(\d+)\.(\d+)([a-z])?$", v)
+        if not m:
+            return None
+        major, minor, patch = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        suffix = m.group(4)
+        return (major, minor, patch, suffix)
+
+    def suffix_ge(a: str | None, b: str) -> bool:
+        if a is None:
+            return False
+        return a >= b
+
+    v = pkg_config_modversion()
+    parsed = parse_openssl_version(v) if v else None
+
+    # In CI we install libssl-dev, so pkg-config should generally be available.
+    # If it isn't, assume OpenSSL 3.x on modern Linux distros.
+    if parsed is None:
+        if sys.platform.startswith("linux"):
+            return ["ossl110", "ossl110g", "ossl110h", "ossl111", "ossl111d", "ossl300"]
+        return None
+
+    major, minor, patch, suffix = parsed
+
+    cfgs: list[str] = []
+    if (major, minor, patch) >= (1, 1, 0):
+        cfgs.append("ossl110")
+        # ossl110g/ossl110h correspond to OpenSSL 1.1.0g/h and later.
+        if (major, minor, patch) > (1, 1, 0) or suffix_ge(suffix, "g"):
+            cfgs.append("ossl110g")
+        if (major, minor, patch) > (1, 1, 0) or suffix_ge(suffix, "h"):
+            cfgs.append("ossl110h")
+    if (major, minor, patch) >= (1, 1, 1):
+        cfgs.append("ossl111")
+        # ossl111d corresponds to OpenSSL 1.1.1d and later.
+        if (major, minor, patch) > (1, 1, 1) or suffix_ge(suffix, "d"):
+            cfgs.append("ossl111d")
+    if major >= 3:
+        cfgs.append("ossl300")
+
+    return cfgs or None
+
+
+def toml_string_array(items: list[str]) -> str:
+    # Emit stable TOML with double-quoted strings.
+    return "[" + ", ".join(json.dumps(s) for s in items) + "]"
+
+
+def main() -> int:
+    meta = cargo_metadata()
+    packages = meta.get("packages", [])
+    reachable_ids = reindeer_reachable_package_ids(meta)
+
+    # First-party packages whose build.rs we intentionally ignore under Buck.
+    buildscript_run_overrides: dict[str, bool] = {
+        # build.rs only adds rerun-if-changed
+        "codex-execpolicy-legacy": False,
+        # Windows-only resource compilation
+        "codex-windows-sandbox": False,
+    }
+
+    # Packages where Cargo metadata reports a build script, but Reindeer does not
+    # require/accept a buildscript fixup in this workspace.
+    skip_packages: set[str] = {
+        "indexmap",
+        "quinn",
+    }
+
+    reachable_pkgs = [p for p in packages if p["id"] in reachable_ids]
+
+    # name -> version -> has_buildscript
+    by_name: dict[str, dict[str, bool]] = {}
+    for pkg in reachable_pkgs:
+        name = pkg["name"]
+        version = pkg["version"]
+        has_buildscript = any(
+            "custom-build" in (t.get("kind") or []) for t in (pkg.get("targets") or [])
+        )
+        by_name.setdefault(name, {})[version] = has_buildscript
+
+    # Nuke and regenerate: fixups are gitignored and generated.
+    if FIXUPS_DIR.exists():
+        shutil.rmtree(FIXUPS_DIR)
+    FIXUPS_DIR.mkdir(parents=True, exist_ok=True)
+
+    wrote = 0
+    for name, versions in sorted(by_name.items()):
+        if name in skip_packages:
+            continue
+
+        buildscript_versions = sorted([v for v, has in versions.items() if has])
+        if not buildscript_versions:
+            continue
+
+        run = buildscript_run_overrides.get(name, True)
+
+        fixup_path = FIXUPS_DIR / name / "fixups.toml"
+        fixup_path.parent.mkdir(parents=True, exist_ok=True)
+
+        stanzas: list[str] = []
+        for v in buildscript_versions:
+            if run:
+                links = vendored_links_value(name, v)
+                stanzas.append(f"['cfg(version = \"={v}\")'.buildscript.run]")
+                stanzas.append("rustc_link_lib = true")
+                stanzas.append("rustc_link_search = true")
+                # The `openssl` crate's build script derives cfgs from
+                # DEP_OPENSSL_VERSION_NUMBER (emitted by openssl-sys). Buck's
+                # buildscript runner does not currently propagate those DEP_*
+                # env vars, so approximate the same cfgs for Buck builds.
+                if name == "openssl" and v == "0.10.73":
+                    cfgs = openssl_cfgs()
+                    if cfgs:
+                        stanzas.append(f"cfgs = {toml_string_array(cfgs)}")
+                if links:
+                    stanzas.append(f'env = {{ CARGO_MANIFEST_LINKS = "{links}" }}')
+                stanzas.append("")
+            else:
+                stanzas.append(f"['cfg(version = \"={v}\")']")
+                stanzas.append("buildscript.run = false")
+                stanzas.append("")
+
+        content = "\n".join(stanzas).rstrip() + "\n"
+        fixup_path.write_text(content, encoding="utf-8")
+        wrote += 1
+
+    if wrote:
+        print(
+            f"Wrote buildscript fixups.toml for {wrote} crates under "
+            f"{os.path.relpath(FIXUPS_DIR, CODEX_RS_ROOT)}"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
