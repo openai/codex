@@ -159,7 +159,7 @@ impl ModelsManager {
     }
     pub async fn handle_new_models_etag(&self, etag: String) {
         let current_etag = self.get_etag().await;
-        if current_etag.as_deref() == Some(etag.as_str()) {
+        if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
             return;
         }
         if let Err(err) = self.refresh_available_models().await {
