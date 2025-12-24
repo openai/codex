@@ -1,6 +1,7 @@
 use crate::config::NetworkMode;
 use crate::mitm;
 use crate::policy::normalize_host;
+use crate::responses::blocked_header_value;
 use crate::state::AppState;
 use crate::state::BlockedRequest;
 use anyhow::Context;
@@ -86,7 +87,7 @@ async fn http_connect_accept(
     let app_state = ctx.state().clone();
     let client = client_addr(&ctx);
 
-    match app_state.host_blocked(&host).await {
+    match app_state.host_blocked(&host, authority.port()).await {
         Ok((true, reason)) => {
             let _ = app_state
                 .record_blocked(BlockedRequest::new(
@@ -279,8 +280,9 @@ async fn http_plain_proxy(mut ctx: ProxyContext, req: Request) -> Result<Respons
         }
     };
     let host = normalize_host(&authority.host().to_string());
+    let port = authority.port();
 
-    match app_state.host_blocked(&host).await {
+    match app_state.host_blocked(&host, port).await {
         Ok((true, reason)) => {
             let _ = app_state
                 .record_blocked(BlockedRequest::new(
@@ -391,12 +393,7 @@ fn json_blocked(host: &str, reason: &str) -> Response {
 }
 
 fn blocked_text(reason: &str) -> Response {
-    Response::builder()
-        .status(StatusCode::FORBIDDEN)
-        .header("content-type", "text/plain")
-        .header("x-proxy-error", blocked_header_value(reason))
-        .body(Body::from(blocked_message(reason)))
-        .unwrap_or_else(|_| Response::new(Body::from("blocked")))
+    crate::responses::blocked_text_response(reason)
 }
 
 fn text_response(status: StatusCode, body: &str) -> Response {
@@ -405,25 +402,4 @@ fn text_response(status: StatusCode, body: &str) -> Response {
         .header("content-type", "text/plain")
         .body(Body::from(body.to_string()))
         .unwrap_or_else(|_| Response::new(Body::from(body.to_string())))
-}
-
-fn blocked_header_value(reason: &str) -> &'static str {
-    match reason {
-        "not_allowed" | "not_allowed_local" => "blocked-by-allowlist",
-        "denied" => "blocked-by-denylist",
-        "method_not_allowed" => "blocked-by-method-policy",
-        "mitm_required" => "blocked-by-mitm-required",
-        _ => "blocked-by-policy",
-    }
-}
-
-fn blocked_message(reason: &str) -> &'static str {
-    match reason {
-        "not_allowed" => "Codex blocked this request: domain not in allowlist.",
-        "not_allowed_local" => "Codex blocked this request: local addresses not allowed.",
-        "denied" => "Codex blocked this request: domain denied by policy.",
-        "method_not_allowed" => "Codex blocked this request: method not allowed in limited mode.",
-        "mitm_required" => "Codex blocked this request: MITM required for limited HTTPS.",
-        _ => "Codex blocked this request by network policy.",
-    }
 }

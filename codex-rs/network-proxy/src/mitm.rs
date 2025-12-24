@@ -2,6 +2,7 @@ use crate::config::MitmConfig;
 use crate::config::NetworkMode;
 use crate::policy::method_allowed;
 use crate::policy::normalize_host;
+use crate::responses::blocked_text_response;
 use crate::state::AppState;
 use crate::state::BlockedRequest;
 use anyhow::Context;
@@ -34,12 +35,17 @@ use rama::tls::rustls::server::TlsAcceptorData;
 use rama::tls::rustls::server::TlsAcceptorDataBuilder;
 use rama::tls::rustls::server::TlsAcceptorLayer;
 use std::fs;
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::BufReader;
+use std::io::Write;
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context as TaskContext;
 use std::task::Poll;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tracing::info;
 use tracing::warn;
 
@@ -453,9 +459,20 @@ fn load_or_create_ca(cfg: &MitmConfig) -> Result<(String, String)> {
     }
 
     let (cert_pem, key_pem) = generate_ca()?;
-    // The CA key is a high-value secret. Ensure it is not world-readable. The cert can be.
-    write_private_file(cert_path, cert_pem.as_bytes(), 0o644)?;
-    write_private_file(key_path, key_pem.as_bytes(), 0o600)?;
+    // The CA key is a high-value secret. Create it atomically with restrictive permissions.
+    // The cert can be world-readable, but we still write it atomically to avoid partial writes.
+    //
+    // We intentionally use create-new semantics: if a key already exists, we should not overwrite
+    // it silently (that would invalidate previously-trusted cert chains).
+    write_atomic_create_new(key_path, key_pem.as_bytes(), 0o600)
+        .with_context(|| format!("failed to persist CA key {}", key_path.display()))?;
+    if let Err(err) = write_atomic_create_new(cert_path, cert_pem.as_bytes(), 0o644)
+        .with_context(|| format!("failed to persist CA cert {}", cert_path.display()))
+    {
+        // Avoid leaving a partially-created CA around (cert missing) if the second write fails.
+        let _ = fs::remove_file(key_path);
+        return Err(err);
+    }
     let cert_path = cert_path.display();
     let key_path = key_path.display();
     info!("generated MITM CA (cert_path={cert_path}, key_path={key_path})");
@@ -482,33 +499,73 @@ fn generate_ca() -> Result<(String, String)> {
     Ok((cert.pem(), key_pair.serialize_pem()))
 }
 
-fn write_private_file(path: &std::path::Path, contents: &[u8], mode: u32) -> Result<()> {
-    fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))?;
-    set_permissions(path, mode)?;
+fn write_atomic_create_new(path: &std::path::Path, contents: &[u8], mode: u32) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("missing parent directory"))?;
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let pid = std::process::id();
+    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp_path = parent.join(format!(".{file_name}.tmp.{pid}.{nanos}"));
+
+    let mut file = open_create_new_with_mode(&tmp_path, mode)?;
+    file.write_all(contents)
+        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed to fsync {}", tmp_path.display()))?;
+    drop(file);
+
+    if path.exists() {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(anyhow!(
+            "refusing to overwrite existing file {}",
+            path.display()
+        ));
+    }
+
+    fs::rename(&tmp_path, path).with_context(|| {
+        format!(
+            "failed to rename {} -> {}",
+            tmp_path.display(),
+            path.display()
+        )
+    })?;
+
+    // Best-effort durability: ensure the directory entry is persisted too.
+    let dir = File::open(parent).with_context(|| format!("failed to open {}", parent.display()))?;
+    dir.sync_all()
+        .with_context(|| format!("failed to fsync {}", parent.display()))?;
+
     Ok(())
 }
 
 #[cfg(unix)]
-fn set_permissions(path: &std::path::Path, mode: u32) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
+fn open_create_new_with_mode(path: &std::path::Path, mode: u32) -> Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
 
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))
-        .with_context(|| format!("failed to set permissions on {}", path.display()))?;
-    Ok(())
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .open(path)
+        .with_context(|| format!("failed to create {}", path.display()))
 }
 
 #[cfg(not(unix))]
-fn set_permissions(_path: &std::path::Path, _mode: u32) -> Result<()> {
-    Ok(())
+fn open_create_new_with_mode(path: &std::path::Path, _mode: u32) -> Result<File> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("failed to create {}", path.display()))
 }
 
 fn blocked_text(reason: &str) -> Response {
-    Response::builder()
-        .status(StatusCode::FORBIDDEN)
-        .header("content-type", "text/plain")
-        .header("x-proxy-error", blocked_header_value(reason))
-        .body(Body::from(blocked_message(reason)))
-        .unwrap_or_else(|_| Response::new(Body::from("blocked")))
+    blocked_text_response(reason)
 }
 
 fn text_response(status: StatusCode, body: &str) -> Response {
@@ -517,21 +574,4 @@ fn text_response(status: StatusCode, body: &str) -> Response {
         .header("content-type", "text/plain")
         .body(Body::from(body.to_string()))
         .unwrap_or_else(|_| Response::new(Body::from(body.to_string())))
-}
-
-fn blocked_header_value(reason: &str) -> &'static str {
-    match reason {
-        "not_allowed" | "not_allowed_local" => "blocked-by-allowlist",
-        "denied" => "blocked-by-denylist",
-        "method_not_allowed" => "blocked-by-method-policy",
-        "mitm_required" => "blocked-by-mitm-required",
-        _ => "blocked-by-policy",
-    }
-}
-
-fn blocked_message(reason: &str) -> &'static str {
-    match reason {
-        "method_not_allowed" => "Codex blocked this request: method not allowed in limited mode.",
-        _ => "Codex blocked this request by network policy.",
-    }
 }

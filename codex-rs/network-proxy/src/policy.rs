@@ -1,5 +1,7 @@
 use crate::config::NetworkMode;
 use std::net::IpAddr;
+use std::net::Ipv4Addr;
+use std::net::Ipv6Addr;
 
 pub fn method_allowed(mode: NetworkMode, method: &str) -> bool {
     match mode {
@@ -17,6 +19,37 @@ pub fn is_loopback_host(host: &str) -> bool {
         return ip.is_loopback();
     }
     false
+}
+
+pub fn is_non_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_non_public_ipv4(ip),
+        IpAddr::V6(ip) => is_non_public_ipv6(ip),
+    }
+}
+
+fn is_non_public_ipv4(ip: Ipv4Addr) -> bool {
+    // Use the standard library classification helpers where possible; they encode the intent more
+    // clearly than hand-rolled range checks.
+    ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+}
+
+fn is_non_public_ipv6(ip: Ipv6Addr) -> bool {
+    // Treat anything that isn't globally routable as "local" for SSRF prevention. In particular:
+    //  - `::1` loopback
+    //  - `fc00::/7` unique-local (RFC 4193)
+    //  - `fe80::/10` link-local
+    //  - `::` unspecified
+    //  - multicast ranges
+    ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || ip.is_unique_local()
+        || ip.is_unicast_link_local()
 }
 
 pub fn normalize_host(host: &str) -> String {
@@ -76,6 +109,18 @@ mod tests {
         assert!(is_loopback_host("127.0.0.1"));
         assert!(is_loopback_host("::1"));
         assert!(!is_loopback_host("1.2.3.4"));
+    }
+
+    #[test]
+    fn is_non_public_ip_rejects_private_and_loopback_ranges() {
+        assert!(is_non_public_ip("127.0.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("10.0.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("192.168.0.1".parse().unwrap()));
+        assert!(!is_non_public_ip("8.8.8.8".parse().unwrap()));
+
+        assert!(is_non_public_ip("::1".parse().unwrap()));
+        assert!(is_non_public_ip("fe80::1".parse().unwrap()));
+        assert!(is_non_public_ip("fc00::1".parse().unwrap()));
     }
 
     #[test]

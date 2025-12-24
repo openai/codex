@@ -78,7 +78,7 @@ pub async fn run_socks5(state: Arc<AppState>, addr: SocketAddr) -> Result<()> {
                     }
                 }
 
-                match app_state.host_blocked(&host).await {
+                match app_state.host_blocked(&host, port).await {
                     Ok((true, reason)) => {
                         let _ = app_state
                             .record_blocked(BlockedRequest::new(

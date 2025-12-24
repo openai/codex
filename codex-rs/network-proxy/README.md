@@ -21,14 +21,20 @@ Example config:
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
 admin_url = "http://127.0.0.1:8080"
+# By default, non-loopback binds are clamped to loopback for safety.
+# If you want to expose these listeners beyond localhost, you must opt in explicitly.
+dangerously_allow_non_loopback = false
+dangerously_allow_non_loopback_admin = false
 mode = "limited" # or "full"
 
 [network_proxy.policy]
-# If allowed_domains is non-empty, hosts must match it (unless denied).
+# Hosts must match the allowlist (unless denied).
+# If `allowed_domains` is empty, the proxy blocks requests until an allowlist is configured.
 allowed_domains = ["*.openai.com"]
 denied_domains = ["evil.example"]
 
-# If false, loopback (localhost/127.0.0.1/::1) is rejected unless explicitly allowlisted.
+# If false, local/private networking is rejected unless the host is explicitly allowlisted.
+# This includes `localhost`, loopback, and common private ranges (RFC1918, IPv6 ULA, link-local).
 allow_local_binding = false
 
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
@@ -115,3 +121,32 @@ curl -sS -X POST http://127.0.0.1:8080/reload
 - Unix socket proxying via the `x-unix-socket` header is **macOS-only**; other platforms will
   reject unix socket requests.
 
+## Security notes (important)
+
+This section documents the protections implemented by `codex-network-proxy`, and the boundaries of
+what it can reasonably guarantee.
+
+- Allowlist-first policy: if `allowed_domains` is empty, requests are blocked until an allowlist is configured.
+- Deny wins: entries in `denied_domains` always override the allowlist.
+- Local/private network protection: when `allow_local_binding = false`, the proxy blocks loopback
+  and common private/link-local ranges (and does a best-effort DNS lookup to catch hostnames that
+  resolve to those ranges).
+- Limited mode enforcement:
+  - only `GET`, `HEAD`, and `OPTIONS` are allowed
+  - HTTPS `CONNECT` requires MITM to be enabled, otherwise CONNECT is blocked (to avoid “tunnel hides method” bypass).
+- Listener safety defaults:
+  - the admin API is unauthenticated; non-loopback binds are clamped unless explicitly enabled via
+    `dangerously_allow_non_loopback_admin`
+  - the HTTP proxy listener similarly clamps non-loopback binds unless explicitly enabled via
+    `dangerously_allow_non_loopback`
+  - when unix socket proxying is enabled, both listeners are forced to loopback to avoid turning the
+    proxy into a remote bridge into local daemons.
+- MITM CA key handling:
+  - the CA key file is created with restrictive permissions (`0600`) and written atomically using
+    create-new + fsync + rename, to avoid partial writes or transiently-permissive modes.
+
+Limitations:
+
+- DNS rebinding is hard to fully prevent without pinning the resolved IP(s) all the way down to the
+  transport layer. If your threat model includes hostile DNS, enforce network egress at a lower
+  layer too (e.g., firewall / VPC / corporate proxy policies).

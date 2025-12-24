@@ -3,6 +3,7 @@ use crate::config::MitmConfig;
 use crate::config::NetworkMode;
 use crate::mitm::MitmState;
 use crate::policy::is_loopback_host;
+use crate::policy::is_non_public_ip;
 use crate::policy::method_allowed;
 use anyhow::Context;
 use anyhow::Result;
@@ -18,11 +19,13 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 use time::OffsetDateTime;
+use tokio::net::lookup_host;
 use tokio::sync::RwLock;
 use tracing::info;
 use tracing::warn;
@@ -125,26 +128,43 @@ impl AppState {
         }
     }
 
-    pub async fn host_blocked(&self, host: &str) -> Result<(bool, String)> {
+    pub async fn host_blocked(&self, host: &str, port: u16) -> Result<(bool, String)> {
         self.reload_if_needed().await?;
-        let guard = self.state.read().await;
+        let (deny_set, allow_set, allow_local_binding, allowed_domains_empty) = {
+            let guard = self.state.read().await;
+            (
+                guard.deny_set.clone(),
+                guard.allow_set.clone(),
+                guard.config.network_proxy.policy.allow_local_binding,
+                guard.config.network_proxy.policy.allowed_domains.is_empty(),
+            )
+        };
+
         // Decision order matters:
         //  1) explicit deny always wins
-        //  2) local/loopback is opt-in (defense-in-depth)
+        //  2) local/private networking is opt-in (defense-in-depth)
         //  3) allowlist is enforced when configured
-        if guard.deny_set.is_match(host) {
+        if deny_set.is_match(host) {
             return Ok((true, "denied".to_string()));
         }
-        let is_loopback = is_loopback_host(host);
-        if is_loopback
-            && !guard.config.network_proxy.policy.allow_local_binding
-            && !guard.allow_set.is_match(host)
-        {
-            return Ok((true, "not_allowed_local".to_string()));
+
+        if allowed_domains_empty {
+            return Ok((true, "not_allowed".to_string()));
         }
-        if guard.config.network_proxy.policy.allowed_domains.is_empty()
-            || !guard.allow_set.is_match(host)
-        {
+
+        if !allow_local_binding && !allow_set.is_match(host) {
+            // If the intent is "prevent access to local/internal networks", we must not rely solely
+            // on string checks like `localhost` / `127.0.0.1`. Attackers can use DNS rebinding or
+            // public suffix services that map hostnames onto private IPs.
+            //
+            // We therefore do a best-effort DNS + IP classification check before allowing the
+            // request. This closes the obvious bypass where the hostname itself isn't loopback.
+            if is_loopback_host(host) || host_resolves_to_non_public_ip(host, port).await? {
+                return Ok((true, "not_allowed_local".to_string()));
+            }
+        }
+
+        if !allow_set.is_match(host) {
             return Ok((true, "not_allowed".to_string()));
         }
         Ok((false, String::new()))
@@ -169,14 +189,35 @@ impl AppState {
 
     pub async fn is_unix_socket_allowed(&self, path: &str) -> Result<bool> {
         self.reload_if_needed().await?;
+        if cfg!(not(target_os = "macos")) {
+            return Ok(false);
+        }
+
+        // We only support absolute unix socket paths (a relative path would be ambiguous with
+        // respect to the proxy process's CWD and can lead to confusing allowlist behavior).
+        if !Path::new(path).is_absolute() {
+            return Ok(false);
+        }
+
         let guard = self.state.read().await;
-        Ok(guard
-            .config
-            .network_proxy
-            .policy
-            .allow_unix_sockets
-            .iter()
-            .any(|p| p == path))
+        let requested_canonical = std::fs::canonicalize(path).ok();
+        for allowed in &guard.config.network_proxy.policy.allow_unix_sockets {
+            if allowed == path {
+                return Ok(true);
+            }
+
+            // Best-effort canonicalization to reduce surprises with symlinks.
+            // If canonicalization fails (e.g., socket not created yet), fall back to raw comparison.
+            let Some(requested_canonical) = &requested_canonical else {
+                continue;
+            };
+            if let Ok(allowed_canonical) = std::fs::canonicalize(allowed)
+                && &allowed_canonical == requested_canonical
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub async fn method_allowed(&self, method: &str) -> Result<bool> {
@@ -228,6 +269,28 @@ impl AppState {
 
         self.force_reload().await
     }
+}
+
+async fn host_resolves_to_non_public_ip(host: &str, port: u16) -> Result<bool> {
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Ok(is_non_public_ip(ip));
+    }
+
+    // If DNS lookup fails, default to "not local/private" rather than blocking. In practice, the
+    // subsequent connect attempt will fail anyway, and blocking on transient resolver issues would
+    // make the proxy fragile. The allowlist/denylist remains the primary control plane.
+    let addrs = match lookup_host((host, port)).await {
+        Ok(addrs) => addrs,
+        Err(_) => return Ok(false),
+    };
+
+    for addr in addrs {
+        if is_non_public_ip(addr.ip()) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 async fn build_config_state() -> Result<ConfigState> {
@@ -297,6 +360,8 @@ struct PartialConfig {
 struct PartialNetworkProxyConfig {
     enabled: Option<bool>,
     mode: Option<NetworkMode>,
+    dangerously_allow_non_loopback: Option<bool>,
+    dangerously_allow_non_loopback_admin: Option<bool>,
     #[serde(default)]
     policy: PartialNetworkPolicy,
 }
@@ -317,6 +382,8 @@ struct PartialNetworkPolicy {
 struct NetworkProxyConstraints {
     enabled: Option<bool>,
     mode: Option<NetworkMode>,
+    dangerously_allow_non_loopback: Option<bool>,
+    dangerously_allow_non_loopback_admin: Option<bool>,
     allowed_domains: Option<Vec<String>>,
     denied_domains: Option<Vec<String>>,
     allow_unix_sockets: Option<Vec<String>>,
@@ -357,6 +424,17 @@ fn network_proxy_constraints_from_trusted_layers(
         }
         if let Some(mode) = partial.network_proxy.mode {
             constraints.mode = Some(mode);
+        }
+        if let Some(dangerously_allow_non_loopback) =
+            partial.network_proxy.dangerously_allow_non_loopback
+        {
+            constraints.dangerously_allow_non_loopback = Some(dangerously_allow_non_loopback);
+        }
+        if let Some(dangerously_allow_non_loopback_admin) =
+            partial.network_proxy.dangerously_allow_non_loopback_admin
+        {
+            constraints.dangerously_allow_non_loopback_admin =
+                Some(dangerously_allow_non_loopback_admin);
         }
 
         if let Some(allowed_domains) = partial.network_proxy.policy.allowed_domains {
@@ -414,6 +492,42 @@ fn validate_policy_against_constraints(
             }
         })?;
     }
+
+    let allow_non_loopback_admin = constraints.dangerously_allow_non_loopback_admin;
+    let _ = Constrained::new(
+        config.network_proxy.dangerously_allow_non_loopback_admin,
+        move |candidate| match allow_non_loopback_admin {
+            Some(true) | None => Ok(()),
+            Some(false) => {
+                if *candidate {
+                    Err(ConstraintError::invalid_value(
+                        "true",
+                        "false (disabled by managed config)",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+        },
+    )?;
+
+    let allow_non_loopback_proxy = constraints.dangerously_allow_non_loopback;
+    let _ = Constrained::new(
+        config.network_proxy.dangerously_allow_non_loopback,
+        move |candidate| match allow_non_loopback_proxy {
+            Some(true) | None => Ok(()),
+            Some(false) => {
+                if *candidate {
+                    Err(ConstraintError::invalid_value(
+                        "true",
+                        "false (disabled by managed config)",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+        },
+    )?;
 
     if let Some(allow_local_binding) = constraints.allow_local_binding {
         let _ = Constrained::new(
@@ -634,7 +748,7 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("example.com").await.unwrap(),
+            state.host_blocked("example.com", 80).await.unwrap(),
             (true, "denied".to_string())
         );
     }
@@ -647,11 +761,11 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("example.com").await.unwrap(),
+            state.host_blocked("example.com", 80).await.unwrap(),
             (false, String::new())
         );
         assert_eq!(
-            state.host_blocked("not-example.com").await.unwrap(),
+            state.host_blocked("not-example.com", 80).await.unwrap(),
             (true, "not_allowed".to_string())
         );
     }
@@ -664,11 +778,11 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("openai.com").await.unwrap(),
+            state.host_blocked("openai.com", 80).await.unwrap(),
             (false, String::new())
         );
         assert_eq!(
-            state.host_blocked("api.openai.com").await.unwrap(),
+            state.host_blocked("api.openai.com", 80).await.unwrap(),
             (false, String::new())
         );
     }
@@ -682,11 +796,11 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("127.0.0.1").await.unwrap(),
+            state.host_blocked("127.0.0.1", 80).await.unwrap(),
             (true, "not_allowed_local".to_string())
         );
         assert_eq!(
-            state.host_blocked("localhost").await.unwrap(),
+            state.host_blocked("localhost", 80).await.unwrap(),
             (true, "not_allowed_local".to_string())
         );
     }
@@ -700,8 +814,22 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("localhost").await.unwrap(),
+            state.host_blocked("localhost", 80).await.unwrap(),
             (false, String::new())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_rejects_private_ip_literals_when_local_binding_disabled() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            allow_local_binding: false,
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("10.0.0.1", 80).await.unwrap(),
+            (true, "not_allowed_local".to_string())
         );
     }
 
@@ -786,6 +914,42 @@ mod tests {
     }
 
     #[test]
+    fn validate_policy_against_constraints_disallows_non_loopback_admin_without_managed_opt_in() {
+        let constraints = NetworkProxyConstraints {
+            dangerously_allow_non_loopback_admin: Some(false),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                dangerously_allow_non_loopback_admin: true,
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_allows_non_loopback_admin_with_managed_opt_in() {
+        let constraints = NetworkProxyConstraints {
+            dangerously_allow_non_loopback_admin: Some(true),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                dangerously_allow_non_loopback_admin: true,
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_ok());
+    }
+
+    #[test]
     fn compile_globset_is_case_insensitive() {
         let patterns = vec!["ExAmPle.CoM".to_string()];
         let set = compile_globset(&patterns).unwrap();
@@ -834,6 +998,39 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn unix_socket_allowlist_resolves_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let unique = OffsetDateTime::now_utc().unix_timestamp_nanos();
+        let dir = std::env::temp_dir().join(format!("codex-network-proxy-test-{unique}"));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let real = dir.join("real.sock");
+        let link = dir.join("link.sock");
+
+        // The allowlist mechanism is path-based; for test purposes we don't need an actual unix
+        // domain socket. Any filesystem entry works for canonicalization.
+        std::fs::write(&real, b"not a socket").unwrap();
+        symlink(&real, &link).unwrap();
+
+        let real_s = real.to_str().unwrap().to_string();
+        let link_s = link.to_str().unwrap().to_string();
+
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            allow_unix_sockets: vec![real_s],
+            ..NetworkPolicy::default()
+        });
+
+        assert!(state.is_unix_socket_allowed(&link_s).await.unwrap());
+
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_file(&real);
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[cfg(not(target_os = "macos"))]
