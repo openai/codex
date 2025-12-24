@@ -2477,16 +2477,19 @@ async fn drain_in_flight(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) -> CodexResult<()> {
+    let mut items = Vec::new();
     while let Some(res) = in_flight.next().await {
         match res {
             Ok(response_input) => {
-                sess.record_conversation_items(&turn_context, &[response_input.into()])
-                    .await;
+                items.push(response_input.into());
             }
             Err(err) => {
                 error_or_panic(format!("in-flight tool future failed during drain: {err}"));
             }
         }
+    }
+    if !items.is_empty() {
+        sess.record_conversation_items(&turn_context, &items).await;
     }
     Ok(())
 }
