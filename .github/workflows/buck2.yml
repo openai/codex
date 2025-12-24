@@ -1,0 +1,39 @@
+name: Buck2 (Experimental, non-blocking for PRs)
+
+on:
+  pull_request: {}
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: buck2-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  buck2-test:
+    name: buck2 test //codex-rs/...
+    runs-on: ubuntu-24.04
+    # Non-blocking while Buck2 support is still experimental.
+    continue-on-error: true
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Buck2 (local)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ./scripts/setup_buck2_local.sh
+
+      - name: Run Buck2 tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ./scripts/buck2 test //codex-rs/...
