@@ -1,4 +1,3 @@
-#[cfg(feature = "mitm")]
 mod imp {
     use crate::config::MitmConfig;
     use crate::config::NetworkMode;
@@ -22,6 +21,7 @@ mod imp {
     use rama::http::Response;
     use rama::http::StatusCode;
     use rama::http::Uri;
+    use rama::http::dep::http::uri::PathAndQuery;
     use rama::http::header::HOST;
     use rama::http::layer::remove_header::RemoveRequestHeaderLayer;
     use rama::http::layer::remove_header::RemoveResponseHeaderLayer;
@@ -44,20 +44,19 @@ mod imp {
     use tracing::info;
     use tracing::warn;
 
-    use rcgen::BasicConstraints;
-    use rcgen::Certificate;
-    use rcgen::CertificateParams;
-    use rcgen::DistinguishedName;
-    use rcgen::DnType;
-    use rcgen::ExtendedKeyUsagePurpose;
-    use rcgen::IsCa;
-    use rcgen::KeyPair;
-    use rcgen::KeyUsagePurpose;
-    use rcgen::SanType;
+    use rcgen_rama::BasicConstraints;
+    use rcgen_rama::CertificateParams;
+    use rcgen_rama::DistinguishedName;
+    use rcgen_rama::DnType;
+    use rcgen_rama::ExtendedKeyUsagePurpose;
+    use rcgen_rama::IsCa;
+    use rcgen_rama::Issuer;
+    use rcgen_rama::KeyPair;
+    use rcgen_rama::KeyUsagePurpose;
+    use rcgen_rama::SanType;
 
     pub struct MitmState {
-        ca_key: KeyPair,
-        ca_cert: Certificate,
+        issuer: Issuer<'static, KeyPair>,
         upstream: rama::service::BoxService<Arc<AppState>, Request, Response, OpaqueError>,
         inspect: bool,
         max_body_bytes: usize,
@@ -67,11 +66,8 @@ mod imp {
         pub fn new(cfg: &MitmConfig) -> Result<Self> {
             let (ca_cert_pem, ca_key_pem) = load_or_create_ca(cfg)?;
             let ca_key = KeyPair::from_pem(&ca_key_pem).context("failed to parse CA key")?;
-            let ca_params = CertificateParams::from_ca_cert_pem(&ca_cert_pem)
+            let issuer: Issuer<'static, KeyPair> = Issuer::from_ca_cert_pem(&ca_cert_pem, ca_key)
                 .context("failed to parse CA cert")?;
-            let ca_cert = ca_params
-                .self_signed(&ca_key)
-                .context("failed to reconstruct CA cert")?;
 
             let tls_config = rama::tls::rustls::client::TlsConnectorData::new_http_auto()
                 .context("create upstream TLS config")?;
@@ -84,8 +80,7 @@ mod imp {
                 .boxed();
 
             Ok(Self {
-                ca_key,
-                ca_cert,
+                issuer,
                 upstream,
                 inspect: cfg.inspect,
                 max_body_bytes: cfg.max_body_bytes,
@@ -93,8 +88,7 @@ mod imp {
         }
 
         fn tls_acceptor_data_for_host(&self, host: &str) -> Result<TlsAcceptorData> {
-            let (cert_pem, key_pem) =
-                issue_host_certificate_pem(host, &self.ca_cert, &self.ca_key)?;
+            let (cert_pem, key_pem) = issue_host_certificate_pem(host, &self.issuer)?;
             let cert_chain = pemfile::certs(&mut BufReader::new(cert_pem.as_bytes()))
                 .collect::<Result<Vec<_>, _>>()
                 .context("failed to parse host cert PEM")?;
@@ -160,7 +154,7 @@ mod imp {
         let response = match forward_request(ctx, req).await {
             Ok(resp) => resp,
             Err(err) => {
-                warn!(error = %err, "MITM upstream request failed");
+                warn!("MITM upstream request failed: {err}");
                 text_response(StatusCode::BAD_GATEWAY, "mitm upstream error")
             }
         };
@@ -201,11 +195,7 @@ mod imp {
         if let Some(request_host) = extract_request_host(&req) {
             let normalized = normalize_host(&request_host);
             if !normalized.is_empty() && normalized != target_host {
-                warn!(
-                    target = %target_host,
-                    request_host = %normalized,
-                    "MITM host mismatch"
-                );
+                warn!("MITM host mismatch (target={target_host}, request_host={normalized})");
                 return Ok(text_response(StatusCode::BAD_REQUEST, "host mismatch"));
             }
         }
@@ -223,12 +213,7 @@ mod imp {
                 ))
                 .await;
             warn!(
-                host = %target_host,
-                method = %method,
-                path = %path,
-                mode = ?mode,
-                allowed_methods = "GET, HEAD, OPTIONS",
-                "MITM blocked by method policy"
+                "MITM blocked by method policy (host={target_host}, method={method}, path={path}, mode={mode:?}, allowed_methods=GET, HEAD, OPTIONS)"
             );
             return Ok(blocked_text("method_not_allowed"));
         }
@@ -355,27 +340,23 @@ mod imp {
 
     impl BodyLoggable for RequestLogContext {
         fn log(self, len: usize, truncated: bool) {
+            let host = self.host;
+            let method = self.method;
+            let path = self.path;
             info!(
-                host = %self.host,
-                method = %self.method,
-                path = %self.path,
-                body_len = len,
-                truncated = truncated,
-                "MITM inspected request body"
+                "MITM inspected request body (host={host}, method={method}, path={path}, body_len={len}, truncated={truncated})"
             );
         }
     }
 
     impl BodyLoggable for ResponseLogContext {
         fn log(self, len: usize, truncated: bool) {
+            let host = self.host;
+            let method = self.method;
+            let path = self.path;
+            let status = self.status;
             info!(
-                host = %self.host,
-                method = %self.method,
-                path = %self.path,
-                status = %self.status,
-                body_len = len,
-                truncated = truncated,
-                "MITM inspected response body"
+                "MITM inspected response body (host={host}, method={method}, path={path}, status={status}, body_len={len}, truncated={truncated})"
             );
         }
     }
@@ -384,7 +365,7 @@ mod imp {
         req.headers()
             .get(HOST)
             .and_then(|v| v.to_str().ok())
-            .map(|v| v.to_string())
+            .map(ToString::to_string)
             .or_else(|| req.uri().authority().map(|a| a.as_str().to_string()))
     }
 
@@ -410,15 +391,14 @@ mod imp {
 
     fn path_and_query(uri: &Uri) -> String {
         uri.path_and_query()
-            .map(|pq| pq.as_str())
+            .map(PathAndQuery::as_str)
             .unwrap_or("/")
             .to_string()
     }
 
     fn issue_host_certificate_pem(
         host: &str,
-        ca_cert: &Certificate,
-        ca_key: &KeyPair,
+        issuer: &Issuer<'_, KeyPair>,
     ) -> Result<(String, String)> {
         let mut params = if let Ok(ip) = host.parse::<IpAddr>() {
             let mut params = CertificateParams::new(Vec::new())
@@ -436,10 +416,10 @@ mod imp {
             KeyUsagePurpose::KeyEncipherment,
         ];
 
-        let key_pair = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
+        let key_pair = KeyPair::generate_for(&rcgen_rama::PKCS_ECDSA_P256_SHA256)
             .map_err(|err| anyhow!("failed to generate host key pair: {err}"))?;
         let cert = params
-            .signed_by(&key_pair, ca_cert, ca_key)
+            .signed_by(&key_pair, issuer)
             .map_err(|err| anyhow!("failed to sign host cert: {err}"))?;
 
         Ok((cert.pem(), key_pair.serialize_pem()))
@@ -472,11 +452,9 @@ mod imp {
         let (cert_pem, key_pem) = generate_ca()?;
         write_private_file(cert_path, cert_pem.as_bytes(), 0o644)?;
         write_private_file(key_path, key_pem.as_bytes(), 0o600)?;
-        info!(
-            cert_path = %cert_path.display(),
-            key_path = %key_path.display(),
-            "generated MITM CA"
-        );
+        let cert_path = cert_path.display();
+        let key_path = key_path.display();
+        info!("generated MITM CA (cert_path={cert_path}, key_path={key_path})");
         Ok((cert_pem, key_pem))
     }
 
@@ -492,7 +470,7 @@ mod imp {
         dn.push(DnType::CommonName, "network_proxy MITM CA");
         params.distinguished_name = dn;
 
-        let key_pair = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
+        let key_pair = KeyPair::generate_for(&rcgen_rama::PKCS_ECDSA_P256_SHA256)
             .map_err(|err| anyhow!("failed to generate CA key pair: {err}"))?;
         let cert = params
             .self_signed(&key_pair)
@@ -554,47 +532,6 @@ mod imp {
             }
             _ => "Codex blocked this request by network policy.",
         }
-    }
-}
-
-#[cfg(not(feature = "mitm"))]
-mod imp {
-    use crate::config::MitmConfig;
-    use crate::config::NetworkMode;
-    use crate::state::AppState;
-    use anyhow::Result;
-    use anyhow::anyhow;
-    use rama::Context as RamaContext;
-    use rama::http::layer::upgrade::Upgraded;
-    use std::sync::Arc;
-
-    #[derive(Debug)]
-    pub struct MitmState;
-
-    #[allow(dead_code)]
-    impl MitmState {
-        pub fn new(_cfg: &MitmConfig) -> Result<Self> {
-            Err(anyhow!("MITM feature disabled at build time"))
-        }
-
-        pub fn inspect_enabled(&self) -> bool {
-            false
-        }
-
-        pub fn max_body_bytes(&self) -> usize {
-            0
-        }
-    }
-
-    pub async fn mitm_tunnel(
-        _ctx: RamaContext<Arc<AppState>>,
-        _upgraded: Upgraded,
-        _host: &str,
-        _port: u16,
-        _mode: NetworkMode,
-        _state: Arc<MitmState>,
-    ) -> Result<()> {
-        Err(anyhow!("MITM feature disabled at build time"))
     }
 }
 

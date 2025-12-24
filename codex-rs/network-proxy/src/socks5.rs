@@ -26,24 +26,21 @@ pub async fn run_socks5(state: Arc<AppState>, addr: SocketAddr) -> Result<()> {
         .await
         .map_err(|err| anyhow!("bind SOCKS5 proxy: {err}"))?;
 
-    info!(addr = %addr, "SOCKS5 proxy listening");
+    info!("SOCKS5 proxy listening on {addr}");
 
     match state.network_mode().await {
         Ok(NetworkMode::Limited) => {
-            info!(
-                mode = "limited",
-                "SOCKS5 is blocked in limited mode; set mode=\"full\" to allow SOCKS5"
-            );
+            info!("SOCKS5 is blocked in limited mode; set mode=\"full\" to allow SOCKS5");
         }
         Ok(NetworkMode::Full) => {}
         Err(err) => {
-            warn!(error = %err, "failed to read network mode");
+            warn!("failed to read network mode: {err}");
         }
     }
 
     let tcp_connector = TcpConnector::default();
-    let policy_tcp_connector =
-        service_fn(move |ctx: RamaContext<Arc<AppState>>, req: TcpRequest| {
+    let policy_tcp_connector = service_fn(
+        move |ctx: RamaContext<Arc<AppState>>, req: TcpRequest| {
             let tcp_connector = tcp_connector.clone();
             async move {
                 let app_state = ctx.state().clone();
@@ -66,12 +63,9 @@ pub async fn run_socks5(state: Arc<AppState>, addr: SocketAddr) -> Result<()> {
                                 "socks5".to_string(),
                             ))
                             .await;
+                        let client = client.as_deref().unwrap_or_default();
                         warn!(
-                            client = %client.as_deref().unwrap_or_default(),
-                            host = %host,
-                            mode = "limited",
-                            allowed_methods = "GET, HEAD, OPTIONS",
-                            "SOCKS blocked by method policy"
+                            "SOCKS blocked by method policy (client={client}, host={host}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
                         );
                         return Err(
                             io::Error::new(io::ErrorKind::PermissionDenied, "blocked").into()
@@ -79,8 +73,8 @@ pub async fn run_socks5(state: Arc<AppState>, addr: SocketAddr) -> Result<()> {
                     }
                     Ok(NetworkMode::Full) => {}
                     Err(err) => {
-                        error!(error = %err, "failed to evaluate method policy");
-                        return Err(io::Error::new(io::ErrorKind::Other, "proxy error").into());
+                        error!("failed to evaluate method policy: {err}");
+                        return Err(io::Error::other("proxy error").into());
                     }
                 }
 
@@ -96,33 +90,26 @@ pub async fn run_socks5(state: Arc<AppState>, addr: SocketAddr) -> Result<()> {
                                 "socks5".to_string(),
                             ))
                             .await;
-                        warn!(
-                            client = %client.as_deref().unwrap_or_default(),
-                            host = %host,
-                            reason = %reason,
-                            "SOCKS blocked"
-                        );
+                        let client = client.as_deref().unwrap_or_default();
+                        warn!("SOCKS blocked (client={client}, host={host}, reason={reason})");
                         return Err(
                             io::Error::new(io::ErrorKind::PermissionDenied, "blocked").into()
                         );
                     }
                     Ok((false, _)) => {
-                        info!(
-                            client = %client.as_deref().unwrap_or_default(),
-                            host = %host,
-                            port = port,
-                            "SOCKS allowed"
-                        );
+                        let client = client.as_deref().unwrap_or_default();
+                        info!("SOCKS allowed (client={client}, host={host}, port={port})");
                     }
                     Err(err) => {
-                        error!(error = %err, "failed to evaluate host");
-                        return Err(io::Error::new(io::ErrorKind::Other, "proxy error").into());
+                        error!("failed to evaluate host: {err}");
+                        return Err(io::Error::other("proxy error").into());
                     }
                 }
 
                 tcp_connector.serve(ctx, req).await
             }
-        });
+        },
+    );
 
     let socks_connector = DefaultConnector::default().with_connector(policy_tcp_connector);
     let socks_acceptor = Socks5Acceptor::new().with_connector(socks_connector);

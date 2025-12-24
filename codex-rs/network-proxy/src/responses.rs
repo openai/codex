@@ -1,9 +1,9 @@
-use hyper::Body;
-use hyper::Response;
-use hyper::StatusCode;
+use rama::http::Body;
+use rama::http::Response;
+use rama::http::StatusCode;
 use serde::Serialize;
 
-pub fn text_response(status: StatusCode, body: &str) -> Response<Body> {
+pub fn text_response(status: StatusCode, body: &str) -> Response {
     Response::builder()
         .status(status)
         .header("content-type", "text/plain")
@@ -11,7 +11,7 @@ pub fn text_response(status: StatusCode, body: &str) -> Response<Body> {
         .unwrap_or_else(|_| Response::new(Body::from(body.to_string())))
 }
 
-pub fn json_response<T: Serialize>(value: &T) -> Response<Body> {
+pub fn json_response<T: Serialize>(value: &T) -> Response {
     let body = match serde_json::to_string(value) {
         Ok(body) => body,
         Err(_) => "{}".to_string(),

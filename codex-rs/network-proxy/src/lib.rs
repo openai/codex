@@ -41,8 +41,7 @@ pub async fn run_main(args: Args) -> Result<()> {
         warn!("allowUnixSockets is macOS-only; requests will be rejected on this platform");
     }
 
-    let cfg_path = config::default_codex_config_path()?;
-    let state = Arc::new(AppState::new(cfg_path).await?);
+    let state = Arc::new(AppState::new().await?);
     let runtime = config::resolve_runtime(&state.current_cfg().await?);
 
     let http_addr: SocketAddr = runtime.http_addr;

@@ -1,24 +1,13 @@
-use anyhow::Context;
-use anyhow::Result;
-use codex_core::config::default_config_path;
 use serde::Deserialize;
 use serde::Serialize;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub network_proxy: NetworkProxyConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            network_proxy: NetworkProxyConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,40 +39,24 @@ impl Default for NetworkProxyConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NetworkPolicy {
-    #[serde(default, rename = "allowed_domains", alias = "allowedDomains")]
+    #[serde(default)]
     pub allowed_domains: Vec<String>,
-    #[serde(default, rename = "denied_domains", alias = "deniedDomains")]
+    #[serde(default)]
     pub denied_domains: Vec<String>,
-    #[serde(default, rename = "allow_unix_sockets", alias = "allowUnixSockets")]
+    #[serde(default)]
     pub allow_unix_sockets: Vec<String>,
-    #[serde(default, rename = "allow_local_binding", alias = "allowLocalBinding")]
+    #[serde(default)]
     pub allow_local_binding: bool,
 }
 
-impl Default for NetworkPolicy {
-    fn default() -> Self {
-        Self {
-            allowed_domains: Vec::new(),
-            denied_domains: Vec::new(),
-            allow_unix_sockets: Vec::new(),
-            allow_local_binding: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkMode {
     Limited,
+    #[default]
     Full,
-}
-
-impl Default for NetworkMode {
-    fn default() -> Self {
-        NetworkMode::Full
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,10 +111,6 @@ pub struct RuntimeConfig {
     pub admin_addr: SocketAddr,
 }
 
-pub fn default_codex_config_path() -> Result<PathBuf> {
-    default_config_path().context("failed to resolve Codex config path")
-}
-
 pub fn resolve_runtime(cfg: &Config) -> RuntimeConfig {
     let http_addr = resolve_addr(&cfg.network_proxy.proxy_url, 3128);
     let admin_addr = resolve_addr(&cfg.network_proxy.admin_url, 8080);
@@ -155,22 +124,30 @@ pub fn resolve_runtime(cfg: &Config) -> RuntimeConfig {
 }
 
 fn resolve_addr(url: &str, default_port: u16) -> SocketAddr {
-    let (host, port) = parse_host_port(url, default_port);
-    let host = if host.eq_ignore_ascii_case("localhost") {
+    let addr_parts = parse_host_port(url, default_port);
+    let host = if addr_parts.host.eq_ignore_ascii_case("localhost") {
         "127.0.0.1"
     } else {
-        host
+        addr_parts.host
     };
     match host.parse::<IpAddr>() {
-        Ok(ip) => SocketAddr::new(ip, port),
-        Err(_) => SocketAddr::from(([127, 0, 0, 1], port)),
+        Ok(ip) => SocketAddr::new(ip, addr_parts.port),
+        Err(_) => SocketAddr::from(([127, 0, 0, 1], addr_parts.port)),
     }
 }
 
-fn parse_host_port(url: &str, default_port: u16) -> (&str, u16) {
+struct SocketAddressParts<'a> {
+    host: &'a str,
+    port: u16,
+}
+
+fn parse_host_port(url: &str, default_port: u16) -> SocketAddressParts<'_> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
-        return ("127.0.0.1", default_port);
+        return SocketAddressParts {
+            host: "127.0.0.1",
+            port: default_port,
+        };
     }
     let without_scheme = trimmed
         .split_once("://")
@@ -182,22 +159,25 @@ fn parse_host_port(url: &str, default_port: u16) -> (&str, u16) {
         .map(|(_, rest)| rest)
         .unwrap_or(host_port);
 
-    if host_port.starts_with('[') {
-        if let Some(end) = host_port.find(']') {
-            let host = &host_port[1..end];
-            let port = host_port[end + 1..]
-                .strip_prefix(':')
-                .and_then(|port| port.parse::<u16>().ok())
-                .unwrap_or(default_port);
-            return (host, port);
-        }
+    if host_port.starts_with('[')
+        && let Some(end) = host_port.find(']')
+    {
+        let host = &host_port[1..end];
+        let port = host_port[end + 1..]
+            .strip_prefix(':')
+            .and_then(|port| port.parse::<u16>().ok())
+            .unwrap_or(default_port);
+        return SocketAddressParts { host, port };
     }
 
-    if let Some((host, port)) = host_port.rsplit_once(':') {
-        if let Ok(port) = port.parse::<u16>() {
-            return (host, port);
-        }
+    if let Some((host, port)) = host_port.rsplit_once(':')
+        && let Ok(port) = port.parse::<u16>()
+    {
+        return SocketAddressParts { host, port };
     }
 
-    (host_port, default_port)
+    SocketAddressParts {
+        host: host_port,
+        port: default_port,
+    }
 }

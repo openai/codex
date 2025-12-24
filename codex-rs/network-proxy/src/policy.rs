@@ -21,10 +21,10 @@ pub fn is_loopback_host(host: &str) -> bool {
 
 pub fn normalize_host(host: &str) -> String {
     let host = host.trim();
-    if host.starts_with('[') {
-        if let Some(end) = host.find(']') {
-            return host[1..end].to_ascii_lowercase();
-        }
+    if host.starts_with('[')
+        && let Some(end) = host.find(']')
+    {
+        return host[1..end].to_ascii_lowercase();
     }
     host.split(':').next().unwrap_or("").to_ascii_lowercase()
 }

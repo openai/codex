@@ -6,10 +6,15 @@ use crate::policy::is_loopback_host;
 use crate::policy::method_allowed;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::anyhow;
+use codex_app_server_protocol::ConfigLayerSource;
+use codex_core::config::CONFIG_TOML_FILE;
+use codex_core::config::ConfigBuilder;
+use codex_core::config::Constrained;
+use codex_core::config::ConstraintError;
 use globset::GlobBuilder;
 use globset::GlobSet;
 use globset::GlobSetBuilder;
+use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -17,7 +22,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
+use time::OffsetDateTime;
 use tokio::sync::RwLock;
 use tracing::info;
 use tracing::warn;
@@ -58,7 +63,7 @@ impl BlockedRequest {
 
 #[derive(Clone)]
 struct ConfigState {
-    cfg: Config,
+    config: Config,
     mtime: Option<SystemTime>,
     allow_set: GlobSet,
     deny_set: GlobSet,
@@ -73,8 +78,8 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn new(cfg_path: PathBuf) -> Result<Self> {
-        let cfg_state = build_config_state(cfg_path)?;
+    pub async fn new() -> Result<Self> {
+        let cfg_state = build_config_state().await?;
         Ok(Self {
             state: Arc::new(RwLock::new(cfg_state)),
         })
@@ -83,33 +88,34 @@ impl AppState {
     pub async fn current_cfg(&self) -> Result<Config> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
-        Ok(guard.cfg.clone())
+        Ok(guard.config.clone())
     }
 
     pub async fn current_patterns(&self) -> Result<(Vec<String>, Vec<String>)> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
         Ok((
-            guard.cfg.network_proxy.policy.allowed_domains.clone(),
-            guard.cfg.network_proxy.policy.denied_domains.clone(),
+            guard.config.network_proxy.policy.allowed_domains.clone(),
+            guard.config.network_proxy.policy.denied_domains.clone(),
         ))
     }
 
     pub async fn force_reload(&self) -> Result<()> {
         let mut guard = self.state.write().await;
-        let previous_cfg = guard.cfg.clone();
+        let previous_cfg = guard.config.clone();
         let blocked = guard.blocked.clone();
-        let cfg_path = guard.cfg_path.clone();
-        match build_config_state(cfg_path.clone()) {
+        match build_config_state().await {
             Ok(mut new_state) => {
-                log_policy_changes(&previous_cfg, &new_state.cfg);
+                log_policy_changes(&previous_cfg, &new_state.config);
                 new_state.blocked = blocked;
                 *guard = new_state;
-                info!(path = %cfg_path.display(), "reloaded config");
+                let path = guard.cfg_path.display();
+                info!("reloaded config from {path}");
                 Ok(())
             }
             Err(err) => {
-                warn!(error = %err, path = %cfg_path.display(), "failed to reload config; keeping previous config");
+                let path = guard.cfg_path.display();
+                warn!("failed to reload config from {path}: {err}; keeping previous config");
                 Err(err)
             }
         }
@@ -123,12 +129,12 @@ impl AppState {
         }
         let is_loopback = is_loopback_host(host);
         if is_loopback
-            && !guard.cfg.network_proxy.policy.allow_local_binding
+            && !guard.config.network_proxy.policy.allow_local_binding
             && !guard.allow_set.is_match(host)
         {
             return Ok((true, "not_allowed_local".to_string()));
         }
-        if guard.cfg.network_proxy.policy.allowed_domains.is_empty()
+        if guard.config.network_proxy.policy.allowed_domains.is_empty()
             || !guard.allow_set.is_match(host)
         {
             return Ok((true, "not_allowed".to_string()));
@@ -157,7 +163,7 @@ impl AppState {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
         Ok(guard
-            .cfg
+            .config
             .network_proxy
             .policy
             .allow_unix_sockets
@@ -168,20 +174,20 @@ impl AppState {
     pub async fn method_allowed(&self, method: &str) -> Result<bool> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
-        Ok(method_allowed(guard.cfg.network_proxy.mode, method))
+        Ok(method_allowed(guard.config.network_proxy.mode, method))
     }
 
     pub async fn network_mode(&self) -> Result<NetworkMode> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
-        Ok(guard.cfg.network_proxy.mode)
+        Ok(guard.config.network_proxy.mode)
     }
 
     pub async fn set_network_mode(&self, mode: NetworkMode) -> Result<()> {
         self.reload_if_needed().await?;
         let mut guard = self.state.write().await;
-        guard.cfg.network_proxy.mode = mode;
-        info!(mode = ?mode, "updated network mode");
+        guard.config.network_proxy.mode = mode;
+        info!("updated network mode to {mode:?}");
         Ok(())
     }
 
@@ -195,7 +201,9 @@ impl AppState {
         let needs_reload = {
             let guard = self.state.read().await;
             if !guard.cfg_path.exists() {
-                true
+                // If the config file is missing, only reload when it *used to* exist (mtime set).
+                // This avoids forcing a reload on every request when running with the default config.
+                guard.mtime.is_some()
             } else {
                 let metadata = std::fs::metadata(&guard.cfg_path).ok();
                 match (metadata.and_then(|m| m.modified().ok()), guard.mtime) {
@@ -214,28 +222,32 @@ impl AppState {
     }
 }
 
-fn build_config_state(cfg_path: PathBuf) -> Result<ConfigState> {
-    let mut cfg = if cfg_path.exists() {
-        load_config_from_path(&cfg_path).with_context(|| {
-            format!(
-                "failed to load config from {}",
-                cfg_path.as_path().display()
-            )
-        })?
-    } else {
-        Config::default()
-    };
-    resolve_mitm_paths(&mut cfg, &cfg_path);
+async fn build_config_state() -> Result<ConfigState> {
+    let codex_cfg = ConfigBuilder::default()
+        .build()
+        .await
+        .context("failed to load Codex config")?;
+
+    let cfg_path = codex_cfg.codex_home.join(CONFIG_TOML_FILE);
+
+    let merged_toml = codex_cfg.config_layer_stack.effective_config();
+    let mut config: Config = merged_toml
+        .try_into()
+        .context("failed to deserialize network proxy config")?;
+
+    enforce_trusted_constraints(&codex_cfg.config_layer_stack, &config)?;
+
+    resolve_mitm_paths(&mut config, &cfg_path);
     let mtime = cfg_path.metadata().and_then(|m| m.modified()).ok();
-    let deny_set = compile_globset(&cfg.network_proxy.policy.denied_domains)?;
-    let allow_set = compile_globset(&cfg.network_proxy.policy.allowed_domains)?;
-    let mitm = if cfg.network_proxy.mitm.enabled {
-        build_mitm_state(&cfg.network_proxy.mitm)?
+    let deny_set = compile_globset(&config.network_proxy.policy.denied_domains)?;
+    let allow_set = compile_globset(&config.network_proxy.policy.allowed_domains)?;
+    let mitm = if config.network_proxy.mitm.enabled {
+        build_mitm_state(&config.network_proxy.mitm)?
     } else {
         None
     };
     Ok(ConfigState {
-        cfg,
+        config,
         mtime,
         allow_set,
         deny_set,
@@ -245,25 +257,248 @@ fn build_config_state(cfg_path: PathBuf) -> Result<ConfigState> {
     })
 }
 
-fn resolve_mitm_paths(cfg: &mut Config, cfg_path: &Path) {
+fn resolve_mitm_paths(config: &mut Config, cfg_path: &Path) {
     let base = cfg_path.parent().unwrap_or_else(|| Path::new("."));
-    if cfg.network_proxy.mitm.ca_cert_path.is_relative() {
-        cfg.network_proxy.mitm.ca_cert_path = base.join(&cfg.network_proxy.mitm.ca_cert_path);
+    if config.network_proxy.mitm.ca_cert_path.is_relative() {
+        config.network_proxy.mitm.ca_cert_path = base.join(&config.network_proxy.mitm.ca_cert_path);
     }
-    if cfg.network_proxy.mitm.ca_key_path.is_relative() {
-        cfg.network_proxy.mitm.ca_key_path = base.join(&cfg.network_proxy.mitm.ca_key_path);
+    if config.network_proxy.mitm.ca_key_path.is_relative() {
+        config.network_proxy.mitm.ca_key_path = base.join(&config.network_proxy.mitm.ca_key_path);
     }
 }
 
-fn build_mitm_state(_cfg: &MitmConfig) -> Result<Option<Arc<MitmState>>> {
-    #[cfg(feature = "mitm")]
+fn build_mitm_state(config: &MitmConfig) -> Result<Option<Arc<MitmState>>> {
+    Ok(Some(Arc::new(MitmState::new(config)?)))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialConfig {
+    #[serde(default)]
+    network_proxy: PartialNetworkProxyConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialNetworkProxyConfig {
+    enabled: Option<bool>,
+    mode: Option<NetworkMode>,
+    #[serde(default)]
+    policy: PartialNetworkPolicy,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialNetworkPolicy {
+    #[serde(default)]
+    allowed_domains: Option<Vec<String>>,
+    #[serde(default)]
+    denied_domains: Option<Vec<String>>,
+    #[serde(default)]
+    allow_unix_sockets: Option<Vec<String>>,
+    #[serde(default)]
+    allow_local_binding: Option<bool>,
+}
+
+#[derive(Debug, Default)]
+struct NetworkProxyConstraints {
+    enabled: Option<bool>,
+    mode: Option<NetworkMode>,
+    allowed_domains: Option<Vec<String>>,
+    denied_domains: Option<Vec<String>>,
+    allow_unix_sockets: Option<Vec<String>>,
+    allow_local_binding: Option<bool>,
+}
+
+fn enforce_trusted_constraints(
+    layers: &codex_core::config_loader::ConfigLayerStack,
+    config: &Config,
+) -> Result<()> {
+    let constraints = network_proxy_constraints_from_trusted_layers(layers)?;
+    validate_policy_against_constraints(config, &constraints)
+        .context("network proxy constraints")?;
+    Ok(())
+}
+
+fn network_proxy_constraints_from_trusted_layers(
+    layers: &codex_core::config_loader::ConfigLayerStack,
+) -> Result<NetworkProxyConstraints> {
+    let mut constraints = NetworkProxyConstraints::default();
+    for layer in layers
+        .get_layers(codex_core::config_loader::ConfigLayerStackOrdering::LowestPrecedenceFirst)
     {
-        return Ok(Some(Arc::new(MitmState::new(_cfg)?)));
+        if is_user_controlled_layer(&layer.name) {
+            continue;
+        }
+
+        let partial: PartialConfig = layer
+            .config
+            .clone()
+            .try_into()
+            .context("failed to deserialize trusted config layer")?;
+
+        if let Some(enabled) = partial.network_proxy.enabled {
+            constraints.enabled = Some(enabled);
+        }
+        if let Some(mode) = partial.network_proxy.mode {
+            constraints.mode = Some(mode);
+        }
+
+        if let Some(allowed_domains) = partial.network_proxy.policy.allowed_domains {
+            constraints.allowed_domains = Some(allowed_domains);
+        }
+        if let Some(denied_domains) = partial.network_proxy.policy.denied_domains {
+            constraints.denied_domains = Some(denied_domains);
+        }
+        if let Some(allow_unix_sockets) = partial.network_proxy.policy.allow_unix_sockets {
+            constraints.allow_unix_sockets = Some(allow_unix_sockets);
+        }
+        if let Some(allow_local_binding) = partial.network_proxy.policy.allow_local_binding {
+            constraints.allow_local_binding = Some(allow_local_binding);
+        }
     }
-    #[cfg(not(feature = "mitm"))]
-    {
-        warn!("MITM enabled in config but binary built without mitm feature");
-        Ok(None)
+    Ok(constraints)
+}
+
+fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {
+    matches!(
+        layer,
+        ConfigLayerSource::User { .. }
+            | ConfigLayerSource::Project { .. }
+            | ConfigLayerSource::SessionFlags
+    )
+}
+
+fn validate_policy_against_constraints(
+    config: &Config,
+    constraints: &NetworkProxyConstraints,
+) -> std::result::Result<(), ConstraintError> {
+    let enabled = config.network_proxy.enabled;
+    if let Some(max_enabled) = constraints.enabled {
+        let _ = Constrained::new(enabled, move |candidate| {
+            if *candidate && !max_enabled {
+                Err(ConstraintError::invalid_value(
+                    "true",
+                    "false (disabled by managed config)",
+                ))
+            } else {
+                Ok(())
+            }
+        })?;
+    }
+
+    if let Some(max_mode) = constraints.mode {
+        let _ = Constrained::new(config.network_proxy.mode, move |candidate| {
+            if network_mode_rank(*candidate) > network_mode_rank(max_mode) {
+                Err(ConstraintError::invalid_value(
+                    format!("{candidate:?}"),
+                    format!("{max_mode:?} or more restrictive"),
+                ))
+            } else {
+                Ok(())
+            }
+        })?;
+    }
+
+    if let Some(allow_local_binding) = constraints.allow_local_binding {
+        let _ = Constrained::new(
+            config.network_proxy.policy.allow_local_binding,
+            move |candidate| {
+                if *candidate && !allow_local_binding {
+                    Err(ConstraintError::invalid_value(
+                        "true",
+                        "false (disabled by managed config)",
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+        )?;
+    }
+
+    if let Some(allowed_domains) = &constraints.allowed_domains {
+        let allowed_set: HashSet<String> = allowed_domains
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect();
+        let _ = Constrained::new(
+            config.network_proxy.policy.allowed_domains.clone(),
+            move |candidate| {
+                let mut invalid = Vec::new();
+                for entry in candidate {
+                    if !allowed_set.contains(&entry.to_ascii_lowercase()) {
+                        invalid.push(entry.clone());
+                    }
+                }
+                if invalid.is_empty() {
+                    Ok(())
+                } else {
+                    Err(ConstraintError::invalid_value(
+                        format!("{invalid:?}"),
+                        "subset of managed allowed_domains",
+                    ))
+                }
+            },
+        )?;
+    }
+
+    if let Some(denied_domains) = &constraints.denied_domains {
+        let required_set: HashSet<String> = denied_domains
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect();
+        let _ = Constrained::new(
+            config.network_proxy.policy.denied_domains.clone(),
+            move |candidate| {
+                let candidate_set: HashSet<String> =
+                    candidate.iter().map(|s| s.to_ascii_lowercase()).collect();
+                let missing: Vec<String> = required_set
+                    .iter()
+                    .filter(|entry| !candidate_set.contains(*entry))
+                    .cloned()
+                    .collect();
+                if missing.is_empty() {
+                    Ok(())
+                } else {
+                    Err(ConstraintError::invalid_value(
+                        "missing managed denied_domains entries",
+                        format!("{missing:?}"),
+                    ))
+                }
+            },
+        )?;
+    }
+
+    if let Some(allow_unix_sockets) = &constraints.allow_unix_sockets {
+        let allowed_set: HashSet<String> = allow_unix_sockets
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect();
+        let _ = Constrained::new(
+            config.network_proxy.policy.allow_unix_sockets.clone(),
+            move |candidate| {
+                let mut invalid = Vec::new();
+                for entry in candidate {
+                    if !allowed_set.contains(&entry.to_ascii_lowercase()) {
+                        invalid.push(entry.clone());
+                    }
+                }
+                if invalid.is_empty() {
+                    Ok(())
+                } else {
+                    Err(ConstraintError::invalid_value(
+                        format!("{invalid:?}"),
+                        "subset of managed allow_unix_sockets",
+                    ))
+                }
+            },
+        )?;
+    }
+
+    Ok(())
+}
+
+fn network_mode_rank(mode: NetworkMode) -> u8 {
+    match mode {
+        NetworkMode::Limited => 0,
+        NetworkMode::Full => 1,
     }
 }
 
@@ -317,7 +552,7 @@ fn log_domain_list_changes(list_name: &str, previous: &[String], next: &[String]
     for entry in next {
         let key = entry.to_ascii_lowercase();
         if seen_next.insert(key.clone()) && !previous_set.contains(&key) {
-            info!(list = list_name, entry = %entry, "config entry added");
+            info!("config entry added to {list_name}: {entry}");
         }
     }
 
@@ -325,20 +560,11 @@ fn log_domain_list_changes(list_name: &str, previous: &[String], next: &[String]
     for entry in previous {
         let key = entry.to_ascii_lowercase();
         if seen_previous.insert(key.clone()) && !next_set.contains(&key) {
-            info!(list = list_name, entry = %entry, "config entry removed");
+            info!("config entry removed from {list_name}: {entry}");
         }
     }
 }
 
 fn unix_timestamp() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0)
-}
-
-fn load_config_from_path(path: &Path) -> Result<Config> {
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("unable to read config file {}", path.display()))?;
-    toml::from_str(&raw).map_err(|err| anyhow!("unable to parse config: {err}"))
+    OffsetDateTime::now_utc().unix_timestamp()
 }
