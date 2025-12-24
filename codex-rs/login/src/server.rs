@@ -30,13 +30,20 @@ use tiny_http::StatusCode;
 
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEFAULT_PORT: u16 = 1455;
+const DEFAULT_HOST: &str = "127.0.0.1";
+
+fn get_login_binding_address() -> String {
+    let addr = std::env::var("CODEX_LOGIN_BIND_ADDRESS")
+        .unwrap_or_else(|_| format!("{DEFAULT_HOST}:{DEFAULT_PORT}"));
+    addr
+}
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
     pub codex_home: PathBuf,
     pub client_id: String,
     pub issuer: String,
-    pub port: u16,
+    pub bind_address: String,
     pub open_browser: bool,
     pub force_state: Option<String>,
     pub forced_chatgpt_workspace_id: Option<String>,
@@ -50,11 +57,12 @@ impl ServerOptions {
         forced_chatgpt_workspace_id: Option<String>,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> Self {
+        let bind_address = get_login_binding_address();
         Self {
             codex_home,
             client_id,
             issuer: DEFAULT_ISSUER.to_string(),
-            port: DEFAULT_PORT,
+            bind_address,
             open_browser: true,
             force_state: None,
             forced_chatgpt_workspace_id,
@@ -101,7 +109,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
-    let server = bind_server(opts.port)?;
+    let server = bind_server(opts.bind_address.clone())?;
     let actual_port = match server.server_addr().to_ip() {
         Some(addr) => addr.port(),
         None => {
@@ -423,8 +431,8 @@ fn generate_state() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-fn send_cancel_request(port: u16) -> io::Result<()> {
-    let addr: SocketAddr = format!("127.0.0.1:{port}")
+fn send_cancel_request(bind_address: String) -> io::Result<()> {
+    let addr: SocketAddr = bind_address
         .parse()
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))?;
@@ -432,7 +440,7 @@ fn send_cancel_request(port: u16) -> io::Result<()> {
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
 
     stream.write_all(b"GET /cancel HTTP/1.1\r\n")?;
-    stream.write_all(format!("Host: 127.0.0.1:{port}\r\n").as_bytes())?;
+    stream.write_all(format!("Host: {bind_address}\r\n").as_bytes())?;
     stream.write_all(b"Connection: close\r\n\r\n")?;
 
     let mut buf = [0u8; 64];
@@ -440,15 +448,14 @@ fn send_cancel_request(port: u16) -> io::Result<()> {
     Ok(())
 }
 
-fn bind_server(port: u16) -> io::Result<Server> {
-    let bind_address = format!("127.0.0.1:{port}");
+fn bind_server(bind_address: String) -> io::Result<Server> {
     let mut cancel_attempted = false;
     let mut attempts = 0;
     const MAX_ATTEMPTS: u32 = 10;
     const RETRY_DELAY: Duration = Duration::from_millis(200);
 
     loop {
-        match Server::http(&bind_address) {
+        match Server::http(bind_address.clone()) {
             Ok(server) => return Ok(server),
             Err(err) => {
                 attempts += 1;
@@ -462,7 +469,7 @@ fn bind_server(port: u16) -> io::Result<Server> {
                 if is_addr_in_use {
                     if !cancel_attempted {
                         cancel_attempted = true;
-                        if let Err(cancel_err) = send_cancel_request(port) {
+                        if let Err(cancel_err) = send_cancel_request(bind_address.clone()) {
                             eprintln!("Failed to cancel previous login server: {cancel_err}");
                         }
                     }
