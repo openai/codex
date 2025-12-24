@@ -1,4 +1,6 @@
 use crate::bash::parse_shell_lc_plain_commands;
+use crate::command_safety::shared_rules::is_safe_git_command;
+use crate::command_safety::shared_rules::is_safe_ripgrep_command;
 use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 
 pub fn is_known_safe_command(command: &[String]) -> bool {
@@ -108,33 +110,10 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         }
 
         // Ripgrep
-        Some("rg") => {
-            const UNSAFE_RIPGREP_OPTIONS_WITH_ARGS: &[&str] = &[
-                // Takes an arbitrary command that is executed for each match.
-                "--pre",
-                // Takes a command that can be used to obtain the local hostname.
-                "--hostname-bin",
-            ];
-            const UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS: &[&str] = &[
-                // Calls out to other decompression tools, so do not auto-approve
-                // out of an abundance of caution.
-                "--search-zip",
-                "-z",
-            ];
-
-            !command.iter().any(|arg| {
-                UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS.contains(&arg.as_str())
-                    || UNSAFE_RIPGREP_OPTIONS_WITH_ARGS
-                        .iter()
-                        .any(|&opt| arg == opt || arg.starts_with(&format!("{opt}=")))
-            })
-        }
+        Some("rg") => is_safe_ripgrep_command(command),
 
         // Git
-        Some("git") => matches!(
-            command.get(1).map(String::as_str),
-            Some("branch" | "status" | "log" | "diff" | "show")
-        ),
+        Some("git") => is_safe_git_command(command),
 
         // Rust
         Some("cargo") if command.get(1).map(String::as_str) == Some("check") => true,
@@ -276,40 +255,6 @@ mod tests {
             assert!(
                 !is_safe_to_call_with_exec(&args),
                 "expected {args:?} to be considered unsafe due to output option"
-            );
-        }
-    }
-
-    #[test]
-    fn ripgrep_rules() {
-        // Safe ripgrep invocations – none of the unsafe flags are present.
-        assert!(is_safe_to_call_with_exec(&vec_str(&[
-            "rg",
-            "Cargo.toml",
-            "-n"
-        ])));
-
-        // Unsafe flags that do not take an argument (present verbatim).
-        for args in [
-            vec_str(&["rg", "--search-zip", "files"]),
-            vec_str(&["rg", "-z", "files"]),
-        ] {
-            assert!(
-                !is_safe_to_call_with_exec(&args),
-                "expected {args:?} to be considered unsafe due to zip-search flag",
-            );
-        }
-
-        // Unsafe flags that expect a value, provided in both split and = forms.
-        for args in [
-            vec_str(&["rg", "--pre", "pwned", "files"]),
-            vec_str(&["rg", "--pre=pwned", "files"]),
-            vec_str(&["rg", "--hostname-bin", "pwned", "files"]),
-            vec_str(&["rg", "--hostname-bin=pwned", "files"]),
-        ] {
-            assert!(
-                !is_safe_to_call_with_exec(&args),
-                "expected {args:?} to be considered unsafe due to external-command flag",
             );
         }
     }
