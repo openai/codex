@@ -5,7 +5,6 @@ use std::time::Duration;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::RmcpClient;
-use escargot::CargoBuild;
 use futures::FutureExt as _;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
@@ -21,11 +20,7 @@ use serde_json::json;
 const RESOURCE_URI: &str = "memo://codex/example-note";
 
 fn stdio_server_bin() -> anyhow::Result<PathBuf> {
-    let build = CargoBuild::new()
-        .package("codex-rmcp-client")
-        .bin("test_stdio_server")
-        .run()?;
-    Ok(build.path().to_path_buf())
+    Ok(codex_utils_cargo_bin::cargo_bin("test_stdio_server")?)
 }
 
 fn init_params() -> InitializeRequestParams {

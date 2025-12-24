@@ -38,7 +38,6 @@ tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
-assert_cmd = { workspace = true }
 core_test_support = { workspace = true }
 mcp_test_support = { workspace = true }
 os_info = { workspace = true }
