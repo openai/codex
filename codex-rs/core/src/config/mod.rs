@@ -1531,12 +1531,6 @@ pub fn find_codex_home() -> std::io::Result<PathBuf> {
     Ok(p)
 }
 
-/// Returns the default path to the Codex config file (`config.toml`).
-pub fn default_config_path() -> std::io::Result<PathBuf> {
-    let codex_home = find_codex_home()?;
-    Ok(codex_home.join(CONFIG_TOML_FILE))
-}
-
 /// Returns the path to the folder where Codex logs are stored. Does not verify
 /// that the directory exists.
 pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
