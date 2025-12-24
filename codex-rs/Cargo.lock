@@ -1773,6 +1773,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-core",
  "globset",
+ "pretty_assertions",
  "rama",
  "rcgen",
  "serde",

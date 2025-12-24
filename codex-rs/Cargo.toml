@@ -84,6 +84,7 @@ codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-mcp-server = { path = "mcp-server" }
 codex-ollama = { path = "ollama" }
+codex-network-proxy = { path = "network-proxy" }
 codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }

@@ -136,6 +136,7 @@ fn resolve_addr(url: &str, default_port: u16) -> SocketAddr {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SocketAddressParts<'a> {
     host: &'a str,
     port: u16,
@@ -170,7 +171,10 @@ fn parse_host_port(url: &str, default_port: u16) -> SocketAddressParts<'_> {
         return SocketAddressParts { host, port };
     }
 
-    if let Some((host, port)) = host_port.rsplit_once(':')
+    // Only treat `host:port` as such when there's a single `:`. This avoids
+    // accidentally interpreting unbracketed IPv6 addresses as `host:port`.
+    if host_port.bytes().filter(|b| *b == b':').count() == 1
+        && let Some((host, port)) = host_port.rsplit_once(':')
         && let Ok(port) = port.parse::<u16>()
     {
         return SocketAddressParts { host, port };
@@ -179,5 +183,129 @@ fn parse_host_port(url: &str, default_port: u16) -> SocketAddressParts<'_> {
     SocketAddressParts {
         host: host_port,
         port: default_port,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn parse_host_port_defaults_for_empty_string() {
+        assert_eq!(
+            parse_host_port("", 1234),
+            SocketAddressParts {
+                host: "127.0.0.1",
+                port: 1234,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_host_port_defaults_for_whitespace() {
+        assert_eq!(
+            parse_host_port("   ", 5555),
+            SocketAddressParts {
+                host: "127.0.0.1",
+                port: 5555,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_host_port_parses_host_port_without_scheme() {
+        assert_eq!(
+            parse_host_port("127.0.0.1:8080", 3128),
+            SocketAddressParts {
+                host: "127.0.0.1",
+                port: 8080,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_host_port_parses_host_port_with_scheme_and_path() {
+        assert_eq!(
+            parse_host_port("http://example.com:8080/some/path", 3128),
+            SocketAddressParts {
+                host: "example.com",
+                port: 8080,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_host_port_strips_userinfo() {
+        assert_eq!(
+            parse_host_port("http://user:pass@host.example:5555", 3128),
+            SocketAddressParts {
+                host: "host.example",
+                port: 5555,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_host_port_parses_ipv6_with_brackets() {
+        assert_eq!(
+            parse_host_port("http://[::1]:9999", 3128),
+            SocketAddressParts {
+                host: "::1",
+                port: 9999,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_host_port_does_not_treat_unbracketed_ipv6_as_host_port() {
+        assert_eq!(
+            parse_host_port("2001:db8::1", 3128),
+            SocketAddressParts {
+                host: "2001:db8::1",
+                port: 3128,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_host_port_falls_back_to_default_port_when_port_is_invalid() {
+        assert_eq!(
+            parse_host_port("example.com:notaport", 3128),
+            SocketAddressParts {
+                host: "example.com:notaport",
+                port: 3128,
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_addr_maps_localhost_to_loopback() {
+        assert_eq!(
+            resolve_addr("localhost", 3128),
+            "127.0.0.1:3128".parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn resolve_addr_parses_ip_literals() {
+        assert_eq!(resolve_addr("1.2.3.4", 80), "1.2.3.4:80".parse().unwrap());
+    }
+
+    #[test]
+    fn resolve_addr_parses_ipv6_literals() {
+        assert_eq!(
+            resolve_addr("http://[::1]:8080", 3128),
+            "[::1]:8080".parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn resolve_addr_falls_back_to_loopback_for_hostnames() {
+        assert_eq!(
+            resolve_addr("http://example.com:5555", 3128),
+            "127.0.0.1:5555".parse().unwrap()
+        );
     }
 }

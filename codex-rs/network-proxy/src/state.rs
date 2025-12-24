@@ -568,3 +568,264 @@ fn log_domain_list_changes(list_name: &str, previous: &[String], next: &[String]
 fn unix_timestamp() -> i64 {
     OffsetDateTime::now_utc().unix_timestamp()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::config::NetworkPolicy;
+    use crate::config::NetworkProxyConfig;
+    use pretty_assertions::assert_eq;
+
+    fn app_state_for_policy(policy: NetworkPolicy) -> AppState {
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                mode: NetworkMode::Full,
+                policy,
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        let allow_set = compile_globset(&config.network_proxy.policy.allowed_domains).unwrap();
+        let deny_set = compile_globset(&config.network_proxy.policy.denied_domains).unwrap();
+
+        let state = ConfigState {
+            config,
+            mtime: None,
+            allow_set,
+            deny_set,
+            mitm: None,
+            cfg_path: PathBuf::from("/nonexistent/config.toml"),
+            blocked: VecDeque::new(),
+        };
+
+        AppState {
+            state: Arc::new(RwLock::new(state)),
+        }
+    }
+
+    #[tokio::test]
+    async fn host_blocked_denied_wins_over_allowed() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            denied_domains: vec!["example.com".to_string()],
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("example.com").await.unwrap(),
+            (true, "denied".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_requires_allowlist_match() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("example.com").await.unwrap(),
+            (false, String::new())
+        );
+        assert_eq!(
+            state.host_blocked("not-example.com").await.unwrap(),
+            (true, "not_allowed".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_expands_apex_for_wildcard_patterns() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["*.openai.com".to_string()],
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("openai.com").await.unwrap(),
+            (false, String::new())
+        );
+        assert_eq!(
+            state.host_blocked("api.openai.com").await.unwrap(),
+            (false, String::new())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_rejects_loopback_when_local_binding_disabled() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            allow_local_binding: false,
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("127.0.0.1").await.unwrap(),
+            (true, "not_allowed_local".to_string())
+        );
+        assert_eq!(
+            state.host_blocked("localhost").await.unwrap(),
+            (true, "not_allowed_local".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_allows_loopback_when_explicitly_allowlisted_and_local_binding_disabled() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["localhost".to_string()],
+            allow_local_binding: false,
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("localhost").await.unwrap(),
+            (false, String::new())
+        );
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_disallows_widening_allowed_domains() {
+        let constraints = NetworkProxyConstraints {
+            allowed_domains: Some(vec!["example.com".to_string()]),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                policy: NetworkPolicy {
+                    allowed_domains: vec!["example.com".to_string(), "evil.com".to_string()],
+                    ..NetworkPolicy::default()
+                },
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_requires_managed_denied_domains_entries() {
+        let constraints = NetworkProxyConstraints {
+            denied_domains: Some(vec!["evil.com".to_string()]),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                policy: NetworkPolicy {
+                    denied_domains: vec![],
+                    ..NetworkPolicy::default()
+                },
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_disallows_enabling_when_managed_disabled() {
+        let constraints = NetworkProxyConstraints {
+            enabled: Some(false),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_disallows_allow_local_binding_when_managed_disabled() {
+        let constraints = NetworkProxyConstraints {
+            allow_local_binding: Some(false),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                policy: NetworkPolicy {
+                    allow_local_binding: true,
+                    ..NetworkPolicy::default()
+                },
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn compile_globset_is_case_insensitive() {
+        let patterns = vec!["ExAmPle.CoM".to_string()];
+        let set = compile_globset(&patterns).unwrap();
+        assert!(set.is_match("example.com"));
+        assert!(set.is_match("EXAMPLE.COM"));
+    }
+
+    #[test]
+    fn compile_globset_expands_apex_for_wildcard_patterns() {
+        let patterns = vec!["*.openai.com".to_string()];
+        let set = compile_globset(&patterns).unwrap();
+        assert!(set.is_match("openai.com"));
+        assert!(set.is_match("api.openai.com"));
+        assert!(!set.is_match("evilopenai.com"));
+    }
+
+    #[test]
+    fn compile_globset_dedupes_patterns_without_changing_behavior() {
+        let patterns = vec!["example.com".to_string(), "example.com".to_string()];
+        let set = compile_globset(&patterns).unwrap();
+        assert!(set.is_match("example.com"));
+        assert!(set.is_match("EXAMPLE.COM"));
+        assert!(!set.is_match("not-example.com"));
+    }
+
+    #[test]
+    fn compile_globset_rejects_invalid_patterns() {
+        let patterns = vec!["[".to_string()];
+        assert!(compile_globset(&patterns).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn unix_socket_allowlist_is_respected_on_macos() {
+        let socket_path = "/tmp/example.sock".to_string();
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            allow_unix_sockets: vec![socket_path.clone()],
+            ..NetworkPolicy::default()
+        });
+
+        assert!(state.is_unix_socket_allowed(&socket_path).await.unwrap());
+        assert!(
+            !state
+                .is_unix_socket_allowed("/tmp/not-allowed.sock")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[tokio::test]
+    async fn unix_socket_allowlist_is_rejected_on_non_macos() {
+        let socket_path = "/tmp/example.sock".to_string();
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            allow_unix_sockets: vec![socket_path.clone()],
+            ..NetworkPolicy::default()
+        });
+
+        assert!(!state.is_unix_socket_allowed(&socket_path).await.unwrap());
+    }
+}

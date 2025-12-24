@@ -28,3 +28,6 @@ tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt"] }
 rama = { version = "0.3.0-alpha.3", default-features = false, features = ["http-full", "proxy-full", "socks5", "rustls"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

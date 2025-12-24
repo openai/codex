@@ -26,5 +26,76 @@ pub fn normalize_host(host: &str) -> String {
     {
         return host[1..end].to_ascii_lowercase();
     }
-    host.split(':').next().unwrap_or("").to_ascii_lowercase()
+
+    // The proxy stack should typically hand us a host without a port, but be
+    // defensive and strip `:port` when there is exactly one `:`.
+    if host.bytes().filter(|b| *b == b':').count() == 1 {
+        return host
+            .split(':')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+    }
+
+    // Avoid mangling unbracketed IPv6 literals.
+    host.to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn method_allowed_full_allows_everything() {
+        assert!(method_allowed(NetworkMode::Full, "GET"));
+        assert!(method_allowed(NetworkMode::Full, "POST"));
+        assert!(method_allowed(NetworkMode::Full, "CONNECT"));
+    }
+
+    #[test]
+    fn method_allowed_limited_allows_only_safe_methods() {
+        assert!(method_allowed(NetworkMode::Limited, "GET"));
+        assert!(method_allowed(NetworkMode::Limited, "HEAD"));
+        assert!(method_allowed(NetworkMode::Limited, "OPTIONS"));
+        assert!(!method_allowed(NetworkMode::Limited, "POST"));
+        assert!(!method_allowed(NetworkMode::Limited, "CONNECT"));
+    }
+
+    #[test]
+    fn is_loopback_host_handles_localhost_variants() {
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("localhost."));
+        assert!(is_loopback_host("LOCALHOST"));
+        assert!(!is_loopback_host("notlocalhost"));
+    }
+
+    #[test]
+    fn is_loopback_host_handles_ip_literals() {
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("::1"));
+        assert!(!is_loopback_host("1.2.3.4"));
+    }
+
+    #[test]
+    fn normalize_host_lowercases_and_trims() {
+        assert_eq!(normalize_host("  ExAmPlE.CoM  "), "example.com");
+    }
+
+    #[test]
+    fn normalize_host_strips_port_for_host_port() {
+        assert_eq!(normalize_host("example.com:1234"), "example.com");
+    }
+
+    #[test]
+    fn normalize_host_preserves_unbracketed_ipv6() {
+        assert_eq!(normalize_host("2001:db8::1"), "2001:db8::1");
+    }
+
+    #[test]
+    fn normalize_host_strips_brackets_for_ipv6() {
+        assert_eq!(normalize_host("[::1]"), "::1");
+        assert_eq!(normalize_host("[::1]:443"), "::1");
+    }
 }
