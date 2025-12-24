@@ -420,37 +420,47 @@ function main(): void {
     showWebviewError((e as PromiseRejectionEvent).reason),
   );
 
-  let hoveredAutoFileLink: HTMLElement | null = null;
+  let hoveredAutoLink: HTMLElement | null = null;
 
-  const setAutoFileLinkHoverState = (
+  const setAutoLinkHoverState = (
     next: HTMLElement | null,
     modPressed: boolean,
   ): void => {
-    if (hoveredAutoFileLink === next) {
-      hoveredAutoFileLink?.classList.toggle("modHover", modPressed);
+    if (hoveredAutoLink === next) {
+      hoveredAutoLink?.classList.toggle("modHover", modPressed);
       return;
     }
-    if (hoveredAutoFileLink) hoveredAutoFileLink.classList.remove("modHover");
-    hoveredAutoFileLink = next;
-    hoveredAutoFileLink?.classList.toggle("modHover", modPressed);
+    if (hoveredAutoLink) hoveredAutoLink.classList.remove("modHover");
+    hoveredAutoLink = next;
+    hoveredAutoLink?.classList.toggle("modHover", modPressed);
+  };
+
+  const eventTargetEl = (target: EventTarget | null): HTMLElement | null => {
+    if (!target) return null;
+    if (target instanceof HTMLElement) return target;
+    if (target instanceof Element) return target as unknown as HTMLElement;
+    const node = target as Node;
+    return node && "parentElement" in node ? (node.parentElement as HTMLElement | null) : null;
   };
 
   window.addEventListener("mousemove", (e) => {
-    const t = e.target as HTMLElement | null;
+    const t = eventTargetEl(e.target);
     const next = t
-      ? (t.closest(".autoFileLink[data-open-file]") as HTMLElement | null)
+      ? (t.closest(
+          ".autoFileLink[data-open-file],.autoUrlLink[data-open-url]",
+        ) as HTMLElement | null)
       : null;
-    setAutoFileLinkHoverState(next, Boolean(e.ctrlKey || e.metaKey));
+    setAutoLinkHoverState(next, Boolean(e.ctrlKey || e.metaKey));
   });
   window.addEventListener("keydown", (e) => {
-    if (!hoveredAutoFileLink) return;
-    hoveredAutoFileLink.classList.toggle("modHover", Boolean(e.ctrlKey || e.metaKey));
+    if (!hoveredAutoLink) return;
+    hoveredAutoLink.classList.toggle("modHover", Boolean(e.ctrlKey || e.metaKey));
   });
   window.addEventListener("keyup", (e) => {
-    if (!hoveredAutoFileLink) return;
-    hoveredAutoFileLink.classList.toggle("modHover", Boolean(e.ctrlKey || e.metaKey));
+    if (!hoveredAutoLink) return;
+    hoveredAutoLink.classList.toggle("modHover", Boolean(e.ctrlKey || e.metaKey));
   });
-  window.addEventListener("blur", () => setAutoFileLinkHoverState(null, false));
+  window.addEventListener("blur", () => setAutoLinkHoverState(null, false));
 
 	  let state: ChatViewState = {
 	    sessions: [],
@@ -465,18 +475,6 @@ function main(): void {
 	    approvals: [],
 	    customPrompts: [],
 	  };
-
-  // Global keybinds (not only when the input is focused).
-  window.addEventListener(
-    "keydown",
-    (e) => {
-      if ((e as KeyboardEvent).key !== "Escape") return;
-      if (!state.sending) return;
-      e.preventDefault();
-      stopCurrentTurn();
-    },
-    true,
-  );
 
   let domSessionId: string | null = null;
   const blockElByKey = new Map<string, HTMLElement>();
@@ -577,6 +575,9 @@ function main(): void {
   let fileSearch: null | { sessionId: string; query: string; paths: string[] } = null;
   let fileSearchInFlight: null | { sessionId: string; query: string } = null;
   let fileSearchTimer: number | null = null;
+  const FILE_SEARCH_DEBOUNCE_MS = 250;
+  const FILE_SEARCH_MIN_QUERY_LEN = 2;
+  const MAX_LINKIFY_TEXT_CHARS = 10_000;
   let agentIndex: string[] | null = null;
   let agentIndexForSessionId: string | null = null;
   let agentIndexRequestedForSessionId: string | null = null;
@@ -879,11 +880,16 @@ function main(): void {
     if (root.dataset.fileLinks === "1") return;
     root.dataset.fileLinks = "1";
 
-    const tokenRe =
+    const fileTokenRe =
       /(?:\.?\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?/g;
+    const fileTokenWithAtRe =
+      /@?(?:\.?\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?/g;
+
+    const urlRe = /https?:\/\/[^\s<>()]+/gi;
 
     const normalizeToken = (raw: string): string => {
       let t = raw.trim();
+      if (t.startsWith("@")) t = t.slice(1);
       while (t.length > 0 && /[),.;:!?]/.test(t[t.length - 1] || "")) {
         t = t.slice(0, -1);
       }
@@ -895,9 +901,18 @@ function main(): void {
       if (el.dataset.openFile) continue;
       const raw = (el.textContent || "").trim();
       if (!raw || /\s/.test(raw)) continue;
-      const m = raw.match(tokenRe);
-      if (!m || m.length !== 1 || m[0] !== raw) continue;
-      const normalized = normalizeToken(raw);
+      if (/^https?:\/\//i.test(raw)) {
+        const normalizedUrl = normalizeToken(raw);
+        if (!normalizedUrl) continue;
+        el.dataset.openUrl = normalizedUrl;
+        el.title = "Ctrl/Cmd+Click to open";
+        el.classList.add("autoUrlLink");
+        continue;
+      }
+      const rawForMatch = raw.startsWith("@") ? raw.slice(1) : raw;
+      const m = rawForMatch.match(fileTokenRe);
+      if (!m || m.length !== 1 || m[0] !== rawForMatch) continue;
+      const normalized = normalizeToken(rawForMatch);
       if (!normalized) continue;
       el.dataset.openFile = normalized;
       el.title = "Ctrl/Cmd+Click to open";
@@ -911,42 +926,93 @@ function main(): void {
       if (!n) break;
       const parent = (n as Text).parentElement;
       if (!parent) continue;
-      if (parent.closest("a,[data-open-file]")) continue;
+      if (parent.closest("a,[data-open-file],[data-open-url]")) continue;
       textNodes.push(n as Text);
     }
 
     for (const node of textNodes) {
       const rawText = node.nodeValue || "";
-      tokenRe.lastIndex = 0;
-      let m: RegExpExecArray | null = null;
-      let lastIdx = 0;
-      const frag = document.createDocumentFragment();
 
-      while ((m = tokenRe.exec(rawText))) {
-        const start = m.index;
-        const end = start + m[0].length;
-        const before = rawText.slice(lastIdx, start);
-        if (before) frag.appendChild(document.createTextNode(before));
+      const appendTextWithFileLinks = (
+        frag: DocumentFragment,
+        text: string,
+      ): boolean => {
+        fileTokenWithAtRe.lastIndex = 0;
+        let m: RegExpExecArray | null = null;
+        let lastIdx = 0;
+        let changed = false;
 
-        const normalized = normalizeToken(m[0]);
-        if (normalized) {
-          const sp = document.createElement("span");
-          sp.className = "autoFileLink";
-          sp.dataset.openFile = normalized;
-          sp.title = "Ctrl/Cmd+Click to open";
-          sp.textContent = m[0];
-          frag.appendChild(sp);
-        } else {
-          frag.appendChild(document.createTextNode(m[0]));
+        while ((m = fileTokenWithAtRe.exec(text))) {
+          changed = true;
+          const start = m.index;
+          const end = start + m[0].length;
+          const before = text.slice(lastIdx, start);
+          if (before) frag.appendChild(document.createTextNode(before));
+
+          const normalized = normalizeToken(m[0]);
+          if (normalized) {
+            const sp = document.createElement("span");
+            sp.className = "autoFileLink";
+            sp.dataset.openFile = normalized;
+            sp.title = "Ctrl/Cmd+Click to open";
+            sp.textContent = m[0];
+            frag.appendChild(sp);
+          } else {
+            frag.appendChild(document.createTextNode(m[0]));
+          }
+
+          lastIdx = end;
         }
 
-        lastIdx = end;
+        if (!changed) {
+          if (text) frag.appendChild(document.createTextNode(text));
+          return false;
+        }
+
+        const tail = text.slice(lastIdx);
+        if (tail) frag.appendChild(document.createTextNode(tail));
+        return true;
+      };
+
+      urlRe.lastIndex = 0;
+      let um: RegExpExecArray | null = null;
+      let lastUrlIdx = 0;
+      let didReplace = false;
+      const frag = document.createDocumentFragment();
+
+      while ((um = urlRe.exec(rawText))) {
+        didReplace = true;
+        const start = um.index;
+        const end = start + um[0].length;
+        const before = rawText.slice(lastUrlIdx, start);
+        if (before) appendTextWithFileLinks(frag, before);
+
+        const normalizedUrl = normalizeToken(um[0]);
+        if (normalizedUrl) {
+          const sp = document.createElement("span");
+          sp.className = "autoUrlLink";
+          sp.dataset.openUrl = normalizedUrl;
+          sp.title = "Ctrl/Cmd+Click to open";
+          sp.textContent = um[0];
+          frag.appendChild(sp);
+        } else {
+          frag.appendChild(document.createTextNode(um[0]));
+        }
+
+        lastUrlIdx = end;
       }
 
-      if (lastIdx === 0) continue;
-      const tail = rawText.slice(lastIdx);
-      if (tail) frag.appendChild(document.createTextNode(tail));
-      node.parentNode?.replaceChild(frag, node);
+      if (didReplace) {
+        const tail = rawText.slice(lastUrlIdx);
+        if (tail) appendTextWithFileLinks(frag, tail);
+        node.parentNode?.replaceChild(frag, node);
+        continue;
+      }
+
+      const fileOnlyFrag = document.createDocumentFragment();
+      const changed = appendTextWithFileLinks(fileOnlyFrag, rawText);
+      if (!changed) continue;
+      node.parentNode?.replaceChild(fileOnlyFrag, node);
     }
   }
 
@@ -1122,7 +1188,7 @@ function main(): void {
         }
 
         // File search (TUI-like): run a query-based search rather than indexing all files.
-        if (query.length > 0) {
+        if (query.length >= FILE_SEARCH_MIN_QUERY_LEN) {
           const existing =
             fileSearch &&
             fileSearch.sessionId === state.activeSession.id &&
@@ -1157,6 +1223,15 @@ function main(): void {
               },
             ]);
           }
+        } else if (query.length > 0) {
+          items = items.concat([
+            {
+              insert: "",
+              label: "(type 2+ chars to search files)",
+              detail: "",
+              kind: "file",
+            },
+          ]);
         }
       }
 
@@ -1444,24 +1519,26 @@ function main(): void {
 
         const btnDecline = document.createElement("button");
         btnDecline.textContent = "Decline";
-        btnDecline.addEventListener("click", () =>
+        btnDecline.addEventListener("click", () => {
           vscode.postMessage({
             type: "approve",
             requestKey: ap.requestKey,
             decision: "decline",
-          }),
-        );
+          });
+          vscode.postMessage({ type: "stop" });
+        });
         actions.appendChild(btnDecline);
 
         const btnCancel = document.createElement("button");
         btnCancel.textContent = "Cancel";
-        btnCancel.addEventListener("click", () =>
+        btnCancel.addEventListener("click", () => {
           vscode.postMessage({
             type: "approve",
             requestKey: ap.requestKey,
             decision: "cancel",
-          }),
-        );
+          });
+          vscode.postMessage({ type: "stop" });
+        });
         actions.appendChild(btnCancel);
 
         card.appendChild(actions);
@@ -1740,7 +1817,11 @@ function main(): void {
         const next = block.hideCommandText
           ? block.output || "[command hidden]"
           : (displayCmd ? "$ " + displayCmd + "\n" : "") + (block.output || "");
-        if (pre.textContent !== next) pre.textContent = next;
+        if (pre.textContent !== next) {
+          pre.textContent = next;
+          delete (pre.dataset as any).fileLinks;
+          if (next.length <= MAX_LINKIFY_TEXT_CHARS) linkifyFilePaths(pre);
+        }
         if (block.terminalStdin && block.terminalStdin.length > 0) {
           const stdinId = id + ":stdin";
           const stdinDet = ensureDetails(stdinId, "", false, "stdin", stdinId);
@@ -1762,7 +1843,11 @@ function main(): void {
           .filter(Boolean)
           .join("\n");
         const metaText = metaLines;
-        if (meta.textContent !== metaText) meta.textContent = metaText;
+        if (meta.textContent !== metaText) {
+          meta.textContent = metaText;
+          delete (meta.dataset as any).fileLinks;
+          if (metaText.length <= MAX_LINKIFY_TEXT_CHARS) linkifyFilePaths(meta);
+        }
         det.appendChild(meta);
         continue;
       }
@@ -2342,7 +2427,7 @@ function sendCurrentInput(): void {
       fileSearchInFlight = { sessionId, query };
       vscode.postMessage({ type: "requestFileSearch", sessionId, query });
       fileSearchTimer = null;
-    }, 100);
+    }, FILE_SEARCH_DEBOUNCE_MS);
   }
 
   function rankFilePaths(paths: string[], query: string): string[] {
@@ -2451,13 +2536,26 @@ function sendCurrentInput(): void {
 
   // Open links via the extension host.
   document.addEventListener("click", (e) => {
-    const t = e.target as HTMLElement | null;
+    const t = eventTargetEl(e.target);
+    const me = e as MouseEvent;
+
+    const urlLink = t
+      ? (t.closest("[data-open-url]") as HTMLElement | null)
+      : null;
+    if (urlLink) {
+      const url = urlLink.getAttribute("data-open-url") || "";
+      if (url && (me.ctrlKey || me.metaKey)) {
+        e.preventDefault();
+        vscode.postMessage({ type: "openExternal", url });
+        return;
+      }
+    }
+
     const fileLink = t
       ? (t.closest("[data-open-file]") as HTMLElement | null)
       : null;
     if (fileLink) {
       const file = fileLink.getAttribute("data-open-file") || "";
-      const me = e as MouseEvent;
       if (file && (me.ctrlKey || me.metaKey)) {
         e.preventDefault();
         vscode.postMessage({ type: "openFile", path: file });

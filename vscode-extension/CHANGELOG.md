@@ -2,6 +2,18 @@
 
 この拡張はまだ初期段階です。互換性が壊れる変更が入る可能性があります。
 
+## 0.1.10
+
+- チャット内の `@path/to/file` 形式でも Ctrl/Cmd+Click でファイルを開けるようにした
+- `openFile` の失敗ダイアログ（`No matching result`）を廃止し、`vscode.open` に委譲
+- Command カード（pre/meta）内のパスも Ctrl/Cmd+Click で開けるようにした（出力が巨大な場合はリンク化を抑制）
+
+## 0.1.9
+
+- 承認UI: Decline/Cancel で `turn/interrupt` を送って実行中を止める（次の入力に進める）
+- チャット履歴内の `http://` / `https://` を Ctrl/Cmd+Click で開けるようにした
+- `@` のファイル検索を軽くした（2文字以上でのみ検索、debounce を延長、キャンセル反応を改善）
+
 ## 0.1.8
 
 - Ctrl/Cmd+Hover 時のみファイルパスをリンク風表示（押しているだけでは表示しない）

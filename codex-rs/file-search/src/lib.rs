@@ -210,7 +210,9 @@ pub fn run(
 
         // Each worker keeps a local counter so we only read the atomic flag
         // every N entries which is cheaper than checking on every file.
-        const CHECK_INTERVAL: usize = 1024;
+        //
+        // Smaller intervals make cancellation more responsive for large repos.
+        const CHECK_INTERVAL: usize = 128;
         let mut processed = 0;
 
         let cancel = cancel_flag.clone();

@@ -380,32 +380,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         uri = vscode.Uri.file(resolved);
       }
 
-      try {
-        let stat: vscode.FileStat | null = null;
-        try {
-          stat = await vscode.workspace.fs.stat(uri);
-        } catch {
-          stat = null;
-        }
-        if (!stat || stat.type !== vscode.FileType.File) {
-          void vscode.window.showInformationMessage("No matching result");
-          return;
-        }
-        const doc = await vscode.workspace.openTextDocument(uri);
-        const editor = await vscode.window.showTextDocument(doc, {
-          preview: true,
-          preserveFocus: false,
-        });
-        if (line != null) {
-          const l = Math.max(0, line - 1);
-          const c = Math.max(0, (column ?? 1) - 1);
-          const pos = new vscode.Position(l, c);
-          editor.selection = new vscode.Selection(pos, pos);
-          editor.revealRange(new vscode.Range(pos, pos));
-        }
-      } catch (err) {
-        void vscode.window.showInformationMessage("No matching result");
+      const options: Record<string, unknown> = {
+        preview: true,
+        preserveFocus: false,
+      };
+      if (line != null) {
+        const l = Math.max(0, line - 1);
+        const c = Math.max(0, (column ?? 1) - 1);
+        const pos = new vscode.Position(l, c);
+        options["selection"] = new vscode.Range(pos, pos);
       }
+      // Delegate error handling to VS Code (no custom "No matching result" dialog).
+      await vscode.commands.executeCommand("vscode.open", uri, options);
       return;
     }
 
@@ -691,6 +677,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .autoFileLink { color: inherit; text-decoration: none; cursor: text; }
       .autoFileLink.modHover { color: var(--vscode-textLink-foreground, rgba(0,120,212,0.9)); text-decoration: underline; cursor: pointer; }
       .autoFileLink.modHover:hover { color: var(--vscode-textLink-activeForeground, rgba(0,120,212,1)); }
+      .autoUrlLink { color: inherit; text-decoration: none; cursor: text; }
+      .autoUrlLink.modHover { color: var(--vscode-textLink-foreground, rgba(0,120,212,0.9)); text-decoration: underline; cursor: pointer; }
+      .autoUrlLink.modHover:hover { color: var(--vscode-textLink-activeForeground, rgba(0,120,212,1)); }
       .fileDiff { margin-top: 8px; }
     </style>
   </head>
