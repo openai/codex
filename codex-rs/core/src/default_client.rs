@@ -135,14 +135,21 @@ pub fn create_client() -> CodexHttpClient {
 
 pub fn build_reqwest_client() -> reqwest::Client {
     use reqwest::header::HeaderMap;
+    use reqwest::header::HeaderValue;
 
     let mut headers = HeaderMap::new();
     headers.insert("originator", originator().header_value.clone());
+    // Add browser-like headers to help avoid Cloudflare bot detection
+    headers.insert("Accept", HeaderValue::from_static("application/json, text/plain, */*"));
+    headers.insert("Accept-Language", HeaderValue::from_static("en-US,en;q=0.9"));
+    headers.insert("Accept-Encoding", HeaderValue::from_static("gzip, deflate, br"));
     let ua = get_codex_user_agent();
 
     let mut builder = reqwest::Client::builder()
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
+        // Enable cookie store to handle session cookies from Cloudflare/auth endpoints
+        .cookie_store(true)
         .default_headers(headers);
     if is_sandboxed() {
         builder = builder.no_proxy();

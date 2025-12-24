@@ -67,6 +67,26 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                         status,
                         request_id: extract_request_id(headers.as_ref()),
                     })
+                } else if status == http::StatusCode::FORBIDDEN {
+                    // Check for Cloudflare challenge page - this is a retryable error
+                    // The challenge page typically contains "Just a moment" or "cf_chl_opt"
+                    if body_text.contains("Just a moment") || body_text.contains("cf_chl_opt") || body_text.contains("challenge-platform") {
+                        // Return as a retryable stream error so the session can retry
+                        CodexErr::Stream(
+                            format!(
+                                "Cloudflare challenge detected (403). This may be temporary. Request ID: {}",
+                                extract_request_id(headers.as_ref())
+                                    .unwrap_or_else(|| "unknown".to_string())
+                            ),
+                            Some(std::time::Duration::from_secs(2)),
+                        )
+                    } else {
+                        CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                            status,
+                            body: body_text,
+                            request_id: extract_request_id(headers.as_ref()),
+                        })
+                    }
                 } else {
                     CodexErr::UnexpectedStatus(UnexpectedResponseError {
                         status,

@@ -54,7 +54,7 @@ os_info = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 regex-lite = { workspace = true }
-reqwest = { workspace = true, features = ["json", "stream"] }
+reqwest = { workspace = true, features = ["json", "stream", "cookies", "brotli"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

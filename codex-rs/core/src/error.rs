@@ -245,6 +245,8 @@ pub struct UnexpectedResponseError {
 
 const CLOUDFLARE_BLOCKED_MESSAGE: &str =
     "Access blocked by Cloudflare. This usually happens when connecting from a restricted region";
+const CLOUDFLARE_CHALLENGE_MESSAGE: &str =
+    "Cloudflare challenge page detected. This may indicate bot detection or network issues. Try: 1) Checking your network/VPN settings, 2) Re-authenticating with `codex login`, or 3) Using API key authentication instead";
 
 impl UnexpectedResponseError {
     fn friendly_message(&self) -> Option<String> {
@@ -252,16 +254,25 @@ impl UnexpectedResponseError {
             return None;
         }
 
-        if !self.body.contains("Cloudflare") || !self.body.contains("blocked") {
-            return None;
+        // Check for Cloudflare challenge page (JavaScript challenge)
+        if self.body.contains("Just a moment") || self.body.contains("cf_chl_opt") || self.body.contains("challenge-platform") {
+            let mut message = format!("{CLOUDFLARE_CHALLENGE_MESSAGE} (status {})", self.status);
+            if let Some(id) = &self.request_id {
+                message.push_str(&format!(", request id: {id}"));
+            }
+            return Some(message);
         }
 
-        let mut message = format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {})", self.status);
-        if let Some(id) = &self.request_id {
-            message.push_str(&format!(", request id: {id}"));
+        // Check for Cloudflare blocked message
+        if self.body.contains("Cloudflare") && self.body.contains("blocked") {
+            let mut message = format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {})", self.status);
+            if let Some(id) = &self.request_id {
+                message.push_str(&format!(", request id: {id}"));
+            }
+            return Some(message);
         }
 
-        Some(message)
+        None
     }
 }
 
@@ -795,6 +806,35 @@ mod tests {
         assert_eq!(
             err.to_string(),
             format!("{CLOUDFLARE_BLOCKED_MESSAGE} (status {status}), request id: ray-id")
+        );
+    }
+
+    #[test]
+    fn unexpected_status_cloudflare_challenge_is_detected() {
+        let err = UnexpectedResponseError {
+            status: StatusCode::FORBIDDEN,
+            body: "<html><head><title>Just a moment...</title></head><body>Please wait while we verify you</body></html>"
+                .to_string(),
+            request_id: Some("cf-ray-123".to_string()),
+        };
+        let status = StatusCode::FORBIDDEN.to_string();
+        assert_eq!(
+            err.to_string(),
+            format!("{CLOUDFLARE_CHALLENGE_MESSAGE} (status {status}), request id: cf-ray-123")
+        );
+    }
+
+    #[test]
+    fn unexpected_status_cloudflare_challenge_cf_chl_opt_is_detected() {
+        let err = UnexpectedResponseError {
+            status: StatusCode::FORBIDDEN,
+            body: r#"<script>window._cf_chl_opt = {cvId: '3'};</script>"#.to_string(),
+            request_id: None,
+        };
+        let status = StatusCode::FORBIDDEN.to_string();
+        assert_eq!(
+            err.to_string(),
+            format!("{CLOUDFLARE_CHALLENGE_MESSAGE} (status {status})")
         );
     }
 
