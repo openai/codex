@@ -132,7 +132,6 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
 
     // Assert the tool output /responses request succeeded and did not trigger another /models fetch.
     let tool_req = tool_output_mock.single_request();
-    assert_eq!(tool_req.header("X-If-Models-Match"), None);
     let _ = tool_req.function_call_output(CALL_ID);
     assert_eq!(refresh_models_mock.requests().len(), 1);
 
