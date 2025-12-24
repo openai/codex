@@ -2090,7 +2090,7 @@ dependencies = [
 name = "codex-utils-cargo-bin"
 version = "0.0.0"
 dependencies = [
- "assert_cmd",
+ "assert_cmd",    
  "thiserror 2.0.17",
 ]
 
