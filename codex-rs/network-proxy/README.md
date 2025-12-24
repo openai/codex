@@ -23,7 +23,7 @@ proxy_url = "http://127.0.0.1:3128"
 admin_url = "http://127.0.0.1:8080"
 # By default, non-loopback binds are clamped to loopback for safety.
 # If you want to expose these listeners beyond localhost, you must opt in explicitly.
-dangerously_allow_non_loopback = false
+dangerously_allow_non_loopback_proxy = false
 dangerously_allow_non_loopback_admin = false
 mode = "limited" # or "full"
 
@@ -138,7 +138,7 @@ what it can reasonably guarantee.
   - the admin API is unauthenticated; non-loopback binds are clamped unless explicitly enabled via
     `dangerously_allow_non_loopback_admin`
   - the HTTP proxy listener similarly clamps non-loopback binds unless explicitly enabled via
-    `dangerously_allow_non_loopback`
+    `dangerously_allow_non_loopback_proxy`
   - when unix socket proxying is enabled, both listeners are forced to loopback to avoid turning the
     proxy into a remote bridge into local daemons.
 - MITM CA key handling:

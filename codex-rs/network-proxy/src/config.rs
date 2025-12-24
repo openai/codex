@@ -20,7 +20,7 @@ pub struct NetworkProxyConfig {
     #[serde(default = "default_admin_url")]
     pub admin_url: String,
     #[serde(default)]
-    pub dangerously_allow_non_loopback: bool,
+    pub dangerously_allow_non_loopback_proxy: bool,
     #[serde(default)]
     pub dangerously_allow_non_loopback_admin: bool,
     #[serde(default)]
@@ -37,7 +37,7 @@ impl Default for NetworkProxyConfig {
             enabled: false,
             proxy_url: default_proxy_url(),
             admin_url: default_admin_url(),
-            dangerously_allow_non_loopback: false,
+            dangerously_allow_non_loopback_proxy: false,
             dangerously_allow_non_loopback_admin: false,
             mode: NetworkMode::default(),
             policy: NetworkPolicy::default(),
@@ -123,7 +123,7 @@ fn clamp_non_loopback(addr: SocketAddr, allow_non_loopback: bool, name: &str) ->
     }
 
     warn!(
-        "{name} requested non-loopback bind ({addr}); clamping to 127.0.0.1:{port} (set the corresponding dangerously_allow_non_loopback* flag to override)",
+        "{name} requested non-loopback bind ({addr}); clamping to 127.0.0.1:{port} (set dangerously_allow_non_loopback_proxy or dangerously_allow_non_loopback_admin to override)",
         port = addr.port()
     );
     SocketAddr::from(([127, 0, 0, 1], addr.port()))
@@ -140,7 +140,7 @@ pub fn resolve_runtime(cfg: &Config) -> RuntimeConfig {
     let admin_addr = resolve_addr(&cfg.network_proxy.admin_url, 8080);
     let http_addr = clamp_non_loopback(
         http_addr,
-        cfg.network_proxy.dangerously_allow_non_loopback,
+        cfg.network_proxy.dangerously_allow_non_loopback_proxy,
         "HTTP proxy",
     );
     let admin_addr = clamp_non_loopback(
@@ -155,9 +155,9 @@ pub fn resolve_runtime(cfg: &Config) -> RuntimeConfig {
         // reachable from outside the machine, it can become a remote bridge into local daemons
         // (e.g. docker.sock). To avoid footguns, enforce loopback binding whenever unix sockets
         // are enabled.
-        if cfg.network_proxy.dangerously_allow_non_loopback && !http_addr.ip().is_loopback() {
+        if cfg.network_proxy.dangerously_allow_non_loopback_proxy && !http_addr.ip().is_loopback() {
             warn!(
-                "unix socket proxying is enabled; ignoring dangerously_allow_non_loopback and clamping HTTP proxy to loopback"
+                "unix socket proxying is enabled; ignoring dangerously_allow_non_loopback_proxy and clamping HTTP proxy to loopback"
             );
         }
         if cfg.network_proxy.dangerously_allow_non_loopback_admin && !admin_addr.ip().is_loopback()

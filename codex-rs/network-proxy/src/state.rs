@@ -360,7 +360,7 @@ struct PartialConfig {
 struct PartialNetworkProxyConfig {
     enabled: Option<bool>,
     mode: Option<NetworkMode>,
-    dangerously_allow_non_loopback: Option<bool>,
+    dangerously_allow_non_loopback_proxy: Option<bool>,
     dangerously_allow_non_loopback_admin: Option<bool>,
     #[serde(default)]
     policy: PartialNetworkPolicy,
@@ -382,7 +382,7 @@ struct PartialNetworkPolicy {
 struct NetworkProxyConstraints {
     enabled: Option<bool>,
     mode: Option<NetworkMode>,
-    dangerously_allow_non_loopback: Option<bool>,
+    dangerously_allow_non_loopback_proxy: Option<bool>,
     dangerously_allow_non_loopback_admin: Option<bool>,
     allowed_domains: Option<Vec<String>>,
     denied_domains: Option<Vec<String>>,
@@ -425,10 +425,11 @@ fn network_proxy_constraints_from_trusted_layers(
         if let Some(mode) = partial.network_proxy.mode {
             constraints.mode = Some(mode);
         }
-        if let Some(dangerously_allow_non_loopback) =
-            partial.network_proxy.dangerously_allow_non_loopback
+        if let Some(dangerously_allow_non_loopback_proxy) =
+            partial.network_proxy.dangerously_allow_non_loopback_proxy
         {
-            constraints.dangerously_allow_non_loopback = Some(dangerously_allow_non_loopback);
+            constraints.dangerously_allow_non_loopback_proxy =
+                Some(dangerously_allow_non_loopback_proxy);
         }
         if let Some(dangerously_allow_non_loopback_admin) =
             partial.network_proxy.dangerously_allow_non_loopback_admin
@@ -511,9 +512,9 @@ fn validate_policy_against_constraints(
         },
     )?;
 
-    let allow_non_loopback_proxy = constraints.dangerously_allow_non_loopback;
+    let allow_non_loopback_proxy = constraints.dangerously_allow_non_loopback_proxy;
     let _ = Constrained::new(
-        config.network_proxy.dangerously_allow_non_loopback,
+        config.network_proxy.dangerously_allow_non_loopback_proxy,
         move |candidate| match allow_non_loopback_proxy {
             Some(true) | None => Ok(()),
             Some(false) => {
