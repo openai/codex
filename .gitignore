@@ -13,6 +13,12 @@ build/
 out/
 storybook-static/
 
+# buck2
+buck-out/
+**/BUCK
+codex-rs/third-party/
+codex-rs/cli/Cargo.lock
+
 # ignore README for publishing
 codex-cli/README.md
 
@@ -89,4 +95,3 @@ CHANGELOG.ignore.md
 # Python bytecode files
 __pycache__/
 *.pyc
-
