@@ -23,8 +23,7 @@ fn test_standalone_exec_cli_can_use_apply_patch() -> anyhow::Result<()> {
     let absolute_path = tmp.path().join(relative_path);
     fs::write(&absolute_path, "original content\n")?;
 
-    Command::cargo_bin("codex-exec")
-        .context("should find binary for codex-exec")?
+    Command::new(codex_utils_cargo_bin::cargo_bin("codex-exec")?)
         .arg(CODEX_APPLY_PATCH_ARG1)
         .arg(
             r#"*** Begin Patch

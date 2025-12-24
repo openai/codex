@@ -125,14 +125,6 @@ pub enum ApplyPatchToolType {
     Function,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq, Default, Hash, TS, JsonSchema, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReasoningSummaryFormat {
-    #[default]
-    None,
-    Experimental,
-}
-
 /// Server-provided truncation policy metadata for a model.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -188,7 +180,6 @@ pub struct ModelInfo {
     pub truncation_policy: TruncationPolicyConfig,
     pub supports_parallel_tool_calls: bool,
     pub context_window: Option<i64>,
-    pub reasoning_summary_format: ReasoningSummaryFormat,
     pub experimental_supported_tools: Vec<String>,
 }
 

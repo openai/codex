@@ -24,7 +24,6 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
-use codex_protocol::openai_models::ReasoningSummaryFormat;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
@@ -83,7 +82,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
         context_window: None,
-        reasoning_summary_format: ReasoningSummaryFormat::None,
         experimental_supported_tools: Vec::new(),
     };
 
@@ -222,7 +220,6 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
         context_window: None,
-        reasoning_summary_format: ReasoningSummaryFormat::None,
         experimental_supported_tools: Vec::new(),
     };
     mount_models_once(
@@ -486,7 +483,6 @@ fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> 
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
         context_window: None,
-        reasoning_summary_format: ReasoningSummaryFormat::None,
         experimental_supported_tools: Vec::new(),
     }
 }

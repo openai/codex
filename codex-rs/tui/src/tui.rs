@@ -47,6 +47,7 @@ use crate::tui::event_stream::TuiEventStream;
 use crate::tui::job_control::SuspendContext;
 
 mod event_stream;
+mod frame_rate_limiter;
 mod frame_requester;
 #[cfg(unix)]
 mod job_control;
