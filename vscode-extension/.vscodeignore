@@ -25,3 +25,4 @@ scripts/**
 tsconfig.json
 pnpm-lock.yaml
 codex-ui-vscode-extension-*.vsix
+vsix/**
