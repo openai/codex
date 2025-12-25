@@ -9,6 +9,7 @@ pub use app::AppExitInfo;
 use codex_app_server_protocol::AuthMode;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
+use codex_common::oss::update_ollama_wire_api_if_needed;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
@@ -226,7 +227,7 @@ pub async fn run_main(
         ..Default::default()
     };
 
-    let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
+    let mut config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
 
     if let Some(warning) = add_dir_warning_message(&cli.add_dir, config.sandbox_policy.get()) {
         #[allow(clippy::print_stderr)]
@@ -302,7 +303,7 @@ pub async fn run_main(
                 ));
             }
         };
-        ensure_oss_provider_ready(provider_id, &config).await?;
+        ensure_oss_provider_ready(provider_id, &mut config).await?;
     }
 
     let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
@@ -561,7 +562,10 @@ async fn load_config_or_exit(
 ) -> Config {
     #[allow(clippy::print_stderr)]
     match Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await {
-        Ok(config) => config,
+        Ok(mut config) => {
+            update_ollama_wire_api_if_needed(&mut config).await;
+            config
+        }
         Err(err) => {
             eprintln!("Error loading configuration: {err}");
             std::process::exit(1);
