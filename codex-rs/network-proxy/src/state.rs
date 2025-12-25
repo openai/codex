@@ -1,0 +1,1049 @@
+use crate::config::Config;
+use crate::config::MitmConfig;
+use crate::config::NetworkMode;
+use crate::mitm::MitmState;
+use crate::policy::is_loopback_host;
+use crate::policy::is_non_public_ip;
+use crate::policy::method_allowed;
+use anyhow::Context;
+use anyhow::Result;
+use codex_app_server_protocol::ConfigLayerSource;
+use codex_core::config::CONFIG_TOML_FILE;
+use codex_core::config::ConfigBuilder;
+use codex_core::config::Constrained;
+use codex_core::config::ConstraintError;
+use globset::GlobBuilder;
+use globset::GlobSet;
+use globset::GlobSetBuilder;
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::HashSet;
+use std::collections::VecDeque;
+use std::net::IpAddr;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::SystemTime;
+use time::OffsetDateTime;
+use tokio::net::lookup_host;
+use tokio::sync::RwLock;
+use tracing::info;
+use tracing::warn;
+
+const MAX_BLOCKED_EVENTS: usize = 200;
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BlockedRequest {
+    pub host: String,
+    pub reason: String,
+    pub client: Option<String>,
+    pub method: Option<String>,
+    pub mode: Option<NetworkMode>,
+    pub protocol: String,
+    pub timestamp: i64,
+}
+
+impl BlockedRequest {
+    pub fn new(
+        host: String,
+        reason: String,
+        client: Option<String>,
+        method: Option<String>,
+        mode: Option<NetworkMode>,
+        protocol: String,
+    ) -> Self {
+        Self {
+            host,
+            reason,
+            client,
+            method,
+            mode,
+            protocol,
+            timestamp: unix_timestamp(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ConfigState {
+    config: Config,
+    mtime: Option<SystemTime>,
+    allow_set: GlobSet,
+    deny_set: GlobSet,
+    mitm: Option<Arc<MitmState>>,
+    cfg_path: PathBuf,
+    blocked: VecDeque<BlockedRequest>,
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    state: Arc<RwLock<ConfigState>>,
+}
+
+impl AppState {
+    pub async fn new() -> Result<Self> {
+        let cfg_state = build_config_state().await?;
+        Ok(Self {
+            state: Arc::new(RwLock::new(cfg_state)),
+        })
+    }
+
+    pub async fn current_cfg(&self) -> Result<Config> {
+        // Callers treat `AppState` as a live view of policy. We reload-on-demand so edits to
+        // `config.toml` (including Codex-managed writes) take effect without a restart.
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.config.clone())
+    }
+
+    pub async fn current_patterns(&self) -> Result<(Vec<String>, Vec<String>)> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok((
+            guard.config.network_proxy.policy.allowed_domains.clone(),
+            guard.config.network_proxy.policy.denied_domains.clone(),
+        ))
+    }
+
+    pub async fn force_reload(&self) -> Result<()> {
+        let mut guard = self.state.write().await;
+        let previous_cfg = guard.config.clone();
+        let blocked = guard.blocked.clone();
+        match build_config_state().await {
+            Ok(mut new_state) => {
+                // Policy changes are operationally sensitive; logging diffs makes changes traceable
+                // without needing to dump full config blobs (which can include unrelated settings).
+                log_policy_changes(&previous_cfg, &new_state.config);
+                new_state.blocked = blocked;
+                *guard = new_state;
+                let path = guard.cfg_path.display();
+                info!("reloaded config from {path}");
+                Ok(())
+            }
+            Err(err) => {
+                let path = guard.cfg_path.display();
+                warn!("failed to reload config from {path}: {err}; keeping previous config");
+                Err(err)
+            }
+        }
+    }
+
+    pub async fn host_blocked(&self, host: &str, port: u16) -> Result<(bool, String)> {
+        self.reload_if_needed().await?;
+        let (deny_set, allow_set, allow_local_binding, allowed_domains_empty) = {
+            let guard = self.state.read().await;
+            (
+                guard.deny_set.clone(),
+                guard.allow_set.clone(),
+                guard.config.network_proxy.policy.allow_local_binding,
+                guard.config.network_proxy.policy.allowed_domains.is_empty(),
+            )
+        };
+
+        // Decision order matters:
+        //  1) explicit deny always wins
+        //  2) local/private networking is opt-in (defense-in-depth)
+        //  3) allowlist is enforced when configured
+        if deny_set.is_match(host) {
+            return Ok((true, "denied".to_string()));
+        }
+
+        if allowed_domains_empty {
+            return Ok((true, "not_allowed".to_string()));
+        }
+
+        if !allow_local_binding && !allow_set.is_match(host) {
+            // If the intent is "prevent access to local/internal networks", we must not rely solely
+            // on string checks like `localhost` / `127.0.0.1`. Attackers can use DNS rebinding or
+            // public suffix services that map hostnames onto private IPs.
+            //
+            // We therefore do a best-effort DNS + IP classification check before allowing the
+            // request. This closes the obvious bypass where the hostname itself isn't loopback.
+            if is_loopback_host(host) || host_resolves_to_non_public_ip(host, port).await? {
+                return Ok((true, "not_allowed_local".to_string()));
+            }
+        }
+
+        if !allow_set.is_match(host) {
+            return Ok((true, "not_allowed".to_string()));
+        }
+        Ok((false, String::new()))
+    }
+
+    pub async fn record_blocked(&self, entry: BlockedRequest) -> Result<()> {
+        self.reload_if_needed().await?;
+        let mut guard = self.state.write().await;
+        guard.blocked.push_back(entry);
+        while guard.blocked.len() > MAX_BLOCKED_EVENTS {
+            guard.blocked.pop_front();
+        }
+        Ok(())
+    }
+
+    pub async fn drain_blocked(&self) -> Result<Vec<BlockedRequest>> {
+        self.reload_if_needed().await?;
+        let mut guard = self.state.write().await;
+        let blocked = std::mem::take(&mut guard.blocked);
+        Ok(blocked.into_iter().collect())
+    }
+
+    pub async fn is_unix_socket_allowed(&self, path: &str) -> Result<bool> {
+        self.reload_if_needed().await?;
+        if cfg!(not(target_os = "macos")) {
+            return Ok(false);
+        }
+
+        // We only support absolute unix socket paths (a relative path would be ambiguous with
+        // respect to the proxy process's CWD and can lead to confusing allowlist behavior).
+        if !Path::new(path).is_absolute() {
+            return Ok(false);
+        }
+
+        let guard = self.state.read().await;
+        let requested_canonical = std::fs::canonicalize(path).ok();
+        for allowed in &guard.config.network_proxy.policy.allow_unix_sockets {
+            if allowed == path {
+                return Ok(true);
+            }
+
+            // Best-effort canonicalization to reduce surprises with symlinks.
+            // If canonicalization fails (e.g., socket not created yet), fall back to raw comparison.
+            let Some(requested_canonical) = &requested_canonical else {
+                continue;
+            };
+            if let Ok(allowed_canonical) = std::fs::canonicalize(allowed)
+                && &allowed_canonical == requested_canonical
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    pub async fn method_allowed(&self, method: &str) -> Result<bool> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(method_allowed(guard.config.network_proxy.mode, method))
+    }
+
+    pub async fn network_mode(&self) -> Result<NetworkMode> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.config.network_proxy.mode)
+    }
+
+    pub async fn set_network_mode(&self, mode: NetworkMode) -> Result<()> {
+        self.reload_if_needed().await?;
+        let mut guard = self.state.write().await;
+        guard.config.network_proxy.mode = mode;
+        info!("updated network mode to {mode:?}");
+        Ok(())
+    }
+
+    pub async fn mitm_state(&self) -> Result<Option<Arc<MitmState>>> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.mitm.clone())
+    }
+
+    async fn reload_if_needed(&self) -> Result<()> {
+        let needs_reload = {
+            let guard = self.state.read().await;
+            if !guard.cfg_path.exists() {
+                // If the config file is missing, only reload when it *used to* exist (mtime set).
+                // This avoids forcing a reload on every request when running with the default config.
+                guard.mtime.is_some()
+            } else {
+                let metadata = std::fs::metadata(&guard.cfg_path).ok();
+                match (metadata.and_then(|m| m.modified().ok()), guard.mtime) {
+                    (Some(new_mtime), Some(old_mtime)) => new_mtime > old_mtime,
+                    (Some(_), None) => true,
+                    _ => false,
+                }
+            }
+        };
+
+        if !needs_reload {
+            return Ok(());
+        }
+
+        self.force_reload().await
+    }
+}
+
+async fn host_resolves_to_non_public_ip(host: &str, port: u16) -> Result<bool> {
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Ok(is_non_public_ip(ip));
+    }
+
+    // If DNS lookup fails, default to "not local/private" rather than blocking. In practice, the
+    // subsequent connect attempt will fail anyway, and blocking on transient resolver issues would
+    // make the proxy fragile. The allowlist/denylist remains the primary control plane.
+    let addrs = match lookup_host((host, port)).await {
+        Ok(addrs) => addrs,
+        Err(_) => return Ok(false),
+    };
+
+    for addr in addrs {
+        if is_non_public_ip(addr.ip()) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+async fn build_config_state() -> Result<ConfigState> {
+    // Load config through `codex-core` so we inherit the same layer ordering and semantics as the
+    // rest of Codex (system/managed layers, user layers, session flags, etc.).
+    let codex_cfg = ConfigBuilder::default()
+        .build()
+        .await
+        .context("failed to load Codex config")?;
+
+    let cfg_path = codex_cfg.codex_home.join(CONFIG_TOML_FILE);
+
+    // Deserialize from the merged effective config, rather than parsing config.toml ourselves.
+    // This avoids a second parser/merger implementation (and the drift that comes with it).
+    let merged_toml = codex_cfg.config_layer_stack.effective_config();
+    let mut config: Config = merged_toml
+        .try_into()
+        .context("failed to deserialize network proxy config")?;
+
+    // Security boundary: user-controlled layers must not be able to widen restrictions set by
+    // trusted/managed layers (e.g., MDM). Enforce this before building runtime state.
+    enforce_trusted_constraints(&codex_cfg.config_layer_stack, &config)?;
+
+    // Permit relative MITM paths for ergonomics; resolve them relative to the directory containing
+    // `config.toml` so the config is relocatable.
+    resolve_mitm_paths(&mut config, &cfg_path);
+    let mtime = cfg_path.metadata().and_then(|m| m.modified()).ok();
+    let deny_set = compile_globset(&config.network_proxy.policy.denied_domains)?;
+    let allow_set = compile_globset(&config.network_proxy.policy.allowed_domains)?;
+    let mitm = if config.network_proxy.mitm.enabled {
+        build_mitm_state(&config.network_proxy.mitm)?
+    } else {
+        None
+    };
+    Ok(ConfigState {
+        config,
+        mtime,
+        allow_set,
+        deny_set,
+        mitm,
+        cfg_path,
+        blocked: VecDeque::new(),
+    })
+}
+
+fn resolve_mitm_paths(config: &mut Config, cfg_path: &Path) {
+    let base = cfg_path.parent().unwrap_or_else(|| Path::new("."));
+    if config.network_proxy.mitm.ca_cert_path.is_relative() {
+        config.network_proxy.mitm.ca_cert_path = base.join(&config.network_proxy.mitm.ca_cert_path);
+    }
+    if config.network_proxy.mitm.ca_key_path.is_relative() {
+        config.network_proxy.mitm.ca_key_path = base.join(&config.network_proxy.mitm.ca_key_path);
+    }
+}
+
+fn build_mitm_state(config: &MitmConfig) -> Result<Option<Arc<MitmState>>> {
+    Ok(Some(Arc::new(MitmState::new(config)?)))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialConfig {
+    #[serde(default)]
+    network_proxy: PartialNetworkProxyConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialNetworkProxyConfig {
+    enabled: Option<bool>,
+    mode: Option<NetworkMode>,
+    dangerously_allow_non_loopback_proxy: Option<bool>,
+    dangerously_allow_non_loopback_admin: Option<bool>,
+    #[serde(default)]
+    policy: PartialNetworkPolicy,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialNetworkPolicy {
+    #[serde(default)]
+    allowed_domains: Option<Vec<String>>,
+    #[serde(default)]
+    denied_domains: Option<Vec<String>>,
+    #[serde(default)]
+    allow_unix_sockets: Option<Vec<String>>,
+    #[serde(default)]
+    allow_local_binding: Option<bool>,
+}
+
+#[derive(Debug, Default)]
+struct NetworkProxyConstraints {
+    enabled: Option<bool>,
+    mode: Option<NetworkMode>,
+    dangerously_allow_non_loopback_proxy: Option<bool>,
+    dangerously_allow_non_loopback_admin: Option<bool>,
+    allowed_domains: Option<Vec<String>>,
+    denied_domains: Option<Vec<String>>,
+    allow_unix_sockets: Option<Vec<String>>,
+    allow_local_binding: Option<bool>,
+}
+
+fn enforce_trusted_constraints(
+    layers: &codex_core::config_loader::ConfigLayerStack,
+    config: &Config,
+) -> Result<()> {
+    let constraints = network_proxy_constraints_from_trusted_layers(layers)?;
+    validate_policy_against_constraints(config, &constraints)
+        .context("network proxy constraints")?;
+    Ok(())
+}
+
+fn network_proxy_constraints_from_trusted_layers(
+    layers: &codex_core::config_loader::ConfigLayerStack,
+) -> Result<NetworkProxyConstraints> {
+    let mut constraints = NetworkProxyConstraints::default();
+    for layer in layers
+        .get_layers(codex_core::config_loader::ConfigLayerStackOrdering::LowestPrecedenceFirst)
+    {
+        // Only trusted layers contribute constraints. User-controlled layers can narrow policy but
+        // must never widen beyond what managed config allows.
+        if is_user_controlled_layer(&layer.name) {
+            continue;
+        }
+
+        let partial: PartialConfig = layer
+            .config
+            .clone()
+            .try_into()
+            .context("failed to deserialize trusted config layer")?;
+
+        if let Some(enabled) = partial.network_proxy.enabled {
+            constraints.enabled = Some(enabled);
+        }
+        if let Some(mode) = partial.network_proxy.mode {
+            constraints.mode = Some(mode);
+        }
+        if let Some(dangerously_allow_non_loopback_proxy) =
+            partial.network_proxy.dangerously_allow_non_loopback_proxy
+        {
+            constraints.dangerously_allow_non_loopback_proxy =
+                Some(dangerously_allow_non_loopback_proxy);
+        }
+        if let Some(dangerously_allow_non_loopback_admin) =
+            partial.network_proxy.dangerously_allow_non_loopback_admin
+        {
+            constraints.dangerously_allow_non_loopback_admin =
+                Some(dangerously_allow_non_loopback_admin);
+        }
+
+        if let Some(allowed_domains) = partial.network_proxy.policy.allowed_domains {
+            constraints.allowed_domains = Some(allowed_domains);
+        }
+        if let Some(denied_domains) = partial.network_proxy.policy.denied_domains {
+            constraints.denied_domains = Some(denied_domains);
+        }
+        if let Some(allow_unix_sockets) = partial.network_proxy.policy.allow_unix_sockets {
+            constraints.allow_unix_sockets = Some(allow_unix_sockets);
+        }
+        if let Some(allow_local_binding) = partial.network_proxy.policy.allow_local_binding {
+            constraints.allow_local_binding = Some(allow_local_binding);
+        }
+    }
+    Ok(constraints)
+}
+
+fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {
+    matches!(
+        layer,
+        ConfigLayerSource::User { .. }
+            | ConfigLayerSource::Project { .. }
+            | ConfigLayerSource::SessionFlags
+    )
+}
+
+fn validate_policy_against_constraints(
+    config: &Config,
+    constraints: &NetworkProxyConstraints,
+) -> std::result::Result<(), ConstraintError> {
+    let enabled = config.network_proxy.enabled;
+    if let Some(max_enabled) = constraints.enabled {
+        let _ = Constrained::new(enabled, move |candidate| {
+            if *candidate && !max_enabled {
+                Err(ConstraintError::invalid_value(
+                    "true",
+                    "false (disabled by managed config)",
+                ))
+            } else {
+                Ok(())
+            }
+        })?;
+    }
+
+    if let Some(max_mode) = constraints.mode {
+        let _ = Constrained::new(config.network_proxy.mode, move |candidate| {
+            if network_mode_rank(*candidate) > network_mode_rank(max_mode) {
+                Err(ConstraintError::invalid_value(
+                    format!("{candidate:?}"),
+                    format!("{max_mode:?} or more restrictive"),
+                ))
+            } else {
+                Ok(())
+            }
+        })?;
+    }
+
+    let allow_non_loopback_admin = constraints.dangerously_allow_non_loopback_admin;
+    let _ = Constrained::new(
+        config.network_proxy.dangerously_allow_non_loopback_admin,
+        move |candidate| match allow_non_loopback_admin {
+            Some(true) | None => Ok(()),
+            Some(false) => {
+                if *candidate {
+                    Err(ConstraintError::invalid_value(
+                        "true",
+                        "false (disabled by managed config)",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+        },
+    )?;
+
+    let allow_non_loopback_proxy = constraints.dangerously_allow_non_loopback_proxy;
+    let _ = Constrained::new(
+        config.network_proxy.dangerously_allow_non_loopback_proxy,
+        move |candidate| match allow_non_loopback_proxy {
+            Some(true) | None => Ok(()),
+            Some(false) => {
+                if *candidate {
+                    Err(ConstraintError::invalid_value(
+                        "true",
+                        "false (disabled by managed config)",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+        },
+    )?;
+
+    if let Some(allow_local_binding) = constraints.allow_local_binding {
+        let _ = Constrained::new(
+            config.network_proxy.policy.allow_local_binding,
+            move |candidate| {
+                if *candidate && !allow_local_binding {
+                    Err(ConstraintError::invalid_value(
+                        "true",
+                        "false (disabled by managed config)",
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+        )?;
+    }
+
+    if let Some(allowed_domains) = &constraints.allowed_domains {
+        let allowed_set: HashSet<String> = allowed_domains
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect();
+        let _ = Constrained::new(
+            config.network_proxy.policy.allowed_domains.clone(),
+            move |candidate| {
+                let mut invalid = Vec::new();
+                for entry in candidate {
+                    if !allowed_set.contains(&entry.to_ascii_lowercase()) {
+                        invalid.push(entry.clone());
+                    }
+                }
+                if invalid.is_empty() {
+                    Ok(())
+                } else {
+                    Err(ConstraintError::invalid_value(
+                        format!("{invalid:?}"),
+                        "subset of managed allowed_domains",
+                    ))
+                }
+            },
+        )?;
+    }
+
+    if let Some(denied_domains) = &constraints.denied_domains {
+        let required_set: HashSet<String> = denied_domains
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect();
+        let _ = Constrained::new(
+            config.network_proxy.policy.denied_domains.clone(),
+            move |candidate| {
+                let candidate_set: HashSet<String> =
+                    candidate.iter().map(|s| s.to_ascii_lowercase()).collect();
+                let missing: Vec<String> = required_set
+                    .iter()
+                    .filter(|entry| !candidate_set.contains(*entry))
+                    .cloned()
+                    .collect();
+                if missing.is_empty() {
+                    Ok(())
+                } else {
+                    Err(ConstraintError::invalid_value(
+                        "missing managed denied_domains entries",
+                        format!("{missing:?}"),
+                    ))
+                }
+            },
+        )?;
+    }
+
+    if let Some(allow_unix_sockets) = &constraints.allow_unix_sockets {
+        let allowed_set: HashSet<String> = allow_unix_sockets
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect();
+        let _ = Constrained::new(
+            config.network_proxy.policy.allow_unix_sockets.clone(),
+            move |candidate| {
+                let mut invalid = Vec::new();
+                for entry in candidate {
+                    if !allowed_set.contains(&entry.to_ascii_lowercase()) {
+                        invalid.push(entry.clone());
+                    }
+                }
+                if invalid.is_empty() {
+                    Ok(())
+                } else {
+                    Err(ConstraintError::invalid_value(
+                        format!("{invalid:?}"),
+                        "subset of managed allow_unix_sockets",
+                    ))
+                }
+            },
+        )?;
+    }
+
+    Ok(())
+}
+
+fn network_mode_rank(mode: NetworkMode) -> u8 {
+    match mode {
+        NetworkMode::Limited => 0,
+        NetworkMode::Full => 1,
+    }
+}
+
+fn compile_globset(patterns: &[String]) -> Result<GlobSet> {
+    let mut builder = GlobSetBuilder::new();
+    let mut seen = HashSet::new();
+    for pattern in patterns {
+        // Operator ergonomics: `*.example.com` usually intends to include both `a.example.com` and
+        // the apex `example.com`. We expand that here so policy matches expectation.
+        let mut expanded = Vec::with_capacity(2);
+        expanded.push(pattern.as_str());
+        if let Some(apex) = pattern.strip_prefix("*.") {
+            expanded.push(apex);
+        }
+        for candidate in expanded {
+            if !seen.insert(candidate.to_string()) {
+                continue;
+            }
+            let glob = GlobBuilder::new(candidate)
+                .case_insensitive(true)
+                .build()
+                .with_context(|| format!("invalid glob pattern: {candidate}"))?;
+            builder.add(glob);
+        }
+    }
+    Ok(builder.build()?)
+}
+
+fn log_policy_changes(previous: &Config, next: &Config) {
+    log_domain_list_changes(
+        "allowlist",
+        &previous.network_proxy.policy.allowed_domains,
+        &next.network_proxy.policy.allowed_domains,
+    );
+    log_domain_list_changes(
+        "denylist",
+        &previous.network_proxy.policy.denied_domains,
+        &next.network_proxy.policy.denied_domains,
+    );
+}
+
+fn log_domain_list_changes(list_name: &str, previous: &[String], next: &[String]) {
+    let previous_set: HashSet<String> = previous
+        .iter()
+        .map(|entry| entry.to_ascii_lowercase())
+        .collect();
+    let next_set: HashSet<String> = next
+        .iter()
+        .map(|entry| entry.to_ascii_lowercase())
+        .collect();
+
+    let mut seen_next = HashSet::new();
+    for entry in next {
+        let key = entry.to_ascii_lowercase();
+        if seen_next.insert(key.clone()) && !previous_set.contains(&key) {
+            info!("config entry added to {list_name}: {entry}");
+        }
+    }
+
+    let mut seen_previous = HashSet::new();
+    for entry in previous {
+        let key = entry.to_ascii_lowercase();
+        if seen_previous.insert(key.clone()) && !next_set.contains(&key) {
+            info!("config entry removed from {list_name}: {entry}");
+        }
+    }
+}
+
+fn unix_timestamp() -> i64 {
+    OffsetDateTime::now_utc().unix_timestamp()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::config::NetworkPolicy;
+    use crate::config::NetworkProxyConfig;
+    use pretty_assertions::assert_eq;
+
+    fn app_state_for_policy(policy: NetworkPolicy) -> AppState {
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                mode: NetworkMode::Full,
+                policy,
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        let allow_set = compile_globset(&config.network_proxy.policy.allowed_domains).unwrap();
+        let deny_set = compile_globset(&config.network_proxy.policy.denied_domains).unwrap();
+
+        let state = ConfigState {
+            config,
+            mtime: None,
+            allow_set,
+            deny_set,
+            mitm: None,
+            cfg_path: PathBuf::from("/nonexistent/config.toml"),
+            blocked: VecDeque::new(),
+        };
+
+        AppState {
+            state: Arc::new(RwLock::new(state)),
+        }
+    }
+
+    #[tokio::test]
+    async fn host_blocked_denied_wins_over_allowed() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            denied_domains: vec!["example.com".to_string()],
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("example.com", 80).await.unwrap(),
+            (true, "denied".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_requires_allowlist_match() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("example.com", 80).await.unwrap(),
+            (false, String::new())
+        );
+        assert_eq!(
+            state.host_blocked("not-example.com", 80).await.unwrap(),
+            (true, "not_allowed".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_expands_apex_for_wildcard_patterns() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["*.openai.com".to_string()],
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("openai.com", 80).await.unwrap(),
+            (false, String::new())
+        );
+        assert_eq!(
+            state.host_blocked("api.openai.com", 80).await.unwrap(),
+            (false, String::new())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_rejects_loopback_when_local_binding_disabled() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            allow_local_binding: false,
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("127.0.0.1", 80).await.unwrap(),
+            (true, "not_allowed_local".to_string())
+        );
+        assert_eq!(
+            state.host_blocked("localhost", 80).await.unwrap(),
+            (true, "not_allowed_local".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_allows_loopback_when_explicitly_allowlisted_and_local_binding_disabled() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["localhost".to_string()],
+            allow_local_binding: false,
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("localhost", 80).await.unwrap(),
+            (false, String::new())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_rejects_private_ip_literals_when_local_binding_disabled() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            allow_local_binding: false,
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("10.0.0.1", 80).await.unwrap(),
+            (true, "not_allowed_local".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_disallows_widening_allowed_domains() {
+        let constraints = NetworkProxyConstraints {
+            allowed_domains: Some(vec!["example.com".to_string()]),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                policy: NetworkPolicy {
+                    allowed_domains: vec!["example.com".to_string(), "evil.com".to_string()],
+                    ..NetworkPolicy::default()
+                },
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_requires_managed_denied_domains_entries() {
+        let constraints = NetworkProxyConstraints {
+            denied_domains: Some(vec!["evil.com".to_string()]),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                policy: NetworkPolicy {
+                    denied_domains: vec![],
+                    ..NetworkPolicy::default()
+                },
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_disallows_enabling_when_managed_disabled() {
+        let constraints = NetworkProxyConstraints {
+            enabled: Some(false),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_disallows_allow_local_binding_when_managed_disabled() {
+        let constraints = NetworkProxyConstraints {
+            allow_local_binding: Some(false),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                policy: NetworkPolicy {
+                    allow_local_binding: true,
+                    ..NetworkPolicy::default()
+                },
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_disallows_non_loopback_admin_without_managed_opt_in() {
+        let constraints = NetworkProxyConstraints {
+            dangerously_allow_non_loopback_admin: Some(false),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                dangerously_allow_non_loopback_admin: true,
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_allows_non_loopback_admin_with_managed_opt_in() {
+        let constraints = NetworkProxyConstraints {
+            dangerously_allow_non_loopback_admin: Some(true),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                dangerously_allow_non_loopback_admin: true,
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_ok());
+    }
+
+    #[test]
+    fn compile_globset_is_case_insensitive() {
+        let patterns = vec!["ExAmPle.CoM".to_string()];
+        let set = compile_globset(&patterns).unwrap();
+        assert!(set.is_match("example.com"));
+        assert!(set.is_match("EXAMPLE.COM"));
+    }
+
+    #[test]
+    fn compile_globset_expands_apex_for_wildcard_patterns() {
+        let patterns = vec!["*.openai.com".to_string()];
+        let set = compile_globset(&patterns).unwrap();
+        assert!(set.is_match("openai.com"));
+        assert!(set.is_match("api.openai.com"));
+        assert!(!set.is_match("evilopenai.com"));
+    }
+
+    #[test]
+    fn compile_globset_dedupes_patterns_without_changing_behavior() {
+        let patterns = vec!["example.com".to_string(), "example.com".to_string()];
+        let set = compile_globset(&patterns).unwrap();
+        assert!(set.is_match("example.com"));
+        assert!(set.is_match("EXAMPLE.COM"));
+        assert!(!set.is_match("not-example.com"));
+    }
+
+    #[test]
+    fn compile_globset_rejects_invalid_patterns() {
+        let patterns = vec!["[".to_string()];
+        assert!(compile_globset(&patterns).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn unix_socket_allowlist_is_respected_on_macos() {
+        let socket_path = "/tmp/example.sock".to_string();
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            allow_unix_sockets: vec![socket_path.clone()],
+            ..NetworkPolicy::default()
+        });
+
+        assert!(state.is_unix_socket_allowed(&socket_path).await.unwrap());
+        assert!(
+            !state
+                .is_unix_socket_allowed("/tmp/not-allowed.sock")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn unix_socket_allowlist_resolves_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let unique = OffsetDateTime::now_utc().unix_timestamp_nanos();
+        let dir = std::env::temp_dir().join(format!("codex-network-proxy-test-{unique}"));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let real = dir.join("real.sock");
+        let link = dir.join("link.sock");
+
+        // The allowlist mechanism is path-based; for test purposes we don't need an actual unix
+        // domain socket. Any filesystem entry works for canonicalization.
+        std::fs::write(&real, b"not a socket").unwrap();
+        symlink(&real, &link).unwrap();
+
+        let real_s = real.to_str().unwrap().to_string();
+        let link_s = link.to_str().unwrap().to_string();
+
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            allow_unix_sockets: vec![real_s],
+            ..NetworkPolicy::default()
+        });
+
+        assert!(state.is_unix_socket_allowed(&link_s).await.unwrap());
+
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_file(&real);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[tokio::test]
+    async fn unix_socket_allowlist_is_rejected_on_non_macos() {
+        let socket_path = "/tmp/example.sock".to_string();
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            allow_unix_sockets: vec![socket_path.clone()],
+            ..NetworkPolicy::default()
+        });
+
+        assert!(!state.is_unix_socket_allowed(&socket_path).await.unwrap());
+    }
+}

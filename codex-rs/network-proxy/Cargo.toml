@@ -1,0 +1,33 @@
+[package]
+name = "codex-network-proxy"
+edition = "2024"
+version = { workspace = true }
+
+[[bin]]
+name = "codex-network-proxy"
+path = "src/main.rs"
+
+[lib]
+name = "codex_network_proxy"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-app-server-protocol = { workspace = true }
+codex-core = { workspace = true }
+globset = { workspace = true }
+rcgen-rama = { package = "rcgen", version = "0.14", default-features = false, features = ["pem", "x509-parser", "ring"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt"] }
+rama = { version = "0.3.0-alpha.3", default-features = false, features = ["http-full", "proxy-full", "socks5", "rustls"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
