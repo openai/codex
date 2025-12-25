@@ -1907,6 +1907,7 @@ dependencies = [
  "lazy_static",
  "log",
  "portable-pty",
+ "pretty_assertions",
  "shared_library",
  "tokio",
  "winapi",
