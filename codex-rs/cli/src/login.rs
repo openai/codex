@@ -150,6 +150,67 @@ pub async fn run_login_with_device_code(
     }
 }
 
+pub async fn run_login_with_device_code_fallback_to_browser(
+    cli_config_overrides: CliConfigOverrides,
+    issuer_base_url: Option<String>,
+    client_id: Option<String>,
+) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
+        eprintln!("ChatGPT login is disabled. Use API key login instead.");
+        std::process::exit(1);
+    }
+
+    let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
+    let mut opts = ServerOptions::new(
+        config.codex_home,
+        client_id.unwrap_or(CLIENT_ID.to_string()),
+        forced_chatgpt_workspace_id,
+        config.cli_auth_credentials_store_mode,
+    );
+    if let Some(iss) = issuer_base_url {
+        opts.issuer = iss;
+    }
+    opts.open_browser = false;
+
+    match run_device_code_login(opts.clone()).await {
+        Ok(()) => {
+            eprintln!("Successfully logged in");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            if e.to_string().contains("device code login is not enabled") {
+                eprintln!("Device code login is not enabled; falling back to browser login.");
+                match run_login_server(opts) {
+                    Ok(server) => {
+                        eprintln!(
+                            "Starting local login server on http://localhost:{}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{}",
+                            server.actual_port, server.auth_url,
+                        );
+                        match server.block_until_done().await {
+                            Ok(()) => {
+                                eprintln!("Successfully logged in");
+                                std::process::exit(0);
+                            }
+                            Err(e) => {
+                                eprintln!("Error logging in: {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error logging in: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                eprintln!("Error logging in with device code: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
