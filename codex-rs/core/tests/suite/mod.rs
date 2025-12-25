@@ -37,6 +37,7 @@ mod list_models;
 mod live_cli;
 mod model_overrides;
 mod model_tools;
+mod models_etag_responses;
 mod otel;
 mod prompt_caching;
 mod quota_exceeded;

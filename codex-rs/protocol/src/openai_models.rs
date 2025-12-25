@@ -187,8 +187,6 @@ pub struct ModelInfo {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema, Default)]
 pub struct ModelsResponse {
     pub models: Vec<ModelInfo>,
-    #[serde(default)]
-    pub etag: String,
 }
 
 // convert ModelInfo to ModelPreset

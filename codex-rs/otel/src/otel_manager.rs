@@ -511,6 +511,7 @@ impl OtelManager {
                 "reasoning_summary_part_added".into()
             }
             ResponseEvent::RateLimits(_) => "rate_limits".into(),
+            ResponseEvent::ModelsEtag(_) => "models_etag".into(),
         }
     }
 
