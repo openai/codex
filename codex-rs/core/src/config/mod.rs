@@ -1194,7 +1194,7 @@ impl Config {
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
-            model_providers.entry(key).or_insert(provider);
+            model_providers.insert(key, provider);
         }
 
         let model_provider_id = model_provider
@@ -2948,6 +2948,36 @@ model = "gpt-5.1-codex"
                 .and_then(|profile| profile.model.as_deref()),
             Some("gpt-5.1-codex"),
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_defined_provider_overrides_built_in_provider() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let mut overridden_openai = ModelProviderInfo::create_openai_provider();
+        overridden_openai.name = "Custom OpenAI".to_string();
+        overridden_openai.stream_max_retries = Some(10);
+        overridden_openai.stream_idle_timeout_ms = Some(1234);
+
+        let cfg = ConfigToml {
+            model_providers: [("openai".to_string(), overridden_openai.clone())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.model_provider_id, "openai");
+        assert_eq!(config.model_provider.name, "Custom OpenAI");
+        assert_eq!(config.model_provider.stream_max_retries, Some(10));
+        assert_eq!(config.model_provider.stream_idle_timeout_ms, Some(1234));
 
         Ok(())
     }
