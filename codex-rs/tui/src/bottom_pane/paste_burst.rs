@@ -54,14 +54,7 @@ impl PasteBurst {
 
     /// Entry point: decide how to treat a plain char with current timing.
     pub fn on_plain_char(&mut self, ch: char, now: Instant) -> CharDecision {
-        match self.last_plain_char_time {
-            Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
-                self.consecutive_plain_char_burst =
-                    self.consecutive_plain_char_burst.saturating_add(1)
-            }
-            _ => self.consecutive_plain_char_burst = 1,
-        }
-        self.last_plain_char_time = Some(now);
+        self.note_plain_char(now);
 
         if self.active {
             self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
@@ -90,6 +83,40 @@ impl PasteBurst {
         // Save the first fast char very briefly to see if a burst follows.
         self.pending_first_char = Some((ch, now));
         CharDecision::RetainFirstChar
+    }
+
+    /// Like on_plain_char(), but never holds the first char.
+    ///
+    /// Used for non-ASCII input paths (e.g., IMEs) where holding a character can
+    /// feel like dropped input, while still allowing burst-based paste detection.
+    ///
+    /// Note: This method will only ever return BufferAppend or BeginBuffer.
+    pub fn on_plain_char_no_hold(&mut self, now: Instant) -> Option<CharDecision> {
+        self.note_plain_char(now);
+
+        if self.active {
+            self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+            return Some(CharDecision::BufferAppend);
+        }
+
+        if self.consecutive_plain_char_burst >= PASTE_BURST_MIN_CHARS {
+            return Some(CharDecision::BeginBuffer {
+                retro_chars: self.consecutive_plain_char_burst.saturating_sub(1),
+            });
+        }
+
+        None
+    }
+
+    fn note_plain_char(&mut self, now: Instant) {
+        match self.last_plain_char_time {
+            Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
+                self.consecutive_plain_char_burst =
+                    self.consecutive_plain_char_burst.saturating_add(1)
+            }
+            _ => self.consecutive_plain_char_burst = 1,
+        }
+        self.last_plain_char_time = Some(now);
     }
 
     /// Flush the buffered burst if the inter-key timeout has elapsed.
