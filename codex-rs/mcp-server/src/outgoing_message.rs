@@ -255,6 +255,7 @@ mod tests {
         let rollout_file = NamedTempFile::new()?;
         let event = Event {
             id: "1".to_string(),
+            agent_id: None,
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: "gpt-4o".to_string(),
@@ -309,6 +310,7 @@ mod tests {
         };
         let event = Event {
             id: "1".to_string(),
+            agent_id: None,
             msg: EventMsg::SessionConfigured(session_configured_event.clone()),
         };
         let meta = OutgoingNotificationMeta {

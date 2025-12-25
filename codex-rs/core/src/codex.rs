@@ -32,6 +32,8 @@ use async_channel::Sender;
 use codex_protocol::ConversationId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::items::TurnItem;
+use codex_protocol::protocol::AgentId;
+use codex_protocol::protocol::DEFAULT_AGENT_ID;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
@@ -197,6 +199,7 @@ fn maybe_push_chat_wire_api_deprecation(
 
     post_session_configured_events.push(Event {
         id: INITIAL_SUBMIT_ID.to_owned(),
+        agent_id: Some(DEFAULT_AGENT_ID.to_string()),
         msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
             summary: CHAT_WIRE_API_DEPRECATION_SUMMARY.to_string(),
             details: None,
@@ -351,6 +354,7 @@ pub(crate) struct Session {
 /// The context needed for a single turn of the conversation.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
+    pub(crate) agent_id: AgentId,
     pub(crate) sub_id: String,
     pub(crate) client: ModelClient,
     /// The session's current working directory. All relative paths provided by
@@ -486,6 +490,7 @@ impl Session {
         per_turn_config: Config,
         model_family: ModelFamily,
         conversation_id: ConversationId,
+        agent_id: AgentId,
         sub_id: String,
     ) -> TurnContext {
         let otel_manager = otel_manager.clone().with_model(
@@ -512,6 +517,7 @@ impl Session {
         });
 
         TurnContext {
+            agent_id,
             sub_id,
             client,
             cwd: session_configuration.cwd.clone(),
@@ -612,6 +618,7 @@ impl Session {
             };
             post_session_configured_events.push(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
+                agent_id: Some(DEFAULT_AGENT_ID.to_string()),
                 msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }),
             });
         }
@@ -867,6 +874,7 @@ impl Session {
 
         Ok(self
             .new_turn_from_configuration(
+                agent_id,
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
@@ -877,6 +885,7 @@ impl Session {
 
     async fn new_turn_from_configuration(
         &self,
+        agent_id: &AgentId,
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
@@ -915,6 +924,7 @@ impl Session {
             per_turn_config,
             model_family,
             self.conversation_id,
+            agent_id.clone(),
             sub_id,
         );
         if let Some(final_schema) = final_output_json_schema {
@@ -962,6 +972,7 @@ impl Session {
         let legacy_source = msg.clone();
         let event = Event {
             id: turn_context.sub_id.clone(),
+            agent_id: Some(turn_context.agent_id.clone()),
             msg,
         };
         self.send_event_raw(event).await;
@@ -970,6 +981,7 @@ impl Session {
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
             let legacy_event = Event {
                 id: turn_context.sub_id.clone(),
+                agent_id: Some(turn_context.agent_id.clone()),
                 msg: legacy,
             };
             self.send_event_raw(legacy_event).await;
@@ -1169,7 +1181,8 @@ impl Session {
         items: &[ResponseItem],
     ) {
         self.record_into_history(items, turn_context).await;
-        self.persist_rollout_response_items(items).await;
+        self.persist_rollout_response_items(&turn_context.agent_id, items)
+            .await;
         self.send_raw_response_items(turn_context, items).await;
     }
 
@@ -1296,7 +1309,7 @@ impl Session {
             guard.clone()
         };
         if let Some(rec) = recorder
-            && let Err(e) = rec.record_items(items).await
+            && let Err(e) = rec.record_items(agent_id, items).await
         {
             error!("failed to record rollout items: {e:#}");
         }
@@ -1326,7 +1339,7 @@ impl Session {
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
         let Some(estimated_total_tokens) = self
-            .clone_history()
+            .clone_history(&turn_context.agent_id)
             .await
             .estimate_token_count(turn_context)
         else {
@@ -1577,14 +1590,15 @@ impl Session {
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
     // Seed with context in case there is an OverrideTurnContext first.
-    let mut previous_context: Option<Arc<TurnContext>> = Some(sess.new_default_turn().await);
+    let mut previous_context: Option<Arc<TurnContext>> =
+        Some(sess.new_default_turn_for_agent(&agent_id).await);
 
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
         match sub.op.clone() {
             Op::Interrupt => {
-                handlers::interrupt(&sess).await;
+                handlers::interrupt(&sess, &agent_id).await;
             }
             Op::OverrideTurnContext {
                 cwd,
@@ -1596,6 +1610,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             } => {
                 handlers::override_turn_context(
                     &sess,
+                    &agent_id,
                     sub.id.clone(),
                     SessionSettingsUpdate {
                         cwd,
@@ -1610,8 +1625,14 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 .await;
             }
             Op::UserInput { .. } | Op::UserTurn { .. } => {
-                handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
-                    .await;
+                handlers::user_input_or_turn(
+                    &sess,
+                    &agent_id,
+                    sub.id.clone(),
+                    sub.op,
+                    &mut previous_context,
+                )
+                .await;
             }
             Op::ExecApproval { id, decision } => {
                 handlers::exec_approval(&sess, id, decision).await;
@@ -1620,30 +1641,38 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::patch_approval(&sess, id, decision).await;
             }
             Op::AddToHistory { text } => {
-                handlers::add_to_history(&sess, &config, text).await;
+                handlers::add_to_history(&sess, &agent_id, &config, text).await;
             }
             Op::GetHistoryEntryRequest { offset, log_id } => {
-                handlers::get_history_entry_request(&sess, &config, sub.id.clone(), offset, log_id)
-                    .await;
+                handlers::get_history_entry_request(
+                    &sess,
+                    &agent_id,
+                    &config,
+                    sub.id.clone(),
+                    offset,
+                    log_id,
+                )
+                .await;
             }
             Op::ListMcpTools => {
-                handlers::list_mcp_tools(&sess, &config, sub.id.clone()).await;
+                handlers::list_mcp_tools(&sess, &agent_id, &config, sub.id.clone()).await;
             }
             Op::ListCustomPrompts => {
-                handlers::list_custom_prompts(&sess, sub.id.clone()).await;
+                handlers::list_custom_prompts(&sess, &agent_id, sub.id.clone()).await;
             }
             Op::ListSkills { cwds, force_reload } => {
-                handlers::list_skills(&sess, sub.id.clone(), cwds, force_reload).await;
+                handlers::list_skills(&sess, &agent_id, sub.id.clone(), cwds, force_reload).await;
             }
             Op::Undo => {
-                handlers::undo(&sess, sub.id.clone()).await;
+                handlers::undo(&sess, &agent_id, sub.id.clone()).await;
             }
             Op::Compact => {
-                handlers::compact(&sess, sub.id.clone()).await;
+                handlers::compact(&sess, &agent_id, sub.id.clone()).await;
             }
             Op::RunUserShellCommand { command } => {
                 handlers::run_user_shell_command(
                     &sess,
+                    &agent_id,
                     sub.id.clone(),
                     command,
                     &mut previous_context,
@@ -1663,7 +1692,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 }
             }
             Op::Review { review_request } => {
-                handlers::review(&sess, &config, sub.id.clone(), review_request).await;
+                handlers::review(&sess, &agent_id, &config, sub.id.clone(), review_request).await;
             }
             _ => {} // Ignore unknown ops; enum is non_exhaustive to allow extensions.
         }
@@ -1716,6 +1745,7 @@ mod handlers {
 
     pub async fn override_turn_context(
         sess: &Session,
+        agent_id: &AgentId,
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) {
@@ -1733,6 +1763,7 @@ mod handlers {
 
     pub async fn user_input_or_turn(
         sess: &Arc<Session>,
+        agent_id: &AgentId,
         sub_id: String,
         op: Op,
         previous_context: &mut Option<Arc<TurnContext>>,
@@ -1789,6 +1820,7 @@ mod handlers {
 
     pub async fn run_user_shell_command(
         sess: &Arc<Session>,
+        agent_id: &AgentId,
         sub_id: String,
         command: String,
         previous_context: &mut Option<Arc<TurnContext>>,
@@ -1865,7 +1897,12 @@ mod handlers {
         }
     }
 
-    pub async fn add_to_history(sess: &Arc<Session>, config: &Arc<Config>, text: String) {
+    pub async fn add_to_history(
+        sess: &Arc<Session>,
+        agent_id: &AgentId,
+        config: &Arc<Config>,
+        text: String,
+    ) {
         let id = sess.conversation_id;
         let config = Arc::clone(config);
         tokio::spawn(async move {
@@ -1877,6 +1914,7 @@ mod handlers {
 
     pub async fn get_history_entry_request(
         sess: &Arc<Session>,
+        agent_id: &AgentId,
         config: &Arc<Config>,
         sub_id: String,
         offset: usize,
@@ -1912,7 +1950,12 @@ mod handlers {
         });
     }
 
-    pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
+    pub async fn list_mcp_tools(
+        sess: &Session,
+        agent_id: &AgentId,
+        config: &Arc<Config>,
+        sub_id: String,
+    ) {
         let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
         let snapshot = collect_mcp_snapshot_from_manager(
             &mcp_connection_manager,
@@ -1930,7 +1973,7 @@ mod handlers {
         sess.send_event_raw(event).await;
     }
 
-    pub async fn list_custom_prompts(sess: &Session, sub_id: String) {
+    pub async fn list_custom_prompts(sess: &Session, agent_id: &str, sub_id: String) {
         let custom_prompts: Vec<CustomPrompt> =
             if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
                 crate::custom_prompts::discover_prompts_in(&dir).await
@@ -1949,6 +1992,7 @@ mod handlers {
 
     pub async fn list_skills(
         sess: &Session,
+        agent_id: &AgentId,
         sub_id: String,
         cwds: Vec<PathBuf>,
         force_reload: bool,
@@ -2046,6 +2090,7 @@ mod handlers {
 
     pub async fn review(
         sess: &Arc<Session>,
+        agent_id: &AgentId,
         config: &Arc<Config>,
         sub_id: String,
         review_request: ReviewRequest,
@@ -2747,12 +2792,15 @@ mod tests {
 
     use codex_protocol::models::FunctionCallOutputPayload;
 
+    use super::AgentState;
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
+    use crate::protocol::DEFAULT_AGENT_ID;
     use crate::protocol::InitialHistory;
     use crate::protocol::RateLimitSnapshot;
     use crate::protocol::RateLimitWindow;
     use crate::protocol::ResumedHistory;
+    use crate::protocol::RolloutLine;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
@@ -2779,6 +2827,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
+    use tokio::sync::RwLock;
 
     #[tokio::test]
     async fn reconstruct_history_matches_live_compactions() {
@@ -3240,6 +3289,7 @@ mod tests {
             per_turn_config,
             model_family,
             conversation_id,
+            agent_id,
             "turn_id".to_string(),
         ));
 
@@ -3479,7 +3529,7 @@ mod tests {
 
         let initial_context = session.build_initial_context(turn_context);
         for item in &initial_context {
-            rollout_items.push(RolloutItem::ResponseItem(item.clone()));
+            push_line(RolloutItem::ResponseItem(item.clone()));
         }
         live_history.record_items(initial_context.iter(), turn_context.truncation_policy);
 
@@ -3491,7 +3541,7 @@ mod tests {
             }],
         };
         live_history.record_items(std::iter::once(&user1), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
+        push_line(RolloutItem::ResponseItem(user1.clone()));
 
         let assistant1 = ResponseItem::Message {
             id: None,
@@ -3501,7 +3551,7 @@ mod tests {
             }],
         };
         live_history.record_items(std::iter::once(&assistant1), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
+        push_line(RolloutItem::ResponseItem(assistant1.clone()));
 
         let summary1 = "summary one";
         let snapshot1 = live_history.get_history();
@@ -3512,7 +3562,7 @@ mod tests {
             summary1,
         );
         live_history.replace(rebuilt1);
-        rollout_items.push(RolloutItem::Compacted(CompactedItem {
+        push_line(RolloutItem::Compacted(CompactedItem {
             message: summary1.to_string(),
             replacement_history: None,
         }));
@@ -3525,7 +3575,7 @@ mod tests {
             }],
         };
         live_history.record_items(std::iter::once(&user2), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
+        push_line(RolloutItem::ResponseItem(user2.clone()));
 
         let assistant2 = ResponseItem::Message {
             id: None,
@@ -3535,7 +3585,7 @@ mod tests {
             }],
         };
         live_history.record_items(std::iter::once(&assistant2), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
+        push_line(RolloutItem::ResponseItem(assistant2.clone()));
 
         let summary2 = "summary two";
         let snapshot2 = live_history.get_history();
@@ -3546,7 +3596,7 @@ mod tests {
             summary2,
         );
         live_history.replace(rebuilt2);
-        rollout_items.push(RolloutItem::Compacted(CompactedItem {
+        push_line(RolloutItem::Compacted(CompactedItem {
             message: summary2.to_string(),
             replacement_history: None,
         }));
@@ -3559,7 +3609,7 @@ mod tests {
             }],
         };
         live_history.record_items(std::iter::once(&user3), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ResponseItem(user3.clone()));
+        push_line(RolloutItem::ResponseItem(user3.clone()));
 
         let assistant3 = ResponseItem::Message {
             id: None,
@@ -3569,7 +3619,7 @@ mod tests {
             }],
         };
         live_history.record_items(std::iter::once(&assistant3), turn_context.truncation_policy);
-        rollout_items.push(RolloutItem::ResponseItem(assistant3.clone()));
+        push_line(RolloutItem::ResponseItem(assistant3.clone()));
 
         (rollout_items, live_history.get_history())
     }

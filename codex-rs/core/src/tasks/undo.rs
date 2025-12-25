@@ -59,7 +59,7 @@ impl SessionTask for UndoTask {
             return None;
         }
 
-        let mut history = sess.clone_history().await;
+        let mut history = sess.clone_history(&ctx.agent_id).await;
         let mut items = history.get_history();
         let mut completed = UndoCompletedEvent {
             success: false,
@@ -96,7 +96,7 @@ impl SessionTask for UndoTask {
         match restore_result {
             Ok(Ok(())) => {
                 items.remove(idx);
-                sess.replace_history(items).await;
+                sess.replace_history(&ctx.agent_id, items).await;
                 let short_id: String = commit_id.chars().take(7).collect();
                 info!(commit_id = commit_id, "Undo restored ghost snapshot");
                 completed.success = true;
