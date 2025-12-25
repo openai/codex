@@ -308,8 +308,9 @@ mod tests {
 
         let command = get_command(&args, Arc::new(default_user_shell()));
 
-        assert_eq!(command.len(), 3);
-        assert_eq!(command[2], "echo hello");
+        let expected_command_len = if cfg!(windows) { 4 } else { 3 };
+        assert_eq!(command.len(), expected_command_len);
+        assert_eq!(command.last().unwrap(), "echo hello");
     }
 
     #[test]
@@ -343,7 +344,7 @@ mod tests {
 
         let command = get_command(&args, Arc::new(default_user_shell()));
 
-        assert_eq!(command[2], "echo hello");
+        assert_eq!(command.last().unwrap(), "echo hello");
     }
 
     #[test]
