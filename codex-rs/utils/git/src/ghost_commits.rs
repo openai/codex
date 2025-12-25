@@ -53,6 +53,7 @@ pub struct CreateGhostCommitOptions<'a> {
     pub message: Option<&'a str>,
     pub force_include: Vec<PathBuf>,
     pub ghost_snapshot: GhostSnapshotConfig,
+    pub staged_only: bool,
 }
 
 /// Options to control ghost commit restoration.
@@ -107,7 +108,13 @@ impl<'a> CreateGhostCommitOptions<'a> {
             message: None,
             force_include: Vec::new(),
             ghost_snapshot: GhostSnapshotConfig::default(),
+            staged_only: false,
         }
+    }
+
+    pub fn staged_only(mut self, staged_only: bool) -> Self {
+        self.staged_only = staged_only;
+        self
     }
 
     /// Sets a custom commit message for the ghost commit.
@@ -348,7 +355,9 @@ pub fn create_ghost_commit_with_report(
 
     // Pre-populate the temporary index with HEAD so unchanged tracked files
     // are included in the snapshot tree.
-    if let Some(parent_sha) = parent.as_deref() {
+    if !options.staged_only
+        && let Some(parent_sha) = parent.as_deref()
+    {
         run_git_for_status(
             repo_root.as_path(),
             vec![OsString::from("read-tree"), OsString::from(parent_sha)],
@@ -356,12 +365,31 @@ pub fn create_ghost_commit_with_report(
         )?;
     }
 
-    let mut index_paths = status_snapshot.tracked_paths;
-    index_paths.extend(existing_untracked.untracked_files_for_index.iter().cloned());
-    let index_paths = dedupe_paths(index_paths);
-    // Stage tracked + new files into the temp index so write-tree reflects the working tree.
-    // We use `git add --all` to make deletions show up in the snapshot tree too.
-    add_paths_to_index(repo_root.as_path(), base_env.as_slice(), &index_paths)?;
+    if options.staged_only {
+        let git_index_path_str = run_git_for_stdout(
+            repo_root.as_path(),
+            &[
+                OsString::from("rev-parse"),
+                OsString::from("--git-path"),
+                OsString::from("index"),
+            ],
+            None,
+        )?;
+        let git_index_path = PathBuf::from(git_index_path_str);
+        let absolute_git_index_path = if git_index_path.is_absolute() {
+            git_index_path
+        } else {
+            repo_root.join(git_index_path)
+        };
+        fs::copy(absolute_git_index_path, &index_path)?;
+    } else {
+        let mut index_paths = status_snapshot.tracked_paths;
+        index_paths.extend(existing_untracked.untracked_files_for_index.iter().cloned());
+        let index_paths = dedupe_paths(index_paths);
+        // Stage tracked + new files into the temp index so write-tree reflects the working tree.
+        // We use `git add --all` to make deletions show up in the snapshot tree too.
+        add_paths_to_index(repo_root.as_path(), base_env.as_slice(), &index_paths)?;
+    }
     if !force_include.is_empty() {
         let mut args = Vec::with_capacity(force_include.len() + 2);
         args.push(OsString::from("add"));
