@@ -384,6 +384,8 @@ pub struct SendUserTurnParams {
     pub model: String,
     pub effort: Option<ReasoningEffort>,
     pub summary: ReasoningSummary,
+    /// Optional JSON Schema used to constrain the final assistant message for this turn.
+    pub output_schema: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
