@@ -80,3 +80,21 @@ pub enum TrustLevel {
     Trusted,
     Untrusted,
 }
+
+/// Controls whether the TUI uses the terminal's alternate screen buffer.
+///
+/// Using alternate screen provides a cleaner fullscreen experience but prevents
+/// scrollback in terminal multiplexers like Zellij that follow the xterm spec
+/// (which says alternate screen should not have scrollback).
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum AltScreenMode {
+    /// Auto-detect: disable alternate screen in Zellij, enable elsewhere.
+    #[default]
+    Auto,
+    /// Always use alternate screen (original behavior).
+    Always,
+    /// Never use alternate screen (inline mode only).
+    Never,
+}

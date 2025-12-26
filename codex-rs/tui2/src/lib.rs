@@ -22,6 +22,8 @@ use codex_core::config::resolve_oss_provider;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
+use codex_core::terminal::Multiplexer;
+use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs::OpenOptions;
@@ -515,13 +517,34 @@ async fn run_ratatui_app(
         resume_picker::ResumeSelection::StartFresh
     };
 
-    let Cli { prompt, images, .. } = cli;
+    let Cli {
+        prompt,
+        images,
+        no_alt_screen,
+        ..
+    } = cli;
 
-    // Run the main chat + transcript UI on the terminal's alternate screen so
-    // the entire viewport can be used without polluting normal scrollback. This
-    // mirrors the behavior of the legacy TUI but keeps inline mode available
-    // for smaller prompts like onboarding and model migration.
-    let _ = tui.enter_alt_screen();
+    // Determine whether to use alternate screen based on CLI flag and config.
+    // Alternate screen provides a cleaner fullscreen experience but prevents
+    // scrollback in terminal multiplexers like Zellij that follow xterm spec.
+    let use_alt_screen = if no_alt_screen {
+        // CLI flag explicitly disables alternate screen
+        false
+    } else {
+        match config.tui_alternate_screen {
+            AltScreenMode::Always => true,
+            AltScreenMode::Never => false,
+            AltScreenMode::Auto => {
+                // Auto-detect: disable in Zellij, enable elsewhere
+                let terminal_info = codex_core::terminal::terminal_info();
+                !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
+            }
+        }
+    };
+
+    if use_alt_screen {
+        let _ = tui.enter_alt_screen();
+    }
 
     let app_result = App::run(
         &mut tui,
@@ -536,7 +559,9 @@ async fn run_ratatui_app(
     )
     .await;
 
-    let _ = tui.leave_alt_screen();
+    if use_alt_screen {
+        let _ = tui.leave_alt_screen();
+    }
     restore();
     if let Ok(exit_info) = &app_result {
         let mut stdout = std::io::stdout();
