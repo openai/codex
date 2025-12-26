@@ -355,6 +355,7 @@ impl McpConnectionManager {
         }
         self.clients = clients;
         self.elicitation_requests = elicitation_requests.clone();
+        let auth_entries = auth_entries.clone();
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
             let mut summary = McpStartupCompleteEvent::default();
@@ -362,7 +363,12 @@ impl McpConnectionManager {
                 match outcome {
                     Ok(_) => summary.ready.push(server_name),
                     Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
-                    Err(StartupOutcomeError::Failed { error }) => {
+                    Err(err @ StartupOutcomeError::Failed { .. }) => {
+                        let error = mcp_init_error_display(
+                            &server_name,
+                            auth_entries.get(&server_name),
+                            &err,
+                        );
                         summary.failed.push(McpStartupFailure {
                             server: server_name,
                             error,
@@ -922,7 +928,14 @@ fn mcp_init_error_display(
             "MCP client for `{server_name}` timed out after {startup_timeout_secs} seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.{server_name}]\nstartup_timeout_sec = XX"
         )
     } else {
-        format!("MCP client for `{server_name}` failed to start: {err:#}")
+        match err {
+            StartupOutcomeError::Cancelled => {
+                format!("MCP client for `{server_name}` startup cancelled.")
+            }
+            StartupOutcomeError::Failed { error } => {
+                format!("MCP client for `{server_name}` failed to start: {error}")
+            }
+        }
     }
 }
 
@@ -1169,7 +1182,7 @@ mod tests {
 
         let display = mcp_init_error_display(server_name, Some(&entry), &err);
 
-        let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
+        let expected = format!("MCP client for `{server_name}` failed to start: boom");
 
         assert_eq!(expected, display);
     }

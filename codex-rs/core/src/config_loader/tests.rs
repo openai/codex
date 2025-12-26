@@ -6,12 +6,31 @@ use crate::config_loader::config_requirements::ConfigRequirementsToml;
 use crate::config_loader::load_requirements_toml;
 use codex_protocol::protocol::AskForApproval;
 use pretty_assertions::assert_eq;
+use serial_test::serial;
 use tempfile::tempdir;
 use toml::Value as TomlValue;
 
+struct CwdGuard {
+    previous: std::path::PathBuf,
+}
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.previous).expect("restore cwd");
+    }
+}
+
+fn set_test_cwd(path: &std::path::Path) -> CwdGuard {
+    let previous = std::env::current_dir().expect("read cwd");
+    std::env::set_current_dir(path).expect("set cwd");
+    CwdGuard { previous }
+}
+
 #[tokio::test]
+#[serial]
 async fn merges_managed_config_layer_on_top() {
     let tmp = tempdir().expect("tempdir");
+    let _cwd = set_test_cwd(tmp.path());
     let managed_path = tmp.path().join("managed_config.toml");
 
     std::fs::write(
@@ -40,9 +59,14 @@ extra = true
         managed_preferences_base64: None,
     };
 
-    let state = load_config_layers_state(tmp.path(), &[] as &[(String, TomlValue)], overrides)
-        .await
-        .expect("load config");
+    let state = load_config_layers_state(
+        tmp.path(),
+        tmp.path(),
+        &[] as &[(String, TomlValue)],
+        overrides,
+    )
+    .await
+    .expect("load config");
     let loaded = state.effective_config();
     let table = loaded.as_table().expect("top-level table expected");
 
@@ -59,8 +83,10 @@ extra = true
 }
 
 #[tokio::test]
+#[serial]
 async fn returns_empty_when_all_layers_missing() {
     let tmp = tempdir().expect("tempdir");
+    let _cwd = set_test_cwd(tmp.path());
     let managed_path = tmp.path().join("managed_config.toml");
     let overrides = LoaderOverrides {
         managed_config_path: Some(managed_path),
@@ -68,9 +94,14 @@ async fn returns_empty_when_all_layers_missing() {
         managed_preferences_base64: None,
     };
 
-    let layers = load_config_layers_state(tmp.path(), &[] as &[(String, TomlValue)], overrides)
-        .await
-        .expect("load layers");
+    let layers = load_config_layers_state(
+        tmp.path(),
+        tmp.path(),
+        &[] as &[(String, TomlValue)],
+        overrides,
+    )
+    .await
+    .expect("load layers");
     assert!(
         layers.get_user_layer().is_none(),
         "no user layer when CODEX_HOME/config.toml does not exist"
@@ -105,6 +136,7 @@ async fn returns_empty_when_all_layers_missing() {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+#[serial]
 async fn managed_preferences_take_highest_precedence() {
     use base64::Engine;
 
@@ -115,6 +147,7 @@ flag = false
 "#;
     let encoded = base64::prelude::BASE64_STANDARD.encode(managed_payload.as_bytes());
     let tmp = tempdir().expect("tempdir");
+    let _cwd = set_test_cwd(tmp.path());
     let managed_path = tmp.path().join("managed_config.toml");
 
     std::fs::write(
@@ -138,9 +171,14 @@ flag = true
         managed_preferences_base64: Some(encoded),
     };
 
-    let state = load_config_layers_state(tmp.path(), &[] as &[(String, TomlValue)], overrides)
-        .await
-        .expect("load config");
+    let state = load_config_layers_state(
+        tmp.path(),
+        tmp.path(),
+        &[] as &[(String, TomlValue)],
+        overrides,
+    )
+    .await
+    .expect("load config");
     let loaded = state.effective_config();
     let nested = loaded
         .get("nested")
@@ -187,5 +225,116 @@ allowed_approval_policies = ["never", "on-request"]
             .can_set(&AskForApproval::OnFailure)
             .is_err()
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[serial]
+async fn loads_repo_local_config_from_cwd_only() -> anyhow::Result<()> {
+    struct CwdGuard {
+        previous: std::path::PathBuf,
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            // If this fails, we want the test to fail loudly rather than silently
+            // leaking state into other tests.
+            std::env::set_current_dir(&self.previous).expect("restore cwd");
+        }
+    }
+
+    let tmp = tempdir()?;
+
+    let codex_home = tmp.path().join("home");
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"value = "user"
+"#,
+    )?;
+
+    let repo = tmp.path().join("repo");
+    let nested = repo.join("a").join("b");
+    std::fs::create_dir_all(&nested)?;
+
+    std::fs::create_dir_all(repo.join(".codex"))?;
+    std::fs::write(
+        repo.join(".codex").join(CONFIG_TOML_FILE),
+        r#"value = "root"
+"#,
+    )?;
+
+    std::fs::create_dir_all(repo.join("a").join(".codex"))?;
+    std::fs::write(
+        repo.join("a").join(".codex").join(CONFIG_TOML_FILE),
+        r#"value = "sub"
+"#,
+    )?;
+
+    std::fs::create_dir_all(nested.join(".codex"))?;
+    std::fs::write(
+        nested.join(".codex").join(CONFIG_TOML_FILE),
+        r#"value = "cwd"
+"#,
+    )?;
+
+    let guard = CwdGuard {
+        previous: std::env::current_dir()?,
+    };
+    std::env::set_current_dir(&nested)?;
+
+    let overrides = LoaderOverrides {
+        managed_config_path: Some(tmp.path().join("managed_config.toml")),
+        #[cfg(target_os = "macos")]
+        managed_preferences_base64: None,
+    };
+
+    let state = load_config_layers_state(
+        &codex_home,
+        &nested,
+        &[] as &[(String, TomlValue)],
+        overrides,
+    )
+    .await
+    .expect("load config layers");
+
+    assert!(
+        state.get_user_layer().is_none(),
+        "Codex-Mine policy: user layer should be ignored when cwd-local config exists"
+    );
+
+    let binding = state.effective_config();
+    let table = binding.as_table().expect("top-level table expected");
+    assert_eq!(
+        table.get("value"),
+        Some(&TomlValue::String("cwd".to_string()))
+    );
+
+    std::fs::remove_file(nested.join(".codex").join(CONFIG_TOML_FILE))?;
+    let overrides = LoaderOverrides {
+        managed_config_path: Some(tmp.path().join("managed_config.toml")),
+        #[cfg(target_os = "macos")]
+        managed_preferences_base64: None,
+    };
+    let state_no_cwd_local = load_config_layers_state(
+        &codex_home,
+        &nested,
+        &[] as &[(String, TomlValue)],
+        overrides,
+    )
+    .await
+    .expect("load config layers");
+    assert!(
+        state_no_cwd_local.get_user_layer().is_some(),
+        "Codex-Mine policy: user layer should load when no cwd-local config exists"
+    );
+    let binding = state_no_cwd_local.effective_config();
+    let table = binding.as_table().expect("top-level table expected");
+    assert_eq!(
+        table.get("value"),
+        Some(&TomlValue::String("user".to_string()))
+    );
+
+    drop(guard);
     Ok(())
 }

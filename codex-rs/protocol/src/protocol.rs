@@ -801,6 +801,7 @@ impl HasLegacyEvent for ReasoningRawContentDeltaEvent {
 impl HasLegacyEvent for EventMsg {
     fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
         match self {
+            EventMsg::ItemStarted(event) => event.as_legacy_events(show_raw_agent_reasoning),
             EventMsg::ItemCompleted(event) => event.as_legacy_events(show_raw_agent_reasoning),
             EventMsg::AgentMessageContentDelta(event) => {
                 event.as_legacy_events(show_raw_agent_reasoning)
@@ -1924,6 +1925,25 @@ mod tests {
         };
 
         assert!(event.as_legacy_events(false).is_empty());
+    }
+
+    #[test]
+    fn event_msg_item_started_propagates_legacy_web_search_begin_event() {
+        let msg = EventMsg::ItemStarted(ItemStartedEvent {
+            thread_id: ConversationId::new(),
+            turn_id: "turn-1".into(),
+            item: TurnItem::WebSearch(WebSearchItem {
+                id: "search-1".into(),
+                query: "find docs".into(),
+            }),
+        });
+
+        let legacy_events = msg.as_legacy_events(false);
+        assert_eq!(legacy_events.len(), 1);
+        match &legacy_events[0] {
+            EventMsg::WebSearchBegin(event) => assert_eq!(event.call_id, "search-1"),
+            _ => panic!("expected WebSearchBegin event"),
+        }
     }
 
     /// Serialize Event to verify that its JSON representation has the expected

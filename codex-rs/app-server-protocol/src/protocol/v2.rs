@@ -240,6 +240,14 @@ pub enum ConfigLayerSource {
         file: AbsolutePathBuf,
     },
 
+    /// Repository-local config layer from `.codex/config.toml` discovered by
+    /// walking up parent directories from the process working directory.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Tree {
+        file: AbsolutePathBuf,
+    },
+
     /// Session-layer overrides supplied via `-c`/`--config`.
     SessionFlags,
 
@@ -262,6 +270,7 @@ impl ConfigLayerSource {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
             ConfigLayerSource::User { .. } => 20,
+            ConfigLayerSource::Tree { .. } => 25,
             ConfigLayerSource::SessionFlags => 30,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm => 50,

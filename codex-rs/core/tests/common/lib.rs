@@ -76,9 +76,18 @@ pub fn test_tmp_path_buf() -> PathBuf {
 /// temporary directory. Using a per-test directory keeps tests hermetic and
 /// avoids clobbering a developer’s real `~/.codex`.
 pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
+    load_default_config_for_test_with_cwd(codex_home, codex_home.path()).await
+}
+
+pub async fn load_default_config_for_test_with_cwd(
+    codex_home: &TempDir,
+    cwd: &std::path::Path,
+) -> Config {
+    let mut overrides = default_test_overrides();
+    overrides.cwd = Some(cwd.to_path_buf());
     ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .harness_overrides(default_test_overrides())
+        .harness_overrides(overrides)
         .build()
         .await
         .expect("defaults for test should always succeed")

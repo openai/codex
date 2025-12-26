@@ -19,6 +19,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use toml::Value as TomlValue;
 
 pub use config_requirements::ConfigRequirements;
@@ -56,6 +57,7 @@ const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/codex/requirements.toml"
 /// See https://developers.openai.com/codex/security for details.
 pub async fn load_config_layers_state(
     codex_home: &Path,
+    cwd: &Path,
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
 ) -> io::Result<ConfigLayerStack> {
@@ -87,40 +89,104 @@ pub async fn load_config_layers_state(
     // TODO(mbolin): Honor managed preferences (macOS only).
     // TODO(mbolin): Honor /etc/codex/config.toml.
 
-    // Add a layer for $CODEX_HOME/config.toml if it exists. Note if the file
-    // exists, but is malformed, then this error should be propagated to the
-    // user.
     let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home)?;
-    match tokio::fs::read_to_string(&user_file).await {
-        Ok(contents) => {
-            let user_config: TomlValue = toml::from_str(&contents).map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "Error parsing user config file {}: {e}",
-                        user_file.as_path().display(),
-                    ),
-                )
-            })?;
-            layers.push(ConfigLayerEntry::new(
-                ConfigLayerSource::User { file: user_file },
-                user_config,
-            ));
-        }
-        Err(e) => {
-            if e.kind() != io::ErrorKind::NotFound {
-                return Err(io::Error::new(
-                    e.kind(),
-                    format!(
-                        "Failed to read user config file {}: {e}",
-                        user_file.as_path().display(),
-                    ),
+    let user_file_path = user_file.as_path().to_path_buf();
+
+    // Codex-Mine policy: repo-local config is *cwd-local only*.
+    //
+    // We intentionally do not walk parent directories, and we do not special-case
+    // git repo roots. If you want repo-wide defaults, invoke Codex from the repo
+    // root (or use your CODEX_HOME config when no cwd-local config exists).
+    let candidates: Vec<PathBuf> = vec![cwd.join(".codex").join(CONFIG_TOML_FILE)];
+
+    let has_repo_local_config = candidates
+        .iter()
+        .any(|path| path.exists() && path.as_path() != user_file_path.as_path());
+
+    // Codex-Mine policy: if repo-local config exists, ignore $CODEX_HOME/config.toml.
+    //
+    // This intentionally does not "merge" repo-local and global user settings:
+    // repo-local config is treated as the complete user-layer source of truth.
+    if has_repo_local_config {
+        tracing::debug!(
+            cwd = %cwd.display(),
+            codex_home = %codex_home.display(),
+            "Repo-local .codex/config.toml found; skipping CODEX_HOME/config.toml"
+        );
+    } else {
+        // Add a layer for $CODEX_HOME/config.toml if it exists. Note if the file
+        // exists, but is malformed, then this error should be propagated to the
+        // user.
+        match tokio::fs::read_to_string(&user_file).await {
+            Ok(contents) => {
+                let user_config: TomlValue = toml::from_str(&contents).map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "Error parsing user config file {}: {e}",
+                            user_file.as_path().display(),
+                        ),
+                    )
+                })?;
+                layers.push(ConfigLayerEntry::new(
+                    ConfigLayerSource::User { file: user_file },
+                    user_config,
                 ));
+            }
+            Err(e) => {
+                if e.kind() != io::ErrorKind::NotFound {
+                    return Err(io::Error::new(
+                        e.kind(),
+                        format!(
+                            "Failed to read user config file {}: {e}",
+                            user_file.as_path().display(),
+                        ),
+                    ));
+                }
             }
         }
     }
 
-    // TODO(mbolin): Add layers for cwd, tree, and repo config files.
+    for path in candidates {
+        if !path.exists() {
+            continue;
+        }
+        // Avoid loading $CODEX_HOME/config.toml as a Tree layer when `cwd` is
+        // under the user's home directory.
+        if path.as_path() == user_file_path.as_path() {
+            continue;
+        }
+        let abs = AbsolutePathBuf::from_absolute_path(&path)?;
+        let contents = tokio::fs::read_to_string(abs.as_path())
+            .await
+            .map_err(|e| {
+                io::Error::new(
+                    e.kind(),
+                    format!(
+                        "Failed to read repo-local config file {}: {e}",
+                        abs.display()
+                    ),
+                )
+            })?;
+        let config: TomlValue = toml::from_str(&contents).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Error parsing repo-local config file {}: {e}",
+                    abs.display()
+                ),
+            )
+        })?;
+
+        tracing::debug!("Loaded repo-local config layer {}", abs.display());
+        layers.push(ConfigLayerEntry::new(
+            ConfigLayerSource::Tree { file: abs },
+            config,
+        ));
+    }
+
+    // TODO(mbolin): Add an explicit layer for `$PWD/config.toml` (separate from `.codex/config.toml`)
+    // and a Git-repo-root-only layer (if we want to distinguish it from Tree).
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.
     if !cli_overrides.is_empty() {

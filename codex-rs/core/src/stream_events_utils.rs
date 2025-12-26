@@ -70,7 +70,13 @@ pub(crate) async fn handle_output_item_done(
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
             if let Some(turn_item) = handle_non_tool_response_item(&item).await {
-                if previously_active_item.is_none() {
+                // Web search calls are "atomic" items: always emit a start/end pair so
+                // hooks and UIs can observe a begin/end lifecycle consistently.
+                //
+                // For streaming message/reasoning items, we still gate the "started"
+                // event on whether there was a previously active item.
+                let always_emit_started = matches!(turn_item, TurnItem::WebSearch(_));
+                if always_emit_started || previously_active_item.is_none() {
                     ctx.sess
                         .emit_turn_item_started(&ctx.turn_context, &turn_item)
                         .await;

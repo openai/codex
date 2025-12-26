@@ -16,6 +16,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::exec_policy::load_exec_policy_for_features;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::hooks::HookRunner;
 use crate::openai_models::model_family::ModelFamily;
 use crate::openai_models::models_manager::ModelsManager;
 use crate::parse_command::parse_command;
@@ -473,6 +474,10 @@ pub(crate) struct SessionSettingsUpdate {
 }
 
 impl Session {
+    pub(crate) fn conversation_id(&self) -> ConversationId {
+        self.conversation_id
+    }
+
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
     fn build_per_turn_config(session_configuration: &SessionConfiguration) -> Config {
         // todo(aibrahim): store this state somewhere else so we don't need to mut config
@@ -664,6 +669,7 @@ impl Session {
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(config.notify.clone()),
+            hook_runner: HookRunner::try_new(config.hooks.clone())?,
             rollout: Mutex::new(Some(rollout_recorder)),
             user_shell: Arc::new(default_shell),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -971,6 +977,8 @@ impl Session {
 
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
+        self.services.hook_runner.on_event(self, turn_context, &msg);
+
         let legacy_source = msg.clone();
         let event = Event {
             id: turn_context.sub_id.clone(),
@@ -980,6 +988,10 @@ impl Session {
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
+            self.services
+                .hook_runner
+                .on_event(self, turn_context, &legacy);
+
             let legacy_event = Event {
                 id: turn_context.sub_id.clone(),
                 msg: legacy,
@@ -2789,6 +2801,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
+    use tokio::time::Instant;
 
     #[tokio::test]
     async fn reconstruct_history_matches_live_compactions() {
@@ -2828,6 +2841,60 @@ mod tests {
 
         let actual = session.state.lock().await.clone_history().get_history();
         assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn hooks_fire_for_legacy_web_search_events() {
+        let (mut session, mut turn_context) = make_session_and_context().await;
+
+        let out_dir = tempfile::tempdir().expect("create temp dir");
+        let out_path = out_dir.path().join("hook_web_search.jsonl");
+        let out_path_str = out_path.to_string_lossy().to_string();
+
+        session.services.hook_runner = HookRunner::try_new(vec![crate::config::HookConfig {
+            id: Some("test-web-search".to_string()),
+            when: vec!["web_search.end".to_string()],
+            matcher: None,
+            command: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!("cat >> \"{out_path_str}\""),
+            ],
+            timeout_ms: Some(2_000),
+            include_output: false,
+            include_patch_contents: false,
+            include_mcp_arguments: false,
+        }])
+        .expect("build hook runner");
+
+        turn_context.sub_id = "turn-id-1".to_string();
+
+        session
+            .send_event(
+                &turn_context,
+                EventMsg::ItemCompleted(ItemCompletedEvent {
+                    thread_id: session.conversation_id(),
+                    turn_id: turn_context.sub_id.clone(),
+                    item: TurnItem::WebSearch(codex_protocol::items::WebSearchItem {
+                        id: "ws-1".to_string(),
+                        query: "test query".to_string(),
+                    }),
+                }),
+            )
+            .await;
+
+        let started = Instant::now();
+        loop {
+            let contents = std::fs::read_to_string(&out_path).unwrap_or_default();
+            if contents.contains("\"type\":\"web_search.end\"") {
+                break;
+            }
+            assert!(
+                started.elapsed() < StdDuration::from_secs(5),
+                "timed out waiting for hook output to be written"
+            );
+            sleep(Duration::from_millis(20)).await;
+        }
     }
 
     #[tokio::test]
@@ -3146,6 +3213,7 @@ mod tests {
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
+            hook_runner: HookRunner::try_new(config.hooks.clone()).expect("build hook runner"),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -3232,6 +3300,7 @@ mod tests {
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::new(None),
+            hook_runner: HookRunner::try_new(config.hooks.clone()).expect("build hook runner"),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,

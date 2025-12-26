@@ -72,7 +72,7 @@ pub fn arg0_dispatch() -> Option<TempDir> {
 /// `codex-linux-sandbox` we *directly* execute
 /// [`codex_linux_sandbox::run_main`] (which never returns). Otherwise we:
 ///
-/// 1.  Load `.env` values from `~/.codex/.env` before creating any threads.
+/// 1.  Load `.env` values before creating any threads.
 /// 2.  Construct a Tokio multi-thread runtime.
 /// 3.  Derive the path to the current executable (so children can re-invoke the
 ///     sandbox) when running on Linux.
@@ -109,25 +109,25 @@ where
 
 const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 
-/// Load env vars from ~/.codex/.env.
+/// Load env vars from `.env` files.
 ///
 /// Security: Do not allow `.env` files to create or modify any variables
 /// with names starting with `CODEX_`.
 fn load_dotenv() {
     let codex_home = codex_core::config::find_codex_home().ok();
-    if let Some(codex_home) = codex_home
-        && let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env"))
+    let cwd_env = std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.join(".codex").join(".env"));
+    if let Some(cwd_env) = cwd_env
+        && let Ok(iter) = dotenvy::from_path_iter(&cwd_env)
     {
-        // Load $CODEX_HOME/.env first so that repo-local settings can override it.
+        // Codex-Mine policy: if `cwd/.codex/.env` exists, ignore `$CODEX_HOME/.env`.
         set_filtered(iter);
+        return;
     }
 
-    let repo_env = std::env::current_dir()
-        .ok()
-        .and_then(|cwd| codex_core::git_info::resolve_root_git_project_for_trust(&cwd))
-        .map(|repo_root| repo_root.join(".codex").join(".env"));
-    if let Some(repo_env) = repo_env
-        && let Ok(iter) = dotenvy::from_path_iter(repo_env)
+    if let Some(codex_home) = codex_home
+        && let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env"))
     {
         set_filtered(iter);
     }

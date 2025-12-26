@@ -748,6 +748,41 @@ notify = ["python3", "/Users/mbolin/.codex/notify.py"]
 
 When Codex detects WSL 2 inside Windows Terminal (the session exports `WT_SESSION`), `tui.notifications` automatically switches to a Windows toast backend by spawning `powershell.exe`. This ensures both approval prompts and completed turns trigger native toasts even though Windows Terminal ignores OSC 9 escape sequences. Terminals that advertise OSC 9 support (iTerm2, WezTerm, kitty, etc.) continue to use the existing escape-sequence backend, and the `notify` hook remains unchanged.
 
+### hooks
+
+Configure event-driven hooks that spawn external commands when certain internal events occur (e.g. tool begin/end, turn begin/end).
+
+Hooks are **observe-only**: failures are surfaced via logs, but do not interrupt the agent.
+
+Each hook is executed by spawning `command` and writing a single JSON payload to **stdin**.
+Hook commands are spawned with the repository root as their working directory when available (otherwise the session `cwd`), so repo-relative paths such as `.codex/hooks/*.py` resolve consistently.
+
+Example:
+
+```toml
+[[hooks]]
+id = "afplay-on-turn-end"
+when = "turn.end"
+command = ["bash", "-lc", "afplay /System/Library/Sounds/Ping.aiff"]
+
+[[hooks]]
+id = "audit-exec"
+when = ["tool.exec.begin", "tool.exec.end"]
+matcher = "shell|unified_exec|local_shell"
+command = ["python3", "scripts/hook_audit.py"]
+timeout_ms = 3000
+include_output = false
+```
+
+Supported `when` values (v1):
+
+- `turn.begin` / `turn.end`
+- `tool.call.begin` / `tool.call.end` (all tools, e.g. `weather`, `calculator`)
+- `tool.exec.begin` / `tool.exec.end`
+- `tool.apply_patch.begin` / `tool.apply_patch.end`
+- `tool.mcp.begin` / `tool.mcp.end`
+- `web_search.begin` / `web_search.end`
+
 ### hide_agent_reasoning
 
 Codex intermittently emits "reasoning" events that show the model's internal "thinking" before it produces a final answer. Some users may find these events distracting, especially in CI logs or minimal terminal output.

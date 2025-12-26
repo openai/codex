@@ -331,6 +331,7 @@ impl ConfigService {
     async fn load_layers_state(&self) -> std::io::Result<ConfigLayerStack> {
         load_config_layers_state(
             &self.codex_home,
+            &self.codex_home,
             &self.cli_overrides,
             self.loader_overrides.clone(),
         )
@@ -552,6 +553,9 @@ fn override_message(layer: &ConfigLayerSource) -> String {
             format!("Overridden by managed config (system): {}", file.display())
         }
         ConfigLayerSource::SessionFlags => "Overridden by session flags".to_string(),
+        ConfigLayerSource::Tree { file } => {
+            format!("Overridden by repo-local config: {}", file.display())
+        }
         ConfigLayerSource::User { file } => {
             format!("Overridden by user config: {}", file.display())
         }
@@ -631,7 +635,24 @@ mod tests {
     use codex_app_server_protocol::AskForApproval;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use serial_test::serial;
     use tempfile::tempdir;
+
+    struct CwdGuard {
+        previous: std::path::PathBuf,
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.previous).expect("restore cwd");
+        }
+    }
+
+    fn set_test_cwd(path: &std::path::Path) -> CwdGuard {
+        let previous = std::env::current_dir().expect("read cwd");
+        std::env::set_current_dir(path).expect("set cwd");
+        CwdGuard { previous }
+    }
 
     #[test]
     fn toml_value_to_item_handles_nested_config_tables() {
@@ -729,8 +750,10 @@ remote_compaction = true
     }
 
     #[tokio::test]
+    #[serial]
     async fn read_includes_origins_and_layers() {
         let tmp = tempdir().expect("tempdir");
+        let _cwd = set_test_cwd(tmp.path());
         let user_path = tmp.path().join(CONFIG_TOML_FILE);
         std::fs::write(&user_path, "model = \"user\"").unwrap();
         let user_file = AbsolutePathBuf::try_from(user_path.clone()).expect("user file");
@@ -927,8 +950,10 @@ remote_compaction = true
     }
 
     #[tokio::test]
+    #[serial]
     async fn read_reports_managed_overrides_user_and_session_flags() {
         let tmp = tempdir().expect("tempdir");
+        let _cwd = set_test_cwd(tmp.path());
         let user_path = tmp.path().join(CONFIG_TOML_FILE);
         std::fs::write(&user_path, "model = \"user\"").unwrap();
         let user_file = AbsolutePathBuf::try_from(user_path.clone()).expect("user file");

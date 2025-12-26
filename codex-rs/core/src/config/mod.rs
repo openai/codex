@@ -168,6 +168,12 @@ pub struct Config {
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
+    /// Optional event-driven hooks. When configured, Codex will spawn the hook
+    /// commands in response to certain internal events (e.g. tool begin/end).
+    /// Hooks are **observe-only**: failures are surfaced via logs but do not
+    /// interrupt the agent's execution.
+    pub hooks: Vec<HookConfig>,
+
     /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
@@ -346,8 +352,17 @@ impl ConfigBuilder {
         let cli_overrides = cli_overrides.unwrap_or_default();
         let harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
-        let config_layer_stack =
-            load_config_layers_state(&codex_home, &cli_overrides, loader_overrides).await?;
+        let cwd_for_layering = harness_overrides
+            .cwd
+            .clone()
+            .map_or_else(std::env::current_dir, std::io::Result::Ok)?;
+        let config_layer_stack = load_config_layers_state(
+            &codex_home,
+            &cwd_for_layering,
+            &cli_overrides,
+            loader_overrides,
+        )
+        .await?;
         let merged_toml = config_layer_stack.effective_config();
 
         // Note that each layer in ConfigLayerStack should have resolved
@@ -403,8 +418,10 @@ pub async fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
+    let cwd = std::env::current_dir()?;
     let config_layer_stack =
-        load_config_layers_state(codex_home, &cli_overrides, LoaderOverrides::default()).await?;
+        load_config_layers_state(codex_home, &cwd, &cli_overrides, LoaderOverrides::default())
+            .await?;
 
     let merged_toml = config_layer_stack.effective_config();
     let cfg = deserialize_config_toml_with_base(merged_toml, codex_home).map_err(|e| {
@@ -438,8 +455,13 @@ pub async fn load_global_mcp_servers(
     // config layers for deprecated fields rather than reporting on the merged
     // result.
     let cli_overrides = Vec::<(String, TomlValue)>::new();
-    let config_layer_stack =
-        load_config_layers_state(codex_home, &cli_overrides, LoaderOverrides::default()).await?;
+    let config_layer_stack = load_config_layers_state(
+        codex_home,
+        codex_home,
+        &cli_overrides,
+        LoaderOverrides::default(),
+    )
+    .await?;
     let merged_toml = config_layer_stack.effective_config();
     let Some(servers_value) = merged_toml.get("mcp_servers") else {
         return Ok(BTreeMap::new());
@@ -631,6 +653,10 @@ pub struct ConfigToml {
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
+
+    /// Optional event-driven hooks.
+    #[serde(default)]
+    pub hooks: Vec<HookConfig>,
 
     /// System instructions.
     pub instructions: Option<String>,
@@ -1255,6 +1281,7 @@ impl Config {
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
             notify: cfg.notify,
+            hooks: cfg.hooks,
             user_instructions,
             base_instructions,
             developer_instructions,
@@ -1453,9 +1480,26 @@ mod tests {
     use super::*;
     use core_test_support::test_absolute_path;
     use pretty_assertions::assert_eq;
+    use serial_test::serial;
 
     use std::time::Duration;
     use tempfile::TempDir;
+
+    struct CwdGuard {
+        previous: std::path::PathBuf,
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.previous).expect("restore cwd");
+        }
+    }
+
+    fn set_test_cwd(path: &std::path::Path) -> CwdGuard {
+        let previous = std::env::current_dir().expect("read cwd");
+        std::env::set_current_dir(path).expect("set cwd");
+        CwdGuard { previous }
+    }
 
     #[test]
     fn test_toml_parsing() {
@@ -1947,7 +1991,8 @@ trust_level = "trusted"
         };
 
         let config_layer_stack =
-            load_config_layers_state(codex_home.path(), &Vec::new(), overrides).await?;
+            load_config_layers_state(codex_home.path(), codex_home.path(), &Vec::new(), overrides)
+                .await?;
         let cfg = deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
             codex_home.path(),
@@ -1975,8 +2020,10 @@ trust_level = "trusted"
     }
 
     #[tokio::test]
+    #[serial]
     async fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
+        let _cwd = set_test_cwd(codex_home.path());
 
         let servers = load_global_mcp_servers(codex_home.path()).await?;
         assert!(servers.is_empty());
@@ -1985,8 +2032,10 @@ trust_level = "trusted"
     }
 
     #[tokio::test]
+    #[serial]
     async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
+        let _cwd = set_test_cwd(codex_home.path());
 
         let mut servers = BTreeMap::new();
         servers.insert(
@@ -2066,6 +2115,7 @@ trust_level = "trusted"
         };
 
         let config_layer_stack = load_config_layers_state(
+            codex_home.path(),
             codex_home.path(),
             &[("model".to_string(), TomlValue::String("cli".to_string()))],
             overrides,
@@ -3054,6 +3104,7 @@ model_verbosity = "high"
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
+                hooks: Vec::new(),
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: HashMap::new(),
@@ -3129,6 +3180,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: Vec::new(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
@@ -3219,6 +3271,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: Vec::new(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
@@ -3295,6 +3348,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: Vec::new(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
@@ -3645,6 +3699,82 @@ trust_level = "untrusted"
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_hooks_toml_parsing() {
+        let cfg = toml::from_str::<ConfigToml>(
+            r#"
+[[hooks]]
+id = "afplay-on-turn-end"
+when = "turn.end"
+command = ["bash", "-lc", "afplay /System/Library/Sounds/Ping.aiff"]
+
+[[hooks]]
+when = ["tool.exec.begin", "tool.exec.end"]
+matcher = "shell|unified_exec"
+command = ["python3", "scripts/hook.py"]
+timeout_ms = 3000
+include_output = true
+"#,
+        )
+        .expect("TOML deserialization should succeed");
+
+        assert_eq!(cfg.hooks.len(), 2);
+        assert_eq!(cfg.hooks[0].id.as_deref(), Some("afplay-on-turn-end"));
+        assert_eq!(cfg.hooks[0].when, vec!["turn.end".to_string()]);
+        assert_eq!(cfg.hooks[0].include_output, false);
+
+        assert_eq!(
+            cfg.hooks[1].when,
+            vec!["tool.exec.begin".to_string(), "tool.exec.end".to_string()]
+        );
+        assert_eq!(cfg.hooks[1].matcher.as_deref(), Some("shell|unified_exec"));
+        assert_eq!(cfg.hooks[1].timeout_ms, Some(3000));
+        assert!(cfg.hooks[1].include_output);
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct HookConfig {
+    #[serde(default)]
+    pub id: Option<String>,
+
+    #[serde(deserialize_with = "deserialize_string_or_vec")]
+    pub when: Vec<String>,
+
+    #[serde(default)]
+    pub matcher: Option<String>,
+
+    pub command: Vec<String>,
+
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+
+    #[serde(default)]
+    pub include_output: bool,
+
+    #[serde(default)]
+    pub include_patch_contents: bool,
+
+    #[serde(default)]
+    pub include_mcp_arguments: bool,
+}
+
+fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    match StringOrVec::deserialize(deserializer)? {
+        StringOrVec::One(one) => Ok(vec![one]),
+        StringOrVec::Many(many) => Ok(many),
     }
 }
 

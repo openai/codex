@@ -1,0 +1,182 @@
+model = "gpt-5.2"
+model_reasoning_effort = "medium"
+model_reasoning_summary = "detailed"
+network_access = true
+sandbox_mode = "danger-full-access"
+
+# notify（システム通知/外部連携）は今回は無効化（音が連打されて確認がしづらいため）
+# notify = ["bash", "-lc", "afplay /System/Library/Sounds/Ping.aiff"]
+
+# repo-local Hooks (Codex-Mine)
+# - Hooks are observe-only: they won't block execution.
+# - Each hook receives a single JSON payload via stdin.
+
+[[hooks]]
+id = "log-turn-begin"
+when = "turn.begin"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/turn.begin.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-turn-end"
+when = "turn.end"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/turn.end.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-web-search-begin"
+when = "web_search.begin"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/web_search.begin.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-web-search-end"
+when = "web_search.end"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/web_search.end.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-tool-exec-begin"
+when = "tool.exec.begin"
+matcher = "shell|unified_exec|user_shell"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.exec.begin.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-tool-exec-end"
+when = "tool.exec.end"
+matcher = "shell|unified_exec|user_shell"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.exec.end.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-tool-call-begin"
+when = "tool.call.begin"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.call.begin.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-tool-call-end"
+when = "tool.call.end"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.call.end.log"]
+timeout_ms = 2000
+
+# --- Examples: filtered hooks (tool / MCP / exec kinds) ---
+# These are useful to prove that `matcher` can target specific tool families.
+
+[[hooks]]
+id = "log-tool-call-mcp-chrome-begin"
+when = "tool.call.begin"
+matcher = "^mcp__chrome-devtools__"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.call.mcp.chrome.begin.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-tool-call-mcp-chrome-end"
+when = "tool.call.end"
+matcher = "^mcp__chrome-devtools__"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.call.mcp.chrome.end.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-tool-call-apply-patch-begin"
+when = "tool.call.begin"
+matcher = "^apply_patch$"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.call.apply_patch.begin.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-tool-call-apply-patch-end"
+when = "tool.call.end"
+matcher = "^apply_patch$"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.call.apply_patch.end.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-tool-mcp-list-pages-begin"
+when = "tool.mcp.begin"
+matcher = "^list_pages$"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.mcp.list_pages.begin.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-tool-mcp-list-pages-end"
+when = "tool.mcp.end"
+matcher = "^list_pages$"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.mcp.list_pages.end.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-tool-exec-unified-only-begin"
+when = "tool.exec.begin"
+matcher = "^unified_exec$"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.exec.unified_exec.begin.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-tool-exec-unified-only-end"
+when = "tool.exec.end"
+matcher = "^unified_exec$"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.exec.unified_exec.end.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-apply-patch-begin"
+when = "tool.apply_patch.begin"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.apply_patch.begin.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-apply-patch-end"
+when = "tool.apply_patch.end"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.apply_patch.end.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-mcp-begin"
+when = "tool.mcp.begin"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.mcp.begin.log"]
+timeout_ms = 2000
+
+[[hooks]]
+id = "log-mcp-end"
+when = "tool.mcp.end"
+command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.mcp.end.log"]
+timeout_ms = 2000
+
+# Optional: JSON payload dump
+# [[hooks]]
+# id = "debug-dump-hooks"
+# when = [
+#   "turn.begin",
+#   "turn.end",
+#   "web_search.begin",
+#   "web_search.end",
+#   "tool.exec.begin",
+#   "tool.exec.end",
+#   "tool.call.begin",
+#   "tool.call.end",
+#   "tool.apply_patch.begin",
+#   "tool.apply_patch.end",
+#   "tool.mcp.begin",
+#   "tool.mcp.end",
+# ]
+# command = ["python3", ".codex/hooks/dump_payload.py", ".memo/logs/hooks-debug.jsonl"]
+# timeout_ms = 2000
+
+[features]
+skills = true
+streamable_shell = true
+# tui2 = true
+unified_exec = true
+view_image_tool = true
+web_search_request = true
+
+[shell_environment_policy]
+ignore_default_excludes = false
+inherit = "all"
+
+## MCP
+[mcp_servers.chrome-devtools]
+args = ["chrome-devtools-mcp@latest"]
+command = "npx"

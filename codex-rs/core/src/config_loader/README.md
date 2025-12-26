@@ -27,8 +27,8 @@ Precedence is **top overrides bottom**:
 1. **MDM** managed preferences (macOS only)
 2. **System** managed config (e.g. `managed_config.toml`)
 3. **Session flags** (CLI overrides, applied as dotted-path TOML writes)
-4. **User** config (repo-local `.codex/config.toml`, if `cwd` is inside a git repo)
-5. **User** config (`$CODEX_HOME/config.toml`)
+4. **Cwd-local** config (`./.codex/config.toml` in the session working directory)
+5. **User** config (`$CODEX_HOME/config.toml`) **only when no cwd-local config exists**
 
 This is what `ConfigLayerStack::effective_config()` implements.
 
@@ -43,7 +43,7 @@ use toml::Value as TomlValue;
 let cli_overrides: Vec<(String, TomlValue)> = Vec::new();
 let layers = load_config_layers_state(
     &codex_home,
-    Some(&cwd),
+    &cwd,
     &cli_overrides,
     LoaderOverrides::default(),
 ).await?;
