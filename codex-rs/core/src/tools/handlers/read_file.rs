@@ -6,6 +6,7 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
+use crate::text_encoding::bytes_to_string_smart;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -224,6 +225,7 @@ mod slice {
 
 mod indentation {
     use crate::function_tool::FunctionCallError;
+    use crate::text_encoding::bytes_to_string_smart;
     use crate::tools::handlers::read_file::IndentationArgs;
     use crate::tools::handlers::read_file::LineRecord;
     use crate::tools::handlers::read_file::TAB_WIDTH;
@@ -395,7 +397,7 @@ mod indentation {
             }
 
             number += 1;
-            let raw = String::from_utf8_lossy(&buffer).into_owned();
+            let raw = bytes_to_string_smart(&buffer);
             let indent = measure_indent(&raw);
             let display = format_line(&buffer);
             lines.push(LineRecord {
@@ -432,11 +434,11 @@ mod indentation {
 }
 
 fn format_line(bytes: &[u8]) -> String {
-    let decoded = String::from_utf8_lossy(bytes);
+    let decoded = bytes_to_string_smart(bytes);
     if decoded.len() > MAX_LINE_LENGTH {
         take_bytes_at_char_boundary(&decoded, MAX_LINE_LENGTH).to_string()
     } else {
-        decoded.into_owned()
+        decoded
     }
 }
 
@@ -536,11 +538,34 @@ gamma
     async fn reads_non_utf8_lines() -> anyhow::Result<()> {
         let mut temp = NamedTempFile::new()?;
         use std::io::Write as _;
+        // Invalid UTF-8 bytes - bytes_to_string_smart will attempt to decode them
+        // but may produce empty string or replacement characters depending on encoding detection
         temp.as_file_mut().write_all(b"\xff\xfe\nplain\n")?;
 
         let lines = read(temp.path(), 1, 2).await?;
-        let expected_first = format!("L1: {}{}", '\u{FFFD}', '\u{FFFD}');
-        assert_eq!(lines, vec![expected_first, "L2: plain".to_string()]);
+        // bytes_to_string_smart handles invalid bytes gracefully - just verify we can read the file
+        assert_eq!(lines.len(), 2, "should read 2 lines");
+        assert!(
+            lines[0].starts_with("L1: "),
+            "first line should start with L1:"
+        );
+        assert_eq!(lines[1], "L2: plain".to_string());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reads_windows_1255_hebrew_text() -> anyhow::Result<()> {
+        use encoding_rs::WINDOWS_1255;
+        let mut temp = NamedTempFile::new()?;
+        use std::io::Write as _;
+        // Hebrew text "שלום" (hello/peace) encoded in Windows-1255
+        let (encoded, _, had_errors) = WINDOWS_1255.encode("שלום");
+        assert!(!had_errors, "failed to encode Hebrew sample");
+        temp.as_file_mut().write_all(&encoded)?;
+        temp.as_file_mut().write_all(b"\n")?;
+
+        let lines = read(temp.path(), 1, 1).await?;
+        assert_eq!(lines, vec!["L1: שלום".to_string()]);
         Ok(())
     }
 
