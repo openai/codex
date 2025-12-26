@@ -2840,16 +2840,25 @@ mod tests {
         let out_dir = tempfile::tempdir().expect("create temp dir");
         let out_path = out_dir.path().join("hook_web_search.jsonl");
         let out_path_str = out_path.to_string_lossy().to_string();
+        let command = if cfg!(windows) {
+            vec![
+                "cmd".to_string(),
+                "/C".to_string(),
+                format!("more >> \"{out_path_str}\""),
+            ]
+        } else {
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!("cat >> \"{out_path_str}\""),
+            ]
+        };
 
         session.services.hook_runner = HookRunner::try_new(vec![crate::config::HookConfig {
             id: Some("test-web-search".to_string()),
             when: vec!["web_search.end".to_string()],
             matcher: None,
-            command: vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                format!("cat >> \"{out_path_str}\""),
-            ],
+            command,
             timeout_ms: Some(2_000),
             include_output: false,
             include_patch_contents: false,
