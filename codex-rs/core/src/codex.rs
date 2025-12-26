@@ -2864,9 +2864,11 @@ mod tests {
             matcher: None,
             command,
             timeout_ms: Some(2_000),
+            blocking: false,
             include_output: false,
             include_patch_contents: false,
             include_mcp_arguments: false,
+            include_tool_arguments: false,
         }])
         .expect("build hook runner");
 

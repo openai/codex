@@ -3877,6 +3877,11 @@ pub struct HookConfig {
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 
+    /// If true, this hook can block execution for certain pre-execution events
+    /// (currently: `tool.call.begin`) when it exits with code 2.
+    #[serde(default)]
+    pub blocking: bool,
+
     #[serde(default)]
     pub include_output: bool,
 
@@ -3885,6 +3890,11 @@ pub struct HookConfig {
 
     #[serde(default)]
     pub include_mcp_arguments: bool,
+
+    /// If true, include the tool invocation payload (tool-specific input) in
+    /// the JSON payload written to stdin.
+    #[serde(default)]
+    pub include_tool_arguments: bool,
 }
 
 fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>

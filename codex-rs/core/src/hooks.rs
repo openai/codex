@@ -13,8 +13,10 @@ use tracing::warn;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::HookConfig;
+use crate::function_tool::FunctionCallError;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::protocol::EventMsg;
+use crate::tools::context::ToolPayload;
 use codex_protocol::models::ResponseInputItem;
 
 #[derive(Debug, Clone)]
@@ -24,9 +26,11 @@ struct CompiledHook {
     matcher: Option<Regex>,
     command: Vec<String>,
     timeout: Option<Duration>,
+    blocking: bool,
     include_output: bool,
     include_patch_contents: bool,
     include_mcp_arguments: bool,
+    include_tool_arguments: bool,
 }
 
 #[derive(Debug, Default)]
@@ -59,13 +63,126 @@ impl HookRunner {
                 matcher,
                 command: hook.command,
                 timeout: hook.timeout_ms.map(Duration::from_millis),
+                blocking: hook.blocking,
                 include_output: hook.include_output,
                 include_patch_contents: hook.include_patch_contents,
                 include_mcp_arguments: hook.include_mcp_arguments,
+                include_tool_arguments: hook.include_tool_arguments,
             });
         }
         debug!(hook_count = out.len(), "hooks configured");
         Ok(Self { hooks: out })
+    }
+
+    pub(crate) async fn maybe_block_tool_call_begin(
+        &self,
+        sess: &Session,
+        turn: &TurnContext,
+        tool_name: &str,
+        call_id: &str,
+        payload: &ToolPayload,
+    ) -> Result<(), FunctionCallError> {
+        let kind = "tool.call.begin";
+        let thread_id = sess.conversation_id().to_string();
+        let hook_cwd =
+            resolve_root_git_project_for_trust(&turn.cwd).unwrap_or_else(|| turn.cwd.clone());
+
+        for hook in &self.hooks {
+            if !hook.blocking {
+                continue;
+            }
+            if !hook.when.contains(kind) {
+                continue;
+            }
+            if let Some(matcher) = &hook.matcher
+                && !matcher.is_match(tool_name)
+            {
+                continue;
+            }
+
+            let mut payload_json = json!({
+                "type": kind,
+                "thread_id": &thread_id,
+                "turn_id": &turn.sub_id,
+                "cwd": &turn.cwd,
+                "tool_name": tool_name,
+                "call_id": call_id,
+                "hook": {
+                    "id": hook.id.as_deref(),
+                }
+            });
+
+            if hook.include_tool_arguments
+                && let Some(obj) = payload_json.as_object_mut()
+            {
+                obj.insert(
+                    "tool_input".to_string(),
+                    tool_input_json(payload, 16 * 1024),
+                );
+            }
+
+            let payload_str = serde_json::to_string(&payload_json).map_err(|e| {
+                FunctionCallError::Fatal(format!("failed to serialize hook payload: {e}"))
+            })?;
+
+            debug!(
+                hook_id = hook.id.as_deref().unwrap_or("<none>"),
+                kind,
+                tool_name,
+                call_id,
+                argv0 = hook.command.first().map(String::as_str).unwrap_or("<empty>"),
+                cwd = %hook_cwd.display(),
+                "running blocking hook"
+            );
+
+            let result = run_hook_command_capture(
+                hook.id.as_deref(),
+                kind,
+                &hook.command,
+                &payload_str,
+                &hook_cwd,
+                hook.timeout,
+            )
+            .await;
+
+            match result {
+                Ok(output) => {
+                    if output.exit_code == Some(2) {
+                        let msg = if output.stderr.trim().is_empty() {
+                            format!(
+                                "blocked by hook (id={})",
+                                hook.id.as_deref().unwrap_or("<none>")
+                            )
+                        } else {
+                            output.stderr
+                        };
+                        return Err(FunctionCallError::Denied(msg));
+                    }
+
+                    if output.exit_code.is_some_and(|code| code != 0) {
+                        warn!(
+                            hook_id = hook.id.as_deref().unwrap_or("<none>"),
+                            kind,
+                            tool_name,
+                            call_id,
+                            status = ?output.exit_code,
+                            "blocking hook exited non-zero but did not block"
+                        );
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        hook_id = hook.id.as_deref().unwrap_or("<none>"),
+                        kind,
+                        tool_name,
+                        call_id,
+                        "blocking hook failed (allowing tool call): {err:#}"
+                    );
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub(crate) fn on_event(&self, sess: &Session, turn: &TurnContext, msg: &EventMsg) {
@@ -276,6 +393,35 @@ impl HookRunner {
                 }
             });
         }
+    }
+}
+
+fn tool_input_json(payload: &ToolPayload, max_len: usize) -> serde_json::Value {
+    match payload {
+        ToolPayload::Function { arguments } => json!({
+            "type": "function",
+            "arguments": truncate(arguments, max_len),
+        }),
+        ToolPayload::Custom { input } => json!({
+            "type": "custom",
+            "input": truncate(input, max_len),
+        }),
+        ToolPayload::LocalShell { params } => json!({
+            "type": "local_shell",
+            "command": &params.command,
+            "workdir": &params.workdir,
+            "timeout_ms": &params.timeout_ms,
+        }),
+        ToolPayload::Mcp {
+            server,
+            tool,
+            raw_arguments,
+        } => json!({
+            "type": "mcp",
+            "server": server,
+            "tool": tool,
+            "arguments": truncate(raw_arguments, max_len),
+        }),
     }
 }
 
@@ -529,6 +675,67 @@ async fn run_hook_command(
         truncate(&stdout, 8 * 1024),
         truncate(&stderr, 8 * 1024),
     );
+}
+
+#[derive(Debug)]
+struct HookCommandOutput {
+    exit_code: Option<i32>,
+    #[allow(dead_code)]
+    stdout: String,
+    stderr: String,
+}
+
+async fn run_hook_command_capture(
+    hook_id: Option<&str>,
+    kind: &str,
+    command: &[String],
+    payload: &str,
+    cwd: &PathBuf,
+    timeout: Option<Duration>,
+) -> anyhow::Result<HookCommandOutput> {
+    let mut cmd = Command::new(&command[0]);
+    if command.len() > 1 {
+        cmd.args(&command[1..]);
+    }
+    cmd.current_dir(cwd);
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| {
+        anyhow::anyhow!(
+            "failed to spawn hook command (id={}, kind={}, argv0={}): {e}",
+            hook_id.unwrap_or("<none>"),
+            kind,
+            command[0]
+        )
+    })?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(payload.as_bytes()).await?;
+    }
+
+    let output = if let Some(timeout) = timeout {
+        tokio::time::timeout(timeout, child.wait_with_output())
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "hook timeout after {}ms (id={}, kind={}, argv0={})",
+                    timeout.as_millis(),
+                    hook_id.unwrap_or("<none>"),
+                    kind,
+                    command[0]
+                )
+            })??
+    } else {
+        child.wait_with_output().await?
+    };
+
+    Ok(HookCommandOutput {
+        exit_code: output.status.code(),
+        stdout: truncate(&String::from_utf8_lossy(&output.stdout), 8 * 1024),
+        stderr: truncate(&String::from_utf8_lossy(&output.stderr), 8 * 1024),
+    })
 }
 
 fn truncate(s: &str, max: usize) -> String {

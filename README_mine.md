@@ -80,6 +80,18 @@ Codex-Mine では `config.toml` に `[[hooks]]` を定義して、内部イベ�
 - 特徴: observe-only（失敗はログに出るが、エージェントの実行は止めない）
 - 実行cwd: 可能なら git repo root、無ければセッションの `cwd`
 
+#### Claude Code 互換: tool 実行のブロック（統合hooks）
+
+Claude Code の `PreToolUse` に寄せて、Codex-Mine の `[[hooks]]` でもツール呼び出しをブロックできる。
+
+- 対象イベント: 現状は `when = "tool.call.begin"` のみ（ツール実行前）
+- 有効化: `blocking = true`
+- ブロック方法: hook コマンドが **exit code 2** で終了し、`stderr` に理由を書くと、その tool call は実行されず失敗扱いで返る
+  - exit code 0: allow（通常実行）
+  - exit code 2: deny（ブロック）
+  - それ以外: hook の失敗として warning に出しつつ allow（＝意図しないロックアウトを避ける）
+- `include_tool_arguments = true` を付けると、stdin JSON に `tool_input` が含まれる（shell/unified_exec 等の引数を見て判定できる）
+
 #### 最小例
 
 ```toml
@@ -97,11 +109,13 @@ timeout_ms = 2000
   - 例: `when = "tool.call.end"` / `when = ["tool.exec.begin", "tool.exec.end"]`
 - `command`（必須）: 起動する外部コマンド（argv配列）。hook の入力JSONは **stdin** に渡される。
 - `timeout_ms`（任意）: hook コマンドのタイムアウト（ミリ秒）。
+- `blocking`（任意）: `true` の場合、`tool.call.begin` で exit code 2 によりツール実行をブロックできる。
 - `matcher`（任意）: イベントに応じてマッチ対象が変わる正規表現（Rust `regex`）。
   - `tool.call.*`: `tool_name`（例: `apply_patch`, `mcp__chrome-devtools__list_pages`, `exec_command`）
   - `tool.mcp.*`: MCP tool 名（例: `list_pages`）
   - `tool.exec.*`: 実行ソース（`shell` / `unified_exec` / `user_shell`）
   - それ以外: 現状マッチ対象なし（`matcher` 指定しても絞れない）
+- `include_tool_arguments`（任意）: `true` の場合、stdin JSON に `tool_input` を含める（ブロック判定用）。
 
 #### `matcher` の例（種類別にHooksを仕込む）
 
