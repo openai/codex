@@ -2,10 +2,7 @@ import * as vscode from "vscode";
 
 import type { Session } from "../sessions";
 import type { ChatBlock } from "./chat_view";
-import {
-  SessionPanel,
-  type SessionPanelChatLine,
-} from "./session_panel";
+import { SessionPanel, type SessionPanelChatLine } from "./session_panel";
 
 type InitialState = {
   blocks: ChatBlock[];

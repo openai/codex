@@ -12,7 +12,11 @@ export type AgentSummary = {
 
 export async function listAgentsFromDisk(
   cwdFsPath: string,
-): Promise<{ agents: AgentSummary[]; errors: string[]; gitRoot: string | null }> {
+): Promise<{
+  agents: AgentSummary[];
+  errors: string[];
+  gitRoot: string | null;
+}> {
   const errors: string[] = [];
   const agents: AgentSummary[] = [];
   const seen = new Set<string>();
@@ -43,7 +47,9 @@ export async function listAgentsFromDisk(
       }
       const parsed = parseAgentFrontmatter(content);
       if (!parsed.ok) {
-        errors.push(`${root.source}: failed to parse ${filePath}: ${parsed.error}`);
+        errors.push(
+          `${root.source}: failed to parse ${filePath}: ${parsed.error}`,
+        );
         continue;
       }
       agents.push({
@@ -66,7 +72,10 @@ function resolveCodexHome(): string {
   return path.join(os.homedir(), ".codex");
 }
 
-async function findGitRoot(start: string, errors: string[]): Promise<string | null> {
+async function findGitRoot(
+  start: string,
+  errors: string[],
+): Promise<string | null> {
   let cur = path.resolve(start);
   for (let i = 0; i < 50; i += 1) {
     const gitPath = path.join(cur, ".git");
@@ -89,7 +98,10 @@ async function findGitRoot(start: string, errors: string[]): Promise<string | nu
   return null;
 }
 
-async function listMarkdownStems(dir: string, errors: string[]): Promise<string[]> {
+async function listMarkdownStems(
+  dir: string,
+  errors: string[],
+): Promise<string[]> {
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     const out: string[] = [];
@@ -105,7 +117,9 @@ async function listMarkdownStems(dir: string, errors: string[]): Promise<string[
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTDIR") {
-      errors.push(`failed to read dir ${dir}: ${String((err as Error).message ?? err)}`);
+      errors.push(
+        `failed to read dir ${dir}: ${String((err as Error).message ?? err)}`,
+      );
     }
     return [];
   }
@@ -120,10 +134,15 @@ function isValidAgentName(name: string): boolean {
 
 function parseAgentFrontmatter(
   content: string,
-): { ok: true; description: string; color: string | null } | { ok: false; error: string } {
+):
+  | { ok: true; description: string; color: string | null }
+  | { ok: false; error: string } {
   const lines = content.split(/\r?\n/);
   if ((lines[0] ?? "").trim() !== "---") {
-    return { ok: false, error: "missing YAML frontmatter (expected starting ---)" };
+    return {
+      ok: false,
+      error: "missing YAML frontmatter (expected starting ---)",
+    };
   }
   let desc: string | null = null;
   let color: string | null = null;
@@ -144,7 +163,7 @@ function parseAgentFrontmatter(
     if (val.length >= 2) {
       const first = val[0];
       const last = val[val.length - 1];
-      if ((first === "\"" && last === "\"") || (first === "'" && last === "'")) {
+      if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
         val = val.slice(1, -1);
       }
     }
@@ -153,12 +172,22 @@ function parseAgentFrontmatter(
   }
 
   if (!foundClose) {
-    return { ok: false, error: "unterminated YAML frontmatter (missing closing ---)" };
+    return {
+      ok: false,
+      error: "unterminated YAML frontmatter (missing closing ---)",
+    };
   }
 
   if (!desc || !desc.trim()) {
-    return { ok: false, error: "missing required frontmatter field: description" };
+    return {
+      ok: false,
+      error: "missing required frontmatter field: description",
+    };
   }
 
-  return { ok: true, description: desc.trim(), color: color ? color.trim() : null };
+  return {
+    ok: true,
+    description: desc.trim(),
+    color: color ? color.trim() : null,
+  };
 }

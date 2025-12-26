@@ -20,7 +20,11 @@ import type { Thread } from "../generated/v2/Thread";
 import type { AnyServerNotification } from "./types";
 import type { FuzzyFileSearchResponse } from "../generated/FuzzyFileSearchResponse";
 
-type ModelSettings = { model: string | null; provider: string | null; reasoning: string | null };
+type ModelSettings = {
+  model: string | null;
+  provider: string | null;
+  reasoning: string | null;
+};
 
 export class BackendManager implements vscode.Disposable {
   private readonly processes = new Map<string, BackendProcess>();
@@ -102,7 +106,8 @@ export class BackendManager implements vscode.Disposable {
     if (existing) {
       this.output.appendLine(
         `Backend already running for ${folder.uri.fsPath}`,
-      );      return;
+      );
+      return;
     }
 
     const cfg = vscode.workspace.getConfiguration("codexMine", folder.uri);
@@ -161,7 +166,6 @@ export class BackendManager implements vscode.Disposable {
     });
     proc.onNotification = (n) => this.onServerNotification(key, n);
     proc.onApprovalRequest = async (req) => this.handleApprovalRequest(req);
-
   }
 
   public async newSession(
@@ -207,7 +211,9 @@ export class BackendManager implements vscode.Disposable {
     return this.modelsByBackendKey.get(session.backendKey) ?? null;
   }
 
-  public async listSkillsForSession(session: Session): Promise<SkillsListEntry[]> {
+  public async listSkillsForSession(
+    session: Session,
+  ): Promise<SkillsListEntry[]> {
     const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
     if (!folder) {
       throw new Error(
@@ -274,7 +280,11 @@ export class BackendManager implements vscode.Disposable {
 
   public async listThreadsForWorkspaceFolder(
     folder: vscode.WorkspaceFolder,
-    opts?: { cursor?: string | null; limit?: number | null; modelProviders?: string[] | null },
+    opts?: {
+      cursor?: string | null;
+      limit?: number | null;
+      modelProviders?: string[] | null;
+    },
   ): Promise<{ data: Thread[]; nextCursor: string | null }> {
     await this.startForWorkspaceFolder(folder);
     const backendKey = folder.uri.toString();
@@ -376,7 +386,9 @@ export class BackendManager implements vscode.Disposable {
     return await proc.accountRead({ refreshToken: false });
   }
 
-  public async readRateLimits(session: Session): Promise<GetAccountRateLimitsResponse> {
+  public async readRateLimits(
+    session: Session,
+  ): Promise<GetAccountRateLimitsResponse> {
     const folder = this.resolveWorkspaceFolder(session.workspaceFolderUri);
     if (!folder) {
       throw new Error(
@@ -448,8 +460,7 @@ export class BackendManager implements vscode.Disposable {
       summary: null,
     };
 
-    const imageSuffix =
-      images.length > 0 ? ` [images=${images.length}]` : "";
+    const imageSuffix = images.length > 0 ? ` [images=${images.length}]` : "";
     this.output.appendLine(`\n>> (${session.title}) ${text}${imageSuffix}`);
     this.output.append(`<< (${session.title}) `);
     const turn = await proc.turnStart(params);

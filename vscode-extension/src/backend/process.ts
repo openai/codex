@@ -198,7 +198,9 @@ export class BackendProcess implements vscode.Disposable {
     });
   }
 
-  public async accountRead(params: GetAccountParams): Promise<GetAccountResponse> {
+  public async accountRead(
+    params: GetAccountParams,
+  ): Promise<GetAccountResponse> {
     return this.rpc.request<GetAccountResponse>({
       method: "account/read",
       params,
@@ -272,7 +274,10 @@ export class BackendProcess implements vscode.Disposable {
 
     const choice = await vscode.window.showWarningMessage(
       `Codex is requesting approval: `,
-      { modal: true, detail: "Review the request and choose Accept or Decline." },
+      {
+        modal: true,
+        detail: "Review the request and choose Accept or Decline.",
+      },
       "Accept",
       "Accept (For Session)",
       "Decline",

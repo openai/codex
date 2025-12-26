@@ -103,7 +103,10 @@ type ChatViewState = {
     model: string;
     displayName: string;
     description: string;
-    supportedReasoningEfforts: Array<{ reasoningEffort: string; description: string }>;
+    supportedReasoningEfforts: Array<{
+      reasoningEffort: string;
+      description: string;
+    }>;
     defaultReasoningEffort: string;
     isDefault: boolean;
   }> | null;
@@ -166,6 +169,15 @@ function main(): void {
   const settingsBtn = mustGet<HTMLButtonElement>("settings");
   const tabsEl = mustGet("tabs");
   const modelBarEl = mustGet("modelBar");
+  const footerBarEl = (() => {
+    const el = statusTextEl.parentElement;
+    if (!el)
+      throw new Error(
+        "Webview DOM element missing: statusText parent (footerBar)",
+      );
+    return el as HTMLElement;
+  })();
+  const statusPopoverEl = mustGet("statusPopover");
   const modelSelect = document.createElement("select");
   modelSelect.className = "modelSelect model";
   const reasoningSelect = document.createElement("select");
@@ -173,21 +185,208 @@ function main(): void {
   modelBarEl.appendChild(modelSelect);
   modelBarEl.appendChild(reasoningSelect);
 
-	  const populateSelect = (
-	    el: HTMLSelectElement,
-	    options: string[],
-	    value: string | null | undefined,
-	  ): void => {
-	    const v = (value && value.trim()) || "default";
-	    const opts = options.includes(v) ? options : [v, ...options];
-	    const sig = v + "\n" + opts.join("\n");
-	    if (el.dataset.sig === sig) return;
-	    el.dataset.sig = sig;
-	    el.innerHTML = "";
-	    for (const opt of opts) {
-	      const o = document.createElement("option");
-	      o.value = opt;
-	      o.textContent = opt === "default" ? "default (CLI config)" : opt;
+  const placeholder = {
+    // Keep the placeholder short (single-line). Put detailed hints in title.
+    wide: "Type a message",
+    narrow: "Message",
+    tiny: "",
+    hint: "Type a message (Enter to send / Shift+Enter for newline)",
+  } as const;
+
+  const updateInputPlaceholder = (): void => {
+    // Prevent placeholder wrapping by keeping it short; use title for the full hint.
+    const w = inputEl.clientWidth;
+    const next =
+      w >= 260
+        ? placeholder.wide
+        : w >= 170
+          ? placeholder.narrow
+          : placeholder.tiny;
+    if (inputEl.placeholder !== next) inputEl.placeholder = next;
+    inputEl.title = placeholder.hint;
+  };
+
+  // Respond to sidebar resizing / layout changes without introducing wraps.
+  const placeholderObserver = new ResizeObserver(() =>
+    updateInputPlaceholder(),
+  );
+  placeholderObserver.observe(inputRowEl);
+
+  let statusPopoverOpen = false;
+  let statusPopoverDetails = "";
+  let statusPopoverEnabled = false;
+
+  const hideStatusPopover = (): void => {
+    statusPopoverOpen = false;
+    statusPopoverEl.style.display = "none";
+    statusPopoverEl.textContent = "";
+  };
+
+  const toggleStatusPopover = (): void => {
+    if (!statusPopoverDetails) return;
+    statusPopoverOpen = !statusPopoverOpen;
+    if (!statusPopoverOpen) {
+      hideStatusPopover();
+      return;
+    }
+    statusPopoverEl.textContent = statusPopoverDetails;
+    statusPopoverEl.style.display = "";
+  };
+
+  statusTextEl.addEventListener("click", (e) => {
+    if (!statusPopoverEnabled || !statusPopoverDetails) return;
+    e.preventDefault();
+    e.stopPropagation();
+    toggleStatusPopover();
+  });
+  document.addEventListener("click", () => hideStatusPopover());
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hideStatusPopover();
+  });
+
+  type ParsedFooterStatus = {
+    ctxPercent: string | null;
+    ctxDetail: string | null;
+    limitA: { label: string; percent: string } | null;
+    limitB: { label: string; percent: string } | null;
+  };
+
+  const parseFooterStatus = (fullStatus: string): ParsedFooterStatus => {
+    const status = fullStatus.trim();
+
+    const ctx = (() => {
+      const m = status.match(/\bremaining=([0-9]{1,3})%\s*\(([^)]+)\)/i);
+      if (m) return { pct: m[1] ?? null, detail: (m[2] ?? "").trim() || null };
+      const m2 = status.match(/\bctx\s+remaining=([0-9]{1,3})%/i);
+      if (m2) return { pct: m2[1] ?? null, detail: null };
+      return { pct: null, detail: null };
+    })();
+
+    const limits = (() => {
+      const found: Array<{ label: string; percent: string }> = [];
+      const re = /\b([a-zA-Z0-9]+)[:=]([0-9]+(?:\.[0-9]+)?)%\b/g;
+      for (const m of status.matchAll(re)) {
+        const rawLabel = (m[1] ?? "").trim();
+        const percent = (m[2] ?? "").trim();
+        if (!rawLabel || !percent) continue;
+        const lower = rawLabel.toLowerCase();
+        if (lower === "remaining" || lower === "ctx") continue;
+        const label =
+          lower === "primary" ? "5h" : lower === "secondary" ? "wk" : rawLabel;
+        found.push({ label, percent });
+      }
+      const rank = (label: string): number => {
+        const lower = label.toLowerCase();
+        if (lower === "5h") return 0;
+        if (lower === "wk") return 1;
+        return 10;
+      };
+      const byLabel = new Map<string, { label: string; percent: string }>();
+      for (const it of found) {
+        if (!byLabel.has(it.label)) byLabel.set(it.label, it);
+      }
+      return [...byLabel.values()].sort(
+        (a, b) => rank(a.label) - rank(b.label),
+      );
+    })();
+
+    const a = limits[0] ?? null;
+    const b = limits[1] ?? null;
+
+    return {
+      ctxPercent: ctx.pct,
+      ctxDetail: ctx.detail,
+      limitA: a,
+      limitB: b,
+    };
+  };
+
+  const fmtPctCompact = (raw: string): string => {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return raw;
+    const rounded = Math.round(n * 100) / 100;
+    return String(rounded)
+      .replace(/\.0+$/, "")
+      .replace(/(\.\d*[1-9])0+$/, "$1");
+  };
+
+  const buildFooterStatusCandidates = (
+    p: ParsedFooterStatus,
+  ): Array<{ tier: number; text: string }> => {
+    const hasCtx = !!p.ctxPercent;
+    const hasLimits = !!p.limitA || !!p.limitB;
+    if (!hasCtx && !hasLimits) return [];
+
+    const ctxTier0 = (() => {
+      if (!p.ctxPercent) return null;
+      if (p.ctxDetail) return `ctx ${p.ctxPercent}% (${p.ctxDetail})`;
+      return `ctx ${p.ctxPercent}%`;
+    })();
+    const ctxTier1 = p.ctxPercent ? `ctx ${p.ctxPercent}%` : null;
+    const ctxTier2 = p.ctxPercent ? `${p.ctxPercent}%` : null;
+
+    const limitsTier0 = (() => {
+      const parts: string[] = [];
+      if (p.limitA)
+        parts.push(`${p.limitA.label}:${fmtPctCompact(p.limitA.percent)}%`);
+      if (p.limitB)
+        parts.push(`${p.limitB.label}:${fmtPctCompact(p.limitB.percent)}%`);
+      return parts.length > 0 ? parts.join(" ") : null;
+    })();
+    const limitsTier1 = (() => {
+      const parts: string[] = [];
+      if (p.limitA)
+        parts.push(`${p.limitA.label}:${fmtPctCompact(p.limitA.percent)}`);
+      if (p.limitB)
+        parts.push(`${p.limitB.label}:${fmtPctCompact(p.limitB.percent)}`);
+      return parts.length > 0 ? parts.join(" ") : null;
+    })();
+    const limitsTier2 = (() => {
+      const a = p.limitA ? fmtPctCompact(p.limitA.percent) : null;
+      const b = p.limitB ? fmtPctCompact(p.limitB.percent) : null;
+      if (a && b) return `L:${a}/${b}`;
+      if (a && p.limitA) return `${p.limitA.label}:${a}`;
+      if (b && p.limitB) return `${p.limitB.label}:${b}`;
+      return null;
+    })();
+
+    const join = (a: string | null, b: string | null): string | null => {
+      const parts = [a, b].filter(
+        (v): v is string => typeof v === "string" && v.length > 0,
+      );
+      return parts.length > 0 ? parts.join(" • ") : null;
+    };
+
+    const t0 = join(ctxTier0, limitsTier0);
+    const t1 = join(ctxTier1, limitsTier1);
+    const t2 = join(ctxTier2, limitsTier2);
+
+    return [
+      { tier: 0, text: t0 ?? "" },
+      { tier: 1, text: t1 ?? "" },
+      { tier: 2, text: t2 ?? "" },
+      { tier: 3, text: "ⓘ" },
+    ].filter((c) => c.text.length > 0);
+  };
+
+  const fitsStatusText = (): boolean =>
+    statusTextEl.scrollWidth <= statusTextEl.clientWidth + 1;
+
+  const populateSelect = (
+    el: HTMLSelectElement,
+    options: string[],
+    value: string | null | undefined,
+  ): void => {
+    const v = (value && value.trim()) || "default";
+    const opts = options.includes(v) ? options : [v, ...options];
+    const sig = v + "\n" + opts.join("\n");
+    if (el.dataset.sig === sig) return;
+    el.dataset.sig = sig;
+    el.innerHTML = "";
+    for (const opt of opts) {
+      const o = document.createElement("option");
+      o.value = opt;
+      o.textContent = opt === "default" ? "default (CLI config)" : opt;
       if (opt === v) o.selected = true;
       el.appendChild(o);
     }
@@ -280,7 +479,10 @@ function main(): void {
     inputEl.value = st.text;
     autosizeInput();
     try {
-      const start = Math.max(0, Math.min(st.selectionStart, inputEl.value.length));
+      const start = Math.max(
+        0,
+        Math.min(st.selectionStart, inputEl.value.length),
+      );
       const end = Math.max(0, Math.min(st.selectionEnd, inputEl.value.length));
       inputEl.setSelectionRange(start, end);
     } catch {
@@ -290,15 +492,45 @@ function main(): void {
     if (opts?.updateSuggestions ?? true) updateSuggestions();
   };
 
+  // Input history is per session so Up/Down navigation doesn't leak across tabs.
+  type InputHistoryState = {
+    items: string[];
+    index: number | null;
+    draftBeforeHistory: string;
+  };
+
+  const inputHistoryBySessionKey = new Map<string, InputHistoryState>();
+
+  const ensureInputHistoryState = (key: string): InputHistoryState => {
+    const existing = inputHistoryBySessionKey.get(key);
+    if (existing) return existing;
+    const next: InputHistoryState = {
+      items: [],
+      index: null,
+      draftBeforeHistory: "",
+    };
+    inputHistoryBySessionKey.set(key, next);
+    return next;
+  };
+
+  const inputHistoryKeyForActiveComposer = (): string => activeComposerKey;
+
+  const exitInputHistoryNavigation = (sessionId: string | null): void => {
+    const key = composerKeyForSessionId(sessionId);
+    const st = ensureInputHistoryState(key);
+    if (st.index === null) return;
+    inputEl.value = st.draftBeforeHistory;
+    st.index = null;
+    st.draftBeforeHistory = "";
+  };
+
   // Chat auto-scroll:
   // - While the user is near the bottom, new content keeps the log pinned to the bottom.
   // - Once the user scrolls up, stop forcing scroll (free mode) until they scroll back near bottom.
   let stickLogToBottom = true;
   const isLogNearBottom = (): boolean => {
     const slackPx = 40;
-    return (
-      logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight <= slackPx
-    );
+    return logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight <= slackPx;
   };
 
   const positionReturnToBottomBtn = (): void => {
@@ -360,7 +592,6 @@ function main(): void {
     if (document.visibilityState === "hidden") saveComposerState();
   });
   window.addEventListener("pagehide", () => saveComposerState());
-
 
   const getSessionDisplayTitle = (
     sess: Session,
@@ -440,7 +671,9 @@ function main(): void {
     if (target instanceof HTMLElement) return target;
     if (target instanceof Element) return target as unknown as HTMLElement;
     const node = target as Node;
-    return node && "parentElement" in node ? (node.parentElement as HTMLElement | null) : null;
+    return node && "parentElement" in node
+      ? (node.parentElement as HTMLElement | null)
+      : null;
   };
 
   window.addEventListener("mousemove", (e) => {
@@ -454,36 +687,38 @@ function main(): void {
   });
   window.addEventListener("keydown", (e) => {
     if (!hoveredAutoLink) return;
-    hoveredAutoLink.classList.toggle("modHover", Boolean(e.ctrlKey || e.metaKey));
+    hoveredAutoLink.classList.toggle(
+      "modHover",
+      Boolean(e.ctrlKey || e.metaKey),
+    );
   });
   window.addEventListener("keyup", (e) => {
     if (!hoveredAutoLink) return;
-    hoveredAutoLink.classList.toggle("modHover", Boolean(e.ctrlKey || e.metaKey));
+    hoveredAutoLink.classList.toggle(
+      "modHover",
+      Boolean(e.ctrlKey || e.metaKey),
+    );
   });
   window.addEventListener("blur", () => setAutoLinkHoverState(null, false));
 
-	  let state: ChatViewState = {
-	    sessions: [],
-	    activeSession: null,
-	    unreadSessionIds: [],
-	    runningSessionIds: [],
-	    blocks: [],
-	    latestDiff: null,
-	    sending: false,
-	    statusText: null,
-	    modelState: null,
-	    approvals: [],
-	    customPrompts: [],
-	  };
+  let state: ChatViewState = {
+    sessions: [],
+    activeSession: null,
+    unreadSessionIds: [],
+    runningSessionIds: [],
+    blocks: [],
+    latestDiff: null,
+    sending: false,
+    statusText: null,
+    modelState: null,
+    approvals: [],
+    customPrompts: [],
+  };
 
   let domSessionId: string | null = null;
   const blockElByKey = new Map<string, HTMLElement>();
   let tabsSig: string | null = null;
   const tabElBySessionId = new Map<string, HTMLDivElement>();
-
-  const inputHistory: string[] = [];
-  let historyIndex: number | null = null;
-  let draftBeforeHistory = "";
   let isComposing = false;
 
   let detailsState = persistedWebviewState.detailsState ?? {};
@@ -535,14 +770,15 @@ function main(): void {
   ];
 
   function buildSlashSuggestions(): SuggestItem[] {
-    const caps = state.capabilities ?? { agents: false, cliVariant: "unknown" as const };
+    const caps = state.capabilities ?? {
+      agents: false,
+      cliVariant: "unknown" as const,
+    };
     const ui = caps.agents
       ? uiSlashSuggestions
       : uiSlashSuggestions.filter((s) => s.label !== "/agents");
     const reserved = new Set(
-      [...baseSlashSuggestions, ...ui].map((s) =>
-        s.label.replace(/^\//, ""),
-      ),
+      [...baseSlashSuggestions, ...ui].map((s) => s.label.replace(/^\//, "")),
     );
     const custom = (state.customPrompts ?? [])
       .map((p) => {
@@ -572,7 +808,8 @@ function main(): void {
 
   let suggestItems: SuggestItem[] = [];
   let suggestIndex = 0;
-  let fileSearch: null | { sessionId: string; query: string; paths: string[] } = null;
+  let fileSearch: null | { sessionId: string; query: string; paths: string[] } =
+    null;
   let fileSearchInFlight: null | { sessionId: string; query: string } = null;
   let fileSearchTimer: number | null = null;
   const FILE_SEARCH_DEBOUNCE_MS = 250;
@@ -880,10 +1117,17 @@ function main(): void {
     if (root.dataset.fileLinks === "1") return;
     root.dataset.fileLinks = "1";
 
+    // NOTE: For plain text nodes, we intentionally keep file detection conservative
+    // (require at least one "/") to avoid accidental linkification (e.g. emails).
+    // For <code> tokens, we allow basename-style paths like "README.md:10" and
+    // ".env.local:23" because they are explicitly formatted by the author.
     const fileTokenRe =
       /(?:\.?\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?/g;
     const fileTokenWithAtRe =
       /@?(?:\.?\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?/g;
+
+    const codeFileTokenRe =
+      /^(?:\.?\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)*\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?$/;
 
     const urlRe = /https?:\/\/[^\s<>()]+/gi;
 
@@ -910,8 +1154,7 @@ function main(): void {
         continue;
       }
       const rawForMatch = raw.startsWith("@") ? raw.slice(1) : raw;
-      const m = rawForMatch.match(fileTokenRe);
-      if (!m || m.length !== 1 || m[0] !== rawForMatch) continue;
+      if (!codeFileTokenRe.test(rawForMatch)) continue;
       const normalized = normalizeToken(rawForMatch);
       if (!normalized) continue;
       el.dataset.openFile = normalized;
@@ -1056,7 +1299,9 @@ function main(): void {
       suggestEl.appendChild(row);
     }
 
-    const active = suggestEl.querySelector(".suggestItem.active") as HTMLElement | null;
+    const active = suggestEl.querySelector(
+      ".suggestItem.active",
+    ) as HTMLElement | null;
     if (active) {
       // Keep the active item visible when navigating with keyboard.
       active.scrollIntoView({ block: "nearest" });
@@ -1102,10 +1347,10 @@ function main(): void {
       .map((it) => {
         const label = it.label.toLowerCase();
         const altLabel = label.startsWith("/prompts:")
-          ? ("/" + label.slice("/prompts:".length))
+          ? "/" + label.slice("/prompts:".length)
           : label.startsWith("@")
             ? label.slice(1)
-          : label;
+            : label;
         const useAlt = !q.includes("prompts:");
         const hay = useAlt ? altLabel : label;
         const idx = hay.indexOf(q);
@@ -1160,7 +1405,10 @@ function main(): void {
     if (atTok) {
       const query = atTok.token.slice(1);
       let items: SuggestItem[] = [...atSuggestions];
-      const caps = state.capabilities ?? { agents: false, cliVariant: "unknown" as const };
+      const caps = state.capabilities ?? {
+        agents: false,
+        cliVariant: "unknown" as const,
+      };
 
       if (query.length > 0 || atTok.token === "@") {
         if (caps.agents) {
@@ -1265,9 +1513,7 @@ function main(): void {
           query.length === 0 ||
           allSlash.some((s) => slashMatches(s.label, query))
         ) {
-          const ranked = query
-            ? rankByPrefix(allSlash, "/" + query)
-            : allSlash;
+          const ranked = query ? rankByPrefix(allSlash, "/" + query) : allSlash;
           const nextReplace = {
             from: slashTok.start,
             to: slashTok.end,
@@ -1363,28 +1609,60 @@ function main(): void {
     const effortOptions = (() => {
       if (!ms.model || models.length === 0)
         return ["default", "none", "minimal", "low", "medium", "high", "xhigh"];
-      const model = models.find((m) => m.model === ms.model || m.id === ms.model);
-      if (!model) return ["default", "none", "minimal", "low", "medium", "high", "xhigh"];
+      const model = models.find(
+        (m) => m.model === ms.model || m.id === ms.model,
+      );
+      if (!model)
+        return ["default", "none", "minimal", "low", "medium", "high", "xhigh"];
       const supported =
         model.supportedReasoningEfforts
           ?.map((o) => o.reasoningEffort)
-          .filter((v): v is string => typeof v === "string" && v.length > 0) ?? [];
+          .filter((v): v is string => typeof v === "string" && v.length > 0) ??
+        [];
       if (supported.length === 0)
         return ["default", "none", "minimal", "low", "medium", "high", "xhigh"];
       return ["default", ...supported];
     })();
     populateSelect(reasoningSelect, effortOptions, ms.reasoning);
 
-
     const fullStatus = String(s.statusText || "").trim();
-    const shortStatus = (() => {
-      const m = fullStatus.match(/ctx\\s+remaining=([0-9]{1,3})%/i);
-      if (m) return `ctx ${m[1]}%`;
-      return fullStatus;
-    })();
-    statusTextEl.textContent = shortStatus;
-    statusTextEl.title = fullStatus;
-    statusTextEl.style.display = shortStatus ? "" : "none";
+    const parsed = parseFooterStatus(fullStatus);
+    const candidates = buildFooterStatusCandidates(parsed);
+
+    // Constrain the footer status area so it never steals space from the selectors.
+    const gapPx = 10;
+    const availablePx = Math.max(
+      0,
+      footerBarEl.clientWidth -
+        Math.round(modelBarEl.getBoundingClientRect().width) -
+        gapPx,
+    );
+    statusTextEl.style.maxWidth = `${availablePx}px`;
+
+    hideStatusPopover();
+    statusPopoverDetails = fullStatus;
+    statusPopoverEnabled = false;
+
+    if (fullStatus && candidates.length > 0) {
+      let chosen = candidates[candidates.length - 1]!;
+      for (const c of candidates) {
+        statusTextEl.textContent = c.text;
+        statusTextEl.title = fullStatus;
+        statusTextEl.style.display = "";
+        if (fitsStatusText()) {
+          chosen = c;
+          break;
+        }
+      }
+      statusPopoverEnabled = chosen.tier >= 2;
+      statusTextEl.classList.toggle("clickable", statusPopoverEnabled);
+    } else {
+      statusTextEl.textContent = fullStatus;
+      statusTextEl.title = fullStatus;
+      statusTextEl.style.display = fullStatus ? "" : "none";
+      statusTextEl.classList.remove("clickable");
+      statusPopoverEnabled = false;
+    }
     diffBtn.disabled = !s.latestDiff;
     sendBtn.disabled = !s.activeSession;
     sendBtn.dataset.mode = s.sending ? "stop" : "send";
@@ -1404,6 +1682,7 @@ function main(): void {
     // Keep input enabled so the user can draft messages even before selecting a session.
     // Sending is still guarded by sendBtn.disabled and sendCurrentInput().
     inputEl.disabled = false;
+    updateInputPlaceholder();
 
     const sessionsList = s.sessions || [];
     const unread = new Set<string>(s.unreadSessionIds || []);
@@ -1439,7 +1718,8 @@ function main(): void {
         const dt = getSessionDisplayTitle(sess, idx);
 
         const existing = tabElBySessionId.get(sess.id);
-        const div = existing ?? (document.createElement("div") as HTMLDivElement);
+        const div =
+          existing ?? (document.createElement("div") as HTMLDivElement);
         if (!existing) {
           tabElBySessionId.set(sess.id, div);
           div.addEventListener("click", () =>
@@ -1469,6 +1749,8 @@ function main(): void {
     const nextSessionId = s.activeSession ? s.activeSession.id : null;
     if (domSessionId !== nextSessionId) {
       // Persist the previous session's draft before switching.
+      // If the user is browsing input history, exit that mode so the draft is saved.
+      exitInputHistoryNavigation(domSessionId);
       saveComposerState();
       domSessionId = nextSessionId;
       restoreComposerState(domSessionId);
@@ -1630,9 +1912,7 @@ function main(): void {
           "msg imageBlock imageBlock-" + String(block.role || "system"),
         );
         const titleEl =
-          (div.querySelector(
-            'div[data-k="title"]',
-          ) as HTMLDivElement | null) ??
+          (div.querySelector('div[data-k="title"]') as HTMLDivElement | null) ??
           (() => {
             const t = document.createElement("div");
             t.dataset.k = "title";
@@ -1640,7 +1920,8 @@ function main(): void {
             div.appendChild(t);
             return t;
           })();
-        if (titleEl.textContent !== block.title) titleEl.textContent = block.title;
+        if (titleEl.textContent !== block.title)
+          titleEl.textContent = block.title;
 
         const img =
           (div.querySelector(
@@ -1771,7 +2052,8 @@ function main(): void {
           block.durationMs === null
         ) {
           const existing = blockElByKey.get(id);
-          if (existing?.parentElement) existing.parentElement.removeChild(existing);
+          if (existing?.parentElement)
+            existing.parentElement.removeChild(existing);
           blockElByKey.delete(id);
           delete detailsState[id];
           continue;
@@ -1972,6 +2254,22 @@ function main(): void {
           continue;
         }
 
+        if (block.title === "MCP startup issues") {
+          const id = "mcpStartupIssues:" + block.id;
+          const det = ensureDetails(
+            id,
+            "notice",
+            false,
+            "Notice: " + block.title,
+            id,
+          );
+          const pre = det.querySelector(`pre[data-k="body"]`);
+          if (pre) pre.remove();
+          const mdEl = ensureMd(det, "body");
+          renderMarkdownInto(mdEl, block.text);
+          continue;
+        }
+
         const div = ensureDiv(key, "msg system");
         const pre = div.querySelector(`pre[data-k="body"]`);
         if (pre) pre.remove();
@@ -2021,7 +2319,7 @@ function main(): void {
     }
   }
 
-function sendCurrentInput(): void {
+  function sendCurrentInput(): void {
     if (!state.activeSession) return;
     if (state.sending) return;
     const text = inputEl.value;
@@ -2040,10 +2338,11 @@ function sendCurrentInput(): void {
     }
 
     // Keep a simple history for navigating with Up/Down.
-    const last = inputHistory.at(-1);
-    if (last !== trimmed) inputHistory.push(trimmed);
-    historyIndex = null;
-    draftBeforeHistory = "";
+    const hist = ensureInputHistoryState(activeComposerKey);
+    const last = hist.items.at(-1);
+    if (last !== trimmed) hist.items.push(trimmed);
+    hist.index = null;
+    hist.draftBeforeHistory = "";
 
     inputEl.value = "";
     inputEl.setSelectionRange(0, 0);
@@ -2091,7 +2390,8 @@ function sendCurrentInput(): void {
   function readFileAsDataUrl(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onerror = () => reject(reader.error ?? new Error("File read failed"));
+      reader.onerror = () =>
+        reject(reader.error ?? new Error("File read failed"));
       reader.onload = () => {
         if (typeof reader.result === "string") resolve(reader.result);
         else reject(new Error("Unexpected file read result"));
@@ -2112,7 +2412,10 @@ function sendCurrentInput(): void {
     return "png";
   }
 
-  async function attachImageFile(file: File, fallbackBaseName: string): Promise<void> {
+  async function attachImageFile(
+    file: File,
+    fallbackBaseName: string,
+  ): Promise<void> {
     const url = await readFileAsDataUrl(file);
     const ext = fileExtFromMime(file.type);
     const rawName = String((file as any).name || "").trim();
@@ -2197,7 +2500,8 @@ function sendCurrentInput(): void {
       if (!dt) return;
       const items = Array.from(dt.items || []);
       const imageItems = items.filter(
-        (it) => it.kind === "file" && String(it.type || "").startsWith("image/"),
+        (it) =>
+          it.kind === "file" && String(it.type || "").startsWith("image/"),
       );
       if (imageItems.length === 0) return;
       if (!state.activeSession) return;
@@ -2223,7 +2527,8 @@ function sendCurrentInput(): void {
   });
   inputEl.addEventListener("keyup", (e) => {
     const key = (e as KeyboardEvent).key;
-    if ((key === "ArrowDown" || key === "ArrowUp") && suggestItems.length > 0) return;
+    if ((key === "ArrowDown" || key === "ArrowUp") && suggestItems.length > 0)
+      return;
     updateSuggestions();
   });
   inputEl.addEventListener("compositionstart", () => {
@@ -2277,17 +2582,18 @@ function sendCurrentInput(): void {
       const end = inputEl.selectionEnd ?? 0;
       if (cur !== end) return;
       if (cur !== 0) return;
-      if (inputHistory.length === 0) return;
+      const hist = ensureInputHistoryState(inputHistoryKeyForActiveComposer());
+      if (hist.items.length === 0) return;
       e.preventDefault();
 
-      if (historyIndex === null) {
-        draftBeforeHistory = inputEl.value;
-        historyIndex = inputHistory.length - 1;
+      if (hist.index === null) {
+        hist.draftBeforeHistory = inputEl.value;
+        hist.index = hist.items.length - 1;
       } else {
-        historyIndex = Math.max(0, historyIndex - 1);
+        hist.index = Math.max(0, hist.index - 1);
       }
 
-      inputEl.value = inputHistory[historyIndex] || "";
+      inputEl.value = hist.items[hist.index] || "";
       const pos = inputEl.value.length;
       inputEl.setSelectionRange(pos, pos);
       autosizeInput();
@@ -2302,16 +2608,17 @@ function sendCurrentInput(): void {
       if ((e as KeyboardEvent).isComposing) return;
       if (suggestItems.length > 0) return;
 
-      if (historyIndex === null) return;
+      const hist = ensureInputHistoryState(inputHistoryKeyForActiveComposer());
+      if (hist.index === null) return;
       e.preventDefault();
 
-      historyIndex += 1;
-      if (historyIndex >= inputHistory.length) {
-        historyIndex = null;
-        inputEl.value = draftBeforeHistory;
-        draftBeforeHistory = "";
+      hist.index += 1;
+      if (hist.index >= hist.items.length) {
+        hist.index = null;
+        inputEl.value = hist.draftBeforeHistory;
+        hist.draftBeforeHistory = "";
       } else {
-        inputEl.value = inputHistory[historyIndex] || "";
+        inputEl.value = hist.items[hist.index] || "";
       }
       const pos = inputEl.value.length;
       inputEl.setSelectionRange(pos, pos);
@@ -2361,7 +2668,11 @@ function sendCurrentInput(): void {
 
       // Ignore stale results.
       const inFlight = fileSearchInFlight;
-      if (!inFlight || inFlight.sessionId !== sessionId || inFlight.query !== query)
+      if (
+        !inFlight ||
+        inFlight.sessionId !== sessionId ||
+        inFlight.query !== query
+      )
         return;
 
       fileSearch = { sessionId, query, paths };
@@ -2520,7 +2831,13 @@ function sendCurrentInput(): void {
       .map((p) => {
         const pl = p.toLowerCase();
         const depth = (p.match(/\//g) || []).length;
-        const score = q ? (pl.startsWith(q) ? 0 : pl.includes("/" + q) ? 1 : 2) : 0;
+        const score = q
+          ? pl.startsWith(q)
+            ? 0
+            : pl.includes("/" + q)
+              ? 1
+              : 2
+          : 0;
         return { p, score, depth, len: p.length };
       })
       .sort(
@@ -2579,6 +2896,18 @@ function sendCurrentInput(): void {
         return href;
       }
     })();
+
+    // If the link is explicitly a file reference, treat it as such even if it
+    // looks like it has a URI scheme (e.g. "README.md:10" would otherwise be
+    // misclassified as scheme="readme.md").
+    const explicitFileRefRe =
+      /^(?:\.{0,2}\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)*\.[A-Za-z0-9]{1,8}(?:(?::\d+(?::\d+)?)|(?:#L\d+(?:C\d+)?))?$/;
+    if (explicitFileRefRe.test(decoded)) {
+      const normalized = decoded.replace(/^\/+/, "");
+      e.preventDefault();
+      vscode.postMessage({ type: "openFile", path: normalized });
+      return;
+    }
 
     const schemeMatch = decoded.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
     const scheme = schemeMatch ? schemeMatch[1]?.toLowerCase() : null;

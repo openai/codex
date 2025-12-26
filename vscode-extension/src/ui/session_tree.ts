@@ -35,7 +35,10 @@ export class SessionTreeDataProvider
     const label = element.session.customTitle
       ? title
       : `${title} #${element.index}`;
-    const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
+    const item = new vscode.TreeItem(
+      label,
+      vscode.TreeItemCollapsibleState.None,
+    );
     // Show full thread id in description for copyability; omit short id in label.
     item.description = element.session.threadId;
     item.contextValue = "codexMine.session";

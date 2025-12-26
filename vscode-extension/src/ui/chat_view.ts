@@ -95,7 +95,10 @@ export type ChatViewState = {
     model: string;
     displayName: string;
     description: string;
-    supportedReasoningEfforts: Array<{ reasoningEffort: string; description: string }>;
+    supportedReasoningEfforts: Array<{
+      reasoningEffort: string;
+      description: string;
+    }>;
     defaultReasoningEffort: string;
     isDefault: boolean;
   }> | null;
@@ -137,7 +140,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "codexMine.chatView";
 
   private view: vscode.WebviewView | null = null;
-  private readonly fileSearchCancellationTokenBySessionId = new Map<string, string>();
+  private refreshTimer: NodeJS.Timeout | null = null;
+  private readonly fileSearchCancellationTokenBySessionId = new Map<
+    string,
+    string
+  >();
 
   public insertIntoInput(text: string): void {
     this.view?.webview.postMessage({ type: "insertText", text });
@@ -164,7 +171,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public refresh(): void {
-    this.postState();
+    // Avoid flooding the Webview with full-state updates (especially during streaming).
+    if (this.refreshTimer) return;
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null;
+      this.postState();
+    }, 16);
   }
 
   public resolveWebviewView(view: vscode.WebviewView): void {
@@ -445,7 +457,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const cancellationToken =
         this.fileSearchCancellationTokenBySessionId.get(sessionId) ??
         crypto.randomUUID();
-      this.fileSearchCancellationTokenBySessionId.set(sessionId, cancellationToken);
+      this.fileSearchCancellationTokenBySessionId.set(
+        sessionId,
+        cancellationToken,
+      );
 
       let paths: string[] = [];
       try {
@@ -455,7 +470,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         paths = [];
       }
 
-      this.view?.webview.postMessage({ type: "fileSearchResult", sessionId, query, paths });
+      this.view?.webview.postMessage({
+        type: "fileSearchResult",
+        sessionId,
+        query,
+        paths,
+      });
       return;
     }
 
@@ -469,7 +489,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      const caps = st.capabilities ?? { agents: false, cliVariant: "unknown" as const };
+      const caps = st.capabilities ?? {
+        agents: false,
+        cliVariant: "unknown" as const,
+      };
       if (!caps.agents) {
         this.view?.webview.postMessage({ type: "agentIndex", agents: [] });
         return;
@@ -495,8 +518,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const stack = anyMsg["stack"];
       const details =
         typeof message === "string"
-          ? message +
-            (typeof stack === "string" && stack ? "\n" + stack : "")
+          ? message + (typeof stack === "string" && stack ? "\n" + stack : "")
           : JSON.stringify(anyMsg, null, 2);
       console.error("[codex-mine] webview error:", details);
       return;
@@ -522,22 +544,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       `script-src ${webview.cspSource} 'nonce-${nonce}'`,
     ].join("; ");
 
-    const clientScriptUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(
-        this.context.extensionUri,
-        "dist",
-        "ui",
-        "chat_view_client.js",
-      ),
-    );
-    const markdownItUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(
-        this.context.extensionUri,
-        "resources",
-        "vendor",
-        "markdown-it.min.js",
-      ),
-    );
+	    const clientScriptUri = webview.asWebviewUri(
+	      vscode.Uri.joinPath(
+	        this.context.extensionUri,
+	        "dist",
+	        "ui",
+	        "chat_view_client.js",
+	      ),
+	    );
+	    const markdownItUri = webview.asWebviewUri(
+	      vscode.Uri.joinPath(
+	        this.context.extensionUri,
+	        "resources",
+	        "vendor",
+	        "markdown-it.min.js",
+	      ),
+	    );
+	    const cacheBusted = (uri: vscode.Uri): vscode.Uri =>
+	      uri.with({ query: `v=${nonce}` });
+	    const clientScriptUriV = cacheBusted(clientScriptUri);
+	    const markdownItUriV = cacheBusted(markdownItUri);
 
     return `<!doctype html>
 <html lang="ja">
@@ -569,12 +595,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       button.iconBtn::before { content: "➤"; font-size: 14px; opacity: 0.95; }
       button.iconBtn[data-mode="stop"]::before { content: "■"; font-size: 12px; }
       button.iconBtn.settingsBtn::before { content: "⚙"; font-size: 14px; }
-      .footerBar { border-top: 1px solid rgba(127,127,127,0.25); padding: 8px 12px 10px; display: flex; flex-wrap: nowrap; gap: 10px; align-items: center; }
+      .footerBar { border-top: 1px solid rgba(127,127,127,0.25); padding: 8px 12px 10px; display: flex; flex-wrap: nowrap; gap: 10px; align-items: center; position: relative; }
       .modelBar { display: flex; flex-wrap: nowrap; gap: 8px; align-items: center; margin: 0; min-width: 0; flex: 1 1 auto; overflow: hidden; }
       .modelSelect { background: var(--vscode-input-background); color: inherit; border: 1px solid rgba(127,127,127,0.35); border-radius: 6px; padding: 4px 6px; }
       .modelSelect.model { width: 160px; max-width: 160px; }
       .modelSelect.effort { width: 110px; max-width: 110px; }
       .footerStatus { margin-left: auto; font-size: 12px; opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .footerStatus.clickable { cursor: pointer; }
+      .statusPopover { position: absolute; right: 12px; bottom: calc(100% + 6px); max-width: min(520px, calc(100vw - 24px)); background: var(--vscode-editorHoverWidget-background, var(--vscode-input-background)); border: 1px solid rgba(127,127,127,0.35); border-radius: 10px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); padding: 8px 10px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
       .tabs { display: flex; gap: 6px; overflow: auto; padding-bottom: 2px; }
       .tab { padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(127,127,127,0.35); cursor: pointer; white-space: nowrap; user-select: none; }
       .tab.active { border-color: rgba(0, 120, 212, 0.9); }
@@ -659,6 +687,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .returnToBottomBtn:hover { opacity: 0.9; background: rgba(127,127,127,0.14); }
       .inputRow { display: flex; gap: 8px; align-items: flex-end; }
       textarea { flex: 1; resize: none; box-sizing: border-box; border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); padding: 6px 10px; background: transparent; color: inherit; font-family: var(--cm-editor-font-family); font-size: var(--cm-editor-font-size); font-weight: var(--cm-editor-font-weight); line-height: 1.2; overflow-y: hidden; min-height: 30px; max-height: 200px; }
+      textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .suggest { position: absolute; left: 12px; right: 12px; bottom: calc(100% + 8px); border: 1px solid var(--vscode-editorSuggestWidget-border, rgba(127,127,127,0.35)); border-radius: 10px; background: var(--vscode-editorSuggestWidget-background, rgba(30,30,30,0.95)); color: var(--vscode-editorSuggestWidget-foreground, inherit); max-height: 160px; overflow: auto; display: none; z-index: 20; box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
       button.iconBtn.attachBtn::before { content: "📎"; font-size: 14px; }
       .attachments { display: none; flex-wrap: wrap; gap: 8px; }
@@ -704,22 +733,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <button id="returnToBottom" class="returnToBottomBtn" title="Scroll to bottom">Return to Bottom</button>
       <div id="inputRow" class="inputRow">
         <input id="imageInput" type="file" accept="image/*" multiple style="display:none" />
-        <button id="attach" class="iconBtn attachBtn" aria-label="Attach image" title="Attach image"></button>
-        <textarea id="input" rows="1" placeholder="Type a message (Enter to send / Shift+Enter for newline)"></textarea>
-        <button id="send" class="iconBtn" data-mode="send" aria-label="Send" title="Send (Esc: stop)"></button>
-      </div>
-      <div id="suggest" class="suggest"></div>
-    </div>
-	    <div class="footerBar">
-	      <div id="modelBar" class="modelBar"></div>
-	      <div id="statusText" class="footerStatus" style="display:none"></div>
+	        <button id="attach" class="iconBtn attachBtn" aria-label="Attach image" title="Attach image"></button>
+	        <textarea id="input" rows="1" placeholder="Type a message"></textarea>
+	        <button id="send" class="iconBtn" data-mode="send" aria-label="Send" title="Send (Esc: stop)"></button>
+	      </div>
+	      <div id="suggest" class="suggest"></div>
 	    </div>
-		    <script nonce="${nonce}" src="${markdownItUri}"></script>
-		    <script nonce="${nonce}" src="${clientScriptUri}"></script>
-		  </body>
-		</html>`;
-  }
-}
+		    <div class="footerBar">
+		      <div id="modelBar" class="modelBar"></div>
+		      <div id="statusText" class="footerStatus" style="display:none"></div>
+          <div id="statusPopover" class="statusPopover" style="display:none"></div>
+		    </div>
+			    <script nonce="${nonce}" src="${markdownItUriV}"></script>
+			    <script nonce="${nonce}" src="${clientScriptUriV}"></script>
+			  </body>
+			</html>`;
+	  }
+	}
 
 function normalizeFileSearchQuery(query: string): string | null {
   const q = query.trim().replace(/\\/g, "/");

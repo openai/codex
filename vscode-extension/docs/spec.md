@@ -65,7 +65,7 @@ The extension contributes a **Codex UI** activity bar container with:
 
 ### 5.1 Input history
 
-- Sent messages are stored in an in-memory history.
+- Sent messages are stored in an in-memory history (per session).
 - Up/Down arrow cycles through the history when the cursor is at the start/end of the input (implementation detail).
 
 ## 6. Slash commands
@@ -141,11 +141,15 @@ The webview provides in-input suggestions for:
   - External links open via `openExternal`.
   - Workspace-relative links (e.g. `README.md`, `./docs/spec.md`, `/README.md`) open as files.
   - `#L10` / `#L10C5` fragments jump to the corresponding position.
+  - `:10` / `:10:5` suffixes (line / line:column) are also supported.
 
 ### 9.2 Ctrl/Cmd-click file links
 
 - A file-like string rendered as a link triggers `openFile`.
 - The extension resolves workspace-relative paths against the active session workspace root.
+- Manual check:
+  - Markdown link: `[README.md:10](README.md:10)` opens `README.md` at line 10.
+  - Code token: `` `.env.local:23` `` opens `.env.local` at line 23.
 
 ## 10. Persistence
 
