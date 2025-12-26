@@ -36,10 +36,12 @@ mod message_processor;
 mod models;
 mod outgoing_message;
 
-/// Size of the bounded channels used to communicate between tasks. The value
-/// is a balance between throughput and memory usage – 128 messages should be
-/// plenty for an interactive CLI.
-const CHANNEL_CAPACITY: usize = 128;
+/// Size of the bounded channels used to communicate between tasks.
+///
+/// VS Code / webview frontends can emit a large volume of streaming delta
+/// notifications; if this queue is too small, the app-server can become
+/// backpressured and stop processing control messages like interrupts.
+const CHANNEL_CAPACITY: usize = 4096;
 
 pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,

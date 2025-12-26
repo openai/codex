@@ -3164,12 +3164,20 @@ impl CodexMessageProcessor {
                             conversation_id.to_string().into(),
                         );
 
-                        outgoing_for_task
-                            .send_notification(OutgoingNotification {
-                                method,
-                                params: Some(params.into()),
-                            })
-                            .await;
+                        // codex/event/* is a legacy/debug channel; it is not required for the
+                        // VS Code UI (which consumes v2 notifications from bespoke handling).
+                        //
+                        // To keep interrupts responsive under heavy streaming load, enqueue
+                        // these best-effort and drop on backpressure.
+                        let ok = outgoing_for_task.try_send_notification(OutgoingNotification {
+                            method,
+                            params: Some(params.into()),
+                        });
+                        if !ok {
+                            tracing::debug!(
+                                "dropping legacy codex/event notification due to backpressure"
+                            );
+                        }
 
                         apply_bespoke_event_handling(
                             event.clone(),

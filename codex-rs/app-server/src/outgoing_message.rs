@@ -107,12 +107,14 @@ impl OutgoingMessageSender {
         }
     }
 
-    /// All notifications should be migrated to [`ServerNotification`] and
-    /// [`OutgoingMessage::Notification`] should be removed.
-    pub(crate) async fn send_notification(&self, notification: OutgoingNotification) {
+    /// Best-effort variant for low-priority notifications.
+    ///
+    /// Returns `true` if queued; `false` if the outbound queue was full or closed.
+    pub(crate) fn try_send_notification(&self, notification: OutgoingNotification) -> bool {
         let outgoing_message = OutgoingMessage::Notification(notification);
-        if let Err(err) = self.sender.send(outgoing_message).await {
-            warn!("failed to send notification to client: {err:?}");
+        match self.sender.try_send(outgoing_message) {
+            Ok(()) => true,
+            Err(_err) => false,
         }
     }
 
