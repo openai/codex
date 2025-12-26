@@ -215,6 +215,7 @@ function main(): void {
 
   let statusPopoverOpen = false;
   let statusPopoverDetails = "";
+  let statusHoverDetails = "";
   let statusPopoverEnabled = false;
 
   const hideStatusPopover = (): void => {
@@ -239,6 +240,16 @@ function main(): void {
     e.preventDefault();
     e.stopPropagation();
     toggleStatusPopover();
+  });
+  statusTextEl.addEventListener("mouseenter", () => {
+    if (statusPopoverOpen) return;
+    if (!statusHoverDetails) return;
+    statusPopoverEl.textContent = statusHoverDetails;
+    statusPopoverEl.style.display = "";
+  });
+  statusTextEl.addEventListener("mouseleave", () => {
+    if (statusPopoverOpen) return;
+    hideStatusPopover();
   });
   document.addEventListener("click", () => hideStatusPopover());
   document.addEventListener("keydown", (e) => {
@@ -1643,6 +1654,7 @@ function main(): void {
 
     hideStatusPopover();
     statusPopoverDetails = fullStatus;
+    statusHoverDetails = statusTooltip !== fullStatus ? statusTooltip : "";
     statusPopoverEnabled = false;
 
     if (fullStatus && candidates.length > 0) {
