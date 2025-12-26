@@ -95,6 +95,7 @@ const globalRuntime: Pick<SessionRuntime, "blocks" | "blockIndexById"> = {
 };
 let globalStatusText: string | null = null;
 let globalRateLimitStatusText: string | null = null;
+let globalRateLimitStatusTooltip: string | null = null;
 let customPrompts: CustomPromptSummary[] = [];
 let sessionModelState: {
   model: string | null;
@@ -1974,6 +1975,35 @@ function formatResetsAt(unixSeconds: number): string {
   return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${hhmm}`;
 }
 
+function formatDurationJa(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const totalHours = Math.floor(totalMinutes / 60);
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  const minutes = totalMinutes % 60;
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}日`);
+  if (hours > 0 || days > 0) parts.push(`${hours}時間`);
+  parts.push(`${minutes}分`);
+  return parts.join("");
+}
+
+function formatResetsAtTooltip(unixSeconds: number): string {
+  const d = new Date(unixSeconds * 1000);
+  const abs = d.toLocaleString(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const deltaMs = d.getTime() - Date.now();
+  if (!Number.isFinite(deltaMs)) return abs;
+  if (deltaMs >= 0) return `${abs}（あと${formatDurationJa(deltaMs)}）`;
+  return `${abs}（${formatDurationJa(-deltaMs)}前）`;
+}
+
 function resolveCodexHome(): string {
   const env = process.env["CODEX_HOME"];
   if (env && env.trim()) return env.trim();
@@ -2283,6 +2313,7 @@ function buildChatState(): ChatViewState {
       statusText: [globalStatusText, globalRateLimitStatusText]
         .filter(Boolean)
         .join(" • "),
+      statusTooltip: globalRateLimitStatusTooltip,
       modelState: getSessionModelState(),
       models: null,
       approvals: [],
@@ -2310,6 +2341,7 @@ function buildChatState(): ChatViewState {
       statusText: [globalStatusText, globalRateLimitStatusText]
         .filter(Boolean)
         .join(" • "),
+      statusTooltip: globalRateLimitStatusTooltip,
       modelState: getSessionModelState(),
       approvals: [],
       customPrompts: promptSummaries,
@@ -2344,6 +2376,7 @@ function buildChatState(): ChatViewState {
     statusText:
       statusText ??
       [globalStatusText, globalRateLimitStatusText].filter(Boolean).join(" • "),
+    statusTooltip: globalRateLimitStatusTooltip,
     modelState: getSessionModelState(),
     models: getModelOptionsForSession(activeRaw),
     approvals: [...rt.pendingApprovals.entries()].map(([requestKey, v]) => ({
@@ -3236,17 +3269,24 @@ function applyGlobalNotification(n: AnyServerNotification): void {
       const p = rateLimits.primary;
       const s = rateLimits.secondary;
       const parts: string[] = [];
+      const tooltipLines: string[] = [];
       if (p) {
         const mins = p.windowDurationMins ?? null;
         const label = mins ? rateLimitShortLabelFromMinutes(mins) : "primary";
         parts.push(`${label}:${formatPercent2(p.usedPercent)}%`);
+        const reset = p.resetsAt ? formatResetsAtTooltip(p.resetsAt) : "不明";
+        tooltipLines.push(`${label} リセット: ${reset}`);
       }
       if (s) {
         const mins = s.windowDurationMins ?? null;
         const label = mins ? rateLimitShortLabelFromMinutes(mins) : "secondary";
         parts.push(`${label}:${formatPercent2(s.usedPercent)}%`);
+        const reset = s.resetsAt ? formatResetsAtTooltip(s.resetsAt) : "不明";
+        tooltipLines.push(`${label} リセット: ${reset}`);
       }
       globalRateLimitStatusText = parts.length > 0 ? parts.join(" ") : null;
+      globalRateLimitStatusTooltip =
+        tooltipLines.length > 0 ? tooltipLines.join("\n") : null;
       chatView?.refresh();
       return;
     }

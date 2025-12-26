@@ -85,6 +85,7 @@ export type ChatViewState = {
   latestDiff: string | null;
   sending: boolean;
   statusText?: string | null;
+  statusTooltip?: string | null;
   modelState?: {
     model: string | null;
     provider: string | null;

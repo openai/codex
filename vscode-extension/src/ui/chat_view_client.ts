@@ -97,6 +97,7 @@ type ChatViewState = {
   latestDiff: string | null;
   sending: boolean;
   statusText?: string | null;
+  statusTooltip?: string | null;
   modelState?: ModelState | null;
   models?: Array<{
     id: string;
@@ -1626,6 +1627,7 @@ function main(): void {
     populateSelect(reasoningSelect, effortOptions, ms.reasoning);
 
     const fullStatus = String(s.statusText || "").trim();
+    const statusTooltip = String(s.statusTooltip || fullStatus).trim();
     const parsed = parseFooterStatus(fullStatus);
     const candidates = buildFooterStatusCandidates(parsed);
 
@@ -1647,7 +1649,7 @@ function main(): void {
       let chosen = candidates[candidates.length - 1]!;
       for (const c of candidates) {
         statusTextEl.textContent = c.text;
-        statusTextEl.title = fullStatus;
+        statusTextEl.title = statusTooltip;
         statusTextEl.style.display = "";
         if (fitsStatusText()) {
           chosen = c;
@@ -1658,7 +1660,7 @@ function main(): void {
       statusTextEl.classList.toggle("clickable", statusPopoverEnabled);
     } else {
       statusTextEl.textContent = fullStatus;
-      statusTextEl.title = fullStatus;
+      statusTextEl.title = statusTooltip;
       statusTextEl.style.display = fullStatus ? "" : "none";
       statusTextEl.classList.remove("clickable");
       statusPopoverEnabled = false;
