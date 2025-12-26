@@ -542,9 +542,9 @@ async fn run_ratatui_app(
         }
     };
 
-    if use_alt_screen {
-        let _ = tui.enter_alt_screen();
-    }
+    // Set flag on Tui so all enter_alt_screen() calls respect the setting
+    tui.set_alt_screen_enabled(use_alt_screen);
+    let _ = tui.enter_alt_screen();
 
     let app_result = App::run(
         &mut tui,
@@ -559,9 +559,7 @@ async fn run_ratatui_app(
     )
     .await;
 
-    if use_alt_screen {
-        let _ = tui.leave_alt_screen();
-    }
+    let _ = tui.leave_alt_screen();
     restore();
     if let Ok(exit_info) = &app_result {
         let mut stdout = std::io::stdout();

@@ -22,6 +22,8 @@ use codex_core::config::resolve_oss_provider;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
+use codex_core::terminal::Multiplexer;
+use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs::OpenOptions;
@@ -493,7 +495,27 @@ async fn run_ratatui_app(
         resume_picker::ResumeSelection::StartFresh
     };
 
-    let Cli { prompt, images, .. } = cli;
+    let Cli {
+        prompt,
+        images,
+        no_alt_screen,
+        ..
+    } = cli;
+
+    // Determine whether to use alternate screen based on CLI flag and config.
+    let use_alt_screen = if no_alt_screen {
+        false
+    } else {
+        match config.tui_alternate_screen {
+            AltScreenMode::Always => true,
+            AltScreenMode::Never => false,
+            AltScreenMode::Auto => {
+                let terminal_info = codex_core::terminal::terminal_info();
+                !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
+            }
+        }
+    };
+    tui.set_alt_screen_enabled(use_alt_screen);
 
     let app_result = App::run(
         &mut tui,
