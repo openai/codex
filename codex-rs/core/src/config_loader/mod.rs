@@ -57,10 +57,8 @@ const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 ///
 /// - admin:    managed preferences (*)
 /// - system    `/etc/codex/config.toml`
-/// - user      `${CODEX_HOME}/config.toml`
-/// - cwd       `${PWD}/config.toml`
-/// - tree      parent directories up to root looking for `./.codex/config.toml`
-/// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml`
+/// - user      `${CODEX_HOME}/config.toml` (**only when no cwd-local config exists**)
+/// - cwd-local `./.codex/config.toml` (in the session working directory)
 /// - runtime   e.g., --config flags, model selector in UI
 ///
 /// (*) Only available on macOS via managed device profiles.
