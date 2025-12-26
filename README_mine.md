@@ -8,6 +8,22 @@
 
 - `./scripts/install-codex-mine.sh`
 
+## バイナリ配布（GitHub Releases）
+
+macOS/Linux 向けに GitHub Releases に prebuilt バイナリ（`codex-<target>.tar.gz`）を載せ、`install.sh` でインストールする想定。
+
+- インストール（最新リリース）:
+  - `curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh | sh`
+- バージョン指定（タグ）:
+  - `CODEX_MINE_VERSION=mine-vX.Y.Z sh install.sh`
+
+インストール先はデフォルトで次になる:
+
+- 実体: `~/.local/codex-mine/bin/codex`
+- ラッパー: `~/.local/bin/codex-mine`
+
+ラッパーは `--config check_for_update_on_startup=false` を常に付けて起動する（本家 `codex` の挙動に寄せる）。
+
 ## 起動コマンド
 
 - npm 版: `codex`

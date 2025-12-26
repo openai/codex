@@ -1,0 +1,113 @@
+name: mine-release
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - "mine-v*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+        shell: bash
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@1.90
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ${{ github.workspace }}/codex-rs/target/
+          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-mine-release-${{ hashFiles('**/Cargo.lock') }}
+
+      - if: ${{ contains(matrix.target, 'linux-musl') }}
+        name: Install musl build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools pkg-config
+
+      - name: Cargo build (codex)
+        run: |
+          cargo build --target "${{ matrix.target }}" --release --bin codex
+
+      - name: Stage artifact
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          release_dir="target/${target}/release"
+          dist_root="${GITHUB_WORKSPACE}/dist/${target}"
+          mkdir -p "${dist_root}"
+          cp "${release_dir}/codex" "${dist_root}/codex"
+          tar -czf "${GITHUB_WORKSPACE}/dist/codex-${target}.tar.gz" -C "${dist_root}" codex
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mine-${{ matrix.target }}
+          path: |
+            dist/codex-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find dist-artifacts -type f -name 'codex-*.tar.gz' -print -exec cp {} dist/ \;
+          ls -la dist
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum codex-*.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/codex-*.tar.gz
+            dist/checksums.txt
