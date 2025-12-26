@@ -13,7 +13,7 @@ set -eu
 #   CODEX_MINE_ROOT          (default: ~/.local/codex-mine)
 #   CODEX_MINE_BIN_DIR       (default: ~/.local/bin)
 
-repo="${CODEX_MINE_GITHUB_REPO:-inoueryo/codex-mine}"
+repo="${CODEX_MINE_GITHUB_REPO:-harukary/codex-mine}"
 version="${CODEX_MINE_VERSION:-latest}"
 
 install_root="${CODEX_MINE_ROOT:-$HOME/.local/codex-mine}"
