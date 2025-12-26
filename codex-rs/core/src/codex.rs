@@ -2842,9 +2842,13 @@ mod tests {
         let out_path_str = out_path.to_string_lossy().to_string();
         let command = if cfg!(windows) {
             vec![
-                "cmd".to_string(),
-                "/C".to_string(),
-                format!("more >> \"{out_path_str}\""),
+                "powershell".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                format!(
+                    "$input | Out-File -FilePath '{}' -Append -Encoding utf8",
+                    out_path_str.replace('\'', "''")
+                ),
             ]
         } else {
             vec![
