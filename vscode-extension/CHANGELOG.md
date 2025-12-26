@@ -6,6 +6,7 @@
 
 - Interrupt: 送信直後など turnId 未確定のタイミングでも Stop/Interrupt が取りこぼされないように修正（turn/started 到達後に割り込みを送る）
 - Backend: backend停止時の streamState クリーンアップ不具合を修正（スレッド単位で削除）
+
 ## 0.1.12
 
 - 拡張アイコンを追加（`resources/icon.png`）
