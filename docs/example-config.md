@@ -49,9 +49,6 @@ model_verbosity = "medium"
 # Force-enable reasoning summaries for current model (default: false)
 model_supports_reasoning_summaries = false
 
-# Force reasoning summary format: none | experimental (default: none)
-model_reasoning_summary_format = "none"
-
 ################################################################################
 # Instruction Overrides
 ################################################################################

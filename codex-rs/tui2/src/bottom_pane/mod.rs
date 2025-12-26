@@ -266,12 +266,13 @@ impl BottomPane {
         self.composer.current_text()
     }
 
-    /// Update the animated header shown to the left of the brackets in the
-    /// status indicator (defaults to "Working"). No-ops if the status
-    /// indicator is not active.
-    pub(crate) fn update_status_header(&mut self, header: String) {
+    /// Update the status indicator header (defaults to "Working") and details below it.
+    ///
+    /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
+    pub(crate) fn update_status(&mut self, header: String, details: Option<String>) {
         if let Some(status) = self.status.as_mut() {
             status.update_header(header);
+            status.update_details(details);
             self.request_redraw();
         }
     }
