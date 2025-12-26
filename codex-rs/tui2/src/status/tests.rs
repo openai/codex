@@ -7,8 +7,8 @@ use chrono::Utc;
 use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
-use codex_core::openai_models::model_family::ModelFamily;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::models_manager::manager::ModelsManager;
+use codex_core::models_manager::model_family::ModelFamily;
 use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::RateLimitWindow;
@@ -90,12 +90,15 @@ async fn status_snapshot_includes_reasoning_details() {
     config.model_provider_id = "openai".to_string();
     config.model_reasoning_effort = Some(ReasoningEffort::High);
     config.model_reasoning_summary = ReasoningSummary::Detailed;
-    config.sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: Vec::new(),
-        network_access: false,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
-    };
+    config
+        .sandbox_policy
+        .set(SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        })
+        .expect("set sandbox policy");
 
     config.cwd = PathBuf::from("/workspace/tests");
 

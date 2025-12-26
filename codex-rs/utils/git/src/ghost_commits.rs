@@ -469,15 +469,18 @@ fn restore_to_commit_inner(
     repo_prefix: Option<&Path>,
     commit_id: &str,
 ) -> Result<(), GitToolingError> {
-    // `git restore` resets both the index and working tree to the snapshot commit.
+    // `git restore` resets the working tree to the snapshot commit.
+    // We intentionally avoid --staged to preserve user's staged changes.
+    // While this might leave some Codex-staged changes in the index (if Codex ran `git add`),
+    // it prevents data loss for users who use the index as a save point.
+    // Data safety > cleanliness.
     // Example:
-    //   git restore --source <commit> --worktree --staged -- <prefix>
+    //   git restore --source <commit> --worktree -- <prefix>
     let mut restore_args = vec![
         OsString::from("restore"),
         OsString::from("--source"),
         OsString::from(commit_id),
         OsString::from("--worktree"),
-        OsString::from("--staged"),
         OsString::from("--"),
     ];
     if let Some(prefix) = repo_prefix {
