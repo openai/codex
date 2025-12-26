@@ -71,6 +71,7 @@ type SessionRuntime = {
   sending: boolean;
   streamingAssistantItemIds: Set<string>;
   activeTurnId: string | null;
+  pendingInterrupt: boolean;
   lastTurnStartedAtMs: number | null;
   lastTurnCompletedAtMs: number | null;
   v2NotificationsSeen: boolean;
@@ -468,8 +469,19 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!session) return;
 
       const rt = ensureRuntime(session.id);
-      const turnId = rt.activeTurnId;
-      if (!turnId) return;
+      const turnId =
+        rt.activeTurnId ?? backendManager.getActiveTurnId(session.threadId);
+      if (!turnId) {
+        if (rt.sending) {
+          rt.pendingInterrupt = true;
+          output.appendLine(
+            "[turn] Interrupt requested before turnId is known; will interrupt on turn/started.",
+          );
+          chatView?.refresh();
+          schedulePersistRuntime(session.id);
+        }
+        return;
+      }
 
       try {
         await backendManager.interruptTurn(session, turnId);
@@ -1389,6 +1401,7 @@ async function sendUserInput(
   if (!backendManager) throw new Error("backendManager is not initialized");
   const rt = ensureRuntime(session.id);
   rt.sending = true;
+  rt.pendingInterrupt = false;
   const trimmed = text.trim();
   if (trimmed) {
     upsertBlock(session.id, { id: newLocalId("user"), type: "user", text });
@@ -1420,6 +1433,7 @@ async function sendUserInput(
     );
   } catch (err) {
     rt.sending = false;
+    rt.pendingInterrupt = false;
     upsertBlock(session.id, {
       id: newLocalId("error"),
       type: "error",
@@ -2182,6 +2196,7 @@ function ensureRuntime(sessionId: string): SessionRuntime {
     sending: false,
     streamingAssistantItemIds: new Set(),
     activeTurnId: null,
+    pendingInterrupt: false,
     lastTurnStartedAtMs: null,
     lastTurnCompletedAtMs: null,
     v2NotificationsSeen: false,
@@ -2401,12 +2416,39 @@ function applyServerNotification(
       rt.lastTurnStartedAtMs = Date.now();
       rt.lastTurnCompletedAtMs = null;
       rt.activeTurnId = String((n as any).params?.turn?.id ?? "") || null;
+      if (rt.pendingInterrupt && rt.activeTurnId && backendManager && sessions) {
+        rt.pendingInterrupt = false;
+        const session = sessions.getById(sessionId);
+        if (session) {
+          const turnId = rt.activeTurnId;
+          outputChannel?.appendLine(
+            `[turn] Sending queued interrupt: turnId=${turnId}`,
+          );
+          void backendManager.interruptTurn(session, turnId).catch((err) => {
+            outputChannel?.appendLine(
+              `[turn] Failed to interrupt (queued): ${String(err)}`,
+            );
+            upsertBlock(sessionId, {
+              id: newLocalId("error"),
+              type: "error",
+              title: "Interrupt failed",
+              text: String(err),
+            });
+            chatView?.refresh();
+          });
+        } else {
+          outputChannel?.appendLine(
+            `[turn] Queued interrupt dropped: session not found (sessionId=${sessionId})`,
+          );
+        }
+      }
       chatView?.refresh();
       return;
     case "turn/completed":
       rt.sending = false;
       rt.lastTurnCompletedAtMs = Date.now();
       rt.activeTurnId = null;
+      rt.pendingInterrupt = false;
       for (const id of rt.streamingAssistantItemIds) {
         const idx = rt.blockIndexById.get(id);
         if (idx === undefined) continue;

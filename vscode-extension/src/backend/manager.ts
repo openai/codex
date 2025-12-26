@@ -87,8 +87,15 @@ export class BackendManager implements vscode.Disposable {
       this.modelsByBackendKey.delete(key);
       this.itemsByThreadId.clear();
       this.latestDiffByThreadId.clear();
-      this.streamState.delete(key);
+      for (const s of this.sessions.listAll()) {
+        if (s.backendKey !== key) continue;
+        this.streamState.delete(s.threadId);
+      }
     }
+  }
+
+  public getActiveTurnId(threadId: string): string | null {
+    return this.streamState.get(threadId)?.activeTurnId ?? null;
   }
 
   public async restartForWorkspaceFolder(
