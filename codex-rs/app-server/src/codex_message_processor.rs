@@ -225,7 +225,7 @@ pub(crate) struct CodexMessageProcessor {
     feedback: CodexFeedback,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ApiVersion {
     V1,
     V2,
@@ -3008,15 +3008,41 @@ impl CodexMessageProcessor {
             };
 
         // Record the pending interrupt so we can reply when TurnAborted arrives.
+        let request_id_for_pending = request_id.clone();
         {
             let mut map = self.pending_interrupts.lock().await;
             map.entry(conversation_id)
                 .or_default()
-                .push((request_id, ApiVersion::V2));
+                .push((request_id_for_pending.clone(), ApiVersion::V2));
         }
 
         // Submit the interrupt; we'll respond upon TurnAborted.
-        let _ = conversation.submit(Op::Interrupt).await;
+        //
+        // If submitting fails, we must surface the error and remove the pending
+        // entry to avoid hanging this JSON-RPC request forever.
+        if let Err(err) = conversation.submit(Op::Interrupt).await {
+            {
+                let mut map = self.pending_interrupts.lock().await;
+                if let Some(pending) = map.get_mut(&conversation_id) {
+                    pending.retain(|(rid, ver)| {
+                        *rid != request_id_for_pending || *ver != ApiVersion::V2
+                    });
+                    if pending.is_empty() {
+                        map.remove(&conversation_id);
+                    }
+                }
+            }
+            self.outgoing
+                .send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to submit interrupt: {err}"),
+                        data: None,
+                    },
+                )
+                .await;
+        }
     }
 
     async fn add_conversation_listener(
