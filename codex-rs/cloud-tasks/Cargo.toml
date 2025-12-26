@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
@@ -25,21 +26,17 @@ codex-core = { path = "../core" }
 codex-login = { path = "../login" }
 codex-tui = { path = "../tui" }
 crossterm = { workspace = true, features = ["event-stream"] }
+owo-colors = { workspace = true, features = ["supports-colors"] }
 ratatui = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+supports-color = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tokio-stream = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 unicode-width = { workspace = true }
-owo-colors = { workspace = true, features = ["supports-colors"] }
-supports-color = { workspace = true }
-
-[dependencies.async-trait]
-workspace = true
 
 [dev-dependencies]
-async-trait = { workspace = true }
 pretty_assertions = { workspace = true }
