@@ -22,7 +22,6 @@ use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
 use std::io;
 use std::path::Path;
-use std::path::PathBuf;
 use toml::Value as TomlValue;
 
 pub use config_requirements::ConfigRequirements;
@@ -40,6 +39,7 @@ const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/codex/requirements.toml"
 /// as skills/ and rules/ will also be honored.
 pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
 
+#[allow(dead_code)]
 const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 
 /// To build up the set of admin-enforced constraints, we build up from multiple
@@ -385,6 +385,7 @@ async fn load_requirements_from_legacy_scheme(
 ///   empty array, which indicates that root detection should be disabled).
 /// - Returns an error if `project_root_markers` is specified but is not an
 ///   array of strings.
+#[allow(dead_code)]
 fn project_root_markers_from_config(config: &TomlValue) -> io::Result<Option<Vec<String>>> {
     let Some(table) = config.as_table() else {
         return Ok(None);
@@ -414,6 +415,7 @@ fn project_root_markers_from_config(config: &TomlValue) -> io::Result<Option<Vec
     Ok(Some(markers))
 }
 
+#[allow(dead_code)]
 fn default_project_root_markers() -> Vec<String> {
     DEFAULT_PROJECT_ROOT_MARKERS
         .iter()
@@ -481,6 +483,7 @@ fn copy_shape_from_original(original: &TomlValue, resolved: &TomlValue) -> TomlV
     }
 }
 
+#[allow(dead_code)]
 async fn find_project_root(
     cwd: &AbsolutePathBuf,
     project_root_markers: &[String],
@@ -505,6 +508,7 @@ async fn find_project_root(
 /// `project_root`, inclusive. The list is ordered in _increasing_ precdence,
 /// starting from folders closest to `project_root` (which is the lowest
 /// precedence) to those closest to `cwd` (which is the highest precedence).
+#[allow(dead_code)]
 async fn load_project_layers(
     cwd: &AbsolutePathBuf,
     project_root: &AbsolutePathBuf,

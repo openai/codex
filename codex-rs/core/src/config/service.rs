@@ -561,9 +561,6 @@ fn override_message(layer: &ConfigLayerSource) -> String {
             dot_codex_folder.display(),
         ),
         ConfigLayerSource::SessionFlags => "Overridden by session flags".to_string(),
-        ConfigLayerSource::Tree { file } => {
-            format!("Overridden by repo-local config: {}", file.display())
-        }
         ConfigLayerSource::User { file } => {
             format!("Overridden by user config: {}", file.display())
         }

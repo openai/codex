@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::AuthManager;
 use crate::RolloutRecorder;
-use crate::hooks::HookRunner;
 use crate::exec_policy::ExecPolicyManager;
+use crate::hooks::HookRunner;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
 use crate::skills::SkillsManager;

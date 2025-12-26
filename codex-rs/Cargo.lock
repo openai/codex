@@ -1872,7 +1872,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-cargo-bin"
-version = "0.0.0"
+version = "0.76.0-alpha.8-mine.0"
 dependencies = [
  "assert_cmd",
  "thiserror 2.0.17",

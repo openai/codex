@@ -3861,7 +3861,7 @@ include_output = true
     }
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct HookConfig {
     #[serde(default)]
     pub id: Option<String>,
