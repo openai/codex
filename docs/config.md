@@ -936,6 +936,18 @@ scroll_wheel_like_max_duration_ms = 200
 
 # Invert scroll direction for mouse wheel/trackpad. TUI2 only.
 scroll_invert = false
+
+# Alternate screen mode. TUI2 only.
+# Controls whether the TUI uses the terminal's alternate screen buffer.
+# Valid values: "auto" (default), "always", "never"
+#
+# - "auto": Disable alternate screen in Zellij (which follows xterm spec and
+#   doesn't support scrollback in alternate screen), enable elsewhere.
+# - "always": Always use alternate screen (original behavior).
+# - "never": Never use alternate screen (inline mode, preserves scrollback).
+#
+# You can also use the --no-alt-screen CLI flag to force "never" mode.
+alternate_screen = "auto"
 ```
 
 > [!NOTE]
@@ -1053,6 +1065,7 @@ Valid values:
 | `tui.scroll_wheel_tick_detect_max_ms`            | number                                                            | Auto-mode threshold (ms) for promoting a stream to wheel-like behavior (default: 12).                                           |
 | `tui.scroll_wheel_like_max_duration_ms`          | number                                                            | Auto-mode fallback duration (ms) used for 1-event-per-tick terminals (default: 200).                                            |
 | `tui.scroll_invert`                              | boolean                                                           | Invert mouse scroll direction in TUI2 (default: false).                                                                         |
+| `tui.alternate_screen`                           | `auto` \| `always` \| `never`                                     | Alternate screen mode in TUI2 (default: `auto`). Use `never` or `--no-alt-screen` for Zellij scrollback.                        |
 | `hide_agent_reasoning`                           | boolean                                                           | Hide model reasoning events.                                                                                                    |
 | `check_for_update_on_startup`                    | boolean                                                           | Check for Codex updates on startup (default: true). Set to `false` only if updates are centrally managed.                       |
 | `show_raw_agent_reasoning`                       | boolean                                                           | Show raw reasoning (when available).                                                                                            |
