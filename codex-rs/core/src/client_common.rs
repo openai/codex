@@ -1,6 +1,6 @@
 use crate::client_common::tools::ToolSpec;
 use crate::error::Result;
-use crate::openai_models::model_family::ModelFamily;
+use crate::models_manager::model_family::ModelFamily;
 pub use codex_api::common::ResponseEvent;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::models::ResponseItem;
@@ -259,7 +259,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::config::test_config;
-    use crate::openai_models::models_manager::ModelsManager;
+    use crate::models_manager::manager::ModelsManager;
 
     use super::*;
 

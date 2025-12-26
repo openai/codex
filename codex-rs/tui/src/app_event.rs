@@ -184,6 +184,9 @@ pub(crate) enum AppEvent {
     OpenFeedbackConsent {
         category: FeedbackCategory,
     },
+
+    /// Launch the external editor after a normal draw has completed.
+    LaunchExternalEditor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

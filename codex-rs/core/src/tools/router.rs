@@ -265,6 +265,23 @@ mod tests {
         let tmp = TempDir::new().expect("create temp dir");
         let out_path = tmp.path().join("hook_tool_call.jsonl");
         let out_path_str = out_path.to_string_lossy().to_string();
+        let command = if cfg!(windows) {
+            vec![
+                "powershell".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                format!(
+                    "$input | Out-File -FilePath '{}' -Append -Encoding utf8",
+                    out_path_str.replace('\'', "''")
+                ),
+            ]
+        } else {
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!("cat >> \"{out_path_str}\""),
+            ]
+        };
 
         Arc::get_mut(&mut session)
             .expect("unique arc")
@@ -273,11 +290,7 @@ mod tests {
             id: Some("test-tool-call".to_string()),
             when: vec!["tool.call.end".to_string()],
             matcher: Some("dummy_tool".to_string()),
-            command: vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                format!("cat >> \"{out_path_str}\""),
-            ],
+            command,
             timeout_ms: Some(2_000),
             include_output: false,
             include_patch_contents: false,

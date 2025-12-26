@@ -10,14 +10,13 @@ use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::features::Feature;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::openai_models::ClientVersion;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -25,7 +24,6 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
-use codex_protocol::openai_models::ReasoningSummaryFormat;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
@@ -73,7 +71,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         }],
         shell_type: ConfigShellToolType::UnifiedExec,
         visibility: ModelVisibility::List,
-        minimal_client_version: ClientVersion(0, 1, 0),
         supported_in_api: true,
         priority: 1,
         upgrade: None,
@@ -85,7 +82,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
         context_window: None,
-        reasoning_summary_format: ReasoningSummaryFormat::None,
         experimental_supported_tools: Vec::new(),
     };
 
@@ -213,7 +209,6 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         }],
         shell_type: ConfigShellToolType::ShellCommand,
         visibility: ModelVisibility::List,
-        minimal_client_version: ClientVersion(0, 1, 0),
         supported_in_api: true,
         priority: 1,
         upgrade: None,
@@ -225,7 +220,6 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
         context_window: None,
-        reasoning_summary_format: ReasoningSummaryFormat::None,
         experimental_supported_tools: Vec::new(),
     };
     mount_models_once(
@@ -478,7 +472,6 @@ fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> 
         }],
         shell_type: ConfigShellToolType::ShellCommand,
         visibility,
-        minimal_client_version: ClientVersion(0, 1, 0),
         supported_in_api: true,
         priority,
         upgrade: None,
@@ -490,7 +483,6 @@ fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> 
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
         context_window: None,
-        reasoning_summary_format: ReasoningSummaryFormat::None,
         experimental_supported_tools: Vec::new(),
     }
 }

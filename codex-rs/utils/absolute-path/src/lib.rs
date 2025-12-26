@@ -14,7 +14,7 @@ use ts_rs::TS;
 /// guaranteed to be canonicalized or exist on the filesystem).
 ///
 /// IMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set
-/// using `AbsolutePathBufGuard::new(base_path)`. If no base path is set, the
+/// using [AbsolutePathBufGuard::new]. If no base path is set, the
 /// deserialization will fail unless the path being deserialized is already
 /// absolute.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema, TS)]
@@ -34,8 +34,20 @@ impl AbsolutePathBuf {
         Ok(Self(absolute_path.into_owned()))
     }
 
+    pub fn current_dir() -> std::io::Result<Self> {
+        let current_dir = std::env::current_dir()?;
+        Self::from_absolute_path(current_dir)
+    }
+
     pub fn join<P: AsRef<Path>>(&self, path: P) -> std::io::Result<Self> {
         Self::resolve_path_against_base(path, &self.0)
+    }
+
+    pub fn parent(&self) -> Option<Self> {
+        self.0.parent().map(|p| {
+            #[expect(clippy::expect_used)]
+            Self::from_absolute_path(p).expect("parent of AbsolutePathBuf must be absolute")
+        })
     }
 
     pub fn as_path(&self) -> &Path {
@@ -107,6 +119,10 @@ thread_local! {
     static ABSOLUTE_PATH_BASE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
+/// Ensure this guard is held while deserializing `AbsolutePathBuf` values to
+/// provide a base path for resolving relative paths. Because this relies on
+/// thread-local storage, the deserialization must be single-threaded and
+/// occur on the same thread that created the guard.
 pub struct AbsolutePathBufGuard;
 
 impl AbsolutePathBufGuard {

@@ -14,7 +14,6 @@ use crate::bash::extract_bash_command;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec_env::create_env;
-use crate::exec_policy::create_exec_approval_requirement_for_command;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::EventMsg;
 use crate::sandboxing::ExecEnv;
@@ -484,15 +483,18 @@ impl UnifiedExecSessionManager {
         let features = context.session.features();
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
-        let exec_approval_requirement = create_exec_approval_requirement_for_command(
-            &context.turn.exec_policy,
-            &features,
-            command,
-            context.turn.approval_policy,
-            &context.turn.sandbox_policy,
-            sandbox_permissions,
-        )
-        .await;
+        let exec_approval_requirement = context
+            .session
+            .services
+            .exec_policy
+            .create_exec_approval_requirement_for_command(
+                &features,
+                command,
+                context.turn.approval_policy,
+                &context.turn.sandbox_policy,
+                sandbox_permissions,
+            )
+            .await;
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,

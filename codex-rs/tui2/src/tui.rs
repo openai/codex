@@ -46,6 +46,8 @@ use crate::tui::job_control::SUSPEND_KEY;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
 
+mod alt_screen_nesting;
+mod frame_rate_limiter;
 mod frame_requester;
 #[cfg(unix)]
 mod job_control;
@@ -131,6 +133,7 @@ pub struct Tui {
     draw_tx: broadcast::Sender<()>,
     pub(crate) terminal: Terminal,
     pending_history_lines: Vec<Line<'static>>,
+    alt_screen_nesting: alt_screen_nesting::AltScreenNesting,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     suspend_context: SuspendContext,
@@ -159,6 +162,7 @@ impl Tui {
             draw_tx,
             terminal,
             pending_history_lines: vec![],
+            alt_screen_nesting: alt_screen_nesting::AltScreenNesting::default(),
             alt_saved_viewport: None,
             #[cfg(unix)]
             suspend_context: SuspendContext::new(),
@@ -305,6 +309,10 @@ impl Tui {
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current
     /// inline viewport for restoration when leaving.
     pub fn enter_alt_screen(&mut self) -> Result<()> {
+        if !self.alt_screen_nesting.enter() {
+            self.alt_screen_active.store(true, Ordering::Relaxed);
+            return Ok(());
+        }
         let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
         if let Ok(size) = self.terminal.size() {
             self.alt_saved_viewport = Some(self.terminal.viewport_area);
@@ -322,6 +330,11 @@ impl Tui {
 
     /// Leave alternate screen and restore the previously saved inline viewport, if any.
     pub fn leave_alt_screen(&mut self) -> Result<()> {
+        if !self.alt_screen_nesting.leave() {
+            self.alt_screen_active
+                .store(self.alt_screen_nesting.is_active(), Ordering::Relaxed);
+            return Ok(());
+        }
         let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
         if let Some(saved) = self.alt_saved_viewport.take() {
             self.terminal.set_viewport_area(saved);
@@ -368,8 +381,17 @@ impl Tui {
             let area = Rect::new(0, 0, size.width, height.min(size.height));
             if area != terminal.viewport_area {
                 // TODO(nornagon): probably this could be collapsed with the clear + set_viewport_area above.
-                terminal.clear()?;
-                terminal.set_viewport_area(area);
+                if terminal.viewport_area.is_empty() {
+                    // On the first draw the viewport is empty, so `Terminal::clear()` is a no-op.
+                    // If we don't clear after sizing the viewport, diff-based rendering may skip
+                    // writing spaces (because "space" == "space" in the buffers) and stale terminal
+                    // contents can leak through as random characters between words.
+                    terminal.set_viewport_area(area);
+                    terminal.clear()?;
+                } else {
+                    terminal.clear()?;
+                    terminal.set_viewport_area(area);
+                }
             }
 
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.

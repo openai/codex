@@ -37,13 +37,13 @@ codex-rmcp-client = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
 codex-tui = { workspace = true }
 codex-tui2 = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 ctor = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
-regex-lite = { workspace = true}
+regex-lite = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
-toml = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -51,6 +51,7 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
+toml = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -59,6 +60,7 @@ codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

@@ -1,12 +1,10 @@
 use chrono::DateTime;
 use chrono::Utc;
-use codex_core::openai_models::model_presets::all_model_presets;
-use codex_protocol::openai_models::ClientVersion;
+use codex_core::models_manager::model_presets::all_model_presets;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
-use codex_protocol::openai_models::ReasoningSummaryFormat;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use serde_json::json;
 use std::path::Path;
@@ -25,7 +23,6 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         } else {
             ModelVisibility::Hide
         },
-        minimal_client_version: ClientVersion(0, 1, 0),
         supported_in_api: true,
         priority,
         upgrade: preset.upgrade.as_ref().map(|u| u.id.clone()),
@@ -37,7 +34,6 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
         context_window: None,
-        reasoning_summary_format: ReasoningSummaryFormat::None,
         experimental_supported_tools: Vec::new(),
     }
 }

@@ -1,10 +1,13 @@
 use super::LoaderOverrides;
 use super::load_config_layers_state;
 use crate::config::CONFIG_TOML_FILE;
+use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::config_requirements::ConfigRequirementsToml;
+use crate::config_loader::fingerprint::version_for_toml;
 use crate::config_loader::load_requirements_toml;
 use codex_protocol::protocol::AskForApproval;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
 use tempfile::tempdir;
@@ -59,9 +62,10 @@ extra = true
         managed_preferences_base64: None,
     };
 
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
     let state = load_config_layers_state(
         tmp.path(),
-        tmp.path(),
+        Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
     )
@@ -94,17 +98,33 @@ async fn returns_empty_when_all_layers_missing() {
         managed_preferences_base64: None,
     };
 
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
     let layers = load_config_layers_state(
         tmp.path(),
-        tmp.path(),
+        Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
     )
     .await
     .expect("load layers");
-    assert!(
-        layers.get_user_layer().is_none(),
-        "no user layer when CODEX_HOME/config.toml does not exist"
+    let user_layer = layers
+        .get_user_layer()
+        .expect("expected a user layer even when CODEX_HOME/config.toml does not exist");
+    assert_eq!(
+        &ConfigLayerEntry {
+            name: super::ConfigLayerSource::User {
+                file: AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, tmp.path())
+                    .expect("resolve user config.toml path")
+            },
+            config: TomlValue::Table(toml::map::Map::new()),
+            version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
+        },
+        user_layer,
+    );
+    assert_eq!(
+        user_layer.config,
+        TomlValue::Table(toml::map::Map::new()),
+        "expected empty config for user layer when config.toml does not exist"
     );
 
     let binding = layers.effective_config();
@@ -118,9 +138,10 @@ async fn returns_empty_when_all_layers_missing() {
         .iter()
         .filter(|layer| matches!(layer.name, super::ConfigLayerSource::System { .. }))
         .count();
+    let expected_system_layers = if cfg!(unix) { 1 } else { 0 };
     assert_eq!(
-        num_system_layers, 0,
-        "managed config layer should be absent when file missing"
+        num_system_layers, expected_system_layers,
+        "system layer should be present only on unix"
     );
 
     #[cfg(not(target_os = "macos"))]
@@ -171,9 +192,10 @@ flag = true
         managed_preferences_base64: Some(encoded),
     };
 
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
     let state = load_config_layers_state(
         tmp.path(),
-        tmp.path(),
+        Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
     )
@@ -214,7 +236,7 @@ allowed_approval_policies = ["never", "on-request"]
     let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
     assert_eq!(
         config_requirements.approval_policy.value(),
-        AskForApproval::OnRequest
+        AskForApproval::Never
     );
     config_requirements
         .approval_policy
@@ -231,18 +253,6 @@ allowed_approval_policies = ["never", "on-request"]
 #[tokio::test(flavor = "current_thread")]
 #[serial]
 async fn loads_repo_local_config_from_cwd_only() -> anyhow::Result<()> {
-    struct CwdGuard {
-        previous: std::path::PathBuf,
-    }
-
-    impl Drop for CwdGuard {
-        fn drop(&mut self) {
-            // If this fails, we want the test to fail loudly rather than silently
-            // leaking state into other tests.
-            std::env::set_current_dir(&self.previous).expect("restore cwd");
-        }
-    }
-
     let tmp = tempdir()?;
 
     let codex_home = tmp.path().join("home");
@@ -278,10 +288,7 @@ async fn loads_repo_local_config_from_cwd_only() -> anyhow::Result<()> {
 "#,
     )?;
 
-    let guard = CwdGuard {
-        previous: std::env::current_dir()?,
-    };
-    std::env::set_current_dir(&nested)?;
+    let _cwd = set_test_cwd(&nested);
 
     let overrides = LoaderOverrides {
         managed_config_path: Some(tmp.path().join("managed_config.toml")),
@@ -289,18 +296,23 @@ async fn loads_repo_local_config_from_cwd_only() -> anyhow::Result<()> {
         managed_preferences_base64: None,
     };
 
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let state = load_config_layers_state(
         &codex_home,
-        &nested,
+        Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
     )
     .await
     .expect("load config layers");
 
-    assert!(
-        state.get_user_layer().is_none(),
-        "Codex-Mine policy: user layer should be ignored when cwd-local config exists"
+    let user_layer = state
+        .get_user_layer()
+        .expect("expected a user layer entry even when cwd-local config exists");
+    assert_eq!(
+        user_layer.config,
+        TomlValue::Table(toml::map::Map::new()),
+        "Codex-Mine policy: user config is not read when cwd-local config exists"
     );
 
     let binding = state.effective_config();
@@ -316,17 +328,22 @@ async fn loads_repo_local_config_from_cwd_only() -> anyhow::Result<()> {
         #[cfg(target_os = "macos")]
         managed_preferences_base64: None,
     };
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let state_no_cwd_local = load_config_layers_state(
         &codex_home,
-        &nested,
+        Some(cwd),
         &[] as &[(String, TomlValue)],
         overrides,
     )
     .await
     .expect("load config layers");
-    assert!(
-        state_no_cwd_local.get_user_layer().is_some(),
-        "Codex-Mine policy: user layer should load when no cwd-local config exists"
+    let user_layer = state_no_cwd_local
+        .get_user_layer()
+        .expect("expected user layer");
+    let user_table = user_layer.config.as_table().expect("user layer table");
+    assert_eq!(
+        user_table.get("value"),
+        Some(&TomlValue::String("user".to_string()))
     );
     let binding = state_no_cwd_local.effective_config();
     let table = binding.as_table().expect("top-level table expected");
@@ -335,6 +352,5 @@ async fn loads_repo_local_config_from_cwd_only() -> anyhow::Result<()> {
         Some(&TomlValue::String("user".to_string()))
     );
 
-    drop(guard);
     Ok(())
 }

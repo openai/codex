@@ -22,7 +22,10 @@ pub(crate) async fn run_subagent_one_shot_with_definition(
     cancellation_token: &CancellationToken,
 ) -> Result<String> {
     let mut sub_config = (*turn_context.client.config()).clone();
-    sub_config.sandbox_policy = SandboxPolicy::new_read_only_policy();
+    sub_config
+        .sandbox_policy
+        .set(SandboxPolicy::new_read_only_policy())
+        .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
     sub_config.features.disable(Feature::ApplyPatchFreeform);
     sub_config.developer_instructions = Some(definition_prompt);
 

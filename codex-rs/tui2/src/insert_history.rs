@@ -1,3 +1,22 @@
+//! Render `ratatui` transcript lines into terminal scrollback.
+//!
+//! `insert_history_lines` is responsible for inserting rendered transcript lines
+//! *above* the TUI viewport by emitting ANSI control sequences through the
+//! terminal backend writer.
+//!
+//! ## Why we use crossterm style commands
+//!
+//! `write_spans` is also used by non-terminal callers (e.g.
+//! `transcript_render::render_lines_to_ansi`) to produce deterministic ANSI
+//! output for tests and "print after exit" flows. That means the implementation
+//! must work with any `impl Write` (including an in-memory `Vec<u8>`) and must
+//! preserve `ratatui::style::Color` semantics, including `Rgb(...)` and
+//! `Indexed(...)`.
+//!
+//! Crossterm's style commands implement `Command` (including ANSI emission), so
+//! `write_spans` can remain backend-independent while still producing ANSI
+//! output that matches the terminal-rendered transcript.
+
 use std::fmt;
 use std::io;
 use std::io::Write;
@@ -7,15 +26,14 @@ use crossterm::Command;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Color as CColor;
+use crossterm::style::Colors;
 use crossterm::style::Print;
 use crossterm::style::SetAttribute;
-use crossterm::style::SetBackgroundColor;
-use crossterm::style::SetForegroundColor;
+use crossterm::style::SetColors;
 use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
 use ratatui::layout::Size;
 use ratatui::prelude::Backend;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -94,10 +112,10 @@ where
         queue!(writer, Print("\r\n"))?;
         queue!(
             writer,
-            SetSgrColors {
-                fg: line.style.fg.unwrap_or(Color::Reset),
-                bg: line.style.bg.unwrap_or(Color::Reset),
-            }
+            SetColors(Colors::new(
+                line.style.fg.map(Into::into).unwrap_or(CColor::Reset),
+                line.style.bg.map(Into::into).unwrap_or(CColor::Reset),
+            ))
         )?;
         queue!(writer, Clear(ClearType::UntilNewLine))?;
         // Merge line-level style into each span so that ANSI colors reflect
@@ -163,69 +181,6 @@ impl Command for ResetScrollRegion {
     fn is_ansi_code_supported(&self) -> bool {
         // TODO(nornagon): is this supported on Windows?
         true
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SetSgrColors {
-    fg: Color,
-    bg: Color,
-}
-
-impl Command for SetSgrColors {
-    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        f.write_str("\x1b[")?;
-        let mut first = true;
-        write_sgr_color(f, self.fg, true, &mut first)?;
-        write_sgr_color(f, self.bg, false, &mut first)?;
-        f.write_str("m")
-    }
-
-    #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
-        Err(std::io::Error::other(
-            "SetSgrColors not supported by winapi.",
-        ))
-    }
-
-    #[cfg(windows)]
-    fn is_ansi_code_supported(&self) -> bool {
-        true
-    }
-}
-
-fn write_sgr_color(
-    f: &mut impl fmt::Write,
-    color: Color,
-    is_foreground: bool,
-    first: &mut bool,
-) -> fmt::Result {
-    if !*first {
-        f.write_str(";")?;
-    }
-    *first = false;
-
-    let base = if is_foreground { 38 } else { 48 };
-    match color {
-        Color::Reset => write!(f, "{}", if is_foreground { 39 } else { 49 }),
-        Color::Black => write!(f, "{}", if is_foreground { 30 } else { 40 }),
-        Color::Red => write!(f, "{}", if is_foreground { 31 } else { 41 }),
-        Color::Green => write!(f, "{}", if is_foreground { 32 } else { 42 }),
-        Color::Yellow => write!(f, "{}", if is_foreground { 33 } else { 43 }),
-        Color::Blue => write!(f, "{}", if is_foreground { 34 } else { 44 }),
-        Color::Magenta => write!(f, "{}", if is_foreground { 35 } else { 45 }),
-        Color::Cyan => write!(f, "{}", if is_foreground { 36 } else { 46 }),
-        Color::Gray => write!(f, "{}", if is_foreground { 37 } else { 47 }),
-        Color::DarkGray => write!(f, "{}", if is_foreground { 90 } else { 100 }),
-        Color::LightRed => write!(f, "{}", if is_foreground { 91 } else { 101 }),
-        Color::LightGreen => write!(f, "{}", if is_foreground { 92 } else { 102 }),
-        Color::LightYellow => write!(f, "{}", if is_foreground { 93 } else { 103 }),
-        Color::LightBlue => write!(f, "{}", if is_foreground { 94 } else { 104 }),
-        Color::LightMagenta => write!(f, "{}", if is_foreground { 95 } else { 105 }),
-        Color::LightCyan => write!(f, "{}", if is_foreground { 96 } else { 106 }),
-        Color::White => write!(f, "{}", if is_foreground { 97 } else { 107 }),
-        Color::Rgb(r, g, b) => write!(f, "{base};2;{r};{g};{b}"),
-        Color::Indexed(i) => write!(f, "{base};5;{i}"),
     }
 }
 
@@ -300,8 +255,8 @@ pub(crate) fn write_spans<'a, I>(mut writer: &mut impl Write, content: I) -> io:
 where
     I: IntoIterator<Item = &'a Span<'a>>,
 {
-    let mut fg = Color::Reset;
-    let mut bg = Color::Reset;
+    let mut fg = CColor::Reset;
+    let mut bg = CColor::Reset;
     let mut last_modifier = Modifier::empty();
     for span in content {
         let mut modifier = Modifier::empty();
@@ -315,16 +270,10 @@ where
             diff.queue(&mut writer)?;
             last_modifier = modifier;
         }
-        let next_fg = span.style.fg.unwrap_or(Color::Reset);
-        let next_bg = span.style.bg.unwrap_or(Color::Reset);
+        let next_fg = span.style.fg.map(Into::into).unwrap_or(CColor::Reset);
+        let next_bg = span.style.bg.map(Into::into).unwrap_or(CColor::Reset);
         if next_fg != fg || next_bg != bg {
-            queue!(
-                writer,
-                SetSgrColors {
-                    fg: next_fg,
-                    bg: next_bg
-                }
-            )?;
+            queue!(writer, SetColors(Colors::new(next_fg, next_bg)))?;
             fg = next_fg;
             bg = next_bg;
         }
@@ -332,12 +281,7 @@ where
         queue!(writer, Print(span.content.clone()))?;
     }
 
-    queue!(
-        writer,
-        SetForegroundColor(CColor::Reset),
-        SetBackgroundColor(CColor::Reset),
-        SetAttribute(crossterm::style::Attribute::Reset),
-    )
+    queue!(writer, SetAttribute(crossterm::style::Attribute::Reset))
 }
 
 #[cfg(test)]
@@ -345,8 +289,10 @@ mod tests {
     use super::*;
     use crate::markdown_render::render_markdown_text;
     use crate::test_backend::VT100Backend;
+    use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
+    use ratatui::style::Style;
 
     #[test]
     fn writes_bold_then_regular_spans() {
@@ -364,8 +310,6 @@ mod tests {
             Print("A"),
             SetAttribute(crossterm::style::Attribute::NormalIntensity),
             Print("B"),
-            SetForegroundColor(CColor::Reset),
-            SetBackgroundColor(CColor::Reset),
             SetAttribute(crossterm::style::Attribute::Reset),
         )
         .unwrap();
@@ -373,6 +317,45 @@ mod tests {
         assert_eq!(
             String::from_utf8(actual).unwrap(),
             String::from_utf8(expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn write_spans_emits_truecolor_and_indexed_sgr() {
+        // This test asserts that `write_spans` emits the correct SGR sequences for colors that
+        // can't be represented with the theme-aware ANSI palette:
+        //
+        // - `ratatui::style::Color::Rgb` (truecolor; `38;2;r;g;b`)
+        // - `ratatui::style::Color::Indexed` (256-color index; `48;5;n`)
+        //
+        // Those constructors are intentionally disallowed in production code (see
+        // `codex-rs/clippy.toml`), but the test needs them so the output bytes are fully
+        // deterministic.
+        #[expect(clippy::disallowed_methods)]
+        let fg = Color::Rgb(1, 2, 3);
+        #[expect(clippy::disallowed_methods)]
+        let bg = Color::Indexed(42);
+
+        let spans = [Span::styled("X", Style::default().fg(fg).bg(bg))];
+
+        let mut actual: Vec<u8> = Vec::new();
+        write_spans(&mut actual, spans.iter()).unwrap();
+
+        let mut expected: Vec<u8> = Vec::new();
+        queue!(
+            expected,
+            SetColors(Colors::new(
+                CColor::Rgb { r: 1, g: 2, b: 3 },
+                CColor::AnsiValue(42)
+            )),
+            Print("X"),
+            SetAttribute(crossterm::style::Attribute::Reset),
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(actual).unwrap(),
+            String::from_utf8(expected).unwrap(),
         );
     }
 
@@ -389,7 +372,7 @@ mod tests {
 
         // Build a blockquote-like line: apply line-level green style and prefix "> "
         let mut line: Line<'static> = Line::from(vec!["> ".into(), "Hello world".into()]);
-        line = line.style(Color::Green);
+        line = line.style(Style::default().fg(Color::Green));
         insert_history_lines(&mut term, vec![line])
             .expect("Failed to insert history lines in test");
 
@@ -427,7 +410,7 @@ mod tests {
             "> ".into(),
             "This is a long quoted line that should wrap".into(),
         ]);
-        line = line.style(Color::Green);
+        line = line.style(Style::default().fg(Color::Green));
 
         insert_history_lines(&mut term, vec![line])
             .expect("Failed to insert history lines in test");

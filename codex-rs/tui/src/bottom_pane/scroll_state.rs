@@ -19,6 +19,7 @@ impl ScrollState {
     }
 
     /// Reset selection and scroll.
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.selected_idx = None;
         self.scroll_top = 0;
@@ -93,6 +94,10 @@ mod tests {
         let mut s = ScrollState::new();
         let len = 10;
         let vis = 5;
+
+        s.reset();
+        assert_eq!(s.selected_idx, None);
+        assert_eq!(s.scroll_top, 0);
 
         s.clamp_selection(len);
         assert_eq!(s.selected_idx, Some(0));

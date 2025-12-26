@@ -44,6 +44,7 @@ use codex_core::features::Feature;
 use codex_core::features::FeatureOverrides;
 use codex_core::features::Features;
 use codex_core::features::is_known_feature_key;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 /// Codex CLI
 ///
@@ -687,7 +688,13 @@ async fn is_tui2_enabled(cli: &TuiCli) -> std::io::Result<bool> {
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
     let codex_home = find_codex_home()?;
-    let config_toml = load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides).await?;
+    let cwd = cli.cwd.clone();
+    let config_cwd = match cwd.as_deref() {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path)?,
+        None => AbsolutePathBuf::current_dir()?,
+    };
+    let config_toml =
+        load_config_as_toml_with_cli_overrides(&codex_home, &config_cwd, cli_kv_overrides).await?;
     let config_profile = config_toml.get_config_profile(cli.config_profile.clone())?;
     let overrides = FeatureOverrides::default();
     let features = Features::from_config(&config_toml, &config_profile, overrides);

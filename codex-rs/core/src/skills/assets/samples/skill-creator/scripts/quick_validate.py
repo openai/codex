@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-MAX_SKILL_NAME_LENGTH = 30
+MAX_SKILL_NAME_LENGTH = 64
 
 
 def validate_skill(skill_path):
