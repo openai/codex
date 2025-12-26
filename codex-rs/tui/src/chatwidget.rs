@@ -646,11 +646,7 @@ impl ChatWidget {
 
         for candidate in candidates {
             let display_path = display_path_for(&candidate.output_root, &repo_path);
-            let scope_summary = if candidate.metadata.scope_paths.is_empty() {
-                "entire repository".to_string()
-            } else {
-                candidate.metadata.scope_paths.join(", ")
-            };
+            let scope_summary = Self::scope_summary_label(&candidate.metadata.scope_paths);
             let age = candidate.age_label.clone();
             items.push(SelectionItem {
                 name: format!("Resume {}", candidate.folder_name),
@@ -687,14 +683,11 @@ impl ChatWidget {
         include_paths: Vec<String>,
         scope_prompt: Option<String>,
         candidate: RunningSecurityReviewCandidate,
+        completed: Vec<SecurityReviewResumeCandidate>,
     ) {
         let repo_path = self.config.cwd.clone();
         let display_path = display_path_for(&candidate.output_root, &repo_path);
-        let scope_summary = if candidate.checkpoint.scope_display_paths.is_empty() {
-            "entire repository".to_string()
-        } else {
-            candidate.checkpoint.scope_display_paths.join(", ")
-        };
+        let scope_summary = Self::scope_summary_label(&candidate.checkpoint.scope_display_paths);
         let step_summary = candidate
             .checkpoint
             .plan_statuses
@@ -747,6 +740,28 @@ impl ChatWidget {
             search_value: Some(display_path.clone()),
             ..Default::default()
         });
+
+        for candidate in completed {
+            let scope_summary = Self::scope_summary_label(&candidate.metadata.scope_paths);
+            let age = candidate.age_label.clone();
+            let display_path = display_path_for(&candidate.output_root, &repo_path);
+            let mode_label = candidate.metadata.mode.as_str();
+            items.push(SelectionItem {
+                name: format!("Resume {}", candidate.folder_name),
+                description: Some(format!(
+                    "Mode: {mode_label} • Scope: {scope_summary} • Age: {age}"
+                )),
+                actions: vec![Box::new(move |tx: &AppEventSender| {
+                    tx.send(AppEvent::ResumeSecurityReview {
+                        output_root: candidate.output_root.clone(),
+                        metadata: candidate.metadata.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                search_value: Some(display_path),
+                ..Default::default()
+            });
+        }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("In-progress security review found".to_string()),
@@ -850,25 +865,25 @@ impl ChatWidget {
             "Bugs".to_string()
         };
 
-        self.security_review_follow_up = Some(SecurityReviewFollowUpState {
-            repo_root: repo_path.clone(),
-            scope_paths: metadata.scope_paths.clone(),
-            mode: metadata.mode,
-            follow_up_path: follow_up_path.clone(),
-            follow_up_label,
-        });
-        self.bottom_pane
-            .set_placeholder_text("Ask a security review follow-up question".to_string());
-
-        let follow_up_display = display_path_for(&follow_up_path, &repo_path);
-        self.add_info_message(
-            format!(
-                "Resumed security review (mode: {}) — follow-up context loaded from {}.",
-                metadata.mode.as_str(),
-                follow_up_display
-            ),
-            None,
+        let follow_up_display = self.set_security_review_follow_up(
+            repo_path,
+            metadata.scope_paths.clone(),
+            metadata.mode,
+            follow_up_path,
+            follow_up_label.clone(),
         );
+        let message = if follow_up_label == "Report" {
+            format!(
+                "Loaded security review report (mode: {}) — follow-up ready from {follow_up_display}.",
+                metadata.mode.as_str()
+            )
+        } else {
+            format!(
+                "Resumed security review (mode: {}) — follow-up ready from {follow_up_label} ({follow_up_display}).",
+                metadata.mode.as_str()
+            )
+        };
+        self.add_info_message(message, None);
     }
     fn flush_answer_stream_with_separator(&mut self) {
         if let Some(mut controller) = self.stream_controller.take()
@@ -3708,6 +3723,42 @@ impl ChatWidget {
         }
     }
 
+    fn set_security_review_follow_up(
+        &mut self,
+        repo_root: PathBuf,
+        scope_paths: Vec<String>,
+        mode: SecurityReviewMode,
+        follow_up_path: PathBuf,
+        follow_up_label: String,
+    ) -> String {
+        let follow_up_display = display_path_for(&follow_up_path, &repo_root);
+        self.security_review_follow_up = Some(SecurityReviewFollowUpState {
+            repo_root,
+            scope_paths,
+            mode,
+            follow_up_path,
+            follow_up_label,
+        });
+        self.bottom_pane
+            .set_placeholder_text("Ask a security review follow-up question".to_string());
+        follow_up_display
+    }
+
+    fn scope_summary_label(paths: &[String]) -> String {
+        if paths.is_empty() {
+            return "entire repository".to_string();
+        }
+        let mut parts: Vec<String> = Vec::new();
+        for path in paths.iter().take(3) {
+            parts.push(path.clone());
+        }
+        let remaining = paths.len() as i64 - parts.len() as i64;
+        if remaining > 0 {
+            parts.push(format!("+{remaining} more"));
+        }
+        parts.join(", ")
+    }
+
     fn security_review_follow_up_prompt(&self, text: &str) -> Option<String> {
         let state = self.security_review_follow_up.as_ref()?;
         if text.starts_with(SECURITY_REVIEW_FOLLOW_UP_MARKER) {
@@ -4015,11 +4066,14 @@ impl ChatWidget {
             && let Some(candidate) =
                 crate::security_review::latest_running_review_candidate(&repo_path)
         {
+            let storage_root = crate::security_review_storage_root(&repo_path);
+            let completed = completed_security_review_candidates(&storage_root);
             self.prompt_running_security_review_resume(
                 mode,
                 include_paths,
                 scope_prompt,
                 candidate,
+                completed,
             );
             return;
         }
@@ -4842,7 +4896,6 @@ impl ChatWidget {
         } else {
             "Bugs".to_string()
         };
-        let follow_up_display = display_path_for(&follow_up_path, &repo_path);
 
         // Show artifact + duration summary at the end, just before the follow-up line.
         let mut tail_lines: Vec<Line<'static>> = Vec::new();
@@ -4890,22 +4943,19 @@ impl ChatWidget {
         if !tail_lines.is_empty() {
             self.add_to_history(PlainHistoryCell::new(tail_lines));
         }
+        let follow_up_display = self.set_security_review_follow_up(
+            repo_path,
+            scope_paths,
+            mode,
+            follow_up_path,
+            follow_up_label.clone(),
+        );
         self.add_info_message(
             format!(
                 "Security review follow-up ready — questions will include context from {follow_up_label} ({follow_up_display})."
             ),
             None,
         );
-        self.bottom_pane
-            .set_placeholder_text("Ask a security review follow-up question".to_string());
-
-        self.security_review_follow_up = Some(SecurityReviewFollowUpState {
-            repo_root: repo_path,
-            scope_paths,
-            mode,
-            follow_up_path,
-            follow_up_label,
-        });
     }
 
     pub(crate) fn on_security_review_failed(&mut self, error: SecurityReviewFailure) {
