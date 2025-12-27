@@ -6210,28 +6210,27 @@ async fn generate_specs(
     };
     directory_candidates.sort_by(|a, b| a.1.cmp(&b.1));
 
-    let heuristically_filtered: Vec<(PathBuf, String)> =
-        if spec_progress_state.targets.is_empty() {
-            let mut filtered: Vec<(PathBuf, String)> = Vec::new();
-            for (path, label) in &directory_candidates {
-                if is_spec_dir_likely_low_signal(path) {
-                    if let Some(tx) = progress_sender.as_ref() {
-                        tx.send(AppEvent::SecurityReviewLog(format!(
-                            "Heuristic skip for spec dir {label} (tests/utils/scripts)."
-                        )));
-                    }
-                } else {
-                    filtered.push((path.clone(), label.clone()));
+    let heuristically_filtered: Vec<(PathBuf, String)> = if spec_progress_state.targets.is_empty() {
+        let mut filtered: Vec<(PathBuf, String)> = Vec::new();
+        for (path, label) in &directory_candidates {
+            if is_spec_dir_likely_low_signal(path) {
+                if let Some(tx) = progress_sender.as_ref() {
+                    tx.send(AppEvent::SecurityReviewLog(format!(
+                        "Heuristic skip for spec dir {label} (tests/utils/scripts)."
+                    )));
                 }
-            }
-            if filtered.is_empty() {
-                directory_candidates.clone()
             } else {
-                filtered
+                filtered.push((path.clone(), label.clone()));
             }
-        } else {
+        }
+        if filtered.is_empty() {
             directory_candidates.clone()
-        };
+        } else {
+            filtered
+        }
+    } else {
+        directory_candidates.clone()
+    };
 
     let mut filtered_dirs = if spec_progress_state.targets.is_empty() {
         match filter_spec_directories(
@@ -12216,7 +12215,7 @@ fn build_threat_model_prompt(repository_summary: &str, spec: &SpecGenerationOutc
 
 fn build_threat_model_retry_prompt(base_prompt: &str, previous_output: &str) -> String {
     format!(
-        "{base_prompt}\n\nPrevious attempt:\n```\n{previous_output}\n```\nThe previous response did not populate the `Threat Model` table. Re-run the task above and respond with the summary paragraph followed by a complete Markdown table named `Threat Model` with populated rows (IDs starting at 1, with realistic data)."
+        "{base_prompt}\n\nPrevious attempt:\n```\n{previous_output}\n```\nThe previous response did not populate the `Threat Model` table. Re-run the task above and respond with the required sections (Primary components, Trust boundaries, Assets, Attacker model, Entry points, Top abuse paths) followed by a complete Markdown table named `Threat Model` with populated rows (IDs starting at 1, with realistic data)."
     )
 }
 

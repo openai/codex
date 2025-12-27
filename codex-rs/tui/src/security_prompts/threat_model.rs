@@ -1,2 +1,31 @@
-pub(crate) const THREAT_MODEL_SYSTEM_PROMPT: &str = "You are a senior application security engineer preparing a threat model. Use the provided architecture specification and repository summary to enumerate realistic threats, prioritised by risk.";
-pub(crate) const THREAT_MODEL_PROMPT_TEMPLATE: &str = "# Repository Summary\n{repository_summary}\n\n# Architecture Specification\n{combined_spec}\n\n# In-Scope Locations\n{locations}\n\n# Task\nConstruct a concise threat model for the system. Focus on meaningful attacker goals and concrete impacts.\n\n## Output Requirements\n- Start with a short paragraph summarising the most important threat themes and high-risk areas.\n- Immediately after the summary, add a short bullet list of the top abuse paths (for example, unauthenticated endpoints, cross-origin messaging gaps, or missing rate limits) before the table.\n- Follow with a markdown table named `Threat Model` with columns: `Threat ID`, `Threat source`, `Prerequisites`, `Threat action`, `Threat impact`, `Impacted assets`, `Priority`, `Recommended mitigations`.\n- Use integer IDs starting at 1. Priority must be one of high, medium, low.\n- Keep prerequisite and mitigation text succinct (single sentence each).\n- Do not include any other sections or commentary outside the summary paragraph, abuse-path bullets, and table.\n";
+pub(crate) const THREAT_MODEL_SYSTEM_PROMPT: &str = r#"You are a senior application security engineer preparing a threat model.
+Use the provided architecture specification and repository summary to enumerate realistic threats, prioritised by risk.
+Prefer concrete, system-specific threats over generic checklists. When details are missing, state assumptions explicitly."#;
+
+pub(crate) const THREAT_MODEL_PROMPT_TEMPLATE: &str = r#"# Repository Summary
+{repository_summary}
+
+# Architecture Specification
+{combined_spec}
+
+# In-Scope Locations
+{locations}
+
+# Task
+Construct a concise threat model for the system. Focus on meaningful attacker goals and concrete impacts.
+
+Some architecture details may already be present in the specification above. Do not restate large portions of the spec; instead, summarize and (when helpful) refer to the relevant spec section headings.
+
+## Output Requirements
+- Start with a short paragraph summarising the most important threat themes and high-risk areas.
+- Include the following sections (keep them short and derived from the spec; 4–8 bullets each where applicable):
+  - `## Primary components` (e.g., API gateway/auth/rate limiting, native preprocessing library, model runner/sandboxing, logging & metrics)
+  - `## Trust boundaries` (use arrow notation such as `Internet → API Gateway`, `Gateway → Native library`, etc.)
+  - `## Assets` as a 2-column table: `Asset` | `Why it matters`
+  - `## Attacker model` with two sublists: `Capabilities` and `Non-capabilities`
+  - `## Entry points` (endpoints, upload surfaces, parsing/decoding paths, error handling/logging)
+- After those sections, add a short bullet list titled `## Top abuse paths` (3–8 items) before the threat table.
+- Follow with a markdown table named `Threat Model` with columns: `Threat ID`, `Threat source`, `Prerequisites`, `Threat action`, `Threat impact`, `Impacted assets`, `Priority`, `Recommended mitigations`.
+- Use integer IDs starting at 1. Priority must be one of `high`, `medium`, `low`.
+- Keep prerequisite and mitigation text succinct (single sentence each).
+"#;
