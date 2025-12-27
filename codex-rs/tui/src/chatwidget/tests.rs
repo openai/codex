@@ -376,6 +376,7 @@ async fn make_chatwidget_manual(
         skills: None,
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let default_agent_id = DEFAULT_AGENT_ID.as_str().to_string();
     let widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
@@ -414,10 +415,18 @@ async fn make_chatwidget_manual(
         is_review_mode: false,
         pre_review_token_info: None,
         needs_final_message_separator: false,
+        replay_messages: Vec::new(),
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
+        selected_agent_id: default_agent_id.clone(),
+        known_agents: vec![default_agent_id.clone()],
+        known_agents_set: HashSet::from([default_agent_id]),
+        pending_agent_events: HashMap::new(),
+        agent_states: HashMap::new(),
+        approval_agent_ids: HashMap::new(),
+        elicitation_agent_ids: HashMap::new(),
     };
     (widget, rx, op_rx)
 }
@@ -902,6 +911,7 @@ fn begin_unified_exec_startup(
     };
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
+        agent_id: None,
         msg: EventMsg::ExecCommandBegin(event.clone()),
     });
     event
@@ -910,6 +920,7 @@ fn begin_unified_exec_startup(
 fn terminal_interaction(chat: &mut ChatWidget, call_id: &str, process_id: &str, stdin: &str) {
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
+        agent_id: None,
         msg: EventMsg::TerminalInteraction(TerminalInteractionEvent {
             call_id: call_id.to_string(),
             process_id: process_id.to_string(),
@@ -1315,6 +1326,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
 
     chat.handle_codex_event(Event {
         id: "turn-wait-1".into(),
+        agent_id: None,
         msg: EventMsg::TaskComplete(TaskCompleteEvent {
             last_agent_message: None,
         }),
@@ -1364,6 +1376,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
 
     chat.handle_codex_event(Event {
         id: "turn-wait-3".into(),
+        agent_id: None,
         msg: EventMsg::TaskComplete(TaskCompleteEvent {
             last_agent_message: None,
         }),
@@ -3409,6 +3422,106 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     let first_idx = combined.find("First message").unwrap();
     let second_idx = combined.find("Second message").unwrap();
     assert!(first_idx < second_idx, "messages out of order: {combined}");
+}
+
+#[tokio::test]
+async fn non_selected_agent_events_buffer_until_switch() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "ev1".into(),
+        agent_id: Some("worker_1".into()),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "hello from worker".into(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(cells.is_empty(), "expected no history while not selected");
+
+    chat.switch_to_agent("worker_1".to_string());
+
+    let cells = drain_insert_history(&mut rx);
+    let combined: String = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect();
+    assert!(
+        combined.contains("Viewing agent `worker_1`"),
+        "missing view header: {combined}"
+    );
+    assert!(
+        combined.contains("hello from worker"),
+        "missing buffered message: {combined}"
+    );
+}
+
+#[tokio::test]
+async fn approval_ops_route_to_requesting_agent() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-1".into(),
+        turn_id: "turn-1".into(),
+        command: vec!["echo".into(), "ok".into()],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: None,
+        proposed_execpolicy_amendment: None,
+        parsed_cmd: vec![],
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        agent_id: Some("worker_2".into()),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+
+    chat.submit_op(Op::ExecApproval {
+        id: "sub-1".into(),
+        decision: codex_core::protocol::ReviewDecision::Approved,
+    });
+
+    let routed = op_rx.try_recv().expect("expected routed op");
+    match routed {
+        Op::ForAgent { agent_id, op } => {
+            assert_eq!(agent_id, "worker_2");
+            assert!(
+                matches!(*op, Op::ExecApproval { .. }),
+                "expected exec approval op, got {op:?}"
+            );
+        }
+        other => panic!("expected ForAgent op, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn ctrl_n_create_agent_from_composer_routes_submission() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_composer_text("hello".to_string());
+
+    chat.create_agent_from_composer("worker_3".to_string());
+
+    let first = op_rx.try_recv().expect("expected first routed op");
+    match first {
+        Op::ForAgent { agent_id, op } => {
+            assert_eq!(agent_id, "worker_3");
+            assert!(
+                matches!(*op, Op::UserInput { .. }),
+                "expected user input op, got {op:?}"
+            );
+        }
+        other => panic!("expected ForAgent op, got {other:?}"),
+    }
+
+    let second = op_rx.try_recv().expect("expected second routed op");
+    match second {
+        Op::ForAgent { agent_id, op } => {
+            assert_eq!(agent_id, "worker_3");
+            assert!(
+                matches!(*op, Op::AddToHistory { .. }),
+                "expected add to history op, got {op:?}"
+            );
+        }
+        other => panic!("expected ForAgent op, got {other:?}"),
+    }
 }
 
 #[tokio::test]

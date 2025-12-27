@@ -6,6 +6,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::ModelPreset;
+use ratatui::text::Line;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
@@ -53,6 +54,9 @@ pub(crate) enum AppEvent {
     DiffResult(String),
 
     InsertHistoryCell(Box<dyn HistoryCell>),
+
+    /// Insert lines into the inline viewport only (do not persist to transcript).
+    InsertEphemeralHistoryLines(Vec<Line<'static>>),
 
     StartCommitAnimation,
     StopCommitAnimation,
@@ -155,6 +159,18 @@ pub(crate) enum AppEvent {
 
     /// Re-open the approval presets popup.
     OpenApprovalsPopup,
+
+    /// Switch the active agent view.
+    SwitchAgent {
+        agent_id: String,
+    },
+
+    /// Create (if needed) a new agent and submit the current composer draft to it.
+    ///
+    /// Triggered by Ctrl+N in the chat view.
+    CreateAgentFromComposer {
+        agent_id: String,
+    },
 
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),
