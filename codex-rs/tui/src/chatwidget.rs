@@ -4243,6 +4243,8 @@ impl ChatWidget {
 
         let scope_text = if context_paths.is_empty() {
             "entire repository".to_string()
+        } else if resume_from.is_some() {
+            format!("{} path(s) (see Scope paths artifact)", context_paths.len())
         } else {
             context_paths.join(", ")
         };
