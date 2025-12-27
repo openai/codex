@@ -175,6 +175,15 @@ fn is_dangerous_cmd(command: &[String]) -> bool {
         return cmd_args.iter().any(|a| a.eq_ignore_ascii_case("/f"));
     }
 
+    // `cmd /c <gui-launcher> https://...` should be treated as dangerous even though the
+    // outer executable is `cmd`. Reuse the same heuristics we apply for direct launches.
+    let mut nested: Vec<String> = Vec::with_capacity(1 + cmd_args.len());
+    nested.push(first_cmd.to_string());
+    nested.extend(cmd_args.iter().cloned());
+    if is_direct_gui_launch(&nested) {
+        return true;
+    }
+
     false
 }
 
@@ -405,6 +414,37 @@ mod tests {
     fn cmd_del_without_force_is_not_flagged() {
         assert!(!is_dangerous_command_windows(&vec_str(&[
             "cmd", "/c", "del", "foo.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_msedge_with_url_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "msedge",
+            "https://example.com"
+        ])));
+    }
+
+    #[test]
+    fn cmd_explorer_with_url_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "explorer.exe",
+            "https://example.com"
+        ])));
+    }
+
+    #[test]
+    fn cmd_rundll32_fileprotocolhandler_with_url_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "rundll32",
+            "url.dll,fileprotocolhandler",
+            "https://example.com"
         ])));
     }
 
