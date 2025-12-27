@@ -62,6 +62,8 @@ pub enum Feature {
     GhostCommit,
     /// Include the view_image tool.
     ViewImageTool,
+    /// Include the plan tool.
+    PlanTool,
     /// Send warnings to the model to correct it on the tool usage.
     ModelWarnings,
     /// Enable the default shell tool.
@@ -305,6 +307,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ViewImageTool,
         key: "view_image_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::PlanTool,
+        key: "plan_tool",
         stage: Stage::Stable,
         default_enabled: true,
     },
