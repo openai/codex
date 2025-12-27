@@ -3,6 +3,7 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Duration;
 
 use crate::AuthManager;
 use crate::SandboxState;
@@ -128,7 +129,9 @@ use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::DeveloperInstructions;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
+use crate::util::add_retry_jitter_and_buffer;
 use crate::util::backoff;
+use crate::util::parse_retry_after_hint;
 use codex_async_utils::OrCancelExt;
 use codex_execpolicy::Policy as ExecPolicy;
 use codex_otel::otel_event_manager::OtelEventManager;
@@ -2230,13 +2233,15 @@ async fn run_turn(
             Err(e @ CodexErr::RefreshTokenFailed(_)) => return Err(e),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
-                let max_retries = turn_context.client.get_provider().stream_max_retries();
+                let provider_max_retries = turn_context.client.get_provider().stream_max_retries();
+                let max_retries = if is_rate_limit_stream_error(&e) {
+                    provider_max_retries.max(12)
+                } else {
+                    provider_max_retries
+                };
                 if retries < max_retries {
                     retries += 1;
-                    let delay = match e {
-                        CodexErr::Stream(_, Some(delay)) => delay,
-                        _ => backoff(retries),
-                    };
+                    let delay = stream_retry_delay(&e, retries);
                     warn!(
                         "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",
                     );
@@ -2257,6 +2262,33 @@ async fn run_turn(
                 }
             }
         }
+    }
+}
+
+fn is_rate_limit_stream_error(err: &CodexErr) -> bool {
+    match err {
+        CodexErr::Stream(message, _) => {
+            let lower = message.to_ascii_lowercase();
+            lower.contains("rate limit")
+                || lower.contains("rate_limit")
+                || lower.contains("rate_limit_exceeded")
+        }
+        _ => false,
+    }
+}
+
+fn stream_retry_delay(err: &CodexErr, attempt: u64) -> Duration {
+    let base_backoff = backoff(attempt);
+    match err {
+        CodexErr::Stream(message, explicit_delay) => {
+            let hinted = explicit_delay.or_else(|| parse_retry_after_hint(message));
+            if let Some(hinted) = hinted {
+                add_retry_jitter_and_buffer(hinted.max(base_backoff))
+            } else {
+                base_backoff
+            }
+        }
+        _ => base_backoff,
     }
 }
 

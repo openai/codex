@@ -14,6 +14,7 @@ use crate::error::UnexpectedResponseError;
 use crate::error::UsageLimitReachedError;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::token_data::PlanType;
+use crate::util::parse_retry_after_hint;
 
 pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
     match err {
@@ -84,7 +85,10 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                 CodexErr::Stream(msg, None)
             }
         },
-        ApiError::RateLimit(msg) => CodexErr::Stream(msg, None),
+        ApiError::RateLimit(msg) => {
+            let delay = parse_retry_after_hint(&msg);
+            CodexErr::Stream(msg, delay)
+        }
     }
 }
 
