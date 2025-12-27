@@ -7,6 +7,11 @@ Then select ONLY high-risk findings to validate. For each, choose the minimal to
 - Use tool "curl" for network_api checks (supply full URL in `target`).
 - Use tool "python" only if a short, non-destructive PoC is essential (include inline script text in `script`).
 
+For python validations, the script must:
+- Print a step-by-step log with clear section headers (at least `CONTROL` and `TRIGGER`) so the run can be pasted into the security report.
+- Run a control action first (benign request/input) and then the trigger action, and print real stdout/stderr outputs for both.
+- Exit 0 only when the expected security-relevant signal is observed; otherwise exit non-zero.
+
 Special case: memory corruption
 - If the finding looks like a memory corruption bug in native code (C/C++ decoder, image preprocessing, FFI boundary, etc.), prefer a single `python` validation that:
   - Attempts to build and run an AddressSanitizer (ASan) instrumented version of the relevant binary/service/library (best-effort; use existing build system if available).

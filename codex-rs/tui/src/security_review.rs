@@ -1942,6 +1942,19 @@ pub struct BugValidationState {
     pub target: Option<String>,
     pub summary: Option<String>,
     pub output_snippet: Option<String>,
+    #[serde(default)]
+    pub repro_steps: Vec<String>,
+    pub stdout_path: Option<String>,
+    pub stderr_path: Option<String>,
+    pub control_target: Option<String>,
+    pub control_summary: Option<String>,
+    pub control_output_snippet: Option<String>,
+    #[serde(default)]
+    pub control_steps: Vec<String>,
+    pub control_stdout_path: Option<String>,
+    pub control_stderr_path: Option<String>,
+    #[serde(default)]
+    pub artifacts: Vec<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub run_at: Option<OffsetDateTime>,
 }
@@ -2195,6 +2208,15 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
             composed.push_str("\n\n#### Validation\n");
             let status_label = validation_status_label(&snapshot.bug.validation);
             composed.push_str(&format!("- **Status:** {status_label}\n"));
+            if let Some(tool) = snapshot
+                .bug
+                .validation
+                .tool
+                .as_ref()
+                .filter(|tool| !tool.is_empty())
+            {
+                composed.push_str(&format!("- **Tool:** `{tool}`\n"));
+            }
             if let Some(target) = snapshot
                 .bug
                 .validation
@@ -2203,6 +2225,15 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
                 .filter(|target| !target.is_empty())
             {
                 composed.push_str(&format!("- **Target:** `{target}`\n"));
+            }
+            if let Some(control_target) = snapshot
+                .bug
+                .validation
+                .control_target
+                .as_ref()
+                .filter(|target| !target.is_empty())
+            {
+                composed.push_str(&format!("- **Control target:** `{control_target}`\n"));
             }
             if let Some(run_at) = snapshot.bug.validation.run_at
                 && let Ok(formatted) = run_at.format(&Rfc3339)
@@ -2216,7 +2247,82 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
                 .as_ref()
                 .filter(|summary| !summary.is_empty())
             {
-                composed.push_str(&format!("- **Summary:** {}\n", summary.trim()));
+                let summary = summary.trim();
+                composed.push_str(&format!("- **Summary:** {summary}\n"));
+            }
+            if let Some(control_summary) = snapshot
+                .bug
+                .validation
+                .control_summary
+                .as_ref()
+                .filter(|summary| !summary.is_empty())
+            {
+                let control_summary = control_summary.trim();
+                composed.push_str(&format!("- **Control summary:** {control_summary}\n"));
+            }
+            if !snapshot.bug.validation.repro_steps.is_empty() {
+                composed.push_str("- **Repro steps:**\n");
+                for (i, step) in snapshot.bug.validation.repro_steps.iter().enumerate() {
+                    let n = i + 1;
+                    let step = step.trim();
+                    composed.push_str(&format!("  {n}. {step}\n"));
+                }
+            }
+            if !snapshot.bug.validation.control_steps.is_empty() {
+                composed.push_str("- **Control steps:**\n");
+                for (i, step) in snapshot.bug.validation.control_steps.iter().enumerate() {
+                    let n = i + 1;
+                    let step = step.trim();
+                    composed.push_str(&format!("  {n}. {step}\n"));
+                }
+            }
+            let mut artifacts: Vec<String> = Vec::new();
+            if let Some(path) = snapshot
+                .bug
+                .validation
+                .stdout_path
+                .as_ref()
+                .filter(|path| !path.is_empty())
+            {
+                artifacts.push(format!("stdout: `{path}`"));
+            }
+            if let Some(path) = snapshot
+                .bug
+                .validation
+                .stderr_path
+                .as_ref()
+                .filter(|path| !path.is_empty())
+            {
+                artifacts.push(format!("stderr: `{path}`"));
+            }
+            if let Some(path) = snapshot
+                .bug
+                .validation
+                .control_stdout_path
+                .as_ref()
+                .filter(|path| !path.is_empty())
+            {
+                artifacts.push(format!("control stdout: `{path}`"));
+            }
+            if let Some(path) = snapshot
+                .bug
+                .validation
+                .control_stderr_path
+                .as_ref()
+                .filter(|path| !path.is_empty())
+            {
+                artifacts.push(format!("control stderr: `{path}`"));
+            }
+            artifacts.extend(snapshot.bug.validation.artifacts.iter().filter_map(|a| {
+                let trimmed = a.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(format!("`{trimmed}`"))
+                }
+            }));
+            if !artifacts.is_empty() {
+                composed.push_str(&format!("- **Artifacts:** {}\n", artifacts.join(", ")));
             }
             if let Some(snippet) = snapshot
                 .bug
@@ -2227,6 +2333,17 @@ fn render_bug_sections(snapshots: &[BugSnapshot], git_link_info: Option<&GitLink
             {
                 composed.push_str("- **Output:**\n```\n");
                 composed.push_str(snippet.trim());
+                composed.push_str("\n```\n");
+            }
+            if let Some(control_snippet) = snapshot
+                .bug
+                .validation
+                .control_output_snippet
+                .as_ref()
+                .filter(|snippet| !snippet.is_empty())
+            {
+                composed.push_str("- **Control output:**\n```\n");
+                composed.push_str(control_snippet.trim());
                 composed.push_str("\n```\n");
             }
         }
@@ -12699,6 +12816,37 @@ fn summarize_process_output(success: bool, stdout: &str, stderr: &str) -> String
     }
 }
 
+fn base_url_for_control(target: &str) -> Option<String> {
+    let url = Url::parse(target).ok()?;
+    let mut control = url;
+    control.set_path("/");
+    control.set_query(None);
+    control.set_fragment(None);
+    Some(control.to_string())
+}
+
+async fn write_validation_output_files(
+    work_dir: &Path,
+    repo_path: &Path,
+    file_stem: &str,
+    prefix: &str,
+    stdout: &str,
+    stderr: &str,
+) -> (String, String) {
+    let _ = tokio_fs::create_dir_all(work_dir).await;
+
+    let stdout_path = work_dir.join(format!("{file_stem}_{prefix}_stdout.txt"));
+    let stderr_path = work_dir.join(format!("{file_stem}_{prefix}_stderr.txt"));
+
+    let _ = tokio_fs::write(&stdout_path, stdout.as_bytes()).await;
+    let _ = tokio_fs::write(&stderr_path, stderr.as_bytes()).await;
+
+    (
+        display_path_for(&stdout_path, repo_path),
+        display_path_for(&stderr_path, repo_path),
+    )
+}
+
 fn build_bugs_markdown(
     snapshot: &SecurityReviewSnapshot,
     git_link_info: Option<&GitLinkInfo>,
@@ -12727,6 +12875,11 @@ async fn execute_bug_command(
     } else {
         format!("[{}] {}", plan.summary_id, plan.title)
     };
+    let file_stem = if let Some(rank) = plan.risk_rank {
+        format!("bug_rank_{rank}")
+    } else {
+        format!("bug_{}", plan.summary_id)
+    };
     logs.push(format!(
         "Running {} verification for {label}",
         plan.request.tool.as_str()
@@ -12754,6 +12907,53 @@ async fn execute_bug_command(
                     logs,
                 };
             };
+
+            let control_target = base_url_for_control(&target);
+            validation.control_target = control_target.clone();
+            if let Some(control_target) = control_target.as_ref() {
+                validation.control_steps.push(format!(
+                    "Run: `curl --silent --show-error --location --max-time 15 {control_target}`"
+                ));
+                let mut control_cmd = Command::new("curl");
+                control_cmd
+                    .arg("--silent")
+                    .arg("--show-error")
+                    .arg("--location")
+                    .arg("--max-time")
+                    .arg("15")
+                    .arg(control_target)
+                    .current_dir(&repo_path);
+
+                match control_cmd.output().await {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        let success = output.status.success();
+                        validation.control_summary =
+                            Some(summarize_process_output(success, &stdout, &stderr));
+                        let snippet_source = if success { &stdout } else { &stderr };
+                        let trimmed = snippet_source.trim();
+                        if !trimmed.is_empty() {
+                            validation.control_output_snippet =
+                                Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
+                        }
+                        let (stdout_path, stderr_path) = write_validation_output_files(
+                            &work_dir, &repo_path, &file_stem, "control", &stdout, &stderr,
+                        )
+                        .await;
+                        validation.control_stdout_path = Some(stdout_path);
+                        validation.control_stderr_path = Some(stderr_path);
+                    }
+                    Err(err) => {
+                        validation.control_summary =
+                            Some(format!("Failed to run curl control: {err}"));
+                    }
+                }
+            }
+
+            validation.repro_steps.push(format!(
+                "Run: `curl --silent --show-error --location --max-time 15 {target}`"
+            ));
 
             let mut command = Command::new("curl");
             command
@@ -12785,6 +12985,12 @@ async fn execute_bug_command(
                         validation.output_snippet =
                             Some(truncate_text(trimmed_snippet, VALIDATION_OUTPUT_GRAPHEMES));
                     }
+                    let (stdout_path, stderr_path) = write_validation_output_files(
+                        &work_dir, &repo_path, &file_stem, "repro", &stdout, &stderr,
+                    )
+                    .await;
+                    validation.stdout_path = Some(stdout_path);
+                    validation.stderr_path = Some(stderr_path);
                     logs.push(format!(
                         "{}: curl exited with status {}",
                         label, output.status
@@ -12843,6 +13049,10 @@ async fn execute_bug_command(
                     logs,
                 };
             };
+
+            validation
+                .artifacts
+                .push(display_path_for(script_path, &repo_path));
             if !script_path.exists() {
                 validation.status = BugValidationStatus::Failed;
                 validation.summary =
@@ -12867,6 +13077,13 @@ async fn execute_bug_command(
             }
             command.current_dir(&repo_path);
 
+            let mut cmd = format!("python {}", display_path_for(script_path, &repo_path));
+            if let Some(target) = plan.request.target.as_ref().filter(|t| !t.is_empty()) {
+                cmd.push(' ');
+                cmd.push_str(target);
+            }
+            validation.repro_steps.push(format!("Run: `{cmd}`"));
+
             match command.output().await {
                 Ok(output) => {
                     let duration = start.elapsed();
@@ -12887,6 +13104,12 @@ async fn execute_bug_command(
                         validation.output_snippet =
                             Some(truncate_text(trimmed_snippet, VALIDATION_OUTPUT_GRAPHEMES));
                     }
+                    let (stdout_path, stderr_path) = write_validation_output_files(
+                        &work_dir, &repo_path, &file_stem, "repro", &stdout, &stderr,
+                    )
+                    .await;
+                    validation.stdout_path = Some(stdout_path);
+                    validation.stderr_path = Some(stderr_path);
                     logs.push(format!(
                         "{}: python exited with status {}",
                         label, output.status
@@ -12912,12 +13135,67 @@ async fn execute_bug_command(
                 };
             };
             let _ = tokio_fs::create_dir_all(&work_dir).await;
-            let file_stem = if let Some(rank) = plan.risk_rank {
-                format!("bug_rank_{rank}")
-            } else {
-                format!("bug_{}", plan.summary_id)
-            };
             let screenshot_path = work_dir.join(format!("{file_stem}.png"));
+
+            let control_target = base_url_for_control(&target);
+            validation.control_target = control_target.clone();
+            if let Some(control_target) = control_target.as_ref() {
+                let control_screenshot_path = work_dir.join(format!("{file_stem}_control.png"));
+                validation.control_steps.push(format!(
+                    "Run: `npx --yes playwright screenshot {control_target} {}`",
+                    display_path_for(&control_screenshot_path, &repo_path)
+                ));
+
+                let mut control_cmd = Command::new("npx");
+                control_cmd
+                    .arg("--yes")
+                    .arg("playwright")
+                    .arg("screenshot")
+                    .arg(control_target)
+                    .arg(&control_screenshot_path)
+                    .current_dir(&repo_path);
+
+                match control_cmd.output().await {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        let success = output.status.success();
+                        if success {
+                            validation.control_summary = Some(format!(
+                                "Saved control screenshot to {}",
+                                display_path_for(&control_screenshot_path, &repo_path)
+                            ));
+                            validation
+                                .artifacts
+                                .push(display_path_for(&control_screenshot_path, &repo_path));
+                        } else {
+                            validation.control_summary =
+                                Some(summarize_process_output(success, &stdout, &stderr));
+                        }
+                        let snippet_source = if success { &stdout } else { &stderr };
+                        let trimmed = snippet_source.trim();
+                        if !trimmed.is_empty() {
+                            validation.control_output_snippet =
+                                Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
+                        }
+                        let (stdout_path, stderr_path) = write_validation_output_files(
+                            &work_dir, &repo_path, &file_stem, "control", &stdout, &stderr,
+                        )
+                        .await;
+                        validation.control_stdout_path = Some(stdout_path);
+                        validation.control_stderr_path = Some(stderr_path);
+                    }
+                    Err(err) => {
+                        validation.control_summary =
+                            Some(format!("Failed to run playwright control: {err}"));
+                    }
+                }
+            }
+
+            validation.repro_steps.push(format!(
+                "Run: `npx --yes playwright screenshot {target} {}`",
+                display_path_for(&screenshot_path, &repo_path)
+            ));
 
             let mut command = Command::new("npx");
             command
@@ -12945,6 +13223,9 @@ async fn execute_bug_command(
                             "Saved screenshot to {} · {duration_label}",
                             display_path_for(&screenshot_path, &repo_path)
                         ));
+                        validation
+                            .artifacts
+                            .push(display_path_for(&screenshot_path, &repo_path));
                     } else {
                         let summary_line = summarize_process_output(success, &stdout, &stderr);
                         validation.summary = Some(format!("{summary_line} · {duration_label}"));
@@ -12955,6 +13236,12 @@ async fn execute_bug_command(
                         validation.output_snippet =
                             Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
                     }
+                    let (stdout_path, stderr_path) = write_validation_output_files(
+                        &work_dir, &repo_path, &file_stem, "repro", &stdout, &stderr,
+                    )
+                    .await;
+                    validation.stdout_path = Some(stdout_path);
+                    validation.stderr_path = Some(stderr_path);
                     logs.push(format!(
                         "{}: playwright exited with status {}",
                         label, output.status
