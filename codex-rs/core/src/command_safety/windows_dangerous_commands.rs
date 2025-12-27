@@ -41,6 +41,13 @@ fn is_dangerous_powershell(command: &[String]) -> bool {
         .collect();
     let has_url = args_have_url(&parsed.tokens);
 
+    // Keep parity with Unix-style `rm -f` checks: in PowerShell, `Remove-Item` (and
+    // common aliases like `rm`) becomes meaningfully more dangerous when `-Force`
+    // (or `-f`) is present.
+    if is_powershell_force_delete(&tokens_lc) {
+        return true;
+    }
+
     if has_url
         && tokens_lc.iter().any(|t| {
             matches!(
@@ -85,6 +92,39 @@ fn is_dangerous_powershell(command: &[String]) -> bool {
     false
 }
 
+fn is_powershell_force_delete(tokens_lc: &[String]) -> bool {
+    let Some(first) = tokens_lc.first() else {
+        return false;
+    };
+
+    // `rm`, `ri`, `del`, `erase` are common aliases for `Remove-Item`.
+    if !matches!(
+        first.as_str(),
+        "remove-item" | "rm" | "ri" | "del" | "erase"
+    ) {
+        return false;
+    }
+
+    tokens_lc.iter().any(|t| {
+        // Common truthy forms.
+        if matches!(t.as_str(), "-force" | "-f" | "-rf" | "-fr") {
+            return true;
+        }
+
+        // Only treat explicit truthy assignments as force. Avoid flagging `-Force:$false`.
+        let value = if let Some(v) = t.strip_prefix("-force:") {
+            v
+        } else if let Some(v) = t.strip_prefix("-f:") {
+            v
+        } else {
+            return false;
+        };
+
+        let value = value.trim();
+        value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("$true") || value == "1"
+    })
+}
+
 fn is_dangerous_cmd(command: &[String]) -> bool {
     let Some((exe, rest)) = command.split_first() else {
         return false;
@@ -107,15 +147,35 @@ fn is_dangerous_cmd(command: &[String]) -> bool {
         }
     }
 
-    let Some(first_cmd) = iter.next() else {
+    let Some(first_cmd_raw) = iter.next() else {
         return false;
     };
-    // Classic `cmd /c start https://...` ShellExecute path.
-    if !first_cmd.eq_ignore_ascii_case("start") {
+
+    // The command body sometimes arrives as a single token (e.g. `cmd /c "del /f foo"`).
+    // Best-effort split it and then append any remaining argv tokens.
+    let mut cmd_tokens: Vec<String> = if first_cmd_raw.contains(char::is_whitespace) {
+        shlex_split(first_cmd_raw).unwrap_or_else(|| vec![first_cmd_raw.to_string()])
+    } else {
+        vec![first_cmd_raw.to_string()]
+    };
+    cmd_tokens.extend(iter.cloned());
+
+    let Some((first_cmd, cmd_args)) = cmd_tokens.split_first() else {
         return false;
+    };
+    let first_cmd_lc = first_cmd.to_ascii_lowercase();
+
+    // Classic `cmd /c start https://...` ShellExecute path.
+    if first_cmd_lc == "start" {
+        return args_have_url(cmd_args);
     }
-    let remaining: Vec<String> = iter.cloned().collect();
-    args_have_url(&remaining)
+
+    // Parity with Unix `rm -f`: CMD `del/erase /f` forces deletion of read-only files.
+    if matches!(first_cmd_lc.as_str(), "del" | "erase") {
+        return cmd_args.iter().any(|a| a.eq_ignore_ascii_case("/f"));
+    }
+
+    false
 }
 
 fn is_direct_gui_launch(command: &[String]) -> bool {
@@ -289,12 +349,62 @@ mod tests {
     }
 
     #[test]
+    fn powershell_remove_item_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Remove-Item -Force foo.txt"
+        ])));
+    }
+
+    #[test]
+    fn powershell_rm_f_alias_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "rm -f foo.txt"
+        ])));
+    }
+
+    #[test]
+    fn powershell_remove_item_without_force_is_not_flagged() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Remove-Item foo.txt"
+        ])));
+    }
+
+    #[test]
+    fn powershell_remove_item_force_false_is_not_flagged() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Remove-Item -Force:$false foo.txt"
+        ])));
+    }
+
+    #[test]
     fn cmd_start_with_url_is_dangerous() {
         assert!(is_dangerous_command_windows(&vec_str(&[
             "cmd",
             "/c",
             "start",
             "https://example.com"
+        ])));
+    }
+
+    #[test]
+    fn cmd_del_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "del", "/f", "foo.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_del_without_force_is_not_flagged() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "del", "foo.txt"
         ])));
     }
 
