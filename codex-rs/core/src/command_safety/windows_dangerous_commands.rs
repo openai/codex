@@ -464,4 +464,22 @@ mod tests {
             "Remove-Item test -Force; Write-Host done"
         ])));
     }
+
+    #[test]
+    fn powershell_remove_item_force_inside_block_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "if ($true) { Remove-Item test -Force}"
+        ])));
+    }
+
+    #[test]
+    fn powershell_remove_item_force_inside_brackets_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "[void]( Remove-Item test -Force)]"
+        ])));
+    }
 }
