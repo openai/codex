@@ -82,6 +82,11 @@ fn is_dangerous_powershell(command: &[String]) -> bool {
         }
     }
 
+    // Check for force delete operations (e.g., Remove-Item -Force)
+    if has_force_delete_cmdlet(&tokens_lc) {
+        return true;
+    }
+
     false
 }
 
@@ -111,11 +116,24 @@ fn is_dangerous_cmd(command: &[String]) -> bool {
         return false;
     };
     // Classic `cmd /c start https://...` ShellExecute path.
-    if !first_cmd.eq_ignore_ascii_case("start") {
-        return false;
+    if first_cmd.eq_ignore_ascii_case("start") {
+        let remaining: Vec<String> = iter.cloned().collect();
+        return args_have_url(&remaining);
     }
-    let remaining: Vec<String> = iter.cloned().collect();
-    args_have_url(&remaining)
+
+    // Force delete: del /f, erase /f
+    if first_cmd.eq_ignore_ascii_case("del") || first_cmd.eq_ignore_ascii_case("erase") {
+        let remaining: Vec<String> = iter.cloned().collect();
+        return has_force_flag_cmd(&remaining);
+    }
+
+    // Recursive directory removal: rd /s /q, rmdir /s /q
+    if first_cmd.eq_ignore_ascii_case("rd") || first_cmd.eq_ignore_ascii_case("rmdir") {
+        let remaining: Vec<String> = iter.cloned().collect();
+        return has_recursive_flag_cmd(&remaining) && has_quiet_flag_cmd(&remaining);
+    }
+
+    false
 }
 
 fn is_direct_gui_launch(command: &[String]) -> bool {
@@ -147,6 +165,35 @@ fn is_direct_gui_launch(command: &[String]) -> bool {
     }
 
     false
+}
+
+/// Check for PowerShell force delete cmdlets like `Remove-Item -Force`.
+fn has_force_delete_cmdlet(tokens: &[String]) -> bool {
+    // PowerShell cmdlets/aliases for deletion
+    const DELETE_CMDLETS: &[&str] = &["remove-item", "ri", "rm", "del", "erase", "rd", "rmdir"];
+    let has_delete = tokens.iter().any(|t| DELETE_CMDLETS.contains(&t.as_str()));
+    let has_force = tokens
+        .iter()
+        .any(|t| t == "-force" || t.starts_with("-force:"));
+    has_delete && has_force
+}
+
+/// Check for /f or /F flag in CMD del/erase arguments.
+fn has_force_flag_cmd(args: &[String]) -> bool {
+    args.iter()
+        .any(|a| a.eq_ignore_ascii_case("/f") || a.to_ascii_lowercase().contains("/f"))
+}
+
+/// Check for /s or /S flag in CMD rd/rmdir arguments.
+fn has_recursive_flag_cmd(args: &[String]) -> bool {
+    args.iter()
+        .any(|a| a.eq_ignore_ascii_case("/s") || a.to_ascii_lowercase().contains("/s"))
+}
+
+/// Check for /q or /Q flag in CMD rd/rmdir arguments.
+fn has_quiet_flag_cmd(args: &[String]) -> bool {
+    args.iter()
+        .any(|a| a.eq_ignore_ascii_case("/q") || a.to_ascii_lowercase().contains("/q"))
 }
 
 fn args_have_url(args: &[String]) -> bool {
@@ -311,6 +358,97 @@ mod tests {
         assert!(!is_dangerous_command_windows(&vec_str(&[
             "explorer.exe",
             "."
+        ])));
+    }
+
+    // Force delete tests for PowerShell
+
+    #[test]
+    fn powershell_remove_item_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Remove-Item test -Force"
+        ])));
+    }
+
+    #[test]
+    fn powershell_remove_item_recurse_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Remove-Item test -Recurse -Force"
+        ])));
+    }
+
+    #[test]
+    fn powershell_ri_alias_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "pwsh",
+            "-Command",
+            "ri test -Force"
+        ])));
+    }
+
+    #[test]
+    fn powershell_remove_item_without_force_is_not_flagged() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Remove-Item test"
+        ])));
+    }
+
+    // Force delete tests for CMD
+    #[test]
+    fn cmd_del_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "del", "/f", "test.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_erase_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "erase", "/f", "test.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_del_without_force_is_not_flagged() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "del", "test.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_rd_recursive_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "rd", "/s", "/q", "test"
+        ])));
+    }
+
+    #[test]
+    fn cmd_rd_without_quiet_is_not_flagged() {
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "rd", "/s", "test"
+        ])));
+    }
+
+    #[test]
+    fn cmd_rmdir_recursive_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/c", "rmdir", "/s", "/q", "test"
+        ])));
+    }
+
+    // Test exact scenario from issue #8567
+    #[test]
+    fn powershell_remove_item_path_recurse_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Remove-Item -Path 'test' -Recurse -Force"
         ])));
     }
 }
