@@ -9,7 +9,9 @@ name: rust-release
 on:
   push:
     tags:
-      - "rust-v*.*.*"
+      # Require a digit immediately after `rust-v` to avoid accidentally
+      # triggering on malformed tags like `rust-vrust-v...`.
+      - "rust-v[0-9]*.*.*"
 
 concurrency:
   group: ${{ github.workflow }}
