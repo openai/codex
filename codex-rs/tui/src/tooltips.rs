@@ -1,7 +1,15 @@
+use codex_core::features::FEATURES;
 use lazy_static::lazy_static;
 use rand::Rng;
 
 const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
+
+fn beta_tooltips() -> Vec<&'static str> {
+    FEATURES
+        .iter()
+        .filter_map(|spec| spec.stage.beta_announcement())
+        .collect()
+}
 
 lazy_static! {
     static ref TOOLTIPS: Vec<&'static str> = RAW_TOOLTIPS
@@ -9,6 +17,12 @@ lazy_static! {
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .collect();
+    static ref ALL_TOOLTIPS: Vec<&'static str> = {
+        let mut tips = Vec::new();
+        tips.extend(TOOLTIPS.iter().copied());
+        tips.extend(beta_tooltips());
+        tips
+    };
 }
 
 pub(crate) fn random_tooltip() -> Option<&'static str> {
@@ -17,10 +31,12 @@ pub(crate) fn random_tooltip() -> Option<&'static str> {
 }
 
 fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R) -> Option<&'static str> {
-    if TOOLTIPS.is_empty() {
+    if ALL_TOOLTIPS.is_empty() {
         None
     } else {
-        TOOLTIPS.get(rng.random_range(0..TOOLTIPS.len())).copied()
+        ALL_TOOLTIPS
+            .get(rng.random_range(0..ALL_TOOLTIPS.len()))
+            .copied()
     }
 }
 

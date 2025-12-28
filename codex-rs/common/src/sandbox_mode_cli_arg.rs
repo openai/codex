@@ -26,3 +26,22 @@ impl From<SandboxModeCliArg> for SandboxMode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn maps_cli_args_to_protocol_modes() {
+        assert_eq!(SandboxMode::ReadOnly, SandboxModeCliArg::ReadOnly.into());
+        assert_eq!(
+            SandboxMode::WorkspaceWrite,
+            SandboxModeCliArg::WorkspaceWrite.into()
+        );
+        assert_eq!(
+            SandboxMode::DangerFullAccess,
+            SandboxModeCliArg::DangerFullAccess.into()
+        );
+    }
+}

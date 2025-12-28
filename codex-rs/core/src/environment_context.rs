@@ -1,9 +1,6 @@
-use serde::Deserialize;
-use serde::Serialize;
-use strum_macros::Display as DeriveDisplay;
-
 use crate::codex::TurnContext;
 use crate::protocol::AskForApproval;
+use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::shell::Shell;
 use codex_protocol::config_types::SandboxMode;
@@ -11,15 +8,11 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use serde::Deserialize;
+use serde::Serialize;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, DeriveDisplay)]
-#[serde(rename_all = "kebab-case")]
-#[strum(serialize_all = "kebab-case")]
-pub enum NetworkAccess {
-    Restricted,
-    Enabled,
-}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "environment_context", rename_all = "snake_case")]
 pub(crate) struct EnvironmentContext {
@@ -27,7 +20,7 @@ pub(crate) struct EnvironmentContext {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub network_access: Option<NetworkAccess>,
-    pub writable_roots: Option<Vec<PathBuf>>,
+    pub writable_roots: Option<Vec<AbsolutePathBuf>>,
     pub shell: Shell,
 }
 
@@ -44,12 +37,14 @@ impl EnvironmentContext {
             sandbox_mode: match sandbox_policy {
                 Some(SandboxPolicy::DangerFullAccess) => Some(SandboxMode::DangerFullAccess),
                 Some(SandboxPolicy::ReadOnly) => Some(SandboxMode::ReadOnly),
+                Some(SandboxPolicy::ExternalSandbox { .. }) => Some(SandboxMode::DangerFullAccess),
                 Some(SandboxPolicy::WorkspaceWrite { .. }) => Some(SandboxMode::WorkspaceWrite),
                 None => None,
             },
             network_access: match sandbox_policy {
                 Some(SandboxPolicy::DangerFullAccess) => Some(NetworkAccess::Enabled),
                 Some(SandboxPolicy::ReadOnly) => Some(NetworkAccess::Restricted),
+                Some(SandboxPolicy::ExternalSandbox { network_access }) => Some(network_access),
                 Some(SandboxPolicy::WorkspaceWrite { network_access, .. }) => {
                     if network_access {
                         Some(NetworkAccess::Enabled)
@@ -191,6 +186,8 @@ mod tests {
     use crate::shell::ShellType;
 
     use super::*;
+    use core_test_support::test_path_buf;
+    use core_test_support::test_tmp_path_buf;
     use pretty_assertions::assert_eq;
 
     fn fake_shell() -> Shell {
@@ -203,7 +200,10 @@ mod tests {
 
     fn workspace_write_policy(writable_roots: Vec<&str>, network_access: bool) -> SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {
-            writable_roots: writable_roots.into_iter().map(PathBuf::from).collect(),
+            writable_roots: writable_roots
+                .into_iter()
+                .map(|s| AbsolutePathBuf::try_from(s).unwrap())
+                .collect(),
             network_access,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -212,24 +212,37 @@ mod tests {
 
     #[test]
     fn serialize_workspace_write_environment_context() {
+        let cwd = test_path_buf("/repo");
+        let writable_root = test_tmp_path_buf();
+        let cwd_str = cwd.to_str().expect("cwd is valid utf-8");
+        let writable_root_str = writable_root
+            .to_str()
+            .expect("writable root is valid utf-8");
         let context = EnvironmentContext::new(
-            Some(PathBuf::from("/repo")),
+            Some(cwd.clone()),
             Some(AskForApproval::OnRequest),
-            Some(workspace_write_policy(vec!["/repo", "/tmp"], false)),
+            Some(workspace_write_policy(
+                vec![cwd_str, writable_root_str],
+                false,
+            )),
             fake_shell(),
         );
 
-        let expected = r#"<environment_context>
-  <cwd>/repo</cwd>
+        let expected = format!(
+            r#"<environment_context>
+  <cwd>{cwd}</cwd>
   <approval_policy>on-request</approval_policy>
   <sandbox_mode>workspace-write</sandbox_mode>
   <network_access>restricted</network_access>
   <writable_roots>
-    <root>/repo</root>
-    <root>/tmp</root>
+    <root>{cwd}</root>
+    <root>{writable_root}</root>
   </writable_roots>
   <shell>bash</shell>
-</environment_context>"#;
+</environment_context>"#,
+            cwd = cwd.display(),
+            writable_root = writable_root.display(),
+        );
 
         assert_eq!(context.serialize_to_xml(), expected);
     }
@@ -246,6 +259,48 @@ mod tests {
         let expected = r#"<environment_context>
   <approval_policy>never</approval_policy>
   <sandbox_mode>read-only</sandbox_mode>
+  <network_access>restricted</network_access>
+  <shell>bash</shell>
+</environment_context>"#;
+
+        assert_eq!(context.serialize_to_xml(), expected);
+    }
+
+    #[test]
+    fn serialize_external_sandbox_environment_context() {
+        let context = EnvironmentContext::new(
+            None,
+            Some(AskForApproval::OnRequest),
+            Some(SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Enabled,
+            }),
+            fake_shell(),
+        );
+
+        let expected = r#"<environment_context>
+  <approval_policy>on-request</approval_policy>
+  <sandbox_mode>danger-full-access</sandbox_mode>
+  <network_access>enabled</network_access>
+  <shell>bash</shell>
+</environment_context>"#;
+
+        assert_eq!(context.serialize_to_xml(), expected);
+    }
+
+    #[test]
+    fn serialize_external_sandbox_with_restricted_network_environment_context() {
+        let context = EnvironmentContext::new(
+            None,
+            Some(AskForApproval::OnRequest),
+            Some(SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Restricted,
+            }),
+            fake_shell(),
+        );
+
+        let expected = r#"<environment_context>
+  <approval_policy>on-request</approval_policy>
+  <sandbox_mode>danger-full-access</sandbox_mode>
   <network_access>restricted</network_access>
   <shell>bash</shell>
 </environment_context>"#;

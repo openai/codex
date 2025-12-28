@@ -131,8 +131,17 @@ impl BottomPane {
         }
     }
 
+    pub fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
+        self.composer.set_skill_mentions(skills);
+        self.request_redraw();
+    }
+
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
         self.status.as_ref()
+    }
+
+    pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
+        self.composer.skills()
     }
 
     #[cfg(test)]
@@ -257,12 +266,13 @@ impl BottomPane {
         self.composer.current_text()
     }
 
-    /// Update the animated header shown to the left of the brackets in the
-    /// status indicator (defaults to "Working"). No-ops if the status
-    /// indicator is not active.
-    pub(crate) fn update_status_header(&mut self, header: String) {
+    /// Update the status indicator header (defaults to "Working") and details below it.
+    ///
+    /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
+    pub(crate) fn update_status(&mut self, header: String, details: Option<String>) {
         if let Some(status) = self.status.as_mut() {
             status.update_header(header);
+            status.update_details(details);
             self.request_redraw();
         }
     }
@@ -369,6 +379,22 @@ impl BottomPane {
         self.context_window_used_tokens = used_tokens;
         self.composer
             .set_context_window(percent, self.context_window_used_tokens);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_transcript_ui_state(
+        &mut self,
+        scrolled: bool,
+        selection_active: bool,
+        scroll_position: Option<(usize, usize)>,
+        copy_selection_key: crate::key_hint::KeyBinding,
+    ) {
+        self.composer.set_transcript_ui_state(
+            scrolled,
+            selection_active,
+            scroll_position,
+            copy_selection_key,
+        );
         self.request_redraw();
     }
 

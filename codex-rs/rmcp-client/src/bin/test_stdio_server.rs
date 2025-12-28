@@ -95,6 +95,7 @@ impl TestToolServer {
             mime_type: Some("text/plain".to_string()),
             size: None,
             icons: None,
+            meta: None,
         };
         Resource::new(raw, None)
     }
@@ -146,6 +147,7 @@ impl ServerHandler for TestToolServer {
             Ok(ListToolsResult {
                 tools: (*tools).clone(),
                 next_cursor: None,
+                meta: None,
             })
         }
     }
@@ -160,6 +162,7 @@ impl ServerHandler for TestToolServer {
             Ok(ListResourcesResult {
                 resources: (*resources).clone(),
                 next_cursor: None,
+                meta: None,
             })
         }
     }
@@ -172,6 +175,7 @@ impl ServerHandler for TestToolServer {
         Ok(ListResourceTemplatesResult {
             resource_templates: (*self.resource_templates).clone(),
             next_cursor: None,
+            meta: None,
         })
     }
 

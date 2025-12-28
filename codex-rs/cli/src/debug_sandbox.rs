@@ -109,7 +109,7 @@ async fn run_command_under_sandbox(
     log_denials: bool,
 ) -> anyhow::Result<()> {
     let sandbox_mode = create_sandbox_mode(full_auto);
-    let config = Config::load_with_cli_overrides(
+    let config = Config::load_with_cli_overrides_and_harness_overrides(
         config_overrides
             .parse_overrides()
             .map_err(anyhow::Error::msg)?,
@@ -136,27 +136,43 @@ async fn run_command_under_sandbox(
     if let SandboxType::Windows = sandbox_type {
         #[cfg(target_os = "windows")]
         {
+            use codex_core::features::Feature;
             use codex_windows_sandbox::run_windows_sandbox_capture;
+            use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
 
-            let policy_str = serde_json::to_string(&config.sandbox_policy)?;
+            let policy_str = serde_json::to_string(config.sandbox_policy.get())?;
 
             let sandbox_cwd = sandbox_policy_cwd.clone();
             let cwd_clone = cwd.clone();
             let env_map = env.clone();
             let command_vec = command.clone();
             let base_dir = config.codex_home.clone();
+            let use_elevated = config.features.enabled(Feature::WindowsSandbox)
+                && config.features.enabled(Feature::WindowsSandboxElevated);
 
             // Preflight audit is invoked elsewhere at the appropriate times.
             let res = tokio::task::spawn_blocking(move || {
-                run_windows_sandbox_capture(
-                    policy_str.as_str(),
-                    &sandbox_cwd,
-                    base_dir.as_path(),
-                    command_vec,
-                    &cwd_clone,
-                    env_map,
-                    None,
-                )
+                if use_elevated {
+                    run_windows_sandbox_capture_elevated(
+                        policy_str.as_str(),
+                        &sandbox_cwd,
+                        base_dir.as_path(),
+                        command_vec,
+                        &cwd_clone,
+                        env_map,
+                        None,
+                    )
+                } else {
+                    run_windows_sandbox_capture(
+                        policy_str.as_str(),
+                        &sandbox_cwd,
+                        base_dir.as_path(),
+                        command_vec,
+                        &cwd_clone,
+                        env_map,
+                        None,
+                    )
+                }
             })
             .await;
 
@@ -200,7 +216,7 @@ async fn run_command_under_sandbox(
             spawn_command_under_seatbelt(
                 command,
                 cwd,
-                &config.sandbox_policy,
+                config.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
                 stdio_policy,
                 env,
@@ -216,7 +232,7 @@ async fn run_command_under_sandbox(
                 codex_linux_sandbox_exe,
                 command,
                 cwd,
-                &config.sandbox_policy,
+                config.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
                 stdio_policy,
                 env,

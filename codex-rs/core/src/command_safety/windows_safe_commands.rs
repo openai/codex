@@ -1,30 +1,38 @@
-use shlex::split as shlex_split;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use serde::Deserialize;
 use std::path::Path;
+use std::process::Command;
+use std::sync::LazyLock;
+
+const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
 
 /// On Windows, we conservatively allow only clearly read-only PowerShell invocations
 /// that match a small safelist. Anything else (including direct CMD commands) is unsafe.
 pub fn is_safe_command_windows(command: &[String]) -> bool {
     if let Some(commands) = try_parse_powershell_command_sequence(command) {
-        return commands
+        commands
             .iter()
-            .all(|cmd| is_safe_powershell_command(cmd.as_slice()));
+            .all(|cmd| is_safe_powershell_command(cmd.as_slice()))
+    } else {
+        // Only PowerShell invocations are allowed on Windows for now; anything else is unsafe.
+        false
     }
-    // Only PowerShell invocations are allowed on Windows for now; anything else is unsafe.
-    false
 }
 
 /// Returns each command sequence if the invocation starts with a PowerShell binary.
 /// For example, the tokens from `pwsh Get-ChildItem | Measure-Object` become two sequences.
 fn try_parse_powershell_command_sequence(command: &[String]) -> Option<Vec<Vec<String>>> {
     let (exe, rest) = command.split_first()?;
-    if !is_powershell_executable(exe) {
-        return None;
+    if is_powershell_executable(exe) {
+        parse_powershell_invocation(exe, rest)
+    } else {
+        None
     }
-    parse_powershell_invocation(rest)
 }
 
 /// Parses a PowerShell invocation into discrete command vectors, rejecting unsafe patterns.
-fn parse_powershell_invocation(args: &[String]) -> Option<Vec<Vec<String>>> {
+fn parse_powershell_invocation(executable: &str, args: &[String]) -> Option<Vec<Vec<String>>> {
     if args.is_empty() {
         // Examples rejected here: "pwsh" and "powershell.exe" with no additional arguments.
         return None;
@@ -42,7 +50,7 @@ fn parse_powershell_invocation(args: &[String]) -> Option<Vec<Vec<String>>> {
                     // Examples rejected here: "pwsh -Command foo bar" and "powershell -c ls extra".
                     return None;
                 }
-                return parse_powershell_script(script);
+                return parse_powershell_script(executable, script);
             }
             _ if lower.starts_with("-command:") || lower.starts_with("/command:") => {
                 if idx + 1 != args.len() {
@@ -51,7 +59,7 @@ fn parse_powershell_invocation(args: &[String]) -> Option<Vec<Vec<String>>> {
                     return None;
                 }
                 let script = arg.split_once(':')?.1;
-                return parse_powershell_script(script);
+                return parse_powershell_script(executable, script);
             }
 
             // Benign, no-arg flags we tolerate.
@@ -77,7 +85,8 @@ fn parse_powershell_invocation(args: &[String]) -> Option<Vec<Vec<String>>> {
             // This happens if powershell is invoked without -Command, e.g.
             // ["pwsh", "-NoLogo", "git", "-c", "core.pager=cat", "status"]
             _ => {
-                return split_into_commands(args[idx..].to_vec());
+                let script = join_arguments_as_script(&args[idx..]);
+                return parse_powershell_script(executable, &script);
             }
         }
     }
@@ -88,46 +97,14 @@ fn parse_powershell_invocation(args: &[String]) -> Option<Vec<Vec<String>>> {
 
 /// Tokenizes an inline PowerShell script and delegates to the command splitter.
 /// Examples of when this is called: pwsh.exe -Command '<script>' or pwsh.exe -Command:<script>
-fn parse_powershell_script(script: &str) -> Option<Vec<Vec<String>>> {
-    let tokens = shlex_split(script)?;
-    split_into_commands(tokens)
-}
-
-/// Splits tokens into pipeline segments while ensuring no unsafe separators slip through.
-/// e.g. Get-ChildItem | Measure-Object -> [['Get-ChildItem'], ['Measure-Object']]
-fn split_into_commands(tokens: Vec<String>) -> Option<Vec<Vec<String>>> {
-    if tokens.is_empty() {
-        // Examples rejected here: "pwsh -Command ''" and "powershell -Command \"\"".
-        return None;
+fn parse_powershell_script(executable: &str, script: &str) -> Option<Vec<Vec<String>>> {
+    if let PowershellParseOutcome::Commands(commands) =
+        parse_with_powershell_ast(executable, script)
+    {
+        Some(commands)
+    } else {
+        None
     }
-
-    let mut commands = Vec::new();
-    let mut current = Vec::new();
-    for token in tokens.into_iter() {
-        match token.as_str() {
-            "|" | "||" | "&&" | ";" => {
-                if current.is_empty() {
-                    // Examples rejected here: "pwsh -Command '| Get-ChildItem'" and "pwsh -Command '; dir'".
-                    return None;
-                }
-                commands.push(current);
-                current = Vec::new();
-            }
-            // Reject if any token embeds separators, redirection, or call operator characters.
-            _ if token.contains(['|', ';', '>', '<', '&']) || token.contains("$(") => {
-                // Examples rejected here: "pwsh -Command 'dir|select'" and "pwsh -Command 'echo hi > out.txt'".
-                return None;
-            }
-            _ => current.push(token),
-        }
-    }
-
-    if current.is_empty() {
-        // Examples rejected here: "pwsh -Command 'dir |'" and "pwsh -Command 'Get-ChildItem ;'".
-        return None;
-    }
-    commands.push(current);
-    Some(commands)
 }
 
 /// Returns true when the executable name is one of the supported PowerShell binaries.
@@ -142,6 +119,105 @@ fn is_powershell_executable(exe: &str) -> bool {
         executable_name.as_str(),
         "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe"
     )
+}
+
+/// Attempts to parse PowerShell using the real PowerShell parser, returning every pipeline element
+/// as a flat argv vector when possible. If parsing fails or the AST includes unsupported constructs,
+/// we conservatively reject the command instead of trying to split it manually.
+fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseOutcome {
+    let encoded_script = encode_powershell_base64(script);
+    let encoded_parser_script = encoded_parser_script();
+    match Command::new(executable)
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            encoded_parser_script,
+        ])
+        .env("CODEX_POWERSHELL_PAYLOAD", &encoded_script)
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            if let Ok(result) =
+                serde_json::from_slice::<PowershellParserOutput>(output.stdout.as_slice())
+            {
+                result.into_outcome()
+            } else {
+                PowershellParseOutcome::Failed
+            }
+        }
+        _ => PowershellParseOutcome::Failed,
+    }
+}
+
+fn encode_powershell_base64(script: &str) -> String {
+    let mut utf16 = Vec::with_capacity(script.len() * 2);
+    for unit in script.encode_utf16() {
+        utf16.extend_from_slice(&unit.to_le_bytes());
+    }
+    BASE64_STANDARD.encode(utf16)
+}
+
+fn encoded_parser_script() -> &'static str {
+    static ENCODED: LazyLock<String> =
+        LazyLock::new(|| encode_powershell_base64(POWERSHELL_PARSER_SCRIPT));
+    &ENCODED
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PowershellParserOutput {
+    status: String,
+    commands: Option<Vec<Vec<String>>>,
+}
+
+impl PowershellParserOutput {
+    fn into_outcome(self) -> PowershellParseOutcome {
+        match self.status.as_str() {
+            "ok" => self
+                .commands
+                .filter(|commands| {
+                    !commands.is_empty()
+                        && commands
+                            .iter()
+                            .all(|cmd| !cmd.is_empty() && cmd.iter().all(|word| !word.is_empty()))
+                })
+                .map(PowershellParseOutcome::Commands)
+                .unwrap_or(PowershellParseOutcome::Unsupported),
+            "unsupported" => PowershellParseOutcome::Unsupported,
+            _ => PowershellParseOutcome::Failed,
+        }
+    }
+}
+
+enum PowershellParseOutcome {
+    Commands(Vec<Vec<String>>),
+    Unsupported,
+    Failed,
+}
+
+fn join_arguments_as_script(args: &[String]) -> String {
+    let mut words = Vec::with_capacity(args.len());
+    if let Some((first, rest)) = args.split_first() {
+        words.push(first.clone());
+        for arg in rest {
+            words.push(quote_argument(arg));
+        }
+    }
+    words.join(" ")
+}
+
+fn quote_argument(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+
+    if arg.chars().all(|ch| !ch.is_whitespace()) {
+        return arg.to_string();
+    }
+
+    format!("'{}'", arg.replace('\'', "''"))
 }
 
 /// Validates that a parsed PowerShell command stays within our read-only safelist.
@@ -174,17 +250,6 @@ fn is_safe_powershell_command(words: &[String]) -> bool {
             // Examples rejected here: "Write-Output (Set-Content foo6.txt 'abc')" and "Get-Content (New-Item bar.txt)".
             return false;
         }
-    }
-
-    // Block PowerShell call operator or any redirection explicitly.
-    if words.iter().any(|w| {
-        matches!(
-            w.as_str(),
-            "&" | ">" | ">>" | "1>" | "2>" | "2>&1" | "*>" | "<" | "<<"
-        )
-    }) {
-        // Examples rejected here: "pwsh -Command '& Remove-Item foo'" and "pwsh -Command 'Get-Content foo > bar'".
-        return false;
     }
 
     let command = words[0]
@@ -279,9 +344,10 @@ fn is_safe_git_command(words: &[String]) -> bool {
     false
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
-    use super::is_safe_command_windows;
+    use super::*;
+    use crate::powershell::try_find_pwsh_executable_blocking;
     use std::string::ToString;
 
     /// Converts a slice of string literals into owned `String`s for the tests.
@@ -312,12 +378,14 @@ mod tests {
         ])));
 
         // pwsh parity
-        assert!(is_safe_command_windows(&vec_str(&[
-            "pwsh.exe",
-            "-NoProfile",
-            "-Command",
-            "Get-ChildItem",
-        ])));
+        if let Some(pwsh) = try_find_pwsh_executable_blocking() {
+            assert!(is_safe_command_windows(&[
+                pwsh.as_path().to_str().unwrap().into(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Get-ChildItem".to_string(),
+            ]));
+        }
     }
 
     #[test]
@@ -327,12 +395,14 @@ mod tests {
             return;
         }
 
-        assert!(is_safe_command_windows(&vec_str(&[
-            r"C:\Program Files\PowerShell\7\pwsh.exe",
-            "-NoProfile",
-            "-Command",
-            "Get-ChildItem -Path .",
-        ])));
+        if let Some(pwsh) = try_find_pwsh_executable_blocking() {
+            assert!(is_safe_command_windows(&[
+                pwsh.as_path().to_str().unwrap().into(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Get-ChildItem -Path .".to_string(),
+            ]));
+        }
 
         assert!(is_safe_command_windows(&vec_str(&[
             r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
@@ -343,47 +413,53 @@ mod tests {
 
     #[test]
     fn allows_read_only_pipelines_and_git_usage() {
-        assert!(is_safe_command_windows(&vec_str(&[
-            "pwsh",
-            "-NoLogo",
-            "-NoProfile",
-            "-Command",
-            "rg --files-with-matches foo | Measure-Object | Select-Object -ExpandProperty Count",
-        ])));
+        let Some(pwsh) = try_find_pwsh_executable_blocking() else {
+            return;
+        };
 
-        assert!(is_safe_command_windows(&vec_str(&[
-            "pwsh",
-            "-NoLogo",
-            "-NoProfile",
-            "-Command",
-            "Get-Content foo.rs | Select-Object -Skip 200",
-        ])));
+        let pwsh: String = pwsh.as_path().to_str().unwrap().into();
+        assert!(is_safe_command_windows(&[
+            pwsh.clone(),
+            "-NoLogo".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "rg --files-with-matches foo | Measure-Object | Select-Object -ExpandProperty Count"
+                .to_string()
+        ]));
 
-        assert!(is_safe_command_windows(&vec_str(&[
-            "pwsh",
-            "-NoLogo",
-            "-NoProfile",
-            "-Command",
-            "git -c core.pager=cat show HEAD:foo.rs",
-        ])));
+        assert!(is_safe_command_windows(&[
+            pwsh.clone(),
+            "-NoLogo".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Get-Content foo.rs | Select-Object -Skip 200".to_string()
+        ]));
 
-        assert!(is_safe_command_windows(&vec_str(&[
-            "pwsh",
-            "-Command",
-            "-git cat-file -p HEAD:foo.rs",
-        ])));
+        assert!(is_safe_command_windows(&[
+            pwsh.clone(),
+            "-NoLogo".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "git -c core.pager=cat show HEAD:foo.rs".to_string()
+        ]));
 
-        assert!(is_safe_command_windows(&vec_str(&[
-            "pwsh",
-            "-Command",
-            "(Get-Content foo.rs -Raw)",
-        ])));
+        assert!(is_safe_command_windows(&[
+            pwsh.clone(),
+            "-Command".to_string(),
+            "-git cat-file -p HEAD:foo.rs".to_string()
+        ]));
 
-        assert!(is_safe_command_windows(&vec_str(&[
-            "pwsh",
-            "-Command",
-            "Get-Item foo.rs | Select-Object Length",
-        ])));
+        assert!(is_safe_command_windows(&[
+            pwsh.clone(),
+            "-Command".to_string(),
+            "(Get-Content foo.rs -Raw)".to_string()
+        ]));
+
+        assert!(is_safe_command_windows(&[
+            pwsh,
+            "-Command".to_string(),
+            "Get-Item foo.rs | Select-Object Length".to_string()
+        ]));
     }
 
     #[test]
@@ -455,5 +531,93 @@ mod tests {
             "-Command",
             "Get-Content (New-Item bar.txt)",
         ])));
+
+        // Unsafe @ expansion.
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-Command",
+            "ls @(calc.exe)"
+        ])));
+
+        // Unsupported constructs that the AST parser refuses (no fallback to manual splitting).
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-Command",
+            "ls && pwd"
+        ])));
+
+        // Sub-expressions are rejected even if they contain otherwise safe commands.
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-Command",
+            "Write-Output $(Get-Content foo)"
+        ])));
+
+        // Empty words from the parser (e.g. '') are rejected.
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-Command",
+            "''"
+        ])));
+    }
+
+    #[test]
+    fn accepts_constant_expression_arguments() {
+        assert!(is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-Command",
+            "Get-Content 'foo bar'"
+        ])));
+
+        assert!(is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-Command",
+            "Get-Content \"foo bar\""
+        ])));
+    }
+
+    #[test]
+    fn rejects_dynamic_arguments() {
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-Command",
+            "Get-Content $foo"
+        ])));
+
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-Command",
+            "Write-Output \"foo $bar\""
+        ])));
+    }
+
+    #[test]
+    fn uses_invoked_powershell_variant_for_parsing() {
+        if !cfg!(windows) {
+            return;
+        }
+
+        let chain = "pwd && ls";
+        assert!(
+            !is_safe_command_windows(&vec_str(&[
+                "powershell.exe",
+                "-NoProfile",
+                "-Command",
+                chain,
+            ])),
+            "`{chain}` is not recognized by powershell.exe"
+        );
+
+        if let Some(pwsh) = try_find_pwsh_executable_blocking() {
+            assert!(
+                is_safe_command_windows(&[
+                    pwsh.as_path().to_str().unwrap().into(),
+                    "-NoProfile".to_string(),
+                    "-Command".to_string(),
+                    chain.to_string(),
+                ]),
+                "`{chain}` should be considered safe to pwsh.exe"
+            );
+        }
     }
 }

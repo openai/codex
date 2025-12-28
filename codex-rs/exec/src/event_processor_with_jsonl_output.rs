@@ -145,9 +145,15 @@ impl EventProcessorWithJsonOutput {
                 };
                 vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
             }
-            EventMsg::StreamError(ev) => vec![ThreadEvent::Error(ThreadErrorEvent {
-                message: ev.message.clone(),
-            })],
+            EventMsg::StreamError(ev) => {
+                let message = match &ev.additional_details {
+                    Some(details) if !details.trim().is_empty() => {
+                        format!("{} ({})", ev.message, details)
+                    }
+                    _ => ev.message.clone(),
+                };
+                vec![ThreadEvent::Error(ThreadErrorEvent { message })]
+            }
             EventMsg::PlanUpdate(ev) => self.handle_plan_update(ev),
             _ => Vec::new(),
         }

@@ -195,11 +195,24 @@ impl OnboardingScreen {
     pub fn should_exit(&self) -> bool {
         self.should_exit
     }
+
+    fn is_api_key_entry_active(&self) -> bool {
+        self.steps.iter().any(|step| {
+            if let Step::Auth(widget) = step {
+                return widget
+                    .sign_in_state
+                    .read()
+                    .is_ok_and(|g| matches!(&*g, SignInState::ApiKeyEntry(_)));
+            }
+            false
+        })
+    }
 }
 
 impl KeyboardHandler for OnboardingScreen {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        match key_event {
+        let is_api_key_entry_active = self.is_api_key_entry_active();
+        let should_quit = match key_event {
             KeyEvent {
                 code: KeyCode::Char('d'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
@@ -211,32 +224,33 @@ impl KeyboardHandler for OnboardingScreen {
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
-            }
-            | KeyEvent {
+            } => true,
+            KeyEvent {
                 code: KeyCode::Char('q'),
                 kind: KeyEventKind::Press,
                 ..
-            } => {
-                if self.is_auth_in_progress() {
-                    // If the user cancels the auth menu, exit the app rather than
-                    // leave the user at a prompt in an unauthed state.
-                    self.should_exit = true;
-                }
-                self.is_done = true;
-            }
-            _ => {
-                if let Some(Step::Welcome(widget)) = self
-                    .steps
-                    .iter_mut()
-                    .find(|step| matches!(step, Step::Welcome(_)))
-                {
-                    widget.handle_key_event(key_event);
-                }
-                if let Some(active_step) = self.current_steps_mut().into_iter().last() {
-                    active_step.handle_key_event(key_event);
-                }
-            }
+            } => !is_api_key_entry_active,
+            _ => false,
         };
+        if should_quit {
+            if self.is_auth_in_progress() {
+                // If the user cancels the auth menu, exit the app rather than
+                // leave the user at a prompt in an unauthed state.
+                self.should_exit = true;
+            }
+            self.is_done = true;
+        } else {
+            if let Some(Step::Welcome(widget)) = self
+                .steps
+                .iter_mut()
+                .find(|step| matches!(step, Step::Welcome(_)))
+            {
+                widget.handle_key_event(key_event);
+            }
+            if let Some(active_step) = self.current_steps_mut().into_iter().last() {
+                active_step.handle_key_event(key_event);
+            }
+        }
         self.request_frame.schedule_frame();
     }
 
@@ -379,6 +393,7 @@ pub(crate) async fn run_onboarding_app(
     while !onboarding_screen.is_done() {
         if let Some(event) = tui_events.next().await {
             match event {
+                TuiEvent::Mouse(_) => {}
                 TuiEvent::Key(key_event) => {
                     onboarding_screen.handle_key_event(key_event);
                 }

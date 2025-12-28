@@ -350,7 +350,6 @@ impl App {
             auth_manager: self.auth_manager.clone(),
             models_manager: self.server.get_models_manager(),
             feedback: self.feedback.clone(),
-            skills: self.skills.clone(),
             is_first_run: false,
         };
         self.chat_widget =

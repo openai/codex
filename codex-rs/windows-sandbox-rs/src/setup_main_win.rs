@@ -6,8 +6,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::dpapi_protect;
+use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::ensure_allow_write_aces;
-use codex_windows_sandbox::fetch_dacl_handle;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
@@ -20,15 +20,18 @@ use rand::RngCore;
 use rand::SeedableRng;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::ffi::c_void;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
+use std::process::Stdio;
 use std::sync::mpsc;
-use std::time::Duration;
 use windows::core::Interface;
 use windows::core::BSTR;
 use windows::Win32::Foundation::VARIANT_TRUE;
@@ -79,7 +82,11 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
-#[derive(Debug, Deserialize)]
+mod read_acl_mutex;
+use read_acl_mutex::acquire_read_acl_mutex;
+use read_acl_mutex::read_acl_mutex_exists;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct Payload {
     version: u32,
     offline_username: String,
@@ -89,7 +96,22 @@ struct Payload {
     write_roots: Vec<PathBuf>,
     real_user: String,
     #[serde(default)]
+    mode: SetupMode,
+    #[serde(default)]
     refresh_only: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum SetupMode {
+    Full,
+    ReadAclsOnly,
+}
+
+impl Default for SetupMode {
+    fn default() -> Self {
+        Self::Full
+    }
 }
 
 #[derive(Serialize)]
@@ -244,90 +266,176 @@ fn resolve_sid(name: &str) -> Result<Vec<u8>> {
     }
 }
 
-fn add_inheritable_allow_no_log(path: &Path, sid: &[u8], mask: u32) -> Result<()> {
-    unsafe {
-        let mut psid: *mut c_void = std::ptr::null_mut();
-        let sid_str = string_from_sid_bytes(sid).map_err(anyhow::Error::msg)?;
-        let sid_w = to_wide(OsStr::new(&sid_str));
-        if ConvertStringSidToSidW(sid_w.as_ptr(), &mut psid) == 0 {
-            return Err(anyhow::anyhow!(
-                "ConvertStringSidToSidW failed: {}",
-                GetLastError()
-            ));
+fn spawn_read_acl_helper(payload: &Payload, _log: &mut File) -> Result<()> {
+    let mut read_payload = payload.clone();
+    read_payload.mode = SetupMode::ReadAclsOnly;
+    read_payload.refresh_only = true;
+    let payload_json = serde_json::to_vec(&read_payload)?;
+    let payload_b64 = BASE64.encode(payload_json);
+    let exe = std::env::current_exe().context("locate setup helper")?;
+    Command::new(&exe)
+        .arg(payload_b64)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .spawn()
+        .context("spawn read ACL helper")?;
+    Ok(())
+}
+
+struct ReadAclSubjects<'a> {
+    offline_psid: *mut c_void,
+    online_psid: *mut c_void,
+    rx_psids: &'a [*mut c_void],
+}
+
+fn apply_read_acls(
+    read_roots: &[PathBuf],
+    subjects: &ReadAclSubjects<'_>,
+    log: &mut File,
+    refresh_errors: &mut Vec<String>,
+    access_mask: u32,
+    access_label: &str,
+    inheritance: u32,
+) -> Result<()> {
+    for root in read_roots {
+        if !root.exists() {
+            log_line(
+                log,
+                &format!("{access_label} root {} missing; skipping", root.display()),
+            )?;
+            continue;
         }
-        let (existing_dacl, sd) = fetch_dacl_handle(path)?;
-        let trustee = TRUSTEE_W {
-            pMultipleTrustee: std::ptr::null_mut(),
-            MultipleTrusteeOperation: 0,
-            TrusteeForm: TRUSTEE_IS_SID,
-            TrusteeType: TRUSTEE_IS_SID,
-            ptstrName: psid as *mut u16,
-        };
-        let ea = EXPLICIT_ACCESS_W {
-            grfAccessPermissions: mask,
-            grfAccessMode: GRANT_ACCESS,
-            grfInheritance: OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
-            Trustee: trustee,
-        };
-        let mut new_dacl: *mut ACL = std::ptr::null_mut();
-        let set = SetEntriesInAclW(1, &ea, existing_dacl, &mut new_dacl);
-        if set != 0 {
-            return Err(anyhow::anyhow!("SetEntriesInAclW failed: {}", set));
+        let builtin_has = read_mask_allows_or_log(
+            root,
+            subjects.rx_psids,
+            None,
+            access_mask,
+            access_label,
+            refresh_errors,
+            log,
+        )?;
+        if builtin_has {
+            continue;
         }
-        let res = SetNamedSecurityInfoW(
-            to_wide(path.as_os_str()).as_ptr() as *mut u16,
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            new_dacl,
-            std::ptr::null_mut(),
-        );
-        if res != 0 {
-            return Err(anyhow::anyhow!(
-                "SetNamedSecurityInfoW failed for {}: {}",
-                path.display(),
-                res
-            ));
+        let offline_has = read_mask_allows_or_log(
+            root,
+            &[subjects.offline_psid],
+            Some("offline"),
+            access_mask,
+            access_label,
+            refresh_errors,
+            log,
+        )?;
+        let online_has = read_mask_allows_or_log(
+            root,
+            &[subjects.online_psid],
+            Some("online"),
+            access_mask,
+            access_label,
+            refresh_errors,
+            log,
+        )?;
+        if offline_has && online_has {
+            continue;
         }
-        if !new_dacl.is_null() {
-            LocalFree(new_dacl as HLOCAL);
+        log_line(
+            log,
+            &format!(
+                "granting {access_label} ACE to {} for sandbox users",
+                root.display()
+            ),
+        )?;
+        let mut successes = usize::from(offline_has) + usize::from(online_has);
+        let mut missing_psids: Vec<*mut c_void> = Vec::new();
+        let mut missing_labels: Vec<&str> = Vec::new();
+        if !offline_has {
+            missing_psids.push(subjects.offline_psid);
+            missing_labels.push("offline");
         }
-        if !sd.is_null() {
-            LocalFree(sd as HLOCAL);
+        if !online_has {
+            missing_psids.push(subjects.online_psid);
+            missing_labels.push("online");
         }
-        if !psid.is_null() {
-            LocalFree(psid as HLOCAL);
+        if !missing_psids.is_empty() {
+            let result = unsafe {
+                ensure_allow_mask_aces_with_inheritance(
+                    root,
+                    &missing_psids,
+                    access_mask,
+                    inheritance,
+                )
+            };
+            match result {
+                Ok(_) => {
+                    successes = 2;
+                }
+                Err(err) => {
+                    let label_list = missing_labels.join(", ");
+                    for label in &missing_labels {
+                        refresh_errors.push(format!(
+                            "grant {access_label} ACE failed on {} for {label}: {err}",
+                            root.display()
+                        ));
+                    }
+                    log_line(
+                        log,
+                        &format!(
+                            "grant {access_label} ACE failed on {} for {}: {err}",
+                            root.display(),
+                            label_list
+                        ),
+                    )?;
+                }
+            }
+        }
+        if successes == 2 {
+        } else {
+            log_line(
+                log,
+                &format!(
+                    "{access_label} ACE incomplete on {} (success {successes}/2)",
+                    root.display()
+                ),
+            )?;
         }
     }
     Ok(())
 }
 
-fn try_add_inheritable_allow_with_timeout(
-    path: &Path,
-    sid: &[u8],
-    mask: u32,
-    _log: &mut File,
-    timeout: Duration,
-) -> Result<()> {
-    let (tx, rx) = mpsc::channel::<Result<()>>();
-    let path_buf = path.to_path_buf();
-    let sid_vec = sid.to_vec();
-    std::thread::spawn(move || {
-        let res = add_inheritable_allow_no_log(&path_buf, &sid_vec, mask);
-        let _ = tx.send(res);
-    });
-    match rx.recv_timeout(timeout) {
-        Ok(res) => res,
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(anyhow::anyhow!(
-            "ACL grant timed out on {} after {:?}",
-            path.display(),
-            timeout
-        )),
-        Err(e) => Err(anyhow::anyhow!(
-            "ACL grant channel error on {}: {e}",
-            path.display()
-        )),
+fn read_mask_allows_or_log(
+    root: &Path,
+    psids: &[*mut c_void],
+    label: Option<&str>,
+    read_mask: u32,
+    access_label: &str,
+    refresh_errors: &mut Vec<String>,
+    log: &mut File,
+) -> Result<bool> {
+    match path_mask_allows(root, psids, read_mask, true) {
+        Ok(has) => Ok(has),
+        Err(e) => {
+            let label_suffix = label
+                .map(|value| format!(" for {value}"))
+                .unwrap_or_default();
+            refresh_errors.push(format!(
+                "{access_label} mask check failed on {}{}: {}",
+                root.display(),
+                label_suffix,
+                e
+            ));
+            log_line(
+                log,
+                &format!(
+                    "{access_label} mask check failed on {}{}: {}; continuing",
+                    root.display(),
+                    label_suffix,
+                    e
+                ),
+            )?;
+            Ok(false)
+        }
     }
 }
 
@@ -392,8 +500,8 @@ fn run_netsh_firewall(sid: &str, log: &mut File) -> Result<()> {
             log_line(
                 log,
                 &format!(
-                "firewall rule configured via COM with LocalUserAuthorizedList={local_user_spec}"
-            ),
+                    "firewall rule configured via COM with LocalUserAuthorizedList={local_user_spec}"
+                ),
             )?;
             Ok(())
         })()
@@ -408,7 +516,7 @@ fn lock_sandbox_dir(
     dir: &Path,
     real_user: &str,
     sandbox_user_sids: &[Vec<u8>],
-    log: &mut File,
+    _log: &mut File,
 ) -> Result<()> {
     std::fs::create_dir_all(dir)?;
     let system_sid = resolve_sid("SYSTEM")?;
@@ -506,10 +614,6 @@ fn lock_sandbox_dir(
             }
         }
     }
-    log_line(
-        log,
-        &format!("sandbox dir ACL applied at {}", dir.display()),
-    )?;
     Ok(())
 }
 
@@ -595,8 +699,6 @@ fn real_main() -> Result<()> {
         .append(true)
         .open(&log_path)
         .context("open log")?;
-    log_line(&mut log, "setup binary started")?;
-    log_note("setup binary started", Some(sbx_dir.as_path()));
     let result = run_setup(&payload, &mut log, &sbx_dir);
     if let Err(err) = &result {
         let _ = log_line(&mut log, &format!("setup error: {err:?}"));
@@ -606,6 +708,78 @@ fn real_main() -> Result<()> {
 }
 
 fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
+    match payload.mode {
+        SetupMode::ReadAclsOnly => run_read_acl_only(payload, log),
+        SetupMode::Full => run_setup_full(payload, log, sbx_dir),
+    }
+}
+
+fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
+    let _read_acl_guard = match acquire_read_acl_mutex()? {
+        Some(guard) => guard,
+        None => {
+            log_line(log, "read ACL helper already running; skipping")?;
+            return Ok(());
+        }
+    };
+    log_line(log, "read-acl-only mode: applying read ACLs")?;
+    let offline_sid = resolve_sid(&payload.offline_username)?;
+    let online_sid = resolve_sid(&payload.online_username)?;
+    let offline_psid = sid_bytes_to_psid(&offline_sid)?;
+    let online_psid = sid_bytes_to_psid(&online_sid)?;
+    let mut refresh_errors: Vec<String> = Vec::new();
+    let users_sid = resolve_sid("Users")?;
+    let users_psid = sid_bytes_to_psid(&users_sid)?;
+    let auth_sid = resolve_sid("Authenticated Users")?;
+    let auth_psid = sid_bytes_to_psid(&auth_sid)?;
+    let everyone_sid = resolve_sid("Everyone")?;
+    let everyone_psid = sid_bytes_to_psid(&everyone_sid)?;
+    let rx_psids = vec![users_psid, auth_psid, everyone_psid];
+    let subjects = ReadAclSubjects {
+        offline_psid,
+        online_psid,
+        rx_psids: &rx_psids,
+    };
+    apply_read_acls(
+        &payload.read_roots,
+        &subjects,
+        log,
+        &mut refresh_errors,
+        FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        "read",
+        OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+    )?;
+    unsafe {
+        if !offline_psid.is_null() {
+            LocalFree(offline_psid as HLOCAL);
+        }
+        if !online_psid.is_null() {
+            LocalFree(online_psid as HLOCAL);
+        }
+        if !users_psid.is_null() {
+            LocalFree(users_psid as HLOCAL);
+        }
+        if !auth_psid.is_null() {
+            LocalFree(auth_psid as HLOCAL);
+        }
+        if !everyone_psid.is_null() {
+            LocalFree(everyone_psid as HLOCAL);
+        }
+    }
+    if !refresh_errors.is_empty() {
+        log_line(
+            log,
+            &format!("read ACL run completed with errors: {:?}", refresh_errors),
+        )?;
+        if payload.refresh_only {
+            anyhow::bail!("read ACL run had errors");
+        }
+    }
+    log_line(log, "read ACL run completed")?;
+    Ok(())
+}
+
+fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
     let refresh_only = payload.refresh_only;
     let offline_pwd = if refresh_only {
         None
@@ -618,7 +792,6 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
         Some(random_password())
     };
     if refresh_only {
-        log_line(log, "refresh-only mode: skipping user creation/firewall")?;
     } else {
         log_line(
             log,
@@ -639,126 +812,50 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
     let offline_psid = sid_bytes_to_psid(&offline_sid)?;
     let online_psid = sid_bytes_to_psid(&online_sid)?;
     let offline_sid_str = string_from_sid_bytes(&offline_sid).map_err(anyhow::Error::msg)?;
-    log_line(
-        log,
-        &format!(
-            "resolved SIDs offline={} online={}",
-            offline_sid_str,
-            string_from_sid_bytes(&online_sid).map_err(anyhow::Error::msg)?
-        ),
-    )?;
-    let caps = load_or_create_cap_sids(&payload.codex_home);
+
+    let caps = load_or_create_cap_sids(&payload.codex_home)?;
     let cap_psid = unsafe {
         convert_string_sid_to_sid(&caps.workspace)
             .ok_or_else(|| anyhow::anyhow!("convert capability SID failed"))?
     };
     let mut refresh_errors: Vec<String> = Vec::new();
-    let users_sid = resolve_sid("Users")?;
-    let users_psid = sid_bytes_to_psid(&users_sid)?;
-    let auth_sid = resolve_sid("Authenticated Users")?;
-    let auth_psid = sid_bytes_to_psid(&auth_sid)?;
-    let everyone_sid = resolve_sid("Everyone")?;
-    let everyone_psid = sid_bytes_to_psid(&everyone_sid)?;
-    let rx_psids = vec![users_psid, auth_psid, everyone_psid];
-    log_line(log, &format!("resolved capability SID {}", caps.workspace))?;
     if !refresh_only {
         run_netsh_firewall(&offline_sid_str, log)?;
     }
 
-    log_line(
-        log,
-        &format!(
-            "refresh: processing {} read roots, {} write roots",
-            payload.read_roots.len(),
-            payload.write_roots.len()
-        ),
-    )?;
-    for root in &payload.read_roots {
-        if !root.exists() {
-            log_line(
-                log,
-                &format!("read root {} missing; skipping", root.display()),
-            )?;
-            continue;
-        }
-        match path_mask_allows(
-            root,
-            &rx_psids,
-            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
-            true,
-        ) {
-            Ok(has) => {
-                if has {
-                    log_line(
-                        log,
-                        &format!(
-                            "Users/AU/Everyone already has RX on {}; skipping",
-                            root.display()
-                        ),
-                    )?;
-                    continue;
-                }
+    if payload.read_roots.is_empty() {
+        log_line(log, "no read roots to grant; skipping read ACL helper")?;
+    } else {
+        match read_acl_mutex_exists() {
+            Ok(true) => {
+                log_line(log, "read ACL helper already running; skipping spawn")?;
             }
-            Err(e) => {
-                refresh_errors.push(format!(
-                    "read mask check failed on {}: {}",
-                    root.display(),
-                    e
-                ));
+            Ok(false) => {
+                spawn_read_acl_helper(payload, log)?;
+            }
+            Err(err) => {
                 log_line(
                     log,
-                    &format!(
-                        "read mask check failed on {}: {}; continuing",
-                        root.display(),
-                        e
-                    ),
+                    &format!("read ACL mutex check failed: {err}; spawning anyway"),
                 )?;
+                spawn_read_acl_helper(payload, log)?;
             }
-        }
-        log_line(
-            log,
-            &format!("granting read ACE to {} for sandbox users", root.display()),
-        )?;
-        let mut successes = 0usize;
-        let read_mask = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
-        for (label, sid_bytes) in [("offline", &offline_sid), ("online", &online_sid)] {
-            match try_add_inheritable_allow_with_timeout(
-                root,
-                sid_bytes,
-                read_mask,
-                log,
-                Duration::from_millis(100),
-            ) {
-                Ok(_) => {
-                    successes += 1;
-                }
-                Err(e) => {
-                    log_line(
-                        log,
-                        &format!(
-                            "grant read ACE timed out/failed on {} for {label}: {e}",
-                            root.display()
-                        ),
-                    )?;
-                    // Best-effort: continue to next SID/root.
-                }
-            }
-        }
-        if successes == 2 {
-            log_line(log, &format!("granted read ACE to {}", root.display()))?;
-        } else {
-            log_line(
-                log,
-                &format!(
-                    "read ACE incomplete on {} (success {}/2)",
-                    root.display(),
-                    successes
-                ),
-            )?;
         }
     }
 
+    let cap_sid_str = caps.workspace.clone();
+    let online_sid_str = string_from_sid_bytes(&online_sid).map_err(anyhow::Error::msg)?;
+    let sid_strings = vec![offline_sid_str.clone(), online_sid_str, cap_sid_str];
+    let write_mask =
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
+    let mut grant_tasks: Vec<PathBuf> = Vec::new();
+
+    let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
+
     for root in &payload.write_roots {
+        if !seen_write_roots.insert(root.clone()) {
+            continue;
+        }
         if !root.exists() {
             log_line(
                 log,
@@ -766,12 +863,6 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
             )?;
             continue;
         }
-        let sids = vec![offline_psid, online_psid, cap_psid];
-        let write_mask = FILE_GENERIC_READ
-            | FILE_GENERIC_WRITE
-            | FILE_GENERIC_EXECUTE
-            | DELETE
-            | FILE_DELETE_CHILD;
         let mut need_grant = false;
         for (label, psid) in [
             ("offline", offline_psid),
@@ -797,14 +888,6 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
                     false
                 }
             };
-            log_line(
-                log,
-                &format!(
-                    "write check {label} on {} => {}",
-                    root.display(),
-                    if has { "present" } else { "missing" }
-                ),
-            )?;
             if !has {
                 need_grant = true;
             }
@@ -817,42 +900,61 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
                     root.display()
                 ),
             )?;
-            match unsafe { ensure_allow_write_aces(root, &sids) } {
-                Ok(res) => {
-                    log_line(
-                        log,
-                        &format!(
-                            "write ACE {} on {}",
-                            if res { "added" } else { "already present" },
-                            root.display()
-                        ),
-                    )?;
-                }
-                Err(e) => {
-                    refresh_errors.push(format!("write ACE failed on {}: {}", root.display(), e));
-                    log_line(
-                        log,
-                        &format!("write ACE grant failed on {}: {}", root.display(), e),
-                    )?;
-                }
-            }
-        } else {
-            log_line(
-                log,
-                &format!(
-                    "write ACE already present for all sandbox SIDs on {}",
-                    root.display()
-                ),
-            )?;
+            grant_tasks.push(root.clone());
         }
     }
+
+    let (tx, rx) = mpsc::channel::<(PathBuf, Result<bool>)>();
+    std::thread::scope(|scope| {
+        for root in grant_tasks {
+            let sid_strings = sid_strings.clone();
+            let tx = tx.clone();
+            scope.spawn(move || {
+                // Convert SID strings to psids locally in this thread.
+                let mut psids: Vec<*mut c_void> = Vec::new();
+                for sid_str in &sid_strings {
+                    if let Some(psid) = unsafe { convert_string_sid_to_sid(sid_str) } {
+                        psids.push(psid);
+                    } else {
+                        let _ = tx.send((root.clone(), Err(anyhow::anyhow!("convert SID failed"))));
+                        return;
+                    }
+                }
+
+                let res = unsafe { ensure_allow_write_aces(&root, &psids) };
+
+                for psid in psids {
+                    unsafe {
+                        LocalFree(psid as HLOCAL);
+                    }
+                }
+                let _ = tx.send((root, res));
+            });
+        }
+        drop(tx);
+        for (root, res) in rx {
+            match res {
+                Ok(_) => {}
+                Err(e) => {
+                    refresh_errors.push(format!("write ACE failed on {}: {}", root.display(), e));
+                    if log_line(
+                        log,
+                        &format!("write ACE grant failed on {}: {}", root.display(), e),
+                    )
+                    .is_err()
+                    {
+                        // ignore log errors inside scoped thread
+                    }
+                }
+            }
+        }
+    });
 
     if refresh_only {
         log_line(
             log,
             &format!(
-                "setup refresh: processed {} read roots, {} write roots; errors={:?}",
-                payload.read_roots.len(),
+                "setup refresh: processed {} write roots (read roots delegated); errors={:?}",
                 payload.write_roots.len(),
                 refresh_errors
             ),
@@ -865,7 +967,6 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
             &[offline_sid.clone(), online_sid.clone()],
             log,
         )?;
-        log_line(log, "sandbox dir ACL applied")?;
         write_secrets(
             &payload.codex_home,
             &payload.offline_username,
@@ -874,10 +975,6 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
             online_pwd.as_ref().unwrap(),
             &payload.read_roots,
             &payload.write_roots,
-        )?;
-        log_line(
-            log,
-            "sandbox users and marker written (sandbox_users.json, setup_marker.json)",
         )?;
     }
     unsafe {
@@ -890,15 +987,6 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
         if !cap_psid.is_null() {
             LocalFree(cap_psid as HLOCAL);
         }
-        if !users_psid.is_null() {
-            LocalFree(users_psid as HLOCAL);
-        }
-        if !auth_psid.is_null() {
-            LocalFree(auth_psid as HLOCAL);
-        }
-        if !everyone_psid.is_null() {
-            LocalFree(everyone_psid as HLOCAL);
-        }
     }
     if refresh_only && !refresh_errors.is_empty() {
         log_line(
@@ -907,7 +995,6 @@ fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
         )?;
         anyhow::bail!("setup refresh had errors");
     }
-    log_line(log, "setup binary completed")?;
     log_note("setup binary completed", Some(sbx_dir));
     Ok(())
 }

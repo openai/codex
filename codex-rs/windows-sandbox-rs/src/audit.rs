@@ -251,7 +251,7 @@ pub fn apply_capability_denies_for_world_writable(
     }
     std::fs::create_dir_all(codex_home)?;
     let cap_path = cap_sid_file(codex_home);
-    let caps = load_or_create_cap_sids(codex_home);
+    let caps = load_or_create_cap_sids(codex_home)?;
     std::fs::write(&cap_path, serde_json::to_string(&caps)?)?;
     let (active_sid, workspace_roots): (*mut c_void, Vec<PathBuf>) = match sandbox_policy {
         SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
@@ -260,12 +260,8 @@ pub fn apply_capability_denies_for_world_writable(
             let mut roots: Vec<PathBuf> =
                 vec![dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf())];
             for root in writable_roots {
-                let candidate = if root.is_absolute() {
-                    root.clone()
-                } else {
-                    cwd.join(root)
-                };
-                roots.push(dunce::canonicalize(&candidate).unwrap_or(candidate));
+                let candidate = root.as_path();
+                roots.push(dunce::canonicalize(candidate).unwrap_or_else(|_| root.to_path_buf()));
             }
             (sid, roots)
         }
@@ -275,7 +271,7 @@ pub fn apply_capability_denies_for_world_writable(
             })?,
             Vec::new(),
         ),
-        SandboxPolicy::DangerFullAccess => {
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
             return Ok(());
         }
     };

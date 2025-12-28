@@ -1,14 +1,18 @@
 pub mod auth;
 use std::collections::HashMap;
+use std::env;
+use std::path::PathBuf;
 
 use async_channel::unbounded;
 use codex_protocol::protocol::McpListToolsResponseEvent;
+use codex_protocol::protocol::SandboxPolicy;
 use mcp_types::Tool as McpTool;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::SandboxState;
 
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
@@ -34,6 +38,13 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
     drop(rx_event);
     let cancel_token = CancellationToken::new();
 
+    // Use ReadOnly sandbox policy for MCP snapshot collection (safest default)
+    let sandbox_state = SandboxState {
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+        sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+    };
+
     mcp_connection_manager
         .initialize(
             config.mcp_servers.clone(),
@@ -41,6 +52,7 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
             auth_status_entries.clone(),
             tx_event,
             cancel_token.clone(),
+            sandbox_state,
         )
         .await;
 

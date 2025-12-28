@@ -1,4 +1,3 @@
-use assert_cmd::prelude::*;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::fs;
@@ -9,7 +8,8 @@ use tempfile::tempdir;
 
 #[test]
 fn test_apply_patch_scenarios() -> anyhow::Result<()> {
-    for scenario in fs::read_dir("tests/fixtures/scenarios")? {
+    let scenarios_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/scenarios");
+    for scenario in fs::read_dir(scenarios_dir)? {
         let scenario = scenario?;
         let path = scenario.path();
         if path.is_dir() {
@@ -36,7 +36,7 @@ fn run_apply_patch_scenario(dir: &Path) -> anyhow::Result<()> {
     // Run apply_patch in the temporary directory. We intentionally do not assert
     // on the exit status here; the scenarios are specified purely in terms of
     // final filesystem state, which we compare below.
-    Command::cargo_bin("apply_patch")?
+    Command::new(codex_utils_cargo_bin::cargo_bin("apply_patch")?)
         .arg(patch)
         .current_dir(tmp.path())
         .output()?;
@@ -82,11 +82,15 @@ fn snapshot_dir_recursive(
             continue;
         };
         let rel = stripped.to_path_buf();
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
+
+        // Under Buck2, files in `__srcs` are often materialized as symlinks.
+        // Use `metadata()` (follows symlinks) so our fixture snapshots work
+        // under both Cargo and Buck2.
+        let metadata = fs::metadata(&path)?;
+        if metadata.is_dir() {
             entries.insert(rel.clone(), Entry::Dir);
             snapshot_dir_recursive(base, &path, entries)?;
-        } else if file_type.is_file() {
+        } else if metadata.is_file() {
             let contents = fs::read(&path)?;
             entries.insert(rel, Entry::File(contents));
         }
@@ -98,12 +102,14 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let path = entry.path();
-        let file_type = entry.file_type()?;
         let dest_path = dst.join(entry.file_name());
-        if file_type.is_dir() {
+
+        // See note in `snapshot_dir_recursive` about Buck2 symlink trees.
+        let metadata = fs::metadata(&path)?;
+        if metadata.is_dir() {
             fs::create_dir_all(&dest_path)?;
             copy_dir_recursive(&path, &dest_path)?;
-        } else if file_type.is_file() {
+        } else if metadata.is_file() {
             if let Some(parent) = dest_path.parent() {
                 fs::create_dir_all(parent)?;
             }

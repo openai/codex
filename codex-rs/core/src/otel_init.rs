@@ -16,7 +16,7 @@ pub fn build_provider(
     config: &Config,
     service_version: &str,
 ) -> Result<Option<OtelProvider>, Box<dyn Error>> {
-    let exporter = match &config.otel.exporter {
+    let to_otel_exporter = |kind: &Kind| match kind {
         Kind::None => OtelExporter::None,
         Kind::OtlpHttp {
             endpoint,
@@ -61,12 +61,16 @@ pub fn build_provider(
         },
     };
 
+    let exporter = to_otel_exporter(&config.otel.exporter);
+    let trace_exporter = to_otel_exporter(&config.otel.trace_exporter);
+
     OtelProvider::from(&OtelSettings {
         service_name: originator().value.to_owned(),
         service_version: service_version.to_string(),
         codex_home: config.codex_home.clone(),
         environment: config.otel.environment.to_string(),
         exporter,
+        trace_exporter,
     })
 }
 

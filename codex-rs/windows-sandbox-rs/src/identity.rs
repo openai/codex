@@ -1,13 +1,14 @@
 use crate::dpapi;
 use crate::logging::debug_log;
 use crate::policy::SandboxPolicy;
+use crate::setup::gather_read_roots;
+use crate::setup::gather_write_roots;
 use crate::setup::run_elevated_setup;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
 use crate::setup::SandboxUserRecord;
 use crate::setup::SandboxUsersFile;
 use crate::setup::SetupMarker;
-use crate::setup::{gather_read_roots, gather_write_roots};
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
@@ -117,7 +118,7 @@ pub fn require_logon_sandbox_creds(
     codex_home: &Path,
 ) -> Result<SandboxCreds> {
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
-    let needed_read = gather_read_roots(command_cwd, policy, policy_cwd);
+    let needed_read = gather_read_roots(command_cwd, policy);
     let mut needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
     // Ensure the sandbox directory itself is writable by sandbox users.
     needed_write.push(sandbox_dir.clone());
@@ -142,7 +143,10 @@ pub fn require_logon_sandbox_creds(
 
     if identity.is_none() {
         if let Some(reason) = &setup_reason {
-            crate::logging::log_note(&format!("sandbox setup required: {reason}"), Some(&sandbox_dir));
+            crate::logging::log_note(
+                &format!("sandbox setup required: {reason}"),
+                Some(&sandbox_dir),
+            );
         } else {
             crate::logging::log_note("sandbox setup required", Some(&sandbox_dir));
         }

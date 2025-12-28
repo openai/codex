@@ -3,7 +3,6 @@ use ratatui::text::Span;
 use std::borrow::Cow;
 use std::ops::Range;
 use textwrap::Options;
-use textwrap::wrap_algorithms::Penalties;
 
 use crate::render::line_utils::push_owned_lines;
 
@@ -92,11 +91,7 @@ impl<'a> RtOptions<'a> {
             subsequent_indent: Line::default(),
             break_words: true,
             word_separator: textwrap::WordSeparator::new(),
-            wrap_algorithm: textwrap::WrapAlgorithm::OptimalFit(Penalties {
-                // ~infinite overflow penalty, we never want to overflow a line.
-                overflow_penalty: usize::MAX / 4,
-                ..Default::default()
-            }),
+            wrap_algorithm: textwrap::WrapAlgorithm::FirstFit,
             word_splitter: textwrap::WordSplitter::HyphenSplitter,
         }
     }
@@ -641,11 +636,11 @@ mod tests {
         let joined: String = wrapped.iter().map(ToString::to_string).join("\n");
         assert_eq!(
             joined,
-            r#"Years passed, and Willowmere thrived
-in peace and friendship. Mira’s herb
-garden flourished with both ordinary and
-enchanted plants, and travelers spoke
-of the kindness of the woman who tended
+            r#"Years passed, and Willowmere thrived in
+peace and friendship. Mira’s herb garden
+flourished with both ordinary and
+enchanted plants, and travelers spoke of
+the kindness of the woman who tended
 them."#
         );
     }

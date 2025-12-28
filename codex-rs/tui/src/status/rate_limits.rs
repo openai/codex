@@ -1,4 +1,5 @@
 use crate::chatwidget::get_limits_duration;
+use crate::text_formatting::capitalize_first;
 
 use super::helpers::format_reset_timestamp;
 use chrono::DateTime;
@@ -220,16 +221,4 @@ fn format_credit_balance(raw: &str) -> Option<String> {
     }
 
     None
-}
-
-fn capitalize_first(label: &str) -> String {
-    let mut chars = label.chars();
-    match chars.next() {
-        Some(first) => {
-            let mut capitalized = first.to_uppercase().collect::<String>();
-            capitalized.push_str(chars.as_str());
-            capitalized
-        }
-        None => String::new(),
-    }
 }

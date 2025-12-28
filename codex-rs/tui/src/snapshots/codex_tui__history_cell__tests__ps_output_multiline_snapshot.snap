@@ -1,0 +1,10 @@
+---
+source: tui/src/history_cell.rs
+expression: rendered
+---
+/ps
+
+Background terminals
+
+  • echo hello [...]
+  • rg "foo" src

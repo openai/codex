@@ -62,6 +62,7 @@ pub(crate) async fn run_update_prompt_if_needed(
                         frame.render_widget_ref(&screen, frame.area());
                     })?;
                 }
+                TuiEvent::Mouse(_) => {}
             }
         } else {
             break;

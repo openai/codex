@@ -10,12 +10,12 @@ struct Alias {
 
 const ALIASES: &[Alias] = &[
     Alias {
-        legacy_key: "experimental_use_unified_exec_tool",
-        feature: Feature::UnifiedExec,
+        legacy_key: "enable_experimental_windows_sandbox",
+        feature: Feature::WindowsSandbox,
     },
     Alias {
-        legacy_key: "experimental_use_rmcp_client",
-        feature: Feature::RmcpClient,
+        legacy_key: "experimental_use_unified_exec_tool",
+        feature: Feature::UnifiedExec,
     },
     Alias {
         legacy_key: "experimental_use_freeform_apply_patch",
@@ -46,7 +46,6 @@ pub struct LegacyFeatureToggles {
     pub include_apply_patch_tool: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
-    pub experimental_use_rmcp_client: Option<bool>,
     pub tools_web_search: Option<bool>,
     pub tools_view_image: Option<bool>,
 }
@@ -70,12 +69,6 @@ impl LegacyFeatureToggles {
             Feature::UnifiedExec,
             self.experimental_use_unified_exec_tool,
             "experimental_use_unified_exec_tool",
-        );
-        set_if_some(
-            features,
-            Feature::RmcpClient,
-            self.experimental_use_rmcp_client,
-            "experimental_use_rmcp_client",
         );
         set_if_some(
             features,

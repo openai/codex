@@ -227,7 +227,6 @@ mod tests {
                     "truncation_policy": {"mode": "bytes", "limit": 10_000},
                     "supports_parallel_tool_calls": false,
                     "context_window": null,
-                    "reasoning_summary_format": "none",
                     "experimental_supported_tools": [],
                 }))
                 .unwrap(),

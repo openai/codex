@@ -5,7 +5,6 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -421,7 +420,6 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         .into_owned();
 
     let mut builder = test_codex().with_config(move |config| {
-        config.features.enable(Feature::RmcpClient);
         config.mcp_servers.insert(
             server_name.to_string(),
             codex_core::config::types::McpServerConfig {
@@ -511,7 +509,6 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
     let openai_png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ee9bQAAAABJRU5ErkJggg==";
 
     let mut builder = test_codex().with_config(move |config| {
-        config.features.enable(Feature::RmcpClient);
         config.mcp_servers.insert(
             server_name.to_string(),
             McpServerConfig {
@@ -774,7 +771,6 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
         .into_owned();
 
     let mut builder = test_codex().with_config(move |config| {
-        config.features.enable(Feature::RmcpClient);
         config.tool_output_token_limit = Some(50_000);
         config.mcp_servers.insert(
             server_name.to_string(),

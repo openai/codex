@@ -150,8 +150,8 @@ pub enum ResponseItem {
     GhostSnapshot {
         ghost_commit: GhostCommit,
     },
-    #[serde(alias = "compaction")]
-    CompactionSummary {
+    #[serde(alias = "compaction_summary")]
+    Compaction {
         encrypted_content: String,
     },
     #[serde(other)]
@@ -671,13 +671,13 @@ mod tests {
 
     #[test]
     fn deserializes_compaction_alias() -> Result<()> {
-        let json = r#"{"type":"compaction","encrypted_content":"abc"}"#;
+        let json = r#"{"type":"compaction_summary","encrypted_content":"abc"}"#;
 
         let item: ResponseItem = serde_json::from_str(json)?;
 
         assert_eq!(
             item,
-            ResponseItem::CompactionSummary {
+            ResponseItem::Compaction {
                 encrypted_content: "abc".into(),
             }
         );

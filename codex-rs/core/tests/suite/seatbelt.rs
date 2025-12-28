@@ -76,7 +76,7 @@ async fn if_parent_of_repo_is_writable_then_dot_git_folder_is_writable() {
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let test_scenario = create_test_scenario(&tmp);
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![test_scenario.repo_parent.clone()],
+        writable_roots: vec![test_scenario.repo_parent.as_path().try_into().unwrap()],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -102,7 +102,7 @@ async fn if_git_repo_is_writable_root_then_dot_git_folder_is_read_only() {
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let test_scenario = create_test_scenario(&tmp);
     let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![test_scenario.repo_root.clone()],
+        writable_roots: vec![test_scenario.repo_root.as_path().try_into().unwrap()],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,

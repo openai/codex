@@ -1,11 +1,10 @@
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
+use codex_client::CodexHttpClient;
+pub use codex_client::CodexRequestBuilder;
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-
-use codex_client::CodexHttpClient;
-pub use codex_client::CodexRequestBuilder;
 
 /// Set this to add a suffix to the User-Agent string.
 ///
@@ -164,7 +163,9 @@ mod tests {
     #[test]
     fn test_get_codex_user_agent() {
         let user_agent = get_codex_user_agent();
-        assert!(user_agent.starts_with("codex_cli_rs/"));
+        let originator = originator().value.as_str();
+        let prefix = format!("{originator}/");
+        assert!(user_agent.starts_with(&prefix));
     }
 
     #[tokio::test]
@@ -205,7 +206,7 @@ mod tests {
         let originator_header = headers
             .get("originator")
             .expect("originator header missing");
-        assert_eq!(originator_header.to_str().unwrap(), "codex_cli_rs");
+        assert_eq!(originator_header.to_str().unwrap(), originator().value);
 
         // User-Agent matches the computed Codex UA for that originator
         let expected_ua = get_codex_user_agent();
@@ -242,9 +243,10 @@ mod tests {
     fn test_macos() {
         use regex_lite::Regex;
         let user_agent = get_codex_user_agent();
-        let re = Regex::new(
-            r"^codex_cli_rs/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$",
-        )
+        let originator = regex_lite::escape(originator().value.as_str());
+        let re = Regex::new(&format!(
+            r"^{originator}/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$"
+        ))
         .unwrap();
         assert!(re.is_match(&user_agent));
     }

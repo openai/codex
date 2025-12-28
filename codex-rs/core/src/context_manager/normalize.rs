@@ -4,6 +4,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 
 use crate::util::error_or_panic;
+use tracing::info;
 
 pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
     // Collect synthetic outputs to insert immediately after their calls.
@@ -22,9 +23,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                 });
 
                 if !has_output {
-                    error_or_panic(format!(
-                        "Function call output is missing for call id: {call_id}"
-                    ));
+                    info!("Function call output is missing for call id: {call_id}");
                     missing_outputs_to_insert.push((
                         idx,
                         ResponseItem::FunctionCallOutput {

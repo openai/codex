@@ -132,7 +132,10 @@ pub(crate) fn default_exec_approval_requirement(
 ) -> ExecApprovalRequirement {
     let needs_approval = match policy {
         AskForApproval::Never | AskForApproval::OnFailure => false,
-        AskForApproval::OnRequest => !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess),
+        AskForApproval::OnRequest => !matches!(
+            sandbox_policy,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        ),
         AskForApproval::UnlessTrusted => true,
     };
 
@@ -251,5 +254,39 @@ impl<'a> SandboxAttempt<'a> {
             self.sandbox_cwd,
             self.codex_linux_sandbox_exe,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::protocol::NetworkAccess;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn external_sandbox_skips_exec_approval_on_request() {
+        assert_eq!(
+            default_exec_approval_requirement(
+                AskForApproval::OnRequest,
+                &SandboxPolicy::ExternalSandbox {
+                    network_access: NetworkAccess::Restricted,
+                },
+            ),
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[test]
+    fn restricted_sandbox_requires_exec_approval_on_request() {
+        assert_eq!(
+            default_exec_approval_requirement(AskForApproval::OnRequest, &SandboxPolicy::ReadOnly),
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            }
+        );
     }
 }

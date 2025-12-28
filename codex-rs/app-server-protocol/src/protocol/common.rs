@@ -117,9 +117,9 @@ client_request_definitions! {
         params: v2::ThreadListParams,
         response: v2::ThreadListResponse,
     },
-    ThreadCompact => "thread/compact" {
-        params: v2::ThreadCompactParams,
-        response: v2::ThreadCompactResponse,
+    SkillsList => "skills/list" {
+        params: v2::SkillsListParams,
+        response: v2::SkillsListResponse,
     },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
@@ -144,9 +144,9 @@ client_request_definitions! {
         response: v2::McpServerOauthLoginResponse,
     },
 
-    McpServersList => "mcpServers/list" {
-        params: v2::ListMcpServersParams,
-        response: v2::ListMcpServersResponse,
+    McpServerStatusList => "mcpServerStatus/list" {
+        params: v2::ListMcpServerStatusParams,
+        response: v2::ListMcpServerStatusResponse,
     },
 
     LoginAccount => "account/login/start" {
@@ -525,6 +525,8 @@ server_notification_definitions! {
     TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
+    /// This event is internal-only. Used by Codex Cloud.
+    RawResponseItemCompleted => "rawResponseItem/completed" (v2::RawResponseItemCompletedNotification),
     AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
     TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
@@ -537,6 +539,7 @@ server_notification_definitions! {
     ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
+    DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),

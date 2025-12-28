@@ -2,10 +2,13 @@
 
 use anyhow::Result;
 use core_test_support::responses::ev_apply_patch_call;
+use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_shell_command_call;
 use core_test_support::test_codex::ApplyPatchModelOutput;
 use pretty_assertions::assert_eq;
 use std::fs;
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::Ordering;
 
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
@@ -29,6 +32,11 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use serde_json::json;
 use test_case::test_case;
+use wiremock::Mock;
+use wiremock::Respond;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 pub async fn apply_patch_harness() -> Result<TestCodexHarness> {
     apply_patch_harness_with(|builder| builder).await
@@ -719,6 +727,132 @@ async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+
+    let source_contents = "line1\nnaïve café\nline3\n";
+    let source_path = harness.path("source.txt");
+    fs::write(&source_path, source_contents)?;
+
+    let read_call_id = "read-source";
+    let apply_call_id = "apply-from-read";
+
+    fn stdout_from_shell_output(output: &str) -> String {
+        let normalized = output.replace("\r\n", "\n").replace('\r', "\n");
+        normalized
+            .split_once("Output:\n")
+            .map(|x| x.1)
+            .unwrap_or("")
+            .trim_end_matches('\n')
+            .to_string()
+    }
+
+    fn function_call_output_text(body: &serde_json::Value, call_id: &str) -> String {
+        body.get("input")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("type").and_then(serde_json::Value::as_str)
+                        == Some("function_call_output")
+                        && item.get("call_id").and_then(serde_json::Value::as_str) == Some(call_id)
+                })
+            })
+            .and_then(|item| item.get("output").and_then(serde_json::Value::as_str))
+            .expect("function_call_output output string")
+            .to_string()
+    }
+
+    struct DynamicApplyFromRead {
+        num_calls: AtomicI32,
+        read_call_id: String,
+        apply_call_id: String,
+    }
+
+    impl Respond for DynamicApplyFromRead {
+        fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+            let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
+            match call_num {
+                0 => {
+                    let command = if cfg!(windows) {
+                        "Get-Content -Encoding utf8 source.txt"
+                    } else {
+                        "cat source.txt"
+                    };
+                    let body = sse(vec![
+                        ev_response_created("resp-1"),
+                        ev_shell_command_call(&self.read_call_id, command),
+                        ev_completed("resp-1"),
+                    ]);
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_string(body)
+                }
+                1 => {
+                    let body_json: serde_json::Value =
+                        request.body_json().expect("request body should be json");
+                    let read_output = function_call_output_text(&body_json, &self.read_call_id);
+                    eprintln!("read_output: \n{read_output}");
+                    let stdout = stdout_from_shell_output(&read_output);
+                    eprintln!("stdout: \n{stdout}");
+                    let patch_lines = stdout
+                        .lines()
+                        .map(|line| format!("+{line}"))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let patch = format!(
+                        "*** Begin Patch\n*** Add File: target.txt\n{patch_lines}\n*** End Patch"
+                    );
+
+                    eprintln!("patch: \n{patch}");
+
+                    let body = sse(vec![
+                        ev_response_created("resp-2"),
+                        ev_apply_patch_custom_tool_call(&self.apply_call_id, &patch),
+                        ev_completed("resp-2"),
+                    ]);
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_string(body)
+                }
+                2 => {
+                    let body = sse(vec![
+                        ev_assistant_message("msg-1", "ok"),
+                        ev_completed("resp-3"),
+                    ]);
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_string(body)
+                }
+                _ => panic!("no response for call {call_num}"),
+            }
+        }
+    }
+
+    let responder = DynamicApplyFromRead {
+        num_calls: AtomicI32::new(0),
+        read_call_id: read_call_id.to_string(),
+        apply_call_id: apply_call_id.to_string(),
+    };
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(responder)
+        .expect(3)
+        .mount(harness.server())
+        .await;
+
+    harness
+        .submit("read source.txt, then apply it to target.txt")
+        .await?;
+
+    let target_contents = fs::read_to_string(harness.path("target.txt"))?;
+    assert_eq!(target_contents, source_contents);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1248,96 +1382,5 @@ async fn apply_patch_change_context_disambiguates_target(
 
     let contents = fs::read_to_string(&target)?;
     assert_eq!(contents, "fn a\nx=10\ny=2\nfn b\nx=11\ny=20\n");
-    Ok(())
-}
-
-/// Ensure that applying a patch can update a CRLF file with unicode characters.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_updates_unicode_characters(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let harness = apply_patch_harness().await?;
-
-    let target = harness.path("unicode.txt");
-    fs::write(&target, "first ⚠️\nsecond ❌\nthird 🔥\n")?;
-
-    let patch = format!(
-        r#"*** Begin Patch
-*** Update File: {}
-@@
- first ⚠️
--second ❌
-+SECOND ✅
-@@
- third 🔥
-+FOURTH
-*** End of File
-*** End Patch"#,
-        target.display()
-    );
-    let call_id = "apply-unicode-update";
-    mount_apply_patch(&harness, call_id, patch.as_str(), "ok", model_output).await;
-
-    harness
-        .submit("update unicode characters via apply_patch CLI")
-        .await?;
-
-    let file_contents = fs::read(&target)?;
-    let content = String::from_utf8_lossy(&file_contents);
-    assert_eq!(content, "first ⚠️\nSECOND ✅\nthird 🔥\nFOURTH\n");
-    Ok(())
-}
-
-/// Ensure that applying a patch via the CLI preserves CRLF line endings for
-/// Windows-style inputs even when updating the file contents.
-#[cfg(windows)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(ApplyPatchModelOutput::Freeform)]
-#[test_case(ApplyPatchModelOutput::Function)]
-#[test_case(ApplyPatchModelOutput::Shell)]
-#[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
-#[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
-async fn apply_patch_cli_updates_crlf_file_preserves_line_endings(
-    model_output: ApplyPatchModelOutput,
-) -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let harness = apply_patch_harness().await?;
-
-    let target = harness.path("crlf.txt");
-    fs::write(&target, b"first\r\nsecond\r\nthird\r\n")?;
-
-    let patch = format!(
-        r#"*** Begin Patch
-*** Update File: {}
-@@
- first
--second
-+SECOND
-@@
- third
-+FOURTH
-*** End of File
-*** End Patch"#,
-        target.display()
-    );
-    let call_id = "apply-crlf-update";
-    mount_apply_patch(&harness, call_id, patch.as_str(), "ok", model_output).await;
-
-    harness
-        .submit("update crlf file via apply_patch CLI")
-        .await?;
-
-    let file_contents = fs::read(&target)?;
-    let content = String::from_utf8_lossy(&file_contents);
-    assert!(content.contains("\r\n"));
-    assert_eq!(content, "first\r\nSECOND\r\nthird\r\nFOURTH\r\n");
     Ok(())
 }

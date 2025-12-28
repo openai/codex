@@ -32,8 +32,10 @@ use crate::token_data::parse_id_token;
 use crate::util::try_parse_error_message;
 use codex_client::CodexHttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
+#[cfg(any(test, feature = "test-support"))]
 use once_cell::sync::Lazy;
 use serde_json::Value;
+#[cfg(any(test, feature = "test-support"))]
 use tempfile::TempDir;
 use thiserror::Error;
 
@@ -64,6 +66,7 @@ const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
 
+#[cfg(any(test, feature = "test-support"))]
 static TEST_AUTH_TEMP_DIRS: Lazy<Mutex<Vec<TempDir>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 #[derive(Debug, Error)]
@@ -633,8 +636,7 @@ mod tests {
     use crate::auth::storage::FileAuthStorage;
     use crate::auth::storage::get_auth_file;
     use crate::config::Config;
-    use crate::config::ConfigOverrides;
-    use crate::config::ConfigToml;
+    use crate::config::ConfigBuilder;
     use crate::token_data::IdTokenInfo;
     use crate::token_data::KnownPlan as InternalKnownPlan;
     use crate::token_data::PlanType as InternalPlanType;
@@ -859,17 +861,16 @@ mod tests {
         Ok(fake_jwt)
     }
 
-    fn build_config(
+    async fn build_config(
         codex_home: &Path,
         forced_login_method: Option<ForcedLoginMethod>,
         forced_chatgpt_workspace_id: Option<String>,
     ) -> Config {
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.to_path_buf(),
-        )
-        .expect("config should load");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.to_path_buf())
+            .build()
+            .await
+            .expect("config should load");
         config.forced_login_method = forced_login_method;
         config.forced_chatgpt_workspace_id = forced_chatgpt_workspace_id;
         config
@@ -912,7 +913,7 @@ mod tests {
         login_with_api_key(codex_home.path(), "sk-test", AuthCredentialsStoreMode::File)
             .expect("seed api key");
 
-        let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None);
+        let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
 
         let err = super::enforce_login_restrictions(&config)
             .await
@@ -938,7 +939,7 @@ mod tests {
         )
         .expect("failed to write auth file");
 
-        let config = build_config(codex_home.path(), None, Some("org_mine".to_string()));
+        let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
 
         let err = super::enforce_login_restrictions(&config)
             .await
@@ -964,7 +965,7 @@ mod tests {
         )
         .expect("failed to write auth file");
 
-        let config = build_config(codex_home.path(), None, Some("org_mine".to_string()));
+        let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
 
         super::enforce_login_restrictions(&config)
             .await
@@ -982,7 +983,7 @@ mod tests {
         login_with_api_key(codex_home.path(), "sk-test", AuthCredentialsStoreMode::File)
             .expect("seed api key");
 
-        let config = build_config(codex_home.path(), None, Some("org_mine".to_string()));
+        let config = build_config(codex_home.path(), None, Some("org_mine".to_string())).await;
 
         super::enforce_login_restrictions(&config)
             .await
@@ -999,7 +1000,7 @@ mod tests {
         let _guard = EnvVarGuard::set(CODEX_API_KEY_ENV_VAR, "sk-env");
         let codex_home = tempdir().unwrap();
 
-        let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None);
+        let config = build_config(codex_home.path(), Some(ForcedLoginMethod::Chatgpt), None).await;
 
         let err = super::enforce_login_restrictions(&config)
             .await
@@ -1103,6 +1104,18 @@ impl AuthManager {
             .lock()
             .expect("lock test codex homes")
             .push(temp_dir);
+        Arc::new(Self {
+            codex_home,
+            inner: RwLock::new(cached),
+            enable_codex_api_key_env: false,
+            auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        })
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    /// Create an AuthManager with a specific CodexAuth and codex home, for testing only.
+    pub fn from_auth_for_testing_with_home(auth: CodexAuth, codex_home: PathBuf) -> Arc<Self> {
+        let cached = CachedAuth { auth: Some(auth) };
         Arc::new(Self {
             codex_home,
             inner: RwLock::new(cached),

@@ -1,6 +1,5 @@
 use std::io::Result;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
@@ -14,6 +13,8 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
@@ -278,8 +279,26 @@ impl PagerView {
                 return Ok(());
             }
         }
-        tui.frame_requester()
-            .schedule_frame_in(Duration::from_millis(16));
+        // Request a redraw; the frame scheduler coalesces bursts and clamps to 60fps.
+        tui.frame_requester().schedule_frame();
+        Ok(())
+    }
+
+    fn handle_mouse_scroll(&mut self, tui: &mut tui::Tui, event: MouseEvent) -> Result<()> {
+        let step: usize = 3;
+        match event.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(step);
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_offset = self.scroll_offset.saturating_add(step);
+            }
+            _ => {
+                return Ok(());
+            }
+        }
+        // Request a redraw; the frame scheduler coalesces bursts and clamps to 60fps.
+        tui.frame_requester().schedule_frame();
         Ok(())
     }
 
@@ -506,6 +525,7 @@ impl TranscriptOverlay {
                 }
                 other => self.view.handle_key_event(tui, other),
             },
+            TuiEvent::Mouse(mouse_event) => self.view.handle_mouse_scroll(tui, mouse_event),
             TuiEvent::Draw => {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
@@ -565,6 +585,7 @@ impl StaticOverlay {
                 }
                 other => self.view.handle_key_event(tui, other),
             },
+            TuiEvent::Mouse(mouse_event) => self.view.handle_mouse_scroll(tui, mouse_event),
             TuiEvent::Draw => {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);

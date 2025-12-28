@@ -23,5 +23,6 @@ uds_windows = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::ModelProviderInfo;
 use crate::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::codex::Session;
@@ -18,7 +19,6 @@ use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
 use crate::util::backoff;
-use codex_app_server_protocol::AuthMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -32,13 +32,11 @@ pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
-pub(crate) fn should_use_remote_compact_task(session: &Session) -> bool {
-    session
-        .services
-        .auth_manager
-        .auth()
-        .is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
-        && session.enabled(Feature::RemoteCompaction)
+pub(crate) fn should_use_remote_compact_task(
+    session: &Session,
+    provider: &ModelProviderInfo,
+) -> bool {
+    provider.is_openai() && session.enabled(Feature::RemoteCompaction)
 }
 
 pub(crate) async fn run_inline_auto_compact_task(
@@ -88,6 +86,11 @@ async fn run_compact_task_inner(
         model: turn_context.client.get_model(),
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
+        base_instructions: turn_context.base_instructions.clone(),
+        user_instructions: turn_context.user_instructions.clone(),
+        developer_instructions: turn_context.developer_instructions.clone(),
+        final_output_json_schema: turn_context.final_output_json_schema.clone(),
+        truncation_policy: Some(turn_context.truncation_policy.into()),
     });
     sess.persist_rollout_items(&[rollout_item]).await;
 

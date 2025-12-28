@@ -1,0 +1,12 @@
+[package]
+name = "codex-utils-cargo-bin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+assert_cmd = { workspace = true }
+thiserror = { workspace = true }

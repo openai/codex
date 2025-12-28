@@ -92,7 +92,7 @@ impl ContextManager {
                     encrypted_content: Some(content),
                     ..
                 }
-                | ResponseItem::CompactionSummary {
+                | ResponseItem::Compaction {
                     encrypted_content: content,
                 } => estimate_reasoning_length(content.len()) as i64,
                 item => {
@@ -258,7 +258,7 @@ impl ContextManager {
             | ResponseItem::FunctionCall { .. }
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::CustomToolCall { .. }
-            | ResponseItem::CompactionSummary { .. }
+            | ResponseItem::Compaction { .. }
             | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Other => item.clone(),
         }
@@ -277,7 +277,7 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. }
-        | ResponseItem::CompactionSummary { .. } => true,
+        | ResponseItem::Compaction { .. } => true,
         ResponseItem::GhostSnapshot { .. } => false,
         ResponseItem::Other => false,
     }
