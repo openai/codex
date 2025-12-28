@@ -8,8 +8,8 @@ sandbox_mode = "danger-full-access"
 # notify = ["bash", "-lc", "afplay /System/Library/Sounds/Ping.aiff"]
 
 # repo-local Hooks (Codex-Mine)
-# - Hooks are observe-only: they won't block execution.
 # - Each hook receives a single JSON payload via stdin.
+# - `when = "tool.call.begin"` で `blocking = true` を指定した hook は、tool の実行前に拒否できます（exit code 2）。
 
 [[hooks]]
 id = "log-turn-begin"
@@ -59,6 +59,17 @@ timeout_ms = 2000
 id = "log-tool-call-end"
 when = "tool.call.end"
 command = ["python3", ".codex/hooks/log_event.py", ".memo/logs/hooks/tool.call.end.log"]
+timeout_ms = 2000
+
+# --- Blocking hook sample (Claude Code-like) ---
+# Prevent destructive git commands from running when the working tree is dirty.
+[[hooks]]
+id = "block-git-destructive-when-dirty"
+when = "tool.call.begin"
+matcher = "^(exec_command|shell|shell_command|local_shell)$"
+blocking = true
+include_tool_arguments = true
+command = ["python3", ".codex/hooks/block_git_destructive_when_dirty.py"]
 timeout_ms = 2000
 
 # --- Examples: filtered hooks (tool / MCP / exec kinds) ---
