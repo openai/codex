@@ -172,9 +172,11 @@ fn has_force_delete_cmdlet(tokens: &[String]) -> bool {
     // PowerShell cmdlets/aliases for deletion
     const DELETE_CMDLETS: &[&str] = &["remove-item", "ri", "rm", "del", "erase", "rd", "rmdir"];
     let has_delete = tokens.iter().any(|t| DELETE_CMDLETS.contains(&t.as_str()));
-    let has_force = tokens
-        .iter()
-        .any(|t| t == "-force" || t.starts_with("-force:"));
+    let has_force = tokens.iter().any(|t| {
+        // Handle -Force, -Force:, -Force; (trailing punctuation)
+        let trimmed = t.trim_end_matches(|c| c == ';' || c == ')' || c == '}');
+        trimmed == "-force" || trimmed.starts_with("-force:")
+    });
     has_delete && has_force
 }
 
@@ -449,6 +451,15 @@ mod tests {
             "powershell",
             "-Command",
             "Remove-Item -Path 'test' -Recurse -Force"
+        ])));
+    }
+
+    #[test]
+    fn powershell_remove_item_force_with_semicolon_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Remove-Item test -Force; Write-Host done"
         ])));
     }
 }
