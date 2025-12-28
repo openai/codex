@@ -212,6 +212,12 @@
           ],
           "default": "prompt",
           "description": "Default decision for server-initiated approval requests."
+        },
+        "codexMine.interrupt.forceStopAfterMs": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 0,
+          "description": "If an interrupt does not complete within this timeout (ms), force stop by killing and restarting the backend process. Set to 0 to disable."
         }
       }
     }

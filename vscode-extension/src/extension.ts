@@ -93,6 +93,13 @@ const globalRuntime: Pick<SessionRuntime, "blocks" | "blockIndexById"> = {
   blocks: [],
   blockIndexById: new Map<string, number>(),
 };
+type PendingForceStop = {
+  timer: NodeJS.Timeout;
+  requestedAtMs: number;
+  expectedTurnId: string | null;
+  forceStopAfterMs: number;
+};
+const pendingForceStopBySessionId = new Map<string, PendingForceStop>();
 let globalStatusText: string | null = null;
 let globalRateLimitStatusText: string | null = null;
 let globalRateLimitStatusTooltip: string | null = null;
@@ -276,17 +283,17 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-	    vscode.commands.registerCommand("codexMine.clearRuntimeCache", async () => {
-	      if (!extensionContext) throw new Error("extensionContext is not set");
-	      if (!sessions) throw new Error("sessions is not initialized");
+    vscode.commands.registerCommand("codexMine.clearRuntimeCache", async () => {
+      if (!extensionContext) throw new Error("extensionContext is not set");
+      if (!sessions) throw new Error("sessions is not initialized");
 
-	      // This only clears in-memory state. Conversation history is re-hydrated
-	      // from `thread/resume` (backed by ~/.codex/sessions) when sessions are opened.
-	      await cleanupLegacyRuntimeCache(extensionContext);
+      // This only clears in-memory state. Conversation history is re-hydrated
+      // from `thread/resume` (backed by ~/.codex/sessions) when sessions are opened.
+      await cleanupLegacyRuntimeCache(extensionContext);
 
-	      // Clear in-memory runtimes for existing sessions.
-	      for (const s of sessions.listAll()) {
-	        const rt = ensureRuntime(s.id);
+      // Clear in-memory runtimes for existing sessions.
+      for (const s of sessions.listAll()) {
+        const rt = ensureRuntime(s.id);
         rt.blocks = [];
         rt.latestDiff = null;
         rt.statusText = null;
@@ -472,21 +479,43 @@ export function activate(context: vscode.ExtensionContext): void {
       const rt = ensureRuntime(session.id);
       const turnId =
         rt.activeTurnId ?? backendManager.getActiveTurnId(session.threadId);
-      if (!turnId) {
-        if (rt.sending) {
-          rt.pendingInterrupt = true;
-          output.appendLine(
-            "[turn] Interrupt requested before turnId is known; will interrupt on turn/started.",
-          );
-          chatView?.refresh();
-          schedulePersistRuntime(session.id);
-        }
+
+      if (!rt.sending) return;
+
+      const folder = resolveWorkspaceFolderForSession(session);
+      const cfg = folder
+        ? vscode.workspace.getConfiguration("codexMine", folder.uri)
+        : vscode.workspace.getConfiguration("codexMine");
+      const forceStopAfterMs =
+        cfg.get<number>("interrupt.forceStopAfterMs") ?? 5000;
+
+      const existing = pendingForceStopBySessionId.get(session.id);
+      if (
+        existing &&
+        (existing.expectedTurnId === null ||
+          existing.expectedTurnId === turnId) &&
+        Date.now() - existing.requestedAtMs < existing.forceStopAfterMs
+      ) {
+        output.appendLine(
+          `[turn] Force stop requested (second interrupt): sessionId=${session.id} turnId=${turnId ?? "(unknown)"}`,
+        );
+        void forceStopSession(session, turnId ?? null, "second interrupt");
         return;
       }
 
-      try {
-        await backendManager.interruptTurn(session, turnId);
-      } catch (err) {
+      if (!turnId) {
+        rt.pendingInterrupt = true;
+        output.appendLine(
+          "[turn] Interrupt requested before turnId is known; will interrupt on turn/started.",
+        );
+        chatView?.refresh();
+        schedulePersistRuntime(session.id);
+        scheduleForceStop(session, null, forceStopAfterMs);
+        return;
+      }
+
+      output.appendLine(`[turn] Interrupt requested: turnId=${turnId}`);
+      void backendManager.interruptTurn(session, turnId).catch((err) => {
         output.appendLine(`[turn] Failed to interrupt: ${String(err)}`);
         upsertBlock(session.id, {
           id: newLocalId("error"),
@@ -495,7 +524,8 @@ export function activate(context: vscode.ExtensionContext): void {
           text: String(err),
         });
         chatView?.refresh();
-      }
+      });
+      scheduleForceStop(session, turnId, forceStopAfterMs);
     }),
   );
 
@@ -916,6 +946,7 @@ export function activate(context: vscode.ExtensionContext): void {
         saveSessions(extensionContext, sessions);
 
         runtimeBySessionId.delete(session.id);
+        clearPendingForceStop(session.id);
         hiddenTabSessionIds.delete(session.id);
         unreadSessionIds.delete(session.id);
         saveHiddenTabSessions(extensionContext);
@@ -1401,6 +1432,7 @@ async function sendUserInput(
 ): Promise<void> {
   if (!backendManager) throw new Error("backendManager is not initialized");
   const rt = ensureRuntime(session.id);
+  clearPendingForceStop(session.id);
   rt.sending = true;
   rt.pendingInterrupt = false;
   const trimmed = text.trim();
@@ -1735,6 +1767,131 @@ function resolveWorkspaceFolderForSession(
 ): vscode.WorkspaceFolder | null {
   const uri = vscode.Uri.parse(session.workspaceFolderUri);
   return vscode.workspace.getWorkspaceFolder(uri) ?? null;
+}
+
+function clearPendingForceStop(sessionId: string): void {
+  const existing = pendingForceStopBySessionId.get(sessionId);
+  if (!existing) return;
+  clearTimeout(existing.timer);
+  pendingForceStopBySessionId.delete(sessionId);
+}
+
+function scheduleForceStop(
+  session: Session,
+  expectedTurnId: string | null,
+  forceStopAfterMs: number | null,
+): void {
+  clearPendingForceStop(session.id);
+
+  if (forceStopAfterMs === null || forceStopAfterMs <= 0) return;
+
+  const timer = setTimeout(() => {
+    void forceStopSession(session, expectedTurnId, "timeout");
+  }, forceStopAfterMs);
+
+  pendingForceStopBySessionId.set(session.id, {
+    timer,
+    requestedAtMs: Date.now(),
+    expectedTurnId,
+    forceStopAfterMs,
+  });
+
+  outputChannel?.appendLine(
+    `[turn] Force stop armed: sessionId=${session.id} turnId=${expectedTurnId ?? "(unknown)"} afterMs=${forceStopAfterMs}`,
+  );
+}
+
+async function forceStopSession(
+  session: Session,
+  expectedTurnId: string | null,
+  reason: "timeout" | "second interrupt",
+): Promise<void> {
+  if (!backendManager) throw new Error("backendManager is not initialized");
+
+  const existing = pendingForceStopBySessionId.get(session.id) ?? null;
+  clearPendingForceStop(session.id);
+
+  const rt = ensureRuntime(session.id);
+  const currentTurnId =
+    rt.activeTurnId ?? backendManager.getActiveTurnId(session.threadId);
+  if (!rt.sending) return;
+  if (expectedTurnId && currentTurnId && expectedTurnId !== currentTurnId) {
+    outputChannel?.appendLine(
+      `[turn] Force stop skipped (turn changed): expected=${expectedTurnId} actual=${currentTurnId}`,
+    );
+    return;
+  }
+
+  const folder = resolveWorkspaceFolderForSession(session);
+  const requestedAtMs = existing?.requestedAtMs ?? Date.now();
+  const elapsedMs = Math.max(0, Date.now() - requestedAtMs);
+
+  outputChannel?.appendLine(
+    `[turn] Force stopping backend: sessionId=${session.id} threadId=${session.threadId} turnId=${currentTurnId ?? "(unknown)"} reason=${reason} elapsedMs=${elapsedMs}`,
+  );
+
+  rt.sending = false;
+  rt.lastTurnCompletedAtMs = Date.now();
+  rt.activeTurnId = null;
+  rt.pendingInterrupt = false;
+  for (const id of rt.streamingAssistantItemIds) {
+    const idx = rt.blockIndexById.get(id);
+    if (idx === undefined) continue;
+    const b = rt.blocks[idx];
+    if (b && b.type === "assistant") (b as any).streaming = false;
+  }
+  rt.streamingAssistantItemIds.clear();
+
+  const afterMs = existing?.forceStopAfterMs ?? null;
+  upsertBlock(session.id, {
+    id: newLocalId("forceStop"),
+    type: "error",
+    title: "Force stopped",
+    text:
+      `Interrupt did not complete${afterMs ? ` within ${afterMs}ms` : ""}. ` +
+      `Restarting backend process... (reason=${reason})`,
+  });
+  chatView?.refresh();
+  schedulePersistRuntime(session.id);
+
+  if (!folder) {
+    upsertBlock(session.id, {
+      id: newLocalId("error"),
+      type: "error",
+      title: "Force stop failed",
+      text: "Workspace folder could not be resolved for this session.",
+    });
+    chatView?.refresh();
+    schedulePersistRuntime(session.id);
+    return;
+  }
+
+  try {
+    await backendManager.forceRestartForWorkspaceFolder(folder);
+    const resumed = await backendManager.resumeSession(
+      session,
+      getSessionModelState(),
+    );
+    void ensureModelsFetched(session);
+    upsertBlock(session.id, {
+      id: newLocalId("info"),
+      type: "info",
+      title: "Backend restarted",
+      text: `Session resumed: ${resumed.thread.id}`,
+    });
+    chatView?.refresh();
+    schedulePersistRuntime(session.id);
+  } catch (err) {
+    outputChannel?.appendLine(`[turn] Force stop failed: ${String(err)}`);
+    upsertBlock(session.id, {
+      id: newLocalId("error"),
+      type: "error",
+      title: "Force stop failed",
+      text: String(err),
+    });
+    chatView?.refresh();
+    schedulePersistRuntime(session.id);
+  }
 }
 
 function formatAsAttachment(
@@ -2449,7 +2606,12 @@ function applyServerNotification(
       rt.lastTurnStartedAtMs = Date.now();
       rt.lastTurnCompletedAtMs = null;
       rt.activeTurnId = String((n as any).params?.turn?.id ?? "") || null;
-      if (rt.pendingInterrupt && rt.activeTurnId && backendManager && sessions) {
+      if (
+        rt.pendingInterrupt &&
+        rt.activeTurnId &&
+        backendManager &&
+        sessions
+      ) {
         rt.pendingInterrupt = false;
         const session = sessions.getById(sessionId);
         if (session) {
@@ -2482,6 +2644,7 @@ function applyServerNotification(
       rt.lastTurnCompletedAtMs = Date.now();
       rt.activeTurnId = null;
       rt.pendingInterrupt = false;
+      clearPendingForceStop(sessionId);
       for (const id of rt.streamingAssistantItemIds) {
         const idx = rt.blockIndexById.get(id);
         if (idx === undefined) continue;

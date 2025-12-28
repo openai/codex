@@ -10,9 +10,7 @@ export type AgentSummary = {
   source: "repo" | "home";
 };
 
-export async function listAgentsFromDisk(
-  cwdFsPath: string,
-): Promise<{
+export async function listAgentsFromDisk(cwdFsPath: string): Promise<{
   agents: AgentSummary[];
   errors: string[];
   gitRoot: string | null;

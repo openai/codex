@@ -119,6 +119,14 @@ export class BackendProcess implements vscode.Disposable {
     }
   }
 
+  public kill(signal: NodeJS.Signals): void {
+    try {
+      this.child.kill(signal);
+    } catch {
+      // kill() can throw if already dead; surface via exit handlers instead.
+    }
+  }
+
   public async threadStart(
     params: ThreadStartParams,
   ): Promise<ThreadStartResponse> {

@@ -545,26 +545,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       `script-src ${webview.cspSource} 'nonce-${nonce}'`,
     ].join("; ");
 
-	    const clientScriptUri = webview.asWebviewUri(
-	      vscode.Uri.joinPath(
-	        this.context.extensionUri,
-	        "dist",
-	        "ui",
-	        "chat_view_client.js",
-	      ),
-	    );
-	    const markdownItUri = webview.asWebviewUri(
-	      vscode.Uri.joinPath(
-	        this.context.extensionUri,
-	        "resources",
-	        "vendor",
-	        "markdown-it.min.js",
-	      ),
-	    );
-	    const cacheBusted = (uri: vscode.Uri): vscode.Uri =>
-	      uri.with({ query: `v=${nonce}` });
-	    const clientScriptUriV = cacheBusted(clientScriptUri);
-	    const markdownItUriV = cacheBusted(markdownItUri);
+    const clientScriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(
+        this.context.extensionUri,
+        "dist",
+        "ui",
+        "chat_view_client.js",
+      ),
+    );
+    const markdownItUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(
+        this.context.extensionUri,
+        "resources",
+        "vendor",
+        "markdown-it.min.js",
+      ),
+    );
+    const cacheBusted = (uri: vscode.Uri): vscode.Uri =>
+      uri.with({ query: `v=${nonce}` });
+    const clientScriptUriV = cacheBusted(clientScriptUri);
+    const markdownItUriV = cacheBusted(markdownItUri);
 
     return `<!doctype html>
 <html lang="ja">
@@ -749,8 +749,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			    <script nonce="${nonce}" src="${clientScriptUriV}"></script>
 			  </body>
 			</html>`;
-	  }
-	}
+  }
+}
 
 function normalizeFileSearchQuery(query: string): string | null {
   const q = query.trim().replace(/\\/g, "/");

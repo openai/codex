@@ -94,6 +94,16 @@ export class BackendManager implements vscode.Disposable {
     }
   }
 
+  public forceStopForWorkspaceFolder(folder: vscode.WorkspaceFolder): void {
+    const key = folder.uri.toString();
+    const proc = this.processes.get(key);
+    if (!proc) return;
+
+    this.output.appendLine(`Force stopping backend for ${folder.uri.fsPath}`);
+    proc.kill("SIGKILL");
+    this.stopForWorkspaceFolder(folder);
+  }
+
   public getActiveTurnId(threadId: string): string | null {
     return this.streamState.get(threadId)?.activeTurnId ?? null;
   }
@@ -102,6 +112,13 @@ export class BackendManager implements vscode.Disposable {
     folder: vscode.WorkspaceFolder,
   ): Promise<void> {
     this.stopForWorkspaceFolder(folder);
+    await this.startForWorkspaceFolder(folder);
+  }
+
+  public async forceRestartForWorkspaceFolder(
+    folder: vscode.WorkspaceFolder,
+  ): Promise<void> {
+    this.forceStopForWorkspaceFolder(folder);
     await this.startForWorkspaceFolder(folder);
   }
 
