@@ -66,3 +66,5 @@ ssh -L 1455:localhost:1455 <user>@<remote-host>
 ```
 
 Then, in that SSH session, run `codex` and select "Sign in with ChatGPT". When prompted, open the printed URL (it will be `http://localhost:1455/...`) in your local browser. The traffic will be tunneled to the remote server.
+
+If you do not want Codex to open your default browser automatically, add `--no-browser` when starting the login flow. The CLI will print the login URL so you can copy/paste it into any browser you have access to.

@@ -18,24 +18,35 @@ pub async fn login_with_chatgpt(
     codex_home: PathBuf,
     forced_chatgpt_workspace_id: Option<String>,
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    open_browser: bool,
 ) -> std::io::Result<()> {
-    let opts = ServerOptions::new(
+    let mut opts = ServerOptions::new(
         codex_home,
         CLIENT_ID.to_string(),
         forced_chatgpt_workspace_id,
         cli_auth_credentials_store_mode,
     );
+    opts.open_browser = open_browser;
     let server = run_login_server(opts)?;
 
     eprintln!(
-        "Starting local login server on http://localhost:{}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{}",
-        server.actual_port, server.auth_url,
+        "Starting local login server on http://localhost:{}.\n{}:\n\n{}",
+        server.actual_port,
+        if open_browser {
+            "If your browser did not open, navigate to this URL to authenticate"
+        } else {
+            "Open this URL to authenticate"
+        },
+        server.auth_url,
     );
 
     server.block_until_done().await
 }
 
-pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {
+pub async fn run_login_with_chatgpt(
+    cli_config_overrides: CliConfigOverrides,
+    open_browser: bool,
+) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
@@ -49,6 +60,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
         config.codex_home,
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
+        open_browser,
     )
     .await
     {
