@@ -2235,7 +2235,7 @@ async fn run_turn(
                 // Use the configured provider-specific stream retry budget.
                 let provider_max_retries = turn_context.client.get_provider().stream_max_retries();
                 let max_retries = if is_rate_limit_stream_error(&e) {
-                    provider_max_retries.max(12)
+                    provider_max_retries.max(20)
                 } else {
                     provider_max_retries
                 };
@@ -2272,6 +2272,8 @@ fn is_rate_limit_stream_error(err: &CodexErr) -> bool {
             lower.contains("rate limit")
                 || lower.contains("rate_limit")
                 || lower.contains("rate_limit_exceeded")
+                || lower.contains("error decoding response body")
+                || lower.contains("transport error: network error")
         }
         _ => false,
     }

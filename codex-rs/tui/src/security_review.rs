@@ -12332,7 +12332,7 @@ fn build_threat_model_prompt(repository_summary: &str, spec: &SpecGenerationOutc
 
 fn build_threat_model_retry_prompt(base_prompt: &str, previous_output: &str) -> String {
     format!(
-        "{base_prompt}\n\nPrevious attempt:\n```\n{previous_output}\n```\nThe previous response did not populate the `Threat Model` table. Re-run the task above and respond with the required sections (Primary components, Trust boundaries, Assets, Attacker model, Entry points, Top abuse paths) followed by a complete Markdown table named `Threat Model` with populated rows (IDs starting at 1, with realistic data)."
+        "{base_prompt}\n\nPrevious attempt:\n```\n{previous_output}\n```\nThe previous response did not populate the `Threat Model` table. Re-run the task above and respond with the required sections (Primary components, Trust boundaries, Components & Trust Boundary Diagram, Assets, Attacker model, Entry points, Top abuse paths) followed by a complete Markdown table named `Threat Model` with populated rows (IDs starting at 1, with realistic data)."
     )
 }
 
@@ -13906,11 +13906,13 @@ async fn call_model(
     metrics: Arc<ReviewMetrics>,
     temperature: f32,
 ) -> Result<ModelCallOutput, String> {
-    // Ensure multiple retries for transient issues like rate limits (5 total attempts minimum).
-    let max_attempts = provider.request_max_retries().max(4);
+    // Ensure multiple retries for transient issues and allow longer recovery when rate limited.
+    let default_max_retries = provider.request_max_retries().max(4);
+    let rate_limit_max_retries = provider.request_max_retries().max(20);
+    let mut max_retries = default_max_retries;
     let mut attempt_errors: Vec<String> = Vec::new();
-
-    for attempt in 0..=max_attempts {
+    let mut attempt = 0;
+    loop {
         metrics.record_model_call();
 
         match call_model_attempt(
@@ -13930,7 +13932,13 @@ async fn call_model(
                 let sanitized = sanitize_model_error(&err);
                 attempt_errors.push(format!("attempt {}: {}", attempt + 1, sanitized));
 
-                if attempt == max_attempts {
+                let retry_after = retry_after_duration(&sanitized);
+                let is_rate_limited = retry_after.is_some() || is_rate_limit_error(&sanitized);
+                if is_rate_limited || is_transient_decode_error(&sanitized) {
+                    max_retries = max_retries.max(rate_limit_max_retries);
+                }
+
+                if attempt >= max_retries {
                     let attempt_count = attempt + 1;
                     let plural = if attempt_count == 1 { "" } else { "s" };
                     let joined = attempt_errors.join("\n- ");
@@ -13939,16 +13947,20 @@ async fn call_model(
                     ));
                 }
 
-                if let Some(delay) = retry_after_duration(&sanitized) {
+                let total_attempts = max_retries + 1;
+                let attempt_number = attempt + 1;
+                attempt += 1;
+
+                if is_rate_limited {
+                    let base_backoff = default_retry_backoff(attempt);
+                    let min_delay = retry_after.unwrap_or(base_backoff).max(base_backoff);
                     let jitter_ms = rand::random_range(250..=1250);
                     let jitter = Duration::from_millis(jitter_ms);
-                    let total_delay = delay.saturating_add(jitter);
+                    let total_delay = min_delay.saturating_add(jitter);
                     metrics.record_rate_limit_wait(total_delay);
                     let wait_secs = total_delay.as_secs_f32();
-                    let base_secs = delay.as_secs_f32();
+                    let base_secs = min_delay.as_secs_f32();
                     let jitter_ms_display = jitter.as_millis();
-                    let attempt_number = attempt + 1;
-                    let total_attempts = max_attempts + 1;
                     let log_line = format!(
                         "Rate limit: {sanitized}; waiting {wait_secs:.1}s (base {base_secs:.1}s + jitter {jitter_ms_display}ms, attempt {attempt_number}/{total_attempts})."
                     );
@@ -13965,7 +13977,7 @@ async fn call_model(
                     );
                     sleep(total_delay).await;
                 } else {
-                    let base = default_retry_backoff(attempt + 1);
+                    let base = default_retry_backoff(attempt);
                     let jitter_ms = rand::random_range(250..=750);
                     let jitter = Duration::from_millis(jitter_ms);
                     let total_delay = base.saturating_add(jitter);
@@ -13975,8 +13987,6 @@ async fn call_model(
             }
         }
     }
-
-    unreachable!("call_model attempts should always return");
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -14207,6 +14217,21 @@ fn retry_after_duration(message: &str) -> Option<Duration> {
     raw.parse::<f64>()
         .ok()
         .and_then(|secs| Duration::try_from_secs_f64(secs).ok())
+}
+
+fn is_rate_limit_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("rate limit")
+        || lower.contains("rate_limit")
+        || lower.contains("rate_limit_exceeded")
+        || lower.contains("too many requests")
+        || lower.contains("429")
+}
+
+fn is_transient_decode_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("error decoding response body")
+        || lower.contains("transport error: network error")
 }
 
 fn parse_responses_stream_output(

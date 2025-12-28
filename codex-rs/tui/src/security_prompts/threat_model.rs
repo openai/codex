@@ -21,6 +21,7 @@ Some architecture details may already be present in the specification above. Do 
 - Include the following sections (keep them short and derived from the spec; 4–8 bullets each where applicable):
   - `## Primary components` (e.g., API gateway/auth/rate limiting, native preprocessing library, model runner/sandboxing, logging & metrics)
   - `## Trust boundaries` (use arrow notation such as `Internet → API Gateway`, `Gateway → Native library`, etc.)
+  - `## Components & Trust Boundary Diagram` containing exactly one `mermaid flowchart TD` (or `flowchart LR`) diagram that shows the primary components and highlights trust boundaries (for example, with `subgraph` zones or annotations). Keep it compact (no more than ~12 nodes), label edges with the action/payload, and include a `title <descriptive label>` line inside the mermaid block.
   - `## Assets` as a 2-column table: `Asset` | `Why it matters`
   - `## Attacker model` with two sublists: `Capabilities` and `Non-capabilities`
   - `## Entry points` (endpoints, upload surfaces, parsing/decoding paths, error handling/logging)
