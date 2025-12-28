@@ -73,6 +73,7 @@ echo -n "${@: -1}" > $(dirname "${0}")/notify.txt"#,
     assert_eq!(payload["type"], json!("agent-turn-complete"));
     assert_eq!(payload["input-messages"], json!(["hello world"]));
     assert_eq!(payload["last-assistant-message"], json!("Done"));
+    assert!(payload["elapsed-ms"].as_u64().is_some());
 
     Ok(())
 }

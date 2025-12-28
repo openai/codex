@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use crate::AuthManager;
 use crate::SandboxState;
@@ -2211,6 +2212,7 @@ pub(crate) async fn run_task(
     if input.is_empty() {
         return None;
     }
+    let turn_started_at = Instant::now();
 
     let auto_compact_limit = turn_context
         .client
@@ -2315,6 +2317,7 @@ pub(crate) async fn run_task(
                             thread_id: sess.conversation_id.to_string(),
                             turn_id: turn_context.sub_id.clone(),
                             cwd: turn_context.cwd.display().to_string(),
+                            elapsed_ms: turn_started_at.elapsed().as_millis() as u64,
                             input_messages: turn_input_messages,
                             last_assistant_message: last_agent_message.clone(),
                         });
