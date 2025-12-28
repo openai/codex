@@ -9,7 +9,7 @@ workspace = true
 
 [dependencies]
 base64 = { workspace = true }
-image = { workspace = true, features = ["jpeg", "png"] }
+image = { workspace = true, features = ["jpeg", "png", "webp"] }
 codex-utils-cache = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "rt", "rt-multi-thread", "macros"] }

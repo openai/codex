@@ -14,6 +14,7 @@ use image::ImageEncoder;
 use image::ImageFormat;
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
+use image::codecs::webp::WebPEncoder;
 use image::imageops::FilterType;
 /// Maximum width used when resizing images before uploading.
 pub const MAX_WIDTH: u32 = 2048;
@@ -51,6 +52,7 @@ pub fn load_and_resize_to_fit(path: &Path) -> Result<EncodedImage, ImageProcessi
         let format = match image::guess_format(&file_bytes) {
             Ok(ImageFormat::Png) => Some(ImageFormat::Png),
             Ok(ImageFormat::Jpeg) => Some(ImageFormat::Jpeg),
+            Ok(ImageFormat::WebP) => Some(ImageFormat::WebP),
             _ => None,
         };
 
@@ -123,6 +125,7 @@ fn encode_image(
 ) -> Result<(Vec<u8>, ImageFormat), ImageProcessingError> {
     let target_format = match preferred_format {
         ImageFormat::Jpeg => ImageFormat::Jpeg,
+        ImageFormat::WebP => ImageFormat::WebP,
         _ => ImageFormat::Png,
     };
 
@@ -153,6 +156,20 @@ fn encode_image(
                     source,
                 })?;
         }
+        ImageFormat::WebP => {
+            let encoder = WebPEncoder::new_lossless(&mut buffer);
+            encoder
+                .encode(
+                    image.as_bytes(),
+                    image.width(),
+                    image.height(),
+                    image.color().into(),
+                )
+                .map_err(|source| ImageProcessingError::Encode {
+                    format: target_format,
+                    source,
+                })?;
+        }
         _ => unreachable!("unsupported target_format should have been handled earlier"),
     }
 
@@ -162,6 +179,7 @@ fn encode_image(
 fn format_to_mime(format: ImageFormat) -> String {
     match format {
         ImageFormat::Jpeg => "image/jpeg".to_string(),
+        ImageFormat::WebP => "image/webp".to_string(),
         _ => "image/png".to_string(),
     }
 }
@@ -248,5 +266,23 @@ mod tests {
         assert_eq!(second.width, 96);
         assert_eq!(second.height, 48);
         assert_ne!(second.bytes, first.bytes);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn supports_webp_images() {
+        let temp_file = NamedTempFile::new().expect("temp file");
+        let image = ImageBuffer::from_pixel(64, 32, Rgba([10u8, 20, 30, 255]));
+        image
+            .save_with_format(temp_file.path(), ImageFormat::WebP)
+            .expect("write webp to temp file");
+
+        let original_bytes = std::fs::read(temp_file.path()).expect("read written image");
+
+        let encoded = load_and_resize_to_fit(temp_file.path()).expect("process image");
+
+        assert_eq!(encoded.width, 64);
+        assert_eq!(encoded.height, 32);
+        assert_eq!(encoded.mime, "image/webp");
+        assert_eq!(encoded.bytes, original_bytes);
     }
 }

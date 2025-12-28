@@ -26,6 +26,7 @@ impl std::error::Error for PasteImageError {}
 pub enum EncodedImageFormat {
     Png,
     Jpeg,
+    Webp,
     Other,
 }
 
@@ -34,6 +35,7 @@ impl EncodedImageFormat {
         match self {
             EncodedImageFormat::Png => "PNG",
             EncodedImageFormat::Jpeg => "JPEG",
+            EncodedImageFormat::Webp => "WEBP",
             EncodedImageFormat::Other => "IMG",
         }
     }
@@ -349,6 +351,7 @@ pub fn pasted_image_format(path: &Path) -> EncodedImageFormat {
     {
         Some("png") => EncodedImageFormat::Png,
         Some("jpg") | Some("jpeg") => EncodedImageFormat::Jpeg,
+        Some("webp") => EncodedImageFormat::Webp,
         _ => EncodedImageFormat::Other,
     }
 }
@@ -431,7 +434,7 @@ mod pasted_paths_tests {
         );
         assert_eq!(
             pasted_image_format(Path::new("/a/b/c.webp")),
-            EncodedImageFormat::Other
+            EncodedImageFormat::Webp
         );
     }
 
