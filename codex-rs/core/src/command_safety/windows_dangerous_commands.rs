@@ -174,7 +174,9 @@ fn has_force_delete_cmdlet(tokens: &[String]) -> bool {
     let has_delete = tokens.iter().any(|t| DELETE_CMDLETS.contains(&t.as_str()));
     let has_force = tokens.iter().any(|t| {
         // Handle -Force, -Force:, -Force; (trailing punctuation)
-        let trimmed = t.trim_end_matches(|c| c == ';' || c == ')' || c == '}');
+        // We use trim_end_matches for simplicity/performance. If this becomes insufficient
+        // (e.g. need to handle complex surrounding punctuation), consider using a Regex.
+        let trimmed = t.trim_end_matches(|c| c == ';' || c == ')' || c == '}' || c == ']');
         trimmed == "-force" || trimmed.starts_with("-force:")
     });
     has_delete && has_force
