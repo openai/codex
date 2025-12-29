@@ -29,6 +29,8 @@ pub struct ResponsesOptions {
     pub include: Vec<String>,
     pub prompt_cache_key: Option<String>,
     pub text: Option<TextControls>,
+    /// Optional default service_tier for Responses/Completions requests (e.g. "priority", "flex").
+    pub service_tier: Option<String>,
     pub store_override: Option<bool>,
     pub conversation_id: Option<String>,
     pub session_source: Option<SessionSource>,
@@ -71,6 +73,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             include,
             prompt_cache_key,
             text,
+            service_tier,
             store_override,
             conversation_id,
             session_source,
@@ -81,6 +84,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             .tools(&prompt.tools)
             .parallel_tool_calls(prompt.parallel_tool_calls)
             .reasoning(reasoning)
+            .service_tier(service_tier.clone())
             .include(include)
             .prompt_cache_key(prompt_cache_key)
             .text(text)

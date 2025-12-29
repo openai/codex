@@ -28,6 +28,7 @@ pub struct ResponsesRequestBuilder<'a> {
     include: Vec<String>,
     prompt_cache_key: Option<String>,
     text: Option<TextControls>,
+    pub service_tier: Option<String>,
     conversation_id: Option<String>,
     session_source: Option<SessionSource>,
     store_override: Option<bool>,
@@ -71,6 +72,11 @@ impl<'a> ResponsesRequestBuilder<'a> {
 
     pub fn text(mut self, text: Option<TextControls>) -> Self {
         self.text = text;
+        self
+    }
+
+    pub fn service_tier(mut self, tier: Option<String>) -> Self {
+        self.service_tier = tier;
         self
     }
 
@@ -118,6 +124,9 @@ impl<'a> ResponsesRequestBuilder<'a> {
             tool_choice: "auto",
             parallel_tool_calls: self.parallel_tool_calls,
             reasoning: self.reasoning,
+            // service_tier is an optional top-level parameter for Responses
+            // and Completions requests; include it when present.
+            service_tier: self.service_tier.as_deref(),
             store,
             stream: true,
             include: self.include,

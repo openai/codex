@@ -304,6 +304,8 @@ pub struct Config {
 
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
+    /// Optional service_tier to request for Responses/Completions (e.g. "priority", "flex").
+    pub model_service_tier: Option<String>,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
@@ -778,6 +780,8 @@ pub struct ConfigToml {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
+    /// Optional service_tier to request for Responses/Completions (e.g. "priority", "flex").
+    pub model_service_tier: Option<String>,
 
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
@@ -1373,6 +1377,7 @@ impl Config {
                 .unwrap_or_default(),
             model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
+            model_service_tier: config_profile.model_service_tier.or(cfg.model_service_tier),
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
@@ -3182,6 +3187,7 @@ model_verbosity = "high"
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: None,
                 model_verbosity: None,
+                model_service_tier: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
                 developer_instructions: None,
@@ -3265,6 +3271,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
+            model_service_tier: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
@@ -3363,6 +3370,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
+            model_service_tier: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
@@ -3447,6 +3455,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_supports_reasoning_summaries: None,
             model_verbosity: Some(Verbosity::High),
+            model_service_tier: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,

@@ -259,6 +259,8 @@ impl ModelClient {
                 include: include.clone(),
                 prompt_cache_key: Some(conversation_id.clone()),
                 text: text.clone(),
+                // Propagate configured model_service_tier (e.g. "priority" or "flex")
+                service_tier: self.config.model_service_tier.clone(),
                 store_override: None,
                 conversation_id: Some(conversation_id.clone()),
                 session_source: Some(session_source.clone()),

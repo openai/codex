@@ -131,6 +131,9 @@ pub struct ResponsesApiRequest<'a> {
     pub include: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
+    /// Optional service tier to request from the provider (for OpenAI Responses/Completions).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
 }
