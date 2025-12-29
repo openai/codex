@@ -313,3 +313,41 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
     assert_eq!(transport.attempts(), 2);
     Ok(())
 }
+
+#[tokio::test]
+async fn responses_client_passes_service_tier_when_set() -> Result<()> {
+    let state = RecordingState::default();
+    let transport = RecordingTransport::new(state.clone());
+    let client = ResponsesClient::new(transport, provider("openai", WireApi::Responses), NoAuth);
+
+    let prompt = codex_api::Prompt {
+        instructions: "Say hi".to_string(),
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hi".to_string(),
+            }],
+        }],
+        tools: Vec::<Value>::new(),
+        parallel_tool_calls: false,
+        output_schema: None,
+    };
+
+    let options = ResponsesOptions {
+        service_tier: Some("flex".to_string()),
+        ..Default::default()
+    };
+
+    let _stream = client.stream_prompt("gpt-test", &prompt, options).await?;
+
+    let requests = state.take_stream_requests();
+    let service_tier = requests
+        .first()
+        .and_then(|request| request.body.as_ref())
+        .and_then(|body| body.get("service_tier"))
+        .and_then(serde_json::Value::as_str);
+
+    assert_eq!(service_tier, Some("flex"));
+    Ok(())
+}
