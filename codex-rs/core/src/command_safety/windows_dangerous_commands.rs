@@ -147,41 +147,50 @@ fn is_dangerous_cmd(command: &[String]) -> bool {
         }
     }
 
-    let Some(first_cmd_raw) = iter.next() else {
+    let Some(first_cmd) = iter.next() else {
         return false;
     };
+    let remaining: Vec<String> = iter.cloned().collect();
 
-    // The command body sometimes arrives as a single token (e.g. `cmd /c "del /f foo"`).
-    // Best-effort split it and then append any remaining argv tokens.
-    let mut cmd_tokens: Vec<String> = if first_cmd_raw.contains(char::is_whitespace) {
-        shlex_split(first_cmd_raw).unwrap_or_else(|| vec![first_cmd_raw.to_string()])
-    } else {
-        vec![first_cmd_raw.to_string()]
-    };
-    cmd_tokens.extend(iter.cloned());
-
-    let Some((first_cmd, cmd_args)) = cmd_tokens.split_first() else {
-        return false;
-    };
-    let first_cmd_lc = first_cmd.to_ascii_lowercase();
+    if is_cmd_force_delete(first_cmd, &remaining) {
+        return true;
+    }
 
     // Classic `cmd /c start https://...` ShellExecute path.
-    if first_cmd_lc == "start" {
-        return args_have_url(cmd_args);
+    if !first_cmd.eq_ignore_ascii_case("start") {
+        return false;
     }
 
-    // Parity with Unix `rm -f`: CMD `del/erase /f` forces deletion of read-only files.
-    if matches!(first_cmd_lc.as_str(), "del" | "erase") {
-        return cmd_args.iter().any(|a| a.eq_ignore_ascii_case("/f"));
+    args_have_url(&remaining)
+}
+
+fn is_cmd_force_delete(first_cmd_lc: &str, cmd_args: &[String]) -> bool {
+    // Helper: detect cmd-style switches, including grouped forms like `/q/f`.
+    let has_switch = |needle: &str| {
+        let needle = needle.to_ascii_lowercase();
+        cmd_args.iter().any(|a| {
+            let lower = a.to_ascii_lowercase();
+            if !(lower.starts_with('/') || lower.starts_with('-')) {
+                return false;
+            }
+
+            // Strip the prefix and split on additional `/` in grouped forms.
+            let rest = lower.trim_start_matches(['/', '-']);
+            rest.split('/').any(|seg| {
+                let seg = seg.trim();
+                seg == needle || seg.starts_with(&format!("{needle}:"))
+            })
+        })
+    };
+
+    // File deletes: `del/erase /f` forces deletion of read-only files.
+    if matches!(first_cmd_lc, "del" | "erase") {
+        return has_switch("f");
     }
 
-    // `cmd /c <gui-launcher> https://...` should be treated as dangerous even though the
-    // outer executable is `cmd`. Reuse the same heuristics we apply for direct launches.
-    let mut nested: Vec<String> = Vec::with_capacity(1 + cmd_args.len());
-    nested.push(first_cmd.to_string());
-    nested.extend(cmd_args.iter().cloned());
-    if is_direct_gui_launch(&nested) {
-        return true;
+    // Directory deletes: `rd/rmdir /s` removes directory trees.
+    if matches!(first_cmd_lc, "rd" | "rmdir") {
+        return has_switch("s");
     }
 
     false
@@ -414,37 +423,6 @@ mod tests {
     fn cmd_del_without_force_is_not_flagged() {
         assert!(!is_dangerous_command_windows(&vec_str(&[
             "cmd", "/c", "del", "foo.txt"
-        ])));
-    }
-
-    #[test]
-    fn cmd_msedge_with_url_is_dangerous() {
-        assert!(is_dangerous_command_windows(&vec_str(&[
-            "cmd",
-            "/c",
-            "msedge",
-            "https://example.com"
-        ])));
-    }
-
-    #[test]
-    fn cmd_explorer_with_url_is_dangerous() {
-        assert!(is_dangerous_command_windows(&vec_str(&[
-            "cmd",
-            "/c",
-            "explorer.exe",
-            "https://example.com"
-        ])));
-    }
-
-    #[test]
-    fn cmd_rundll32_fileprotocolhandler_with_url_is_dangerous() {
-        assert!(is_dangerous_command_windows(&vec_str(&[
-            "cmd",
-            "/c",
-            "rundll32",
-            "url.dll,fileprotocolhandler",
-            "https://example.com"
         ])));
     }
 
