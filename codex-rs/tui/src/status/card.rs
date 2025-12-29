@@ -64,6 +64,7 @@ struct StatusHistoryCell {
     agents_summary: String,
     account: Option<StatusAccountDisplay>,
     session_id: Option<String>,
+    service_tier: Option<String>,
     token_usage: StatusTokenUsageData,
     rate_limits: StatusRateLimitData,
 }
@@ -134,6 +135,7 @@ impl StatusHistoryCell {
         let agents_summary = compose_agents_summary(config);
         let account = compose_account_display(auth_manager, plan_type);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
+        let service_tier = config.model_service_tier.clone();
         let context_window = model_family.context_window.and_then(|window| {
             context_usage.map(|usage| StatusContextWindowData {
                 percent_remaining: usage.percent_of_context_window_remaining(window),
@@ -159,6 +161,7 @@ impl StatusHistoryCell {
             agents_summary,
             account,
             session_id,
+            service_tier,
             token_usage,
             rate_limits,
         }
@@ -383,6 +386,9 @@ impl HistoryCell for StatusHistoryCell {
         lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
         lines.push(formatter.line("Approval", vec![Span::from(self.approval.clone())]));
         lines.push(formatter.line("Sandbox", vec![Span::from(self.sandbox.clone())]));
+        if let Some(tier) = self.service_tier.as_ref() {
+            lines.push(formatter.line("Service tier", vec![Span::from(tier.clone())]));
+        }
         lines.push(formatter.line("Agents.md", vec![Span::from(self.agents_summary.clone())]));
 
         if let Some(account_value) = account_value {
