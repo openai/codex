@@ -4,8 +4,8 @@ Codex supports requesting an optional "service tier" from model providers that e
 
 A service tier is an opaque string sent as a top-level `service_tier` parameter in Responses/Completions requests. Examples used in this codebase include:
 
-- `priority` — higher priority routing for lower-latency or higher-throughput access
 - `flex` — lower-cost or best-effort routing
+- `priority` — higher priority routing for lower-latency or higher-throughput access
 
 Note: exact semantics and available tier names depend on the provider. If the provider does not support `service_tier`, the parameter is ignored.
 
@@ -28,8 +28,8 @@ Examples
 1. Configuring a default in `~/.codex/config.toml`:
 
 ```toml
-# Request the "priority" tier by default for responses/completions
-model_service_tier = "priority"
+# Request the "flex" tier by default for responses/completions
+model_service_tier = "flex"
 ```
 
 2. Overriding per-request (high-level example):
@@ -39,4 +39,3 @@ let req = ResponsesRequest::new(...).service_tier(Some("flex".to_string()));
 ```
 
 When in doubt, consult your model provider's documentation for supported service tier names and semantics.
-
