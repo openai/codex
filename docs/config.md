@@ -238,6 +238,15 @@ By default, `reasoning` is only set on requests to OpenAI models that are known 
 
 ```toml
 model_supports_reasoning_summaries = true
+
+### model_service_tier
+
+Optional default service tier to request for Responses/Completions (examples: "priority", "flex"). When set, Codex includes this value as a top-level `service_tier` parameter in outgoing Responses/Completions requests. Providers that do not support `service_tier` will ignore the parameter.
+
+```toml
+# Request the "priority" tier by default for responses/completions
+model_service_tier = "priority"
+```
 ```
 
 ### model_context_window
