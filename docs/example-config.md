@@ -24,9 +24,9 @@ model = "gpt-5.1-codex-max"
 # Model used by the /review feature (code reviews). Default: "gpt-5.1-codex-max".
 review_model = "gpt-5.1-codex-max"
 
-# Optional default service tier to request from the model provider (e.g. "priority" or "flex").
+# Optional default service tier to request from the model provider (e.g. "flex").
 # See docs/service-tiers.md for details.
-# model_service_tier = "priority"
+# model_service_tier = "flex"
 
 # Provider id selected from [model_providers]. Default: "openai".
 model_provider = "openai"
