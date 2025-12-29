@@ -29,7 +29,6 @@ pub fn ensure_non_interactive_pager(env_map: &mut HashMap<String, String>) {
 }
 
 // Keep PATH and PATHEXT stable for callers that rely on inheriting the parent process env.
-#[allow(dead_code)]
 pub fn inherit_path_env(env_map: &mut HashMap<String, String>) {
     if !env_map.contains_key("PATH") {
         if let Ok(path) = env::var("PATH") {

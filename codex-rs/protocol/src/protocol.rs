@@ -268,6 +268,24 @@ pub enum AskForApproval {
     Never,
 }
 
+/// Represents whether outbound network access is available to the agent.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, Default, JsonSchema, TS,
+)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum NetworkAccess {
+    #[default]
+    Restricted,
+    Enabled,
+}
+
+impl NetworkAccess {
+    pub fn is_enabled(self) -> bool {
+        matches!(self, NetworkAccess::Enabled)
+    }
+}
+
 /// Determines execution restrictions for model shell commands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display, JsonSchema, TS)]
 #[strum(serialize_all = "kebab-case")]
@@ -280,6 +298,15 @@ pub enum SandboxPolicy {
     /// Read-only access to the entire file-system.
     #[serde(rename = "read-only")]
     ReadOnly,
+
+    /// Indicates the process is already in an external sandbox. Allows full
+    /// disk access while honoring the provided network setting.
+    #[serde(rename = "external-sandbox")]
+    ExternalSandbox {
+        /// Whether the external sandbox permits outbound network traffic.
+        #[serde(default)]
+        network_access: NetworkAccess,
+    },
 
     /// Same as `ReadOnly` but additionally grants write access to the current
     /// working directory ("workspace").
@@ -373,6 +400,7 @@ impl SandboxPolicy {
     pub fn has_full_disk_write_access(&self) -> bool {
         match self {
             SandboxPolicy::DangerFullAccess => true,
+            SandboxPolicy::ExternalSandbox { .. } => true,
             SandboxPolicy::ReadOnly => false,
             SandboxPolicy::WorkspaceWrite { .. } => false,
         }
@@ -381,6 +409,7 @@ impl SandboxPolicy {
     pub fn has_full_network_access(&self) -> bool {
         match self {
             SandboxPolicy::DangerFullAccess => true,
+            SandboxPolicy::ExternalSandbox { network_access } => network_access.is_enabled(),
             SandboxPolicy::ReadOnly => false,
             SandboxPolicy::WorkspaceWrite { network_access, .. } => *network_access,
         }
@@ -392,6 +421,7 @@ impl SandboxPolicy {
     pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<WritableRoot> {
         match self {
             SandboxPolicy::DangerFullAccess => Vec::new(),
+            SandboxPolicy::ExternalSandbox { .. } => Vec::new(),
             SandboxPolicy::ReadOnly => Vec::new(),
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
@@ -1294,6 +1324,23 @@ pub struct TurnContextItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
     pub summary: ReasoningSummaryConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub developer_instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_output_json_schema: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncation_policy: Option<TruncationPolicy>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "mode", content = "limit", rename_all = "snake_case")]
+pub enum TruncationPolicy {
+    Bytes(usize),
+    Tokens(usize),
 }
 
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
@@ -1553,6 +1600,11 @@ pub struct StreamErrorEvent {
     pub message: String,
     #[serde(default)]
     pub codex_error_info: Option<CodexErrorInfo>,
+    /// Optional details about the underlying stream failure (often the same
+    /// human-readable message that is surfaced as the terminal error if retries
+    /// are exhausted).
+    #[serde(default)]
+    pub additional_details: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1691,6 +1743,7 @@ pub enum SkillScope {
     User,
     Repo,
     System,
+    Admin,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1829,6 +1882,21 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn external_sandbox_reports_full_access_flags() {
+        let restricted = SandboxPolicy::ExternalSandbox {
+            network_access: NetworkAccess::Restricted,
+        };
+        assert!(restricted.has_full_disk_write_access());
+        assert!(!restricted.has_full_network_access());
+
+        let enabled = SandboxPolicy::ExternalSandbox {
+            network_access: NetworkAccess::Enabled,
+        };
+        assert!(enabled.has_full_disk_write_access());
+        assert!(enabled.has_full_network_access());
+    }
 
     #[test]
     fn item_started_event_from_web_search_emits_begin_event() {

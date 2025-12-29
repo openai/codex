@@ -24,8 +24,8 @@ use crate::default_client::build_reqwest_client;
 use crate::error::Result as CoreResult;
 use crate::features::Feature;
 use crate::model_provider_info::ModelProviderInfo;
-use crate::openai_models::model_family::ModelFamily;
-use crate::openai_models::model_presets::builtin_model_presets;
+use crate::models_manager::model_family::ModelFamily;
+use crate::models_manager::model_presets::builtin_model_presets;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -314,9 +314,7 @@ mod tests {
     use super::*;
     use crate::CodexAuth;
     use crate::auth::AuthCredentialsStoreMode;
-    use crate::config::Config;
-    use crate::config::ConfigOverrides;
-    use crate::config::ConfigToml;
+    use crate::config::ConfigBuilder;
     use crate::features::Feature;
     use crate::model_provider_info::WireApi;
     use codex_protocol::openai_models::ModelsResponse;
@@ -356,7 +354,6 @@ mod tests {
             "truncation_policy": {"mode": "bytes", "limit": 10_000},
             "supports_parallel_tool_calls": false,
             "context_window": null,
-            "reasoning_summary_format": "none",
             "experimental_supported_tools": [],
         }))
         .expect("valid model")
@@ -397,12 +394,11 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
@@ -455,12 +451,11 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager = Arc::new(AuthManager::new(
             codex_home.path().to_path_buf(),
@@ -511,12 +506,11 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager = Arc::new(AuthManager::new(
             codex_home.path().to_path_buf(),
@@ -587,12 +581,11 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )
-        .expect("load default test config");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());

@@ -13,6 +13,7 @@ use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
+use crate::shimmer::shimmer_spans;
 use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
@@ -32,7 +33,6 @@ use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::openai_models::ReasoningSummaryFormat;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -441,6 +441,79 @@ pub(crate) fn new_unified_exec_interaction(
     stdin: String,
 ) -> UnifiedExecInteractionCell {
     UnifiedExecInteractionCell::new(command_display, stdin)
+}
+
+#[derive(Debug)]
+// Live-only wait cell that shimmers while we poll; flushes into a static entry later.
+pub(crate) struct UnifiedExecWaitCell {
+    command_display: Option<String>,
+    animations_enabled: bool,
+}
+
+impl UnifiedExecWaitCell {
+    pub(crate) fn new(command_display: Option<String>, animations_enabled: bool) -> Self {
+        Self {
+            command_display: command_display.filter(|display| !display.is_empty()),
+            animations_enabled,
+        }
+    }
+
+    pub(crate) fn matches(&self, command_display: Option<&str>) -> bool {
+        let command_display = command_display.filter(|display| !display.is_empty());
+        match (self.command_display.as_deref(), command_display) {
+            (Some(current), Some(incoming)) => current == incoming,
+            _ => true,
+        }
+    }
+
+    pub(crate) fn update_command_display(&mut self, command_display: Option<String>) {
+        if self.command_display.is_none() {
+            self.command_display = command_display.filter(|display| !display.is_empty());
+        }
+    }
+
+    pub(crate) fn command_display(&self) -> Option<String> {
+        self.command_display.clone()
+    }
+}
+
+impl HistoryCell for UnifiedExecWaitCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width == 0 {
+            return Vec::new();
+        }
+        let wrap_width = width as usize;
+
+        let mut header_spans = vec!["• ".dim()];
+        if self.animations_enabled {
+            header_spans.extend(shimmer_spans("Waiting for background terminal"));
+        } else {
+            header_spans.push("Waiting for background terminal".bold());
+        }
+        if let Some(command) = &self.command_display
+            && !command.is_empty()
+        {
+            header_spans.push(" · ".dim());
+            header_spans.push(command.clone().dim());
+        }
+        let header = Line::from(header_spans);
+
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let header_wrapped = word_wrap_line(&header, RtOptions::new(wrap_width));
+        push_owned_lines(&header_wrapped, &mut out);
+        out
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.display_lines(width).len() as u16
+    }
+}
+
+pub(crate) fn new_unified_exec_wait_live(
+    command_display: Option<String>,
+    animations_enabled: bool,
+) -> UnifiedExecWaitCell {
+    UnifiedExecWaitCell::new(command_display, animations_enabled)
 }
 
 #[derive(Debug)]
@@ -1587,39 +1660,28 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_reasoning_summary_block(
-    full_reasoning_buffer: String,
-    reasoning_summary_format: ReasoningSummaryFormat,
-) -> Box<dyn HistoryCell> {
-    if reasoning_summary_format == ReasoningSummaryFormat::Experimental {
-        // Experimental format is following:
-        // ** header **
-        //
-        // reasoning summary
-        //
-        // So we need to strip header from reasoning summary
-        let full_reasoning_buffer = full_reasoning_buffer.trim();
-        if let Some(open) = full_reasoning_buffer.find("**") {
-            let after_open = &full_reasoning_buffer[(open + 2)..];
-            if let Some(close) = after_open.find("**") {
-                let after_close_idx = open + 2 + close + 2;
-                // if we don't have anything beyond `after_close_idx`
-                // then we don't have a summary to inject into history
-                if after_close_idx < full_reasoning_buffer.len() {
-                    let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
-                    let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
-                    return Box::new(ReasoningSummaryCell::new(
-                        header_buffer,
-                        summary_buffer,
-                        false,
-                    ));
-                }
+pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<dyn HistoryCell> {
+    let full_reasoning_buffer = full_reasoning_buffer.trim();
+    if let Some(open) = full_reasoning_buffer.find("**") {
+        let after_open = &full_reasoning_buffer[(open + 2)..];
+        if let Some(close) = after_open.find("**") {
+            let after_close_idx = open + 2 + close + 2;
+            // if we don't have anything beyond `after_close_idx`
+            // then we don't have a summary to inject into history
+            if after_close_idx < full_reasoning_buffer.len() {
+                let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
+                let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
+                return Box::new(ReasoningSummaryCell::new(
+                    header_buffer,
+                    summary_buffer,
+                    false,
+                ));
             }
         }
     }
     Box::new(ReasoningSummaryCell::new(
         "".to_string(),
-        full_reasoning_buffer,
+        full_reasoning_buffer.to_string(),
         true,
     ))
 }
@@ -1682,11 +1744,9 @@ mod tests {
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
     use codex_core::config::Config;
-    use codex_core::config::ConfigOverrides;
-    use codex_core::config::ConfigToml;
+    use codex_core::config::ConfigBuilder;
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
-    use codex_core::openai_models::models_manager::ModelsManager;
     use codex_core::protocol::McpAuthStatus;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
@@ -1700,14 +1760,13 @@ mod tests {
     use mcp_types::TextContent;
     use mcp_types::Tool;
     use mcp_types::ToolInputSchema;
-
-    fn test_config() -> Config {
-        Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            std::env::temp_dir(),
-        )
-        .expect("config")
+    async fn test_config() -> Config {
+        let codex_home = std::env::temp_dir();
+        ConfigBuilder::default()
+            .codex_home(codex_home.clone())
+            .build()
+            .await
+            .expect("config")
     }
 
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -1752,6 +1811,13 @@ mod tests {
     }
 
     #[test]
+    fn unified_exec_wait_cell_renders_wait() {
+        let cell = new_unified_exec_wait_live(None, false);
+        let lines = render_transcript(&cell);
+        assert_eq!(lines, vec!["• Waiting for background terminal"],);
+    }
+
+    #[test]
     fn ps_output_empty_snapshot() {
         let cell = new_unified_exec_sessions_output(Vec::new());
         let rendered = render_lines(&cell.display_lines(60)).join("\n");
@@ -1785,9 +1851,9 @@ mod tests {
         insta::assert_snapshot!(rendered);
     }
 
-    #[test]
-    fn mcp_tools_output_masks_sensitive_values() {
-        let mut config = test_config();
+    #[tokio::test]
+    async fn mcp_tools_output_masks_sensitive_values() {
+        let mut config = test_config().await;
         let mut env = HashMap::new();
         env.insert("TOKEN".to_string(), "secret".to_string());
         let stdio_config = McpServerConfig {
@@ -2593,10 +2659,8 @@ mod tests {
     }
     #[test]
     fn reasoning_summary_block() {
-        let reasoning_format = ReasoningSummaryFormat::Experimental;
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-            reasoning_format,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -2608,32 +2672,19 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
-        let reasoning_format = ReasoningSummaryFormat::Experimental;
-        let cell = new_reasoning_summary_block(
-            "Detailed reasoning goes here.".to_string(),
-            reasoning_format,
-        );
+        let cell = new_reasoning_summary_block("Detailed reasoning goes here.".to_string());
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• Detailed reasoning goes here."]);
     }
 
-    #[test]
-    fn reasoning_summary_block_respects_config_overrides() {
-        let mut config = test_config();
+    #[tokio::test]
+    async fn reasoning_summary_block_respects_config_overrides() {
+        let mut config = test_config().await;
         config.model = Some("gpt-3.5-turbo".to_string());
         config.model_supports_reasoning_summaries = Some(true);
-        config.model_reasoning_summary_format = Some(ReasoningSummaryFormat::Experimental);
-        let model_family =
-            ModelsManager::construct_model_family_offline(&config.model.clone().unwrap(), &config);
-        assert_eq!(
-            model_family.reasoning_summary_format,
-            ReasoningSummaryFormat::Experimental
-        );
-
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-            model_family.reasoning_summary_format,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -2642,11 +2693,8 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_falls_back_when_header_is_missing() {
-        let reasoning_format = ReasoningSummaryFormat::Experimental;
-        let cell = new_reasoning_summary_block(
-            "**High level reasoning without closing".to_string(),
-            reasoning_format,
-        );
+        let cell =
+            new_reasoning_summary_block("**High level reasoning without closing".to_string());
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• **High level reasoning without closing"]);
@@ -2654,18 +2702,14 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_falls_back_when_summary_is_missing() {
-        let reasoning_format = ReasoningSummaryFormat::Experimental;
-        let cell = new_reasoning_summary_block(
-            "**High level reasoning without closing**".to_string(),
-            reasoning_format.clone(),
-        );
+        let cell =
+            new_reasoning_summary_block("**High level reasoning without closing**".to_string());
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• High level reasoning without closing"]);
 
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**\n\n  ".to_string(),
-            reasoning_format,
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -2674,10 +2718,8 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_splits_header_and_summary_when_present() {
-        let reasoning_format = ReasoningSummaryFormat::Experimental;
         let cell = new_reasoning_summary_block(
             "**High level plan**\n\nWe should fix the bug next.".to_string(),
-            reasoning_format,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));

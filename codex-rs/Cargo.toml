@@ -36,6 +36,7 @@ members = [
     "tui",
     "tui2",
     "utils/absolute-path",
+    "utils/cargo-bin",
     "utils/git",
     "utils/cache",
     "utils/image",
@@ -93,6 +94,7 @@ codex-tui = { path = "tui" }
 codex-tui2 = { path = "tui2" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-cache = { path = "utils/cache" }
+codex-utils-cargo-bin = { path = "utils/cargo-bin" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-pty = { path = "utils/pty" }
@@ -146,7 +148,7 @@ indexmap = "2.12.0"
 insta = "1.44.3"
 itertools = "0.14.0"
 keyring = { version = "3.6", default-features = false }
-landlock = "0.4.1"
+landlock = "0.4.4"
 lazy_static = "1"
 libc = "0.2.177"
 log = "0.4"
@@ -199,7 +201,7 @@ strum_macros = "0.27.2"
 supports-color = "3.0.2"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"
-test-log = "0.2.18"
+test-log = "0.2.19"
 textwrap = "0.16.2"
 thiserror = "2.0.17"
 time = "0.3"

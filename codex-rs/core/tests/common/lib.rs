@@ -4,14 +4,11 @@ use tempfile::TempDir;
 
 use codex_core::CodexConversation;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use regex_lite::Regex;
 use std::path::PathBuf;
-
-#[cfg(target_os = "linux")]
-use assert_cmd::cargo::cargo_bin;
 
 pub mod process;
 pub mod responses;
@@ -75,19 +72,22 @@ pub fn test_tmp_path_buf() -> PathBuf {
 /// Returns a default `Config` whose on-disk state is confined to the provided
 /// temporary directory. Using a per-test directory keeps tests hermetic and
 /// avoids clobbering a developer’s real `~/.codex`.
-pub fn load_default_config_for_test(codex_home: &TempDir) -> Config {
-    Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        default_test_overrides(),
-        codex_home.path().to_path_buf(),
-    )
-    .expect("defaults for test should always succeed")
+pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
+    ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(default_test_overrides())
+        .build()
+        .await
+        .expect("defaults for test should always succeed")
 }
 
 #[cfg(target_os = "linux")]
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides {
-        codex_linux_sandbox_exe: Some(cargo_bin("codex-linux-sandbox")),
+        codex_linux_sandbox_exe: Some(
+            codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
+                .expect("should find binary for codex-linux-sandbox"),
+        ),
         ..ConfigOverrides::default()
     }
 }

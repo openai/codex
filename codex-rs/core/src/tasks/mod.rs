@@ -19,7 +19,7 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::openai_models::models_manager::ModelsManager;
+use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnAbortReason;

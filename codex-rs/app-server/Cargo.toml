@@ -48,7 +48,6 @@ uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
 app_test_support = { workspace = true }
-assert_cmd = { workspace = true }
 base64 = { workspace = true }
 core_test_support = { workspace = true }
 mcp-types = { workspace = true }

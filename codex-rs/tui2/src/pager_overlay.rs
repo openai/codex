@@ -1,6 +1,5 @@
 use std::io::Result;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
@@ -280,8 +279,8 @@ impl PagerView {
                 return Ok(());
             }
         }
-        tui.frame_requester()
-            .schedule_frame_in(Duration::from_millis(16));
+        // Request a redraw; the frame scheduler coalesces bursts and clamps to 60fps.
+        tui.frame_requester().schedule_frame();
         Ok(())
     }
 
@@ -298,8 +297,8 @@ impl PagerView {
                 return Ok(());
             }
         }
-        tui.frame_requester()
-            .schedule_frame_in(Duration::from_millis(16));
+        // Request a redraw; the frame scheduler coalesces bursts and clamps to 60fps.
+        tui.frame_requester().schedule_frame();
         Ok(())
     }
 

@@ -16,6 +16,7 @@ workspace = true
 anyhow = { workspace = true }
 async-channel = { workspace = true }
 async-trait = { workspace = true }
+arc-swap = "1.7.1"
 base64 = { workspace = true }
 chardetng = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
@@ -61,7 +62,6 @@ sha1 = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
-strum_macros = { workspace = true }
 tempfile = { workspace = true }
 test-case = "3.3.1"
 test-log = { workspace = true }
@@ -123,6 +123,7 @@ assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-core = { path = ".", features = ["deterministic_process_ids"] }
+codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 ctor = { workspace = true }
 escargot = { workspace = true }
@@ -132,7 +133,6 @@ predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
-tokio-test = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }
 walkdir = { workspace = true }

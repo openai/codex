@@ -46,6 +46,7 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
         "string_content",
         "raw_string",
         "number",
+        "concatenation",
     ];
     // Allow only safe punctuation / operator tokens; anything else causes reject.
     const ALLOWED_PUNCT_TOKENS: &[&str] = &["&&", "||", ";", "|", "\"", "'"];
@@ -158,6 +159,48 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
                     return None;
                 }
             }
+            "concatenation" => {
+                // Handle concatenated arguments like -g"*.py"
+                let mut concatenated = String::new();
+                let mut concat_cursor = child.walk();
+                for part in child.named_children(&mut concat_cursor) {
+                    match part.kind() {
+                        "word" | "number" => {
+                            concatenated
+                                .push_str(part.utf8_text(src.as_bytes()).ok()?.to_owned().as_str());
+                        }
+                        "string" => {
+                            if part.child_count() == 3
+                                && part.child(0)?.kind() == "\""
+                                && part.child(1)?.kind() == "string_content"
+                                && part.child(2)?.kind() == "\""
+                            {
+                                concatenated.push_str(
+                                    part.child(1)?
+                                        .utf8_text(src.as_bytes())
+                                        .ok()?
+                                        .to_owned()
+                                        .as_str(),
+                                );
+                            } else {
+                                return None;
+                            }
+                        }
+                        "raw_string" => {
+                            let raw_string = part.utf8_text(src.as_bytes()).ok()?;
+                            let stripped = raw_string
+                                .strip_prefix('\'')
+                                .and_then(|s| s.strip_suffix('\''))?;
+                            concatenated.push_str(stripped);
+                        }
+                        _ => return None,
+                    }
+                }
+                if concatenated.is_empty() {
+                    return None;
+                }
+                words.push(concatenated);
+            }
             _ => return None,
         }
     }
@@ -255,5 +298,48 @@ mod tests {
         let command = vec!["zsh".to_string(), "-lc".to_string(), "ls".to_string()];
         let parsed = parse_shell_lc_plain_commands(&command).unwrap();
         assert_eq!(parsed, vec![vec!["ls".to_string()]]);
+    }
+
+    #[test]
+    fn accepts_concatenated_flag_and_value() {
+        // Test case: -g"*.py" (flag directly concatenated with quoted value)
+        let cmds = parse_seq("rg -n \"foo\" -g\"*.py\"").unwrap();
+        assert_eq!(
+            cmds,
+            vec![vec![
+                "rg".to_string(),
+                "-n".to_string(),
+                "foo".to_string(),
+                "-g*.py".to_string(),
+            ]]
+        );
+    }
+
+    #[test]
+    fn accepts_concatenated_flag_with_single_quotes() {
+        let cmds = parse_seq("grep -n 'pattern' -g'*.txt'").unwrap();
+        assert_eq!(
+            cmds,
+            vec![vec![
+                "grep".to_string(),
+                "-n".to_string(),
+                "pattern".to_string(),
+                "-g*.txt".to_string(),
+            ]]
+        );
+    }
+
+    #[test]
+    fn rejects_concatenation_with_variable_substitution() {
+        // Environment variables in concatenated strings should be rejected
+        assert!(parse_seq("rg -g\"$VAR\" pattern").is_none());
+        assert!(parse_seq("rg -g\"${VAR}\" pattern").is_none());
+    }
+
+    #[test]
+    fn rejects_concatenation_with_command_substitution() {
+        // Command substitution in concatenated strings should be rejected
+        assert!(parse_seq("rg -g\"$(pwd)\" pattern").is_none());
+        assert!(parse_seq("rg -g\"$(echo '*.py')\" pattern").is_none());
     }
 }

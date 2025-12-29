@@ -85,7 +85,6 @@ pub fn format_last_error(err: i32) -> String {
     }
 }
 
-#[allow(dead_code)]
 pub fn string_from_sid_bytes(sid: &[u8]) -> Result<String, String> {
     unsafe {
         let mut str_ptr: *mut u16 = std::ptr::null_mut();

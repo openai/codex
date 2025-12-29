@@ -7,6 +7,7 @@ Codex configuration gives you fine-grained control over the model, execution env
 - [Feature flags](#feature-flags)
 - [Model selection](#model-selection)
 - [Execution environment](#execution-environment)
+- [Project root detection](#project-root-detection)
 - [MCP integration](#mcp-integration)
 - [Observability and telemetry](#observability-and-telemetry)
 - [Profiles and overrides](#profiles-and-overrides)
@@ -42,11 +43,9 @@ Supported features:
 | Key                                   | Default | Stage        | Description                                           |
 | ------------------------------------- | :-----: | ------------ | ----------------------------------------------------- |
 | `unified_exec`                        |  false  | Experimental | Use the unified PTY-backed exec tool                  |
-| `rmcp_client`                         |  false  | Experimental | Enable oauth support for streamable HTTP MCP servers  |
 | `apply_patch_freeform`                |  false  | Beta         | Include the freeform `apply_patch` tool               |
 | `view_image_tool`                     |  true   | Stable       | Include the `view_image` tool                         |
 | `web_search_request`                  |  false  | Stable       | Allow the model to issue web searches                 |
-| `ghost_commit`                        |  false  | Experimental | Create a ghost commit each turn                       |
 | `enable_experimental_windows_sandbox` |  false  | Experimental | Use the Windows restricted-token sandbox              |
 | `tui2`                                |  false  | Experimental | Use the experimental TUI v2 (viewport) implementation |
 | `skills`                              |  false  | Experimental | Enable discovery and injection of skills              |
@@ -417,6 +416,17 @@ set = { PATH = "/usr/bin", MY_FLAG = "1" }
 
 Currently, `CODEX_SANDBOX_NETWORK_DISABLED=1` is also added to the environment, assuming network is disabled. This is not configurable.
 
+## Project root detection
+
+Codex discovers `.codex/` project layers by walking up from the working directory until it hits a project marker. By default it looks for `.git`. You can override the marker list in user/system/MDM config:
+
+```toml
+# $CODEX_HOME/config.toml
+project_root_markers = [".git", ".hg", ".sl"]
+```
+
+Set `project_root_markers = []` to skip searching parent directories and treat the current working directory as the project root.
+
 ## MCP integration
 
 ### mcp_servers
@@ -465,14 +475,7 @@ http_headers = { "HEADER_NAME" = "HEADER_VALUE" }
 env_http_headers = { "HEADER_NAME" = "ENV_VAR" }
 ```
 
-Streamable HTTP connections always use the experimental Rust MCP client under the hood, so expect occasional rough edges. OAuth login flows are gated on the `rmcp_client = true` flag:
-
-```toml
-[features]
-rmcp_client = true
-```
-
-After enabling it, run `codex mcp login <server-name>` when the server supports OAuth.
+Streamable HTTP connections always use the Rust MCP client under the hood. Run `codex mcp login <server-name>` to authenticate for servers supporting OAuth.
 
 #### Other configuration options
 
@@ -885,12 +888,77 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 # Disable terminal animations (welcome screen, status shimmer, spinner).
 # Defaults to true.
 animations = false
+
+# TUI2 mouse scrolling (wheel + trackpad)
+#
+# Terminals emit different numbers of raw scroll events per physical wheel notch (commonly 1, 3,
+# or 9+). TUI2 normalizes raw event density into consistent wheel behavior (default: ~3 lines per
+# wheel notch) while keeping trackpad input higher fidelity via fractional accumulation.
+#
+# See `codex-rs/tui2/docs/scroll_input_model.md` for the model and probe data.
+
+# Override *wheel* event density (raw events per physical wheel notch). TUI2 only.
+#
+# Wheel-like per-event contribution is:
+# - `scroll_wheel_lines / scroll_events_per_tick`
+#
+# Trackpad-like streams use `min(scroll_events_per_tick, 3)` as the divisor so dense wheel ticks
+# (e.g. 9 events per notch) do not make trackpads feel artificially slow.
+scroll_events_per_tick = 3
+
+# Override wheel scroll lines per physical wheel notch (classic feel). TUI2 only.
+scroll_wheel_lines = 3
+
+# Override baseline trackpad sensitivity (lines per tick-equivalent). TUI2 only.
+#
+# Trackpad-like per-event contribution is:
+# - `scroll_trackpad_lines / min(scroll_events_per_tick, 3)`
+scroll_trackpad_lines = 1
+
+# Trackpad acceleration (optional). TUI2 only.
+# These keep small swipes precise while letting large/faster swipes cover more content.
+#
+# Concretely, TUI2 computes:
+# - `multiplier = clamp(1 + abs(events) / scroll_trackpad_accel_events, 1..scroll_trackpad_accel_max)`
+#
+# The multiplier is applied to the trackpad-like stream’s computed line delta (including any
+# carried fractional remainder).
+scroll_trackpad_accel_events = 30
+scroll_trackpad_accel_max = 3
+
+# Force scroll interpretation. TUI2 only.
+# Valid values: "auto" (default), "wheel", "trackpad"
+scroll_mode = "auto"
+
+# Auto-mode heuristic tuning. TUI2 only.
+scroll_wheel_tick_detect_max_ms = 12
+scroll_wheel_like_max_duration_ms = 200
+
+# Invert scroll direction for mouse wheel/trackpad. TUI2 only.
+scroll_invert = false
 ```
 
 > [!NOTE]
 > Codex emits desktop notifications using terminal escape codes. Not all terminals support these (notably, macOS Terminal.app and VS Code's terminal do not support custom notifications. iTerm2, Ghostty and WezTerm do support these notifications).
 
 > [!NOTE] > `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
+
+Scroll settings (`tui.scroll_events_per_tick`, `tui.scroll_wheel_lines`, `tui.scroll_trackpad_lines`, `tui.scroll_trackpad_accel_*`, `tui.scroll_mode`, `tui.scroll_wheel_*`, `tui.scroll_invert`) currently apply to the TUI2 viewport scroll implementation.
+
+> [!NOTE] > `tui.scroll_events_per_tick` has terminal-specific defaults derived from mouse scroll probe logs
+> collected on macOS for a small set of terminals:
+>
+> - Terminal.app: 3
+> - Warp: 9
+> - WezTerm: 1
+> - Alacritty: 3
+> - Ghostty: 3 (stopgap; one probe measured ~9)
+> - iTerm2: 1
+> - VS Code terminal: 1
+> - Kitty: 3
+>
+> We should augment these defaults with data from more terminals and other platforms over time.
+> Unknown terminals fall back to 3 and can be overridden via `tui.scroll_events_per_tick`.
 
 ## Authentication and authorization
 
@@ -943,6 +1011,7 @@ Valid values:
 | `notify`                                         | array<string>                                                     | External program for notifications.                                                                                             |
 | `tui.animations`                                 | boolean                                                           | Enable terminal animations (welcome screen, shimmer, spinner). Defaults to true; set to `false` to disable visual motion.       |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                         |
+| `developer_instructions`                         | string                                                            | The additional developer instructions.                                                                                          |
 | `features.<feature-flag>`                        | boolean                                                           | See [feature flags](#feature-flags) for details                                                                                 |
 | `ghost_snapshot.disable_warnings`                | boolean                                                           | Disable every warnings around ghost snapshot (large files, directory, ...)                                                      |
 | `ghost_snapshot.ignore_large_untracked_files`    | number                                                            | Exclude untracked files larger than this many bytes from ghost snapshots (default: 10 MiB). Set to `0` to disable.              |
@@ -975,6 +1044,15 @@ Valid values:
 | `file_opener`                                    | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`).                                                                         |
 | `tui`                                            | table                                                             | TUI‑specific options.                                                                                                           |
 | `tui.notifications`                              | boolean \| array<string>                                          | Enable desktop notifications in the tui (default: true).                                                                        |
+| `tui.scroll_events_per_tick`                     | number                                                            | Raw events per wheel notch (normalization input; default: terminal-specific; fallback: 3).                                      |
+| `tui.scroll_wheel_lines`                         | number                                                            | Lines per physical wheel notch in wheel-like mode (default: 3).                                                                 |
+| `tui.scroll_trackpad_lines`                      | number                                                            | Baseline trackpad sensitivity in trackpad-like mode (default: 1).                                                               |
+| `tui.scroll_trackpad_accel_events`               | number                                                            | Trackpad acceleration: events per +1x speed in TUI2 (default: 30).                                                              |
+| `tui.scroll_trackpad_accel_max`                  | number                                                            | Trackpad acceleration: max multiplier in TUI2 (default: 3).                                                                     |
+| `tui.scroll_mode`                                | `auto` \| `wheel` \| `trackpad`                                   | How to interpret scroll input in TUI2 (default: `auto`).                                                                        |
+| `tui.scroll_wheel_tick_detect_max_ms`            | number                                                            | Auto-mode threshold (ms) for promoting a stream to wheel-like behavior (default: 12).                                           |
+| `tui.scroll_wheel_like_max_duration_ms`          | number                                                            | Auto-mode fallback duration (ms) used for 1-event-per-tick terminals (default: 200).                                            |
+| `tui.scroll_invert`                              | boolean                                                           | Invert mouse scroll direction in TUI2 (default: false).                                                                         |
 | `hide_agent_reasoning`                           | boolean                                                           | Hide model reasoning events.                                                                                                    |
 | `check_for_update_on_startup`                    | boolean                                                           | Check for Codex updates on startup (default: true). Set to `false` only if updates are centrally managed.                       |
 | `show_raw_agent_reasoning`                       | boolean                                                           | Show raw reasoning (when available).                                                                                            |
@@ -982,7 +1060,6 @@ Valid values:
 | `model_reasoning_summary`                        | `auto` \| `concise` \| `detailed` \| `none`                       | Reasoning summaries.                                                                                                            |
 | `model_verbosity`                                | `low` \| `medium` \| `high`                                       | GPT‑5 text verbosity (Responses API).                                                                                           |
 | `model_supports_reasoning_summaries`             | boolean                                                           | Force‑enable reasoning summaries.                                                                                               |
-| `model_reasoning_summary_format`                 | `none` \| `experimental`                                          | Force reasoning summary format.                                                                                                 |
 | `chatgpt_base_url`                               | string                                                            | Base URL for ChatGPT auth flow.                                                                                                 |
 | `experimental_instructions_file`                 | string (path)                                                     | Replace built‑in instructions (experimental).                                                                                   |
 | `experimental_use_exec_command_tool`             | boolean                                                           | Use experimental exec command tool.                                                                                             |

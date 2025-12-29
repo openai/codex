@@ -178,14 +178,14 @@ impl TestCodexBuilder {
             ..built_in_model_providers()["openai"].clone()
         };
         let cwd = Arc::new(TempDir::new()?);
-        let mut config = load_default_config_for_test(home);
+        let mut config = load_default_config_for_test(home).await;
         config.cwd = cwd.path().to_path_buf();
         config.model_provider = model_provider;
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
         }
-        if let Ok(cmd) = assert_cmd::Command::cargo_bin("codex") {
-            config.codex_linux_sandbox_exe = Some(PathBuf::from(cmd.get_program().to_os_string()));
+        if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
+            config.codex_linux_sandbox_exe = Some(path);
         }
 
         let mut mutators = vec![];

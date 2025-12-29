@@ -132,7 +132,7 @@ impl ConfigService {
         params: ConfigReadParams,
     ) -> Result<ConfigReadResponse, ConfigServiceError> {
         let layers = self
-            .load_layers_state()
+            .load_thread_agnostic_config()
             .await
             .map_err(|err| ConfigServiceError::io("failed to read configuration layers", err))?;
 
@@ -185,7 +185,7 @@ impl ConfigService {
         &self,
     ) -> Result<codex_app_server_protocol::UserSavedConfig, ConfigServiceError> {
         let layers = self
-            .load_layers_state()
+            .load_thread_agnostic_config()
             .await
             .map_err(|err| ConfigServiceError::io("failed to load configuration", err))?;
 
@@ -219,7 +219,7 @@ impl ConfigService {
         }
 
         let layers = self
-            .load_layers_state()
+            .load_thread_agnostic_config()
             .await
             .map_err(|err| ConfigServiceError::io("failed to load configuration", err))?;
         let user_layer = match layers.get_user_layer() {
@@ -328,9 +328,14 @@ impl ConfigService {
         })
     }
 
-    async fn load_layers_state(&self) -> std::io::Result<ConfigLayerStack> {
+    /// Loads a "thread-agnostic" config, which means the config layers do not
+    /// include any in-repo .codex/ folders because there is no cwd/project root
+    /// associated with this query.
+    async fn load_thread_agnostic_config(&self) -> std::io::Result<ConfigLayerStack> {
+        let cwd: Option<AbsolutePathBuf> = None;
         load_config_layers_state(
             &self.codex_home,
+            cwd,
             &self.cli_overrides,
             self.loader_overrides.clone(),
         )
@@ -551,6 +556,10 @@ fn override_message(layer: &ConfigLayerSource) -> String {
         ConfigLayerSource::System { file } => {
             format!("Overridden by managed config (system): {}", file.display())
         }
+        ConfigLayerSource::Project { dot_codex_folder } => format!(
+            "Overridden by project config: {}/{CONFIG_TOML_FILE}",
+            dot_codex_folder.display(),
+        ),
         ConfigLayerSource::SessionFlags => "Overridden by session flags".to_string(),
         ConfigLayerSource::User { file } => {
             format!("Overridden by user config: {}", file.display())
@@ -769,15 +778,41 @@ remote_compaction = true
             },
         );
         let layers = response.layers.expect("layers present");
-        assert_eq!(layers.len(), 2, "expected two layers");
-        assert_eq!(
-            layers.first().unwrap().name,
-            ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
-        );
-        assert_eq!(
-            layers.get(1).unwrap().name,
-            ConfigLayerSource::User { file: user_file }
-        );
+        if cfg!(unix) {
+            let system_file = AbsolutePathBuf::from_absolute_path(
+                crate::config_loader::SYSTEM_CONFIG_TOML_FILE_UNIX,
+            )
+            .expect("system file");
+            assert_eq!(layers.len(), 3, "expected three layers on unix");
+            assert_eq!(
+                layers.first().unwrap().name,
+                ConfigLayerSource::LegacyManagedConfigTomlFromFile {
+                    file: managed_file.clone()
+                }
+            );
+            assert_eq!(
+                layers.get(1).unwrap().name,
+                ConfigLayerSource::User {
+                    file: user_file.clone()
+                }
+            );
+            assert_eq!(
+                layers.get(2).unwrap().name,
+                ConfigLayerSource::System { file: system_file }
+            );
+        } else {
+            assert_eq!(layers.len(), 2, "expected two layers");
+            assert_eq!(
+                layers.first().unwrap().name,
+                ConfigLayerSource::LegacyManagedConfigTomlFromFile {
+                    file: managed_file.clone()
+                }
+            );
+            assert_eq!(
+                layers.get(1).unwrap().name,
+                ConfigLayerSource::User { file: user_file }
+            );
+        }
     }
 
     #[tokio::test]
