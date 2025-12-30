@@ -2,7 +2,7 @@
 
 Codex supports requesting an optional "service tier" from model providers that expose this feature (for example, some OpenAI endpoints).
 
-A service tier is an opaque string sent as a top-level `service_tier` parameter in Responses/Completions requests. Examples used in this codebase include:
+A service tier is an opaque string sent as a top-level `service_tier` parameter in Responses/Completions and Chat Completions requests. Examples used in this codebase include:
 
 - `flex` — lower-cost or best-effort routing
 - `priority` — higher priority routing for lower-latency or higher-throughput access
@@ -17,6 +17,7 @@ Where to configure
 Behavior in Codex
 
 - The `model_service_tier` configuration key is optional. When set, Codex includes the value as the `service_tier` top-level parameter on Responses/Completions requests for providers that use the Responses API.
+- When using a provider configured with `wire_api = "chat"`, Codex also includes `service_tier` on Chat Completions requests.
 - The TUI displays the active service tier in the status card when it is configured.
 
 Security and privacy
@@ -28,7 +29,7 @@ Examples
 1. Configuring a default in `~/.codex/config.toml`:
 
 ```toml
-# Request the "flex" tier by default for responses/completions
+# Request the "flex" tier by default for responses/chat completions
 model_service_tier = "flex"
 ```
 

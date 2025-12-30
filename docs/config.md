@@ -241,10 +241,10 @@ model_supports_reasoning_summaries = true
 
 ### model_service_tier
 
-Optional default service tier to request for Responses/Completions (examples: "priority", "flex"). When set, Codex includes this value as a top-level `service_tier` parameter in outgoing Responses/Completions requests. Providers that do not support `service_tier` will ignore the parameter.
+Optional default service tier to request for Responses/Completions and Chat Completions (examples: "priority", "flex"). When set, Codex includes this value as a top-level `service_tier` parameter in outgoing requests. Providers that do not support `service_tier` will ignore the parameter.
 
 ```toml
-# Request the "flex" tier by default for responses/completions
+# Request the "flex" tier by default for responses/chat completions
 model_service_tier = "flex"
 ```
 ```
