@@ -9,7 +9,8 @@ on:
 jobs:
   gather-duplicates:
     name: Identify potential duplicates
-    if: ${{ github.event.action == 'opened' || (github.event.action == 'labeled' && github.event.label.name == 'codex-deduplicate') }}
+    # Prevent runs on forks (requires OpenAI API key, wastes Actions minutes)
+    if: github.repository == 'openai/codex' && (github.event.action == 'opened' || (github.event.action == 'labeled' && github.event.label.name == 'codex-deduplicate'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
