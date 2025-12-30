@@ -40,7 +40,9 @@ impl ToolCallRuntime {
             parallel_execution: Arc::new(RwLock::new(())),
         }
     }
-
+    // 并行执行工具，可以读操作可以并行，写操作需要阻塞
+    // 正在持有读锁的并行工具会先跑完，写锁会等待它们释放
+    // 写的时候，其他任务都进入队列，等到写完成，再执行
     pub(crate) fn handle_tool_call(
         &self,
         call: ToolCall,
