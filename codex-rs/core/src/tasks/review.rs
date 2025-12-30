@@ -46,6 +46,12 @@ impl SessionTask for ReviewTask {
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
+        let _ = session
+            .session
+            .services
+            .otel_manager
+            .counter("codex.task.review", 1, &[]);
+
         // Start sub-codex conversation and get the receiver for events.
         let output = match start_review_conversation(
             session.clone(),

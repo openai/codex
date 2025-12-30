@@ -17,6 +17,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
+use codex_otel::ToolDecisionSource;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 
@@ -45,8 +46,8 @@ impl ToolOrchestrator {
         let otel = turn_ctx.client.get_otel_manager();
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
-        let otel_user = codex_otel::otel_manager::ToolDecisionSource::User;
-        let otel_cfg = codex_otel::otel_manager::ToolDecisionSource::Config;
+        let otel_user = ToolDecisionSource::User;
+        let otel_cfg = ToolDecisionSource::Config;
 
         // 1) Approval
         let mut already_approved = false;
