@@ -809,16 +809,22 @@ pub(crate) fn create_tools_json_for_chat_completions_api(
             }
 
             if let Some(map) = tool.as_object_mut() {
-                let name = map
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                // Remove "type" field as it is not needed in chat completions.
+                // Remove fields not used by chat completions.
                 map.remove("type");
+                map.remove("strict");
+
+                // OpenAI tool schemas require additionalProperties=false at the root.
+                if let Some(params) = map.get_mut("parameters") {
+                    if let serde_json::Value::Object(obj) = params {
+                        obj.insert(
+                            "additionalProperties".to_string(),
+                            serde_json::Value::Bool(false),
+                        );
+                    }
+                }
+
                 Some(json!({
                     "type": "function",
-                    "name": name,
                     "function": map,
                 }))
             } else {
