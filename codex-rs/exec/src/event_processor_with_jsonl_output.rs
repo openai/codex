@@ -67,6 +67,7 @@ pub struct EventProcessorWithJsonOutput {
     last_total_token_usage: Option<codex_core::protocol::TokenUsage>,
     running_mcp_tool_calls: HashMap<String, RunningMcpToolCall>,
     last_critical_error: Option<ThreadErrorEvent>,
+    session_timestamp: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +102,7 @@ impl EventProcessorWithJsonOutput {
             last_total_token_usage: None,
             running_mcp_tool_calls: HashMap::new(),
             last_critical_error: None,
+            session_timestamp: None,
         }
     }
 
@@ -167,9 +169,11 @@ impl EventProcessorWithJsonOutput {
         )
     }
 
-    fn handle_session_configured(&self, payload: &SessionConfiguredEvent) -> Vec<ThreadEvent> {
+    fn handle_session_configured(&mut self, payload: &SessionConfiguredEvent) -> Vec<ThreadEvent> {
+        self.session_timestamp.clone_from(&payload.timestamp);
         vec![ThreadEvent::ThreadStarted(ThreadStartedEvent {
             thread_id: payload.session_id.to_string(),
+            timestamp: payload.timestamp.clone(),
         })]
     }
 
@@ -524,14 +528,22 @@ impl EventProcessor for EventProcessorWithJsonOutput {
     fn process_event(&mut self, event: Event) -> CodexStatus {
         let aggregated = self.collect_thread_events(&event);
         for conv_event in aggregated {
-            match serde_json::to_string(&conv_event) {
-                Ok(line) => {
-                    println!("{line}");
+            match serde_json::to_value(&conv_event) {
+                Ok(value) => {
+                    let value = self.with_timestamp(value);
+                    match serde_json::to_string(&value) {
+                        Ok(line) => {
+                            println!("{line}");
+                        }
+                        Err(e) => {
+                            error!("Failed to serialize event: {e:?}");
+                        }
+                    }
                 }
                 Err(e) => {
                     error!("Failed to serialize event: {e:?}");
                 }
-            }
+            };
         }
 
         let Event { msg, .. } = event;
@@ -544,5 +556,20 @@ impl EventProcessor for EventProcessorWithJsonOutput {
         } else {
             CodexStatus::Running
         }
+    }
+}
+
+impl EventProcessorWithJsonOutput {
+    fn with_timestamp(&self, mut value: JsonValue) -> JsonValue {
+        if let Some(timestamp) = self.session_timestamp.as_ref()
+            && let Some(obj) = value.as_object_mut()
+            && !obj.contains_key("timestamp")
+        {
+            obj.insert(
+                "timestamp".to_string(),
+                JsonValue::String(timestamp.clone()),
+            );
+        }
+        value
     }
 }

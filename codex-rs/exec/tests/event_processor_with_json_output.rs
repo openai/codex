@@ -72,10 +72,12 @@ fn session_configured_produces_thread_started_event() {
         codex_protocol::ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")
             .unwrap();
     let rollout_path = PathBuf::from("/tmp/rollout.json");
+    let timestamp = Some("2025-09-05T16:53:11.850Z".to_string());
     let ev = event(
         "e1",
         EventMsg::SessionConfigured(SessionConfiguredEvent {
             session_id,
+            timestamp: timestamp.clone(),
             model: "codex-mini-latest".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
@@ -93,6 +95,7 @@ fn session_configured_produces_thread_started_event() {
         out,
         vec![ThreadEvent::ThreadStarted(ThreadStartedEvent {
             thread_id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+            timestamp,
         })]
     );
 }

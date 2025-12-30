@@ -20,9 +20,9 @@ To write the output of `codex exec` to a file, in addition to using a shell redi
 
 `codex exec` supports a `--json` mode that streams events to stdout as JSON Lines (JSONL) while the agent runs.
 
-Supported event types:
+Supported event types (all events include a `timestamp` field with the session creation time, RFC3339 UTC):
 
-- `thread.started` - when a thread is started or resumed.
+- `thread.started` - when a thread is started or resumed. Includes `thread_id`.
 - `turn.started` - when a turn starts. A turn encompasses all events between the user message and the assistant response.
 - `turn.completed` - when a turn completes; includes token usage.
 - `turn.failed` - when a turn fails; includes error details.
@@ -44,14 +44,14 @@ Typically, an `agent_message` is added at the end of the turn.
 Sample output:
 
 ```jsonl
-{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Searching for README files**"}}
-{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","aggregated_output":"","status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","aggregated_output":"2025-09-11\nAGENTS.md\nCHANGELOG.md\ncliff.toml\ncodex-cli\ncodex-rs\ndocs\nexamples\nflake.lock\nflake.nix\nLICENSE\nnode_modules\nNOTICE\npackage.json\npnpm-lock.yaml\npnpm-workspace.yaml\nPNPM.md\nREADME.md\nscripts\nsdk\ntmp\n","exit_code":0,"status":"completed"}}
-{"type":"item.completed","item":{"id":"item_2","type":"reasoning","text":"**Checking repository root for README**"}}
-{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Yep — there’s a `README.md` in the repository root."}}
-{"type":"turn.completed","usage":{"input_tokens":24763,"cached_input_tokens":24448,"output_tokens":122}}
+{"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53","timestamp":"2025-09-11T15:20:05Z"}
+{"type":"turn.started","timestamp":"2025-09-11T15:20:05Z"}
+{"type":"item.completed","timestamp":"2025-09-11T15:20:05Z","item":{"id":"item_0","type":"reasoning","text":"**Searching for README files**"}}
+{"type":"item.started","timestamp":"2025-09-11T15:20:05Z","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","aggregated_output":"","status":"in_progress"}}
+{"type":"item.completed","timestamp":"2025-09-11T15:20:05Z","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","aggregated_output":"2025-09-11\nAGENTS.md\nCHANGELOG.md\ncliff.toml\ncodex-cli\ncodex-rs\ndocs\nexamples\nflake.lock\nflake.nix\nLICENSE\nnode_modules\nNOTICE\npackage.json\npnpm-lock.yaml\npnpm-workspace.yaml\nPNPM.md\nREADME.md\nscripts\nsdk\ntmp\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","timestamp":"2025-09-11T15:20:05Z","item":{"id":"item_2","type":"reasoning","text":"**Checking repository root for README**"}}
+{"type":"item.completed","timestamp":"2025-09-11T15:20:05Z","item":{"id":"item_3","type":"agent_message","text":"Yep — there’s a `README.md` in the repository root."}}
+{"type":"turn.completed","timestamp":"2025-09-11T15:20:05Z","usage":{"input_tokens":24763,"cached_input_tokens":24448,"output_tokens":122}}
 ```
 
 ### Structured output

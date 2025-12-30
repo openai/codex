@@ -105,6 +105,7 @@ async fn resumed_initial_messages_render_history() {
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
+        timestamp: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,

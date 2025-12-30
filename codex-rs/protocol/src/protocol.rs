@@ -1774,6 +1774,9 @@ pub struct SkillsListEntry {
 pub struct SessionConfiguredEvent {
     /// Name left as session_id instead of conversation_id for backwards compatibility.
     pub session_id: ConversationId,
+    /// RFC3339 timestamp (UTC) when the session was created.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
 
     /// Tell the client what model is being queried.
     pub model: String,
@@ -1938,6 +1941,7 @@ mod tests {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
+                timestamp: None,
                 model: "codex-mini-latest".to_string(),
                 model_provider_id: "openai".to_string(),
                 approval_policy: AskForApproval::Never,

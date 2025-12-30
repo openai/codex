@@ -39,6 +39,9 @@ pub enum ThreadEvent {
 pub struct ThreadStartedEvent {
     /// The identified of the new thread. Can be used to resume the thread later.
     pub thread_id: String,
+    /// RFC3339 timestamp (UTC) when the session was created.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS, Default)]

@@ -47,6 +47,7 @@ use codex_protocol::protocol::SessionSource;
 pub struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
     pub(crate) rollout_path: PathBuf,
+    session_timestamp: Option<String>,
 }
 
 #[derive(Clone)]
@@ -160,6 +161,9 @@ impl RolloutRecorder {
                 None,
             ),
         };
+        let session_timestamp = meta
+            .as_ref()
+            .map(|session_meta| session_meta.timestamp.clone());
 
         // Clone the cwd for the spawned task to collect git info asynchronously
         let cwd = config.cwd.clone();
@@ -174,7 +178,15 @@ impl RolloutRecorder {
         // driver instead of blocking the runtime.
         tokio::task::spawn(rollout_writer(file, rx, meta, cwd));
 
-        Ok(Self { tx, rollout_path })
+        Ok(Self {
+            tx,
+            rollout_path,
+            session_timestamp,
+        })
+    }
+
+    pub fn session_timestamp(&self) -> Option<String> {
+        self.session_timestamp.clone()
     }
 
     pub(crate) async fn record_items(&self, items: &[RolloutItem]) -> std::io::Result<()> {

@@ -204,6 +204,19 @@ fn maybe_push_chat_wire_api_deprecation(
     });
 }
 
+fn session_timestamp_from_history(initial_history: &InitialHistory) -> Option<String> {
+    let items = match initial_history {
+        InitialHistory::New => return None,
+        InitialHistory::Resumed(resumed) => resumed.history.as_slice(),
+        InitialHistory::Forked(items) => items.as_slice(),
+    };
+
+    items.iter().find_map(|item| match item {
+        RolloutItem::SessionMeta(line) => Some(line.meta.timestamp.clone()),
+        _ => None,
+    })
+}
+
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub async fn spawn(
@@ -597,6 +610,8 @@ impl Session {
             anyhow::Error::from(e)
         })?;
         let rollout_path = rollout_recorder.rollout_path.clone();
+        let session_timestamp = session_timestamp_from_history(&initial_history)
+            .or_else(|| rollout_recorder.session_timestamp());
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
@@ -685,6 +700,7 @@ impl Session {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
+                timestamp: session_timestamp,
                 model: session_configuration.model.clone(),
                 model_provider_id: config.model_provider_id.clone(),
                 approval_policy: session_configuration.approval_policy.value(),
