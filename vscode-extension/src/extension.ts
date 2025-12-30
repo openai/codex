@@ -1873,7 +1873,6 @@ async function forceStopSession(
       getSessionModelState(),
     );
     void ensureModelsFetched(session);
-    hydrateRuntimeFromThread(session.id, resumed.thread, { force: true });
     upsertBlock(session.id, {
       id: newLocalId("info"),
       type: "info",
@@ -3951,11 +3950,7 @@ function findRecentWebSearchBlockIdByQuery(
   return null;
 }
 
-function hydrateRuntimeFromThread(
-  sessionId: string,
-  thread: Thread,
-  opts?: { force?: boolean },
-): void {
+function hydrateRuntimeFromThread(sessionId: string, thread: Thread): void {
   const rt = ensureRuntime(sessionId);
 
   const hasConversationBlocks = rt.blocks.some((b) => {
@@ -3974,23 +3969,19 @@ function hydrateRuntimeFromThread(
         return false;
     }
   });
-  if (!opts?.force && hasConversationBlocks) return;
+  if (hasConversationBlocks) return;
 
-  const preserved = rt.blocks.filter((b) => {
-    switch (b.type) {
-      case "info":
-      case "system":
-      case "note":
-      case "error":
-        return true;
-      default:
-        return false;
-    }
-  });
+  // Preserve non-conversation blocks that may have arrived before hydration (e.g. legacy warnings).
+  const preserved = rt.blocks.filter(
+    (b) =>
+      b.type === "info" ||
+      b.type === "system" ||
+      b.type === "note" ||
+      b.type === "error",
+  );
 
   rt.blocks.length = 0;
   rt.blockIndexById.clear();
-  rt.streamingAssistantItemIds.clear();
 
   const turns: Turn[] = Array.isArray(thread.turns) ? thread.turns : [];
   for (const turn of turns) {

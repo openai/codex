@@ -16,12 +16,7 @@ declare const markdownit:
       renderer: { rules: Record<string, any> };
     });
 
-type Session = {
-  id: string;
-  title: string;
-  customTitle?: boolean;
-  displayNumber: number;
-};
+type Session = { id: string; title: string; customTitle?: boolean };
 type ModelState = {
   model: string | null;
   provider: string | null;
@@ -41,10 +36,6 @@ type ChatBlock =
       alt: string;
       caption: string | null;
       role: "user" | "assistant" | "tool" | "system";
-      imageKey?: string;
-      mimeType?: string;
-      byteLength?: number;
-      autoLoad?: boolean;
     }
   | { id: string; type: "info"; title: string; text: string }
   | { id: string; type: "webSearch"; query: string; status: string }
@@ -616,10 +607,11 @@ function main(): void {
 
   const getSessionDisplayTitle = (
     sess: Session,
+    idx: number,
   ): { label: string; tooltip: string } => {
     const title = String(sess.title || "").trim() || "Untitled";
     if (sess.customTitle) return { label: title, tooltip: title };
-    return { label: `${title} #${sess.displayNumber}`, tooltip: title };
+    return { label: `${title} #${idx + 1}`, tooltip: title };
   };
 
   if (typeof markdownit !== "function") {
@@ -740,190 +732,6 @@ function main(): void {
   let tabsSig: string | null = null;
   const tabElBySessionId = new Map<string, HTMLDivElement>();
   let isComposing = false;
-
-  type PendingImageRequest = {
-    imageKey: string;
-    resolve: (result: ImageLoadResult) => void;
-  };
-  type ImageLoadResult =
-    | { ok: true; imageKey: string; mimeType: string; base64: string }
-    | { ok: false; imageKey: string; error: string };
-
-  const pendingImageRequestsById = new Map<string, PendingImageRequest>();
-  const imageObjectUrlByKey = new Map<
-    string,
-    { url: string; byteLength: number; lastUsedAt: number }
-  >();
-
-  const IMAGE_AUTOLOAD_DEFAULT_MAX_ITEMS = 24;
-  const IMAGE_OBJECT_URL_CACHE_MAX_ITEMS = 24;
-  const IMAGE_OBJECT_URL_CACHE_MAX_TOTAL_BYTES = 12_000_000;
-  const IMAGE_RENDER_MAX_EDGE_PX = 1024;
-  const IMAGE_RENDER_MAX_BYTES = 350_000;
-
-  function approxBytesFromBase64(base64: string): number {
-    const s = base64.trim().replace(/=+$/, "");
-    return Math.floor((s.length * 3) / 4);
-  }
-
-  function pruneImageObjectUrls(): void {
-    const entries = Array.from(imageObjectUrlByKey.entries());
-    let total = entries.reduce((sum, [, v]) => sum + (v.byteLength || 0), 0);
-    if (
-      entries.length <= IMAGE_OBJECT_URL_CACHE_MAX_ITEMS &&
-      total <= IMAGE_OBJECT_URL_CACHE_MAX_TOTAL_BYTES
-    )
-      return;
-
-    entries.sort((a, b) => (a[1].lastUsedAt || 0) - (b[1].lastUsedAt || 0));
-    for (const [key, v] of entries) {
-      if (
-        imageObjectUrlByKey.size <= IMAGE_OBJECT_URL_CACHE_MAX_ITEMS &&
-        total <= IMAGE_OBJECT_URL_CACHE_MAX_TOTAL_BYTES
-      )
-        break;
-      URL.revokeObjectURL(v.url);
-      imageObjectUrlByKey.delete(key);
-      total -= v.byteLength || 0;
-    }
-  }
-
-  async function decodeBase64ToBytes(base64: string): Promise<Uint8Array> {
-    try {
-      const binary = atob(base64);
-      const out = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-      return out;
-    } catch (err) {
-      throw new Error(`Failed to decode base64: ${String(err)}`);
-    }
-  }
-
-  async function resizeImageBlob(
-    blob: Blob,
-  ): Promise<{ blob: Blob; byteLength: number }> {
-    const bitmap = await createImageBitmap(blob);
-    try {
-      const w = bitmap.width;
-      const h = bitmap.height;
-      if (!w || !h) return { blob, byteLength: blob.size };
-
-      const scale = Math.min(1, IMAGE_RENDER_MAX_EDGE_PX / Math.max(w, h));
-      const tw = Math.max(1, Math.round(w * scale));
-      const th = Math.max(1, Math.round(h * scale));
-
-      const canvas = document.createElement("canvas");
-      canvas.width = tw;
-      canvas.height = th;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return { blob, byteLength: blob.size };
-      ctx.drawImage(bitmap, 0, 0, tw, th);
-
-      const toBlob = (quality: number): Promise<Blob | null> =>
-        new Promise((resolve) =>
-          canvas.toBlob((b) => resolve(b), "image/jpeg", quality),
-        );
-
-      // Deterministic quality steps; do not silently loop forever.
-      const candidates = [0.85, 0.75, 0.65, 0.55];
-      let best: Blob | null = null;
-      for (const q of candidates) {
-        const b = await toBlob(q);
-        if (!b) continue;
-        best = b;
-        if (b.size <= IMAGE_RENDER_MAX_BYTES) break;
-      }
-      if (!best) return { blob, byteLength: blob.size };
-      return { blob: best, byteLength: best.size };
-    } finally {
-      bitmap.close();
-    }
-  }
-
-  function requestImageData(imageKey: string): Promise<ImageLoadResult> {
-    const requestId = `${Date.now()}:${Math.random().toString(16).slice(2)}`;
-    return new Promise<ImageLoadResult>((resolve) => {
-      pendingImageRequestsById.set(requestId, { imageKey, resolve });
-      vscode.postMessage({ type: "loadImage", imageKey, requestId });
-    });
-  }
-
-  async function ensureImageRendered(
-    block: Extract<ChatBlock, { type: "image" }>,
-    imgEl: HTMLImageElement,
-    captionEl: HTMLDivElement,
-  ): Promise<void> {
-    const imageKey = String(block.imageKey || "");
-    if (!imageKey) {
-      if (block.src && imgEl.src !== block.src) imgEl.src = block.src;
-      return;
-    }
-
-    const cached = imageObjectUrlByKey.get(imageKey);
-    if (cached) {
-      cached.lastUsedAt = Date.now();
-      if (imgEl.src !== cached.url) imgEl.src = cached.url;
-      return;
-    }
-
-    if (!block.autoLoad) {
-      imgEl.removeAttribute("src");
-      imgEl.style.cursor = "pointer";
-      const fallbackCaption =
-        (block.caption || "").trim() ||
-        `画像はオフロードされています（クリックで読み込み）`;
-      captionEl.textContent = fallbackCaption;
-      captionEl.style.display = "";
-      imgEl.addEventListener(
-        "click",
-        () => {
-          (block as any).autoLoad = true;
-          void ensureImageRendered(block, imgEl, captionEl);
-        },
-        { once: true },
-      );
-      return;
-    }
-
-    captionEl.textContent = "画像を読み込み中…";
-    captionEl.style.display = "";
-
-    const result = await requestImageData(imageKey);
-    if (!result.ok) {
-      captionEl.textContent = `画像の読み込みに失敗: ${result.error}`;
-      captionEl.style.display = "";
-      return;
-    }
-
-    const bytes = await decodeBase64ToBytes(result.base64);
-    const bytesBuf = (bytes.buffer as ArrayBuffer).slice(
-      bytes.byteOffset,
-      bytes.byteOffset + bytes.byteLength,
-    );
-    const rawMime =
-      result.mimeType || String(block.mimeType || "") || "image/*";
-    const rawBlob = new Blob([bytesBuf], {
-      type: rawMime === "image/*" ? "application/octet-stream" : rawMime,
-    });
-    const resized = await resizeImageBlob(rawBlob);
-    const url = URL.createObjectURL(resized.blob);
-
-    imageObjectUrlByKey.set(imageKey, {
-      url,
-      byteLength:
-        resized.byteLength ||
-        rawBlob.size ||
-        approxBytesFromBase64(result.base64),
-      lastUsedAt: Date.now(),
-    });
-    pruneImageObjectUrls();
-
-    imgEl.style.cursor = "";
-    if (imgEl.src !== url) imgEl.src = url;
-    const captionText = (block.caption || "").trim();
-    captionEl.textContent = captionText;
-    captionEl.style.display = captionText ? "" : "none";
-  }
 
   let detailsState = persistedWebviewState.detailsState ?? {};
 
@@ -1795,7 +1603,10 @@ function main(): void {
     const shouldAutoScroll = stickLogToBottom && isLogNearBottom();
     let forceScrollToBottom = false;
     titleEl.textContent = s.activeSession
-      ? getSessionDisplayTitle(s.activeSession).label
+      ? getSessionDisplayTitle(
+          s.activeSession,
+          (s.sessions || []).findIndex((x) => x.id === s.activeSession!.id),
+        ).label
       : "Codex UI (no session selected)";
 
     const ms = s.modelState || {
@@ -1893,11 +1704,11 @@ function main(): void {
     const activeId = s.activeSession ? s.activeSession.id : null;
 
     const nextTabsSig = sessionsList
-      .map((sess) => {
+      .map((sess, idx) => {
         const isUnread = unread.has(sess.id);
         const isRunning = running.has(sess.id);
         const isActive = activeId === sess.id;
-        const dt = getSessionDisplayTitle(sess);
+        const dt = getSessionDisplayTitle(sess, idx);
         return [
           sess.id,
           dt.label,
@@ -1913,12 +1724,12 @@ function main(): void {
       tabsSig = nextTabsSig;
       const frag = document.createDocumentFragment();
       const wanted = new Set<string>();
-      sessionsList.forEach((sess) => {
+      sessionsList.forEach((sess, idx) => {
         wanted.add(sess.id);
         const isUnread = unread.has(sess.id);
         const isRunning = running.has(sess.id);
         const isActive = activeId === sess.id;
-        const dt = getSessionDisplayTitle(sess);
+        const dt = getSessionDisplayTitle(sess, idx);
 
         const existing = tabElBySessionId.get(sess.id);
         const div =
@@ -2138,8 +1949,10 @@ function main(): void {
             div.appendChild(i);
             return i;
           })();
+        if (img.src !== block.src) img.src = block.src;
         img.alt = block.alt || "image";
 
+        const captionText = (block.caption || "").trim();
         const captionEl =
           (div.querySelector(
             'div[data-k="caption"]',
@@ -2151,11 +1964,8 @@ function main(): void {
             div.appendChild(c);
             return c;
           })();
-        // Render via blob/object URLs to avoid VS Code resource host (401 Unauthorized) and reduce memory.
-        void ensureImageRendered(block, img, captionEl).catch((err) => {
-          captionEl.textContent = `画像の描画に失敗: ${String(err)}`;
-          captionEl.style.display = "";
-        });
+        captionEl.textContent = captionText;
+        captionEl.style.display = captionText ? "" : "none";
         continue;
       }
 
@@ -2850,38 +2660,7 @@ function main(): void {
       query?: unknown;
       agents?: unknown;
       text?: unknown;
-      requestId?: unknown;
-      imageKey?: unknown;
-      ok?: unknown;
-      mimeType?: unknown;
-      base64?: unknown;
-      error?: unknown;
     };
-    if (anyMsg.type === "imageData") {
-      const requestId =
-        typeof anyMsg.requestId === "string" ? anyMsg.requestId : null;
-      if (!requestId) return;
-      const pending = pendingImageRequestsById.get(requestId);
-      if (!pending) return;
-      pendingImageRequestsById.delete(requestId);
-      const ok = Boolean(anyMsg.ok);
-      if (ok) {
-        pending.resolve({
-          ok: true,
-          imageKey: pending.imageKey,
-          mimeType: typeof anyMsg.mimeType === "string" ? anyMsg.mimeType : "",
-          base64: typeof anyMsg.base64 === "string" ? anyMsg.base64 : "",
-        });
-      } else {
-        pending.resolve({
-          ok: false,
-          imageKey: pending.imageKey,
-          error:
-            typeof anyMsg.error === "string" ? anyMsg.error : "Unauthorized",
-        });
-      }
-      return;
-    }
     if (anyMsg.type === "state") {
       receivedState = true;
       state = anyMsg.state as ChatViewState;
@@ -2912,7 +2691,7 @@ function main(): void {
 
       fileSearch = { sessionId, query, paths };
       fileSearchInFlight = null;
-      updateSuggestions();
+      renderSuggest();
       return;
     }
     if (anyMsg.type === "agentIndex") {
@@ -2926,7 +2705,7 @@ function main(): void {
         agentIndex = null;
         agentIndexForSessionId = null;
       }
-      updateSuggestions();
+      renderSuggest();
       return;
     }
     if (anyMsg.type === "insertText") {
