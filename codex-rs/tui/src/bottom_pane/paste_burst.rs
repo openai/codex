@@ -6,6 +6,7 @@ use std::time::Instant;
 const PASTE_BURST_MIN_CHARS: u16 = 3;
 const PASTE_BURST_CHAR_INTERVAL: Duration = Duration::from_millis(8);
 const PASTE_ENTER_SUPPRESS_WINDOW: Duration = Duration::from_millis(120);
+const PASTE_BURST_ACTIVE_IDLE_TIMEOUT: Duration = Duration::from_millis(60);
 
 #[derive(Default)]
 pub(crate) struct PasteBurst {
@@ -50,6 +51,11 @@ impl PasteBurst {
     /// paste-burst timing threshold.
     pub fn recommended_flush_delay() -> Duration {
         PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(1)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn recommended_active_flush_delay() -> Duration {
+        PASTE_BURST_ACTIVE_IDLE_TIMEOUT + Duration::from_millis(1)
     }
 
     /// Entry point: decide how to treat a plain char with current timing.
@@ -129,9 +135,14 @@ impl PasteBurst {
     ///
     /// Returns None if the timeout has not elapsed or there is nothing to flush.
     pub fn flush_if_due(&mut self, now: Instant) -> FlushResult {
+        let timeout = if self.is_active_internal() {
+            PASTE_BURST_ACTIVE_IDLE_TIMEOUT
+        } else {
+            PASTE_BURST_CHAR_INTERVAL
+        };
         let timed_out = self
             .last_plain_char_time
-            .is_some_and(|t| now.duration_since(t) > PASTE_BURST_CHAR_INTERVAL);
+            .is_some_and(|t| now.duration_since(t) > timeout);
         if timed_out && self.is_active_internal() {
             self.active = false;
             let out = std::mem::take(&mut self.buffer);
