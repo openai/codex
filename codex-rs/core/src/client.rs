@@ -171,6 +171,7 @@ impl ModelClient {
                     &api_prompt,
                     Some(conversation_id.clone()),
                     Some(session_source.clone()),
+                    self.config.model_service_tier.clone(),
                 )
                 .await;
 

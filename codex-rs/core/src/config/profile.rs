@@ -21,7 +21,7 @@ pub struct ConfigProfile {
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
-    /// Optional service_tier to request for Responses/Completions (e.g. "priority", "flex").
+    /// Optional service_tier to request for Responses/Completions and Chat Completions (e.g. "priority", "flex").
     pub model_service_tier: Option<String>,
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<AbsolutePathBuf>,

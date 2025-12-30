@@ -55,11 +55,13 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
         prompt: &ApiPrompt,
         conversation_id: Option<String>,
         session_source: Option<SessionSource>,
+        service_tier: Option<String>,
     ) -> Result<ResponseStream, ApiError> {
         use crate::requests::ChatRequestBuilder;
 
         let request =
             ChatRequestBuilder::new(model, &prompt.instructions, &prompt.input, &prompt.tools)
+                .service_tier(service_tier)
                 .conversation_id(conversation_id)
                 .session_source(session_source)
                 .build(self.streaming.provider())?;

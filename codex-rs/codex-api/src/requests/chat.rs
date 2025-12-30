@@ -24,6 +24,7 @@ pub struct ChatRequestBuilder<'a> {
     instructions: &'a str,
     input: &'a [ResponseItem],
     tools: &'a [Value],
+    service_tier: Option<String>,
     conversation_id: Option<String>,
     session_source: Option<SessionSource>,
 }
@@ -40,9 +41,15 @@ impl<'a> ChatRequestBuilder<'a> {
             instructions,
             input,
             tools,
+            service_tier: None,
             conversation_id: None,
             session_source: None,
         }
+    }
+
+    pub fn service_tier(mut self, service_tier: Option<String>) -> Self {
+        self.service_tier = service_tier;
+        self
     }
 
     pub fn conversation_id(mut self, id: Option<String>) -> Self {
@@ -309,12 +316,16 @@ impl<'a> ChatRequestBuilder<'a> {
             }
         }
 
-        let payload = json!({
+        let mut payload = json!({
             "model": self.model,
             "messages": messages,
             "stream": true,
             "tools": self.tools,
         });
+
+        if let Some(service_tier) = self.service_tier {
+            payload["service_tier"] = json!(service_tier);
+        }
 
         let mut headers = build_conversation_headers(self.conversation_id);
         if let Some(subagent) = subagent_header(&self.session_source) {
@@ -383,6 +394,27 @@ mod tests {
         assert_eq!(
             req.headers.get("x-openai-subagent"),
             Some(&HeaderValue::from_static("review"))
+        );
+    }
+
+    #[test]
+    fn includes_service_tier_when_set() {
+        let prompt_input = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hi".to_string(),
+            }],
+        }];
+
+        let req = ChatRequestBuilder::new("gpt-test", "inst", &prompt_input, &[])
+            .service_tier(Some("flex".to_string()))
+            .build(&provider())
+            .expect("request");
+
+        assert_eq!(
+            req.body.get("service_tier").and_then(|v| v.as_str()),
+            Some("flex")
         );
     }
 }

@@ -304,7 +304,7 @@ pub struct Config {
 
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
-    /// Optional service_tier to request for Responses/Completions (e.g. "priority", "flex").
+    /// Optional service_tier to request for Responses/Completions and Chat Completions (e.g. "priority", "flex").
     pub model_service_tier: Option<String>,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
@@ -780,7 +780,7 @@ pub struct ConfigToml {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
-    /// Optional service_tier to request for Responses/Completions (e.g. "priority", "flex").
+    /// Optional service_tier to request for Responses/Completions and Chat Completions (e.g. "priority", "flex").
     pub model_service_tier: Option<String>,
 
     /// Override to force-enable reasoning summaries for the configured model.
