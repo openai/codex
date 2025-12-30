@@ -246,7 +246,7 @@ export function activate(context: vscode.ExtensionContext): void {
         sessionId: session.id,
       });
     },
-    (message) => {
+    (message: string) => {
       void vscode.window.showErrorMessage(message);
       const session = activeSessionId
         ? sessions?.getById(activeSessionId)
@@ -1873,6 +1873,7 @@ async function forceStopSession(
       getSessionModelState(),
     );
     void ensureModelsFetched(session);
+    hydrateRuntimeFromThread(session.id, resumed.thread, { force: true });
     upsertBlock(session.id, {
       id: newLocalId("info"),
       type: "info",
@@ -3950,7 +3951,11 @@ function findRecentWebSearchBlockIdByQuery(
   return null;
 }
 
-function hydrateRuntimeFromThread(sessionId: string, thread: Thread): void {
+function hydrateRuntimeFromThread(
+  sessionId: string,
+  thread: Thread,
+  opts?: { force?: boolean },
+): void {
   const rt = ensureRuntime(sessionId);
 
   const hasConversationBlocks = rt.blocks.some((b) => {
@@ -3969,7 +3974,7 @@ function hydrateRuntimeFromThread(sessionId: string, thread: Thread): void {
         return false;
     }
   });
-  if (hasConversationBlocks) return;
+  if (!opts?.force && hasConversationBlocks) return;
 
   // Preserve non-conversation blocks that may have arrived before hydration (e.g. legacy warnings).
   const preserved = rt.blocks.filter(

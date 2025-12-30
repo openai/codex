@@ -7,6 +7,7 @@
 - ステータス: rate limit（例: `5h:11% wk:7%`）にホバーするとリセット時刻を表示
 - Interrupt: 送信直後など turnId 未確定のタイミングでも Stop/Interrupt が取りこぼされないように修正（turn/started 到達後に割り込みを送る）
 - Interrupt: Stop/Interrupt が効かない場合の最終手段として、一定時間で backend を kill & restart する Force Stop を追加（`codexMine.interrupt.forceStopAfterMs`）
+- Interrupt: Force Stop 発動時は `thread/resume` の結果で会話履歴を再hydrationし、表示ズレを防止
 - Backend: backend停止時の streamState クリーンアップ不具合を修正（スレッド単位で削除）
 
 ## 0.1.12
