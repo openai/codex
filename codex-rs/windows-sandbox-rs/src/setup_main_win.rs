@@ -8,6 +8,7 @@ use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::dpapi_protect;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::ensure_allow_write_aces;
+use codex_windows_sandbox::hide_newly_created_users;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
@@ -176,9 +177,10 @@ fn sid_bytes_to_psid(sid: &[u8]) -> Result<*mut c_void> {
     Ok(psid)
 }
 
-fn ensure_local_user(name: &str, password: &str, log: &mut File) -> Result<()> {
+fn ensure_local_user(name: &str, password: &str, log: &mut File) -> Result<bool> {
     let name_w = to_wide(OsStr::new(name));
     let pwd_w = to_wide(OsStr::new(password));
+    let mut created = false;
     unsafe {
         let info = USER_INFO_1 {
             usri1_name: name_w.as_ptr() as *mut u16,
@@ -214,6 +216,8 @@ fn ensure_local_user(name: &str, password: &str, log: &mut File) -> Result<()> {
                     "failed to create/update user {name}, code {status}/{upd}"
                 ));
             }
+        } else {
+            created = true;
         }
         let group = to_wide(OsStr::new("Users"));
         let member = LOCALGROUP_MEMBERS_INFO_3 {
@@ -227,7 +231,7 @@ fn ensure_local_user(name: &str, password: &str, log: &mut File) -> Result<()> {
             1,
         );
     }
-    Ok(())
+    Ok(created)
 }
 
 fn resolve_sid(name: &str) -> Result<Vec<u8>> {
@@ -800,12 +804,20 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                 payload.offline_username, payload.online_username
             ),
         )?;
-        ensure_local_user(
+        let mut created_users = Vec::new();
+        if ensure_local_user(
             &payload.offline_username,
             offline_pwd.as_ref().unwrap(),
             log,
-        )?;
-        ensure_local_user(&payload.online_username, online_pwd.as_ref().unwrap(), log)?;
+        )? {
+            created_users.push(payload.offline_username.clone());
+        }
+        if ensure_local_user(&payload.online_username, online_pwd.as_ref().unwrap(), log)? {
+            created_users.push(payload.online_username.clone());
+        }
+        if !created_users.is_empty() {
+            hide_newly_created_users(&created_users, sbx_dir);
+        }
     }
     let offline_sid = resolve_sid(&payload.offline_username)?;
     let online_sid = resolve_sid(&payload.online_username)?;
